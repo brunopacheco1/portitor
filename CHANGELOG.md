@@ -47,6 +47,15 @@ versions may change behaviour and configuration.
   scope type rule (ADR 0021), and Gaia-X onboarding the steps of a run
   and its schedule.
 
+### Added
+
+- An optional observability stack for the Compose demo
+  (`examples/compose/observability.yaml`, ADR 0023 section 6): an
+  OpenTelemetry Collector, Jaeger and Prometheus, pinned by digest,
+  started by hand. `scripts/demo-compose.sh` takes it with
+  `EXTRA_COMPOSE=examples/compose/observability.yaml`. See TESTING,
+  "Observability stack (by hand)".
+
 ## [0.8.0] - 2026-11-15
 
 ### Documentation

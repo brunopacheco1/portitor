@@ -22,6 +22,9 @@
 #   Without images it uses the compose file's defaults (the release images).
 # Environment:
 #   KEEP=1       leave the containers running, and run/, at the end
+#   EXTRA_COMPOSE=examples/compose/observability.yaml
+#                one more Compose file, used with compose.yaml (here: the
+#                optional observability stack)
 # Needs docker with the compose plugin, curl, jq and openssl.
 
 set -euo pipefail
@@ -31,6 +34,7 @@ if [[ $# -gt 0 ]]; then export PORTITOR_IMAGE=$1; fi
 if [[ $# -gt 1 ]]; then export PORTITOR_IDENTITY_IMAGE=$2; fi
 if [[ $# -gt 2 ]]; then export PORTITOR_ISSUER_IMAGE=$3; fi
 COMPOSE=(docker compose -f examples/compose/compose.yaml)
+if [[ -n ${EXTRA_COMPOSE:-} ]]; then COMPOSE+=(-f "$EXTRA_COMPOSE"); fi
 RUN=examples/compose/run
 
 # who is who (compose.yaml)
