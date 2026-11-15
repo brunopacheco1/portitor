@@ -116,8 +116,8 @@ checks this file:
 | [TD-26](#td-26) | One bad dataset stopped the connector at start | Technical debt | 0.7 plan (ADR 0020, 2026-11-14) | Addressed | done in 0.7 |
 | [TD-27](#td-27) | The domain crates' I/O check named too few crates | Technical debt | 0.5 review (ADR 0004, 2026-11-14) | Addressed | done 2026-11-14 |
 
-Totals: 35 risks (Open 11, Mitigated 14, Accepted 4, Addressed 6);
-27 technical debts (Open 18, Accepted 4, Addressed 5).
+Totals: 35 risks (Open 8, Mitigated 15, Accepted 4, Addressed 8);
+27 technical debts (Open 17, Accepted 4, Addressed 6).
 
 ## Risks
 
