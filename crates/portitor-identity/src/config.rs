@@ -38,8 +38,9 @@ pub struct Config {
     pub credential_service_url: String,
     /// The `SQLite` file (`PORTITOR_DB_FILE`).
     pub db_file: PathBuf,
-    /// The management API, if `PORTITOR_MANAGEMENT_API_KEY_FILE` is set.
-    pub management: Option<ManagementConfig>,
+    /// The management port: always the health checks, and the management
+    /// API when `PORTITOR_MANAGEMENT_API_KEY_FILE` is set.
+    pub management: ManagementConfig,
     /// The STS client id (`PORTITOR_STS_CLIENT_ID`).
     pub sts_client_id: String,
     /// The STS client secret (`PORTITOR_STS_CLIENT_SECRET_FILE`).
@@ -76,14 +77,10 @@ pub struct GaiaxConfig {
     pub participant_file: PathBuf,
 }
 
-/// Where the management API listens, and its key.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ManagementConfig {
-    /// Address to listen on (`PORTITOR_MANAGEMENT_BIND`).
-    pub bind: String,
-    /// The file that holds the API key.
-    pub api_key_file: PathBuf,
-}
+/// Where the management port listens, and the API key: the settings
+/// shared by the three components, read with
+/// `ManagementConfig::from_env(DEFAULT_MANAGEMENT_BIND)`.
+pub use portitor_runtime::management::ManagementConfig;
 
 /// A setting is missing or wrong.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -133,13 +130,7 @@ impl Config {
             portitor_dcp::did_web_url(issuer)
                 .map_err(|e| invalid("PORTITOR_TRUSTED_ISSUERS", &format!("{issuer}: {e}")))?;
         }
-        let management = text("PORTITOR_MANAGEMENT_API_KEY_FILE")
-            .filter(|v| !v.is_empty())
-            .map(|file| ManagementConfig {
-                bind: text("PORTITOR_MANAGEMENT_BIND")
-                    .unwrap_or_else(|| DEFAULT_MANAGEMENT_BIND.to_owned()),
-                api_key_file: PathBuf::from(file),
-            });
+        let management = ManagementConfig::from_vars(DEFAULT_MANAGEMENT_BIND, &var);
         let key_file = PathBuf::from(required("PORTITOR_IDENTITY_KEY_FILE")?);
         // the one STS client is the participant's own connector, so it is
         // named by the participant's DID unless set
@@ -278,7 +269,11 @@ mod tests {
             ["did:web:issuer.example", "did:web:other.example"]
         );
         assert_eq!(config.scope_type_aliases, [DEFAULT_TYPE_ALIASES]);
-        assert_eq!(config.management, None);
+        assert_eq!(
+            config.management,
+            ManagementConfig::health_only(DEFAULT_MANAGEMENT_BIND)
+        );
+        assert_eq!(config.management.bind, "127.0.0.1:8091");
         assert!(!config.allow_http);
         assert_eq!(config.certificate_chain_file, None);
         assert_eq!(config.gaiax, None);
@@ -350,10 +345,10 @@ mod tests {
         let config = read(&vars).unwrap();
         assert_eq!(
             config.management,
-            Some(ManagementConfig {
+            ManagementConfig {
                 bind: "127.0.0.1:8091".to_owned(),
-                api_key_file: PathBuf::from("/run/secrets/api")
-            })
+                api_key_file: Some(PathBuf::from("/run/secrets/api"))
+            }
         );
     }
 

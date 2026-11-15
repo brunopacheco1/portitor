@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: Portitor contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# OpenTelemetry Collector configuration for observability.yaml: receives
+# OTLP over HTTP from the Portitor components, sends the traces to Jaeger
+# (OTLP over HTTP) and the metrics to Prometheus (its OTLP endpoint,
+# /api/v1/otlp; the exporter adds /v1/metrics).
+# Component names as listed by `otelcol components` in the 0.165.0 image.
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+
+exporters:
+  otlp_http/jaeger:
+    endpoint: http://jaeger:4318
+  otlp_http/prometheus:
+    endpoint: http://prometheus:9090/api/v1/otlp
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/jaeger]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/prometheus]

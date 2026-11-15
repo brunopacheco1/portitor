@@ -1581,3 +1581,86 @@ async fn consumer_and_provider_derive_the_same_scopes() {
         ]
     );
 }
+
+/// Our STS for the readiness check: signs as `party`, counts the tokens
+/// it gives, and fails while `down` is set.
+struct CountingSts {
+    party: Party,
+    tokens: std::sync::atomic::AtomicUsize,
+    down: std::sync::atomic::AtomicBool,
+}
+
+impl SecureTokenService for CountingSts {
+    fn token<'a>(&'a self, request: TokenRequest<'a>) -> BoxFuture<'a, Result<String, String>> {
+        use std::sync::atomic::Ordering;
+        let answer = if self.down.load(Ordering::SeqCst) {
+            Err("STS: connection refused".to_owned())
+        } else {
+            self.tokens.fetch_add(1, Ordering::SeqCst);
+            let jti = portitor_runtime::system::new_uuid();
+            Ok(self
+                .party
+                .id_token(request.audience, request.access_token, &jti))
+        };
+        Box::pin(async move { answer })
+    }
+}
+
+#[tokio::test]
+async fn readiness_checks_our_identity_in_the_background() {
+    use crate::health::OwnIdentityCheck;
+    use portitor_runtime::health::Check as _;
+    use std::sync::atomic::Ordering;
+    let ds = dataspace().await;
+    // a participant of our own, with its DID document served
+    let mine = Party::new(&ds.base, "mine");
+    let doc = mine.document(&ds.base, true);
+    ds.world
+        .lock()
+        .unwrap()
+        .documents
+        .insert("mine".into(), doc);
+    let settings = AuthSettings {
+        participant_id: mine.did.clone(),
+        sts_url: String::new(),
+        sts_allow_http: false,
+        sts_client_id: String::new(),
+        sts_client_secret: String::new(),
+        trusted_issuers: Vec::new(),
+        gaiax_compliance_issuers: Vec::new(),
+        scopes: Vec::new(),
+        allow_http: true,
+    };
+    let sts = Arc::new(CountingSts {
+        party: mine,
+        tokens: std::sync::atomic::AtomicUsize::new(0),
+        down: std::sync::atomic::AtomicBool::new(false),
+    });
+    let check = OwnIdentityCheck::with_sts(&settings, Arc::clone(&sts) as _).unwrap();
+    // not ready before the first run
+    assert!(check.check().await.is_err());
+    check.refresh().await;
+    assert_eq!(check.check().await, Ok(()));
+    // probes only read the result: one token in all
+    assert_eq!(check.check().await, Ok(()));
+    assert_eq!(check.check().await, Ok(()));
+    assert_eq!(sts.tokens.load(Ordering::SeqCst), 1);
+
+    // our STS is down: a check that never passed fails, and says what
+    // failed without any secret
+    sts.down.store(true, Ordering::SeqCst);
+    let fresh = OwnIdentityCheck::with_sts(&settings, Arc::clone(&sts) as _).unwrap();
+    fresh.refresh().await;
+    let err = fresh.check().await.unwrap_err();
+    assert!(err.contains("STS"), "{err}");
+    // and so does the next probe, without asking again
+    assert_eq!(fresh.check().await.unwrap_err(), err);
+
+    // our DID document is no longer served
+    sts.down.store(false, Ordering::SeqCst);
+    ds.world.lock().unwrap().documents.remove("mine");
+    let fresh = OwnIdentityCheck::with_sts(&settings, Arc::clone(&sts) as _).unwrap();
+    fresh.refresh().await;
+    let err = fresh.check().await.unwrap_err();
+    assert!(err.contains("cannot read the DID document"), "{err}");
+}

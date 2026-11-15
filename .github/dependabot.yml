@@ -9,6 +9,10 @@ updates:
     schedule:
       interval: weekly
     groups:
+      # the OpenTelemetry crates are 0.x and change their API together (ADR 0023);
+      # first, so the test-only opentelemetry-proto joins them too
+      opentelemetry:
+        patterns: ['opentelemetry*', 'tracing-opentelemetry']
       # one PR per week for test-only tooling; runtime dependencies stay separate
       test-tooling:
         dependency-type: development

@@ -15,7 +15,6 @@ use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use portitor_dsp::Offer;
-use portitor_dsp::guard::Direction;
 use portitor_dsp::negotiation::provider::{
     Failure, Negotiation, NegotiationStore, Outgoing, ProviderService, StoreError,
 };
@@ -25,12 +24,14 @@ use portitor_dsp::negotiation::{
     NegotiationEvent, Transition,
 };
 use portitor_dsp::policy::{CallerCredentials, credential_scopes};
+use portitor_runtime::telemetry::metrics;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::auth::{AnyVerifier, Caller, credentials_for};
 use crate::harvest::DatasetCopy;
 use crate::http_client::outbound_url_allowed;
+use crate::inbound::read_message;
 use crate::outbox::{self, Link, Message, Outbox};
 use crate::ports::{AnyDecider, AnyStore, Ports};
 use crate::system::SystemEnvironment;
@@ -122,18 +123,13 @@ impl Provider {
         message_type: &str,
         provider_pid: &str,
     ) -> Result<T, Box<ContractNegotiationError>> {
-        let Json(value) = body.map_err(|e| Box::new(invalid(provider_pid, "", &e.body_text())))?;
-        let consumer_pid = value
-            .get("consumerPid")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        self.link
-            .guard
-            .check(Direction::Inbound, message_type, &value)
-            .map_err(|r| Box::new(invalid(provider_pid, &consumer_pid, &r.to_string())))?;
-        serde_json::from_value(value)
-            .map_err(|e| Box::new(invalid(provider_pid, &consumer_pid, &e.to_string())))
+        read_message(
+            &*self.link.guard,
+            body,
+            message_type,
+            "consumerPid",
+            |consumer_pid, reason| invalid(provider_pid, consumer_pid, reason),
+        )
     }
 
     /// The caller's verified credentials for the credential constraints of
@@ -162,6 +158,10 @@ impl Outbox for Provider {
 
     fn link(&self) -> &Link {
         &self.link
+    }
+
+    fn kind(&self) -> metrics::Outbox {
+        metrics::Outbox::Negotiation(metrics::Role::Provider)
     }
 
     fn message(out: &Outgoing) -> Message<'_> {

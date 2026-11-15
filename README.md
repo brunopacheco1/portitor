@@ -92,8 +92,8 @@ Configuration (environment variables):
 | `PORTITOR_BUNDLE_AUTHORITY` | none (**required** with a bundle) | The authority's `did:web` DID; its DID document lists the bundle key |
 | `PORTITOR_BUNDLE_CACHE_DIR` | `bundle-cache` next to `PORTITOR_DB_FILE` (`/data/bundle-cache` in the image) | Where the verified bundle and the version in use are kept; the bundle is used only when the authority's host or DID document cannot be reached |
 | `PORTITOR_DB_FILE` | `portitor.db` (`/data/portitor.db` in the image) | SQLite file that keeps negotiations; one connector per file |
-| `PORTITOR_MANAGEMENT_API_KEY_FILE` | none (management API off) | File with the management API key (at least 32 characters, for example `openssl rand -hex 32`) |
-| `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8081` | Address of the management API |
+| `PORTITOR_MANAGEMENT_API_KEY_FILE` | none (management API off) | File with the management API key (at least 32 characters, for example `openssl rand -hex 32`); an empty value counts as unset |
+| `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8081` | Address of the management port: always the health checks (`/api/check/...`, no key, [DEPLOYING](docs/DEPLOYING.md#health-and-logs)), and the management API with its key |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | `false` | `true` allows plain `http://` for consumers' callbacks, providers, partners' `did:web` DIDs and credential services, status lists and the STS; development and tests only |
 | `PORTITOR_DATA_TOKEN_SECONDS` | `3600` | How long a data access token is valid after the transfer starts; `1` to `31536000` (one year) |
 | `PORTITOR_STS_URL` | none (**required**) | Token endpoint of the participant's STS (`portitor-identity`: `<base URL>/sts/token`); every DSP request is authenticated with DCP (ADR 0016) |
@@ -104,6 +104,7 @@ Configuration (environment variables):
 | `PORTITOR_DCP_SCOPES` | `org.eclipse.dspace.dcp.vc.type:MembershipCredential` | Comma-separated scopes asked from callers' credential services, and granted to the counter-party in our tokens |
 | `PORTITOR_POLICY_CREDENTIALS` | none (`MembershipCredential` only) | Comma-separated credential types that offers may constrain, each `Type` (scope `org.eclipse.dspace.dcp.vc.type:<Type>:read`) or `Type=<scope>` ([ADR 0019](docs/adr/0019-credential-constraints.md)) |
 | `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` | none (no Gaia-X compliance credential accepted) | Comma-separated `did:web` DIDs of the Gaia-X compliance services you trust, for example `did:web:compliance.lab.gaia-x.eu:v2`; separate from `PORTITOR_TRUSTED_ISSUERS` ([ADR 0022](docs/adr/0022-gaia-x-compliance-in-policies.md)) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | none (no traces or metrics) | Base URL of an OTLP/HTTP receiver: traces and metrics are sent there with OpenTelemetry. The other `OTEL_*` variables are in [DEPLOYING](docs/DEPLOYING.md#traces-and-metrics) ([ADR 0023](docs/adr/0023-observability.md)) |
 
 As provider, the connector agrees to a request for an offer in its
 catalog, then finalizes once the consumer verifies. It sends its messages
@@ -180,7 +181,9 @@ state before giving up. See
 Your own systems start and follow negotiations and transfers as consumer
 through the management API. It is not part of DSP, so it has its own port
 (`PORTITOR_MANAGEMENT_BIND`) and is off unless `PORTITOR_MANAGEMENT_API_KEY_FILE`
-is set. Every call needs `Authorization: Bearer <key>`.
+is set. Every call needs `Authorization: Bearer <key>`, except
+`/v1/openapi.json`, `/health` and the health checks. The port itself is
+always bound, for the health checks.
 
 | Method and path | What it does |
 |---|---|
@@ -196,6 +199,7 @@ is set. Every call needs `Authorization: Bearer <key>`.
 | `GET /v1/harvest-jobs/{id}` | Returns one harvest run with the error of each rejected dataset |
 | `GET /v1/openapi.json` | The OpenAPI description (no key needed); also in [docs/api/management-openapi.json](docs/api/management-openapi.json) |
 | `GET /health` | Answers `ok` (no key needed) |
+| `GET /api/check/liveness`, `/readiness`, `/startup`, `/health` | Health checks in Eclipse EDC's format (no key needed, also with the management API off; [DEPLOYING](docs/DEPLOYING.md#health-and-logs)) |
 
 For example, with an offer copied unchanged from the provider's catalog
 (the provider agrees only to the catalog's terms, see above):
@@ -282,7 +286,9 @@ it, and [examples/healthdcat-datasets.json](examples/healthdcat-datasets.json)
 has datasets written for it. See [DEPLOYING](docs/DEPLOYING.md#schema-and-vocabulary-bundle).
 
 To see two participants agree a contract and transfer a file, run the demo
-in Docker Compose (needs Docker, `curl`, `jq` and `openssl`):
+in Docker Compose (needs Docker with the Compose plugin, `curl`, `jq` and
+`openssl`). The [quickstart](https://bruno.pacheco.lu/portitor/#try) on the
+website walks through it: what to run, where to look, how to clean up.
 
 ```sh
 scripts/demo-compose.sh
@@ -307,7 +313,10 @@ restricted dataset to a member; last, once the issuer revokes the
 consumer's `DataProcessorCredential`, a new transfer that needs it is
 refused. It stops everything at the end;
 `KEEP=1` leaves it running. `scripts/demo.sh` does the same without Docker
-(needs Python 3 as well).
+(needs Python 3 as well). To see the components' traces and metrics, add
+the optional observability stack (OpenTelemetry Collector, Jaeger,
+Prometheus): `EXTRA_COMPOSE=examples/compose/observability.yaml`, see
+[TESTING](docs/TESTING.md#observability-stack-by-hand).
 
 A connector does not run alone: it needs its participant's identity
 component for DCP (`PORTITOR_STS_URL`, `PORTITOR_STS_CLIENT_SECRET_FILE`,

@@ -4,31 +4,44 @@
 
 //! Portitor identity component binary.
 
+use std::ffi::OsString;
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use portitor_dcp::SigningKey;
-use portitor_identity::config::Config;
+use portitor_identity::config::{Config, DEFAULT_MANAGEMENT_BIND, ManagementConfig};
 use portitor_identity::gaiax::{GaiaxCompliance, HttpGaiaxCompliance};
 use portitor_identity::issuance::HttpIssuerClient;
 use portitor_identity::store::SqliteStore;
 use portitor_identity::{Identity, Ports};
 use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::directory::WebDirectory;
+use portitor_runtime::health;
+use portitor_runtime::management::management_port;
 use portitor_runtime::serve::{
-    MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, bind_management, init_logging, serve, with_limits,
+    MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, run_component, serve_with_trusted_routes, with_limits,
 };
 
-#[tokio::main]
-async fn main() -> ExitCode {
-    init_logging();
-    match run().await {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            tracing::error!(%error, "portitor-identity stopped");
-            ExitCode::FAILURE
+/// Without arguments, runs the identity component. `portitor-identity
+/// health` asks the running component's readiness check instead (ADR
+/// 0023; for Docker's `HEALTHCHECK`), and exits 0 when it passes.
+fn main() -> ExitCode {
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    match args.as_slice() {
+        [] => serve_identity(),
+        [command] if command == "health" => {
+            health::probe(&ManagementConfig::from_env(DEFAULT_MANAGEMENT_BIND).bind)
+        }
+        _ => {
+            eprintln!("portitor-identity takes no arguments, except for: health");
+            ExitCode::from(2)
         }
     }
+}
+
+#[tokio::main]
+async fn serve_identity() -> ExitCode {
+    run_component("portitor-identity", run()).await
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -66,16 +79,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
 
-    let management = if let Some(settings) = &config.management {
-        let key = ApiKey::read(&settings.api_key_file)
-            .map_err(|e| format!("PORTITOR_MANAGEMENT_API_KEY_FILE: {e}"))?;
-        let listener = bind_management(&settings.bind).await?;
-        let app = portitor_identity::management::router(Arc::clone(&identity), key);
-        Some((listener, app))
-    } else {
-        tracing::info!("management API off (PORTITOR_MANAGEMENT_API_KEY_FILE not set)");
-        None
-    };
+    // the management port always serves the health checks (ADR 0023);
+    // the management API only with its key
+    let checks = Arc::new(portitor_identity::health::readiness_checks(
+        &identity,
+        config.db_file.clone(),
+    ));
+    let management = management_port(&config.management, checks, |key| {
+        portitor_identity::management::router(Arc::clone(&identity), key)
+    })
+    .await?;
     tracing::info!(
         bind = %config.bind,
         did = %identity.participant_id(),
@@ -89,7 +102,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         REQUEST_TIMEOUT,
         MAX_CONCURRENT_REQUESTS,
     );
-    serve((listener, app), management).await?;
+    // only the STS is called from inside the participant (by its own
+    // connector), so only its caller's trace context is taken
+    serve_with_trusted_routes(
+        (listener, app),
+        Some(management),
+        &[portitor_identity::STS_ROUTE],
+    )
+    .await?;
     Ok(())
 }
 

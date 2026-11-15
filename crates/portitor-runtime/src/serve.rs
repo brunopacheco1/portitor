@@ -2,10 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! Process plumbing every Portitor binary needs: JSON logs, serving the
-//! public and the management API, limits for the public server, and
-//! stopping on Ctrl-C or SIGTERM.
+//! Process plumbing every Portitor binary needs: serving the public and
+//! the management API (each request observed, see
+//! [`crate::telemetry::http`]), limits for the public server, and
+//! stopping on Ctrl-C or SIGTERM. Logs, traces and metrics are started by
+//! [`crate::telemetry::init`].
 
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,9 +19,9 @@ use axum::middleware::Next;
 use axum::response::Response;
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
-use tracing_subscriber::EnvFilter;
 
 use crate::api_key::problem;
+use crate::telemetry::http::observe_requests;
 
 /// How long the public server works on one request before it answers
 /// 503. Longer than the slowest step behind it: the connector's data plane
@@ -29,17 +32,6 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// How many requests the public server works on at once. Further requests
 /// wait for a free slot, within [`REQUEST_TIMEOUT`].
 pub const MAX_CONCURRENT_REQUESTS: usize = 256;
-
-/// JSON logs on standard output; the level comes from `RUST_LOG`
-/// (default `info`).
-pub fn init_logging() {
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
-}
 
 /// The limits of [`with_limits`], shared by every request.
 #[derive(Debug, Clone)]
@@ -81,6 +73,33 @@ async fn limit(State(limits): State<Limits>, request: Request, next: Next) -> Re
     problem(StatusCode::SERVICE_UNAVAILABLE, "the request took too long")
 }
 
+/// Runs a component: starts logs and telemetry ([`crate::telemetry::init`]),
+/// runs `work` until it ends (the servers stopped on SIGTERM or Ctrl-C, or
+/// failed), sends the last spans and metrics, and gives the exit code: 0,
+/// or 1 after logging `<name> stopped` with the error.
+///
+/// `work` is the component's `async fn run()`, called but not started:
+/// an `async fn`'s body only runs when awaited, here after telemetry is
+/// up. `name` is `'static` (a literal such as `"portitor-connector"`)
+/// because telemetry keeps it as the service name.
+pub async fn run_component<F>(name: &'static str, work: F) -> ExitCode
+where
+    F: Future<Output = Result<(), Box<dyn std::error::Error>>>,
+{
+    let telemetry = crate::telemetry::init(name);
+    let result = work.await;
+    // after the servers stopped (SIGTERM, Ctrl-C) or failed: send the
+    // last spans and metrics
+    telemetry.shutdown().await;
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            tracing::error!(%error, "{name} stopped");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Resolves once the stop signal was sent.
 pub async fn wait(mut stopped: tokio::sync::watch::Receiver<bool>) {
     let _ = stopped.wait_for(|s| *s).await;
@@ -111,19 +130,20 @@ pub async fn shutdown() {
     tracing::info!("shutting down");
 }
 
-/// Binds the management API's socket, and logs where it listens.
+/// Binds the management port's socket, and logs where it listens.
 ///
 /// # Errors
 /// The address is invalid or taken.
 pub async fn bind_management(bind: &str) -> std::io::Result<TcpListener> {
     let listener = TcpListener::bind(bind).await?;
-    tracing::info!(bind = %bind, "management API listening");
+    tracing::info!(bind = %bind, "management port listening");
     Ok(listener)
 }
 
 /// Serves `public`, and `management` when it is on, until Ctrl-C or
 /// SIGTERM. One signal stops both servers; each finishes the requests it
-/// has started.
+/// has started. Every request gets a span and a duration measure; no
+/// caller's trace context is taken (see [`serve_with_trusted_routes`]).
 ///
 /// # Errors
 /// A server fails, or the management server's task panicked.
@@ -131,8 +151,25 @@ pub async fn serve(
     public: (TcpListener, Router),
     management: Option<(TcpListener, Router)>,
 ) -> std::io::Result<()> {
+    serve_with_trusted_routes(public, management, &[]).await
+}
+
+/// Like [`serve`], and the public routes in `trusted_routes` (route
+/// templates such as `/sts/token`) take the caller's W3C trace context:
+/// routes called only from inside our own participant (ADR 0023, section
+/// 4). `trusted_routes` is `&'static`, a list fixed in the program, as
+/// [`observe_requests`] needs it.
+///
+/// # Errors
+/// A server fails, or the management server's task panicked.
+pub async fn serve_with_trusted_routes(
+    public: (TcpListener, Router),
+    management: Option<(TcpListener, Router)>,
+    trusted_routes: &'static [&'static str],
+) -> std::io::Result<()> {
     let (stop, stopped) = tokio::sync::watch::channel(false);
     let management = management.map(|(listener, app)| {
+        let app = observe_requests(app, &[]);
         tokio::spawn(
             axum::serve(listener, app)
                 .with_graceful_shutdown(wait(stopped.clone()))
@@ -144,6 +181,7 @@ pub async fn serve(
         let _ = stop.send(true);
     });
     let (listener, app) = public;
+    let app = observe_requests(app, trusted_routes);
     axum::serve(listener, app)
         .with_graceful_shutdown(wait(stopped))
         .await?;

@@ -28,18 +28,20 @@ use portitor_dsp::transfer::{
     TransferCompletionMessage, TransferError, TransferStartMessage, TransferSuspensionMessage,
     TransferTerminationMessage, Transition,
 };
+use portitor_runtime::telemetry::metrics;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::auth::Caller;
 use crate::consumer::{InMemoryConsumerNegotiations, page};
 use crate::http_client::outbound_url_allowed;
+use crate::inbound::{Body, read_message};
 use crate::outbox::{self, Link, Message, Outbox};
 use crate::ports::{
     AnyConsumerTransferDecider, AnyConsumerTransferStore, AnyHeldAgreements, Ports,
 };
 use crate::system::SystemEnvironment;
-use crate::transfer::{Body, bad_request, failed, reached_state, read_message};
+use crate::transfer::{bad_request, failed, reached_state};
 
 /// Adapter: consumer transfers kept in memory (lost on restart). The
 /// `SQLite` adapter replaces it for real use.
@@ -325,6 +327,10 @@ impl Outbox for TransferConsumer {
 
     fn link(&self) -> &Link {
         &self.link
+    }
+
+    fn kind(&self) -> metrics::Outbox {
+        metrics::Outbox::Transfer(metrics::Role::Consumer)
     }
 
     fn delivered(&self, out: &Outgoing, ack: Option<&Value>) -> Result<Option<Outgoing>, Failure> {

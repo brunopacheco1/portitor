@@ -2,14 +2,128 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Portitor issuer management API",
-    "description": "Participants, offers, issued credentials and revocation of the dataspace authority's issuer. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description needs the API key.",
+    "description": "Participants, offers, issued credentials and revocation of the dataspace authority's issuer. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.8.0"
+    "version": "0.9.0"
   },
   "paths": {
+    "/api/check/health": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "The component's health: the same checks as readiness.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "Every check passed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A check failed; its failure says why",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/check/liveness": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "The process answers: it lives. Checks nothing else.",
+        "operationId": "liveness",
+        "responses": {
+          "200": {
+            "description": "The process runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/check/readiness": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Whether the component can serve: its own dependencies only (its\ndatabase, its key, ...), never other participants.",
+        "operationId": "readiness",
+        "responses": {
+          "200": {
+            "description": "Every check passed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A check failed; its failure says why",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/check/startup": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Whether the component has started: the same checks as readiness.",
+        "operationId": "startup",
+        "responses": {
+          "200": {
+            "description": "Every check passed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A check failed; its failure says why",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/credentials": {
       "get": {
         "tags": [
@@ -345,6 +459,36 @@
   },
   "components": {
     "schemas": {
+      "ComponentResult": {
+        "type": "object",
+        "description": "The result of one check: EDC's `HealthCheckResult`.",
+        "required": [
+          "component",
+          "isHealthy",
+          "failure"
+        ],
+        "properties": {
+          "component": {
+            "type": "string",
+            "description": "What was checked, for example `database`."
+          },
+          "failure": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Failure",
+                "description": "Why it failed; `null` when it passed (always present)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "isHealthy": {
+            "type": "boolean",
+            "description": "Whether the check passed."
+          }
+        }
+      },
       "CredentialView": {
         "type": "object",
         "description": "An issued credential.",
@@ -420,6 +564,48 @@
             "format": "int64",
             "description": "Its position in that list.",
             "minimum": 0
+          }
+        }
+      },
+      "Failure": {
+        "type": "object",
+        "description": "Why a check failed: EDC's `Failure`.",
+        "required": [
+          "messages",
+          "failureDetail"
+        ],
+        "properties": {
+          "failureDetail": {
+            "type": "string",
+            "description": "The messages joined with `\", \"`, as EDC's `getFailureDetail()`."
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What went wrong. Never a secret, key or token."
+          }
+        }
+      },
+      "HealthStatus": {
+        "type": "object",
+        "description": "The answer of every check route: EDC's `HealthStatus`.",
+        "required": [
+          "isSystemHealthy",
+          "componentResults"
+        ],
+        "properties": {
+          "componentResults": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ComponentResult"
+            },
+            "description": "One result per check."
+          },
+          "isSystemHealthy": {
+            "type": "boolean",
+            "description": "Whether every component is healthy. False when there is no\ncomponent at all, as in EDC."
           }
         }
       },
@@ -545,6 +731,10 @@
     {
       "name": "Credentials",
       "description": "Offers, issued credentials and revocation (DCP v1.0.1, Bitstring Status List)"
+    },
+    {
+      "name": "Health",
+      "description": "Health checks in Eclipse EDC's Observability API shape (ADR 0023). They need no API key, and neither does GET /health (plain `ok`). Served even when the management API is off."
     }
   ]
 }

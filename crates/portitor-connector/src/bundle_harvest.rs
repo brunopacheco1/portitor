@@ -40,6 +40,7 @@ use crate::shacl::BundleRules;
 use crate::system::now_secs;
 use portitor_bundle::source::{BundleConfig, BundleSource, BundleSourceError, VersionChoice};
 use portitor_bundle::store::{BundleStore, InUse};
+use portitor_runtime::telemetry::metrics;
 
 /// The rules of the bundle version in use, swapped when a new version is
 /// taken. The harvest checks datasets with it ([`DatasetCheck`]) and the
@@ -52,6 +53,7 @@ impl BundleCopy {
     /// A copy holding `rules`.
     #[must_use]
     pub fn new(rules: BundleRules) -> Self {
+        metrics::bundle_in_use(rules.version(), true);
         Self(Arc::new(RwLock::new(Arc::new(rules))))
     }
 
@@ -64,7 +66,19 @@ impl BundleCopy {
     /// Puts `rules` in use. Calls already going on finish with the old
     /// rules.
     fn replace(&self, rules: BundleRules) {
-        *self.0.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(rules);
+        let new_version = rules.version().to_owned();
+        let mut in_use = self.0.write().unwrap_or_else(PoisonError::into_inner);
+        let old_version = in_use.version().to_owned();
+        *in_use = Arc::new(rules);
+        // `drop` ends the write lock here, before the measures below,
+        // instead of at the end of the function: other threads waiting to
+        // read the rules go on at once, and recording a measure never
+        // runs while the lock is held
+        drop(in_use);
+        if old_version != new_version {
+            metrics::bundle_in_use(&old_version, false);
+        }
+        metrics::bundle_in_use(&new_version, true);
     }
 }
 

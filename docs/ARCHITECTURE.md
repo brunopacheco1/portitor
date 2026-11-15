@@ -65,7 +65,10 @@ judged against it.
     Docker Compose demo needs no file edits.
 11. **Observable.** Structured JSON logs, metrics and traces
     (OpenTelemetry), health and readiness endpoints. *Check:* every
-    protocol state change is logged with its process id.
+    protocol state change is logged with its process ids; a CI test
+    proves that traces and metrics are exported only when an OTLP
+    endpoint is set, and hold no token
+    ([ADR 0023](adr/0023-observability.md)).
 12. **Hexagonal architecture.** Pure domain crates, ports as traits,
     adapters for HTTP, storage and DID resolution
     ([ADR 0004](adr/0004-hexagonal-architecture.md)). *Check:* domain crates
@@ -106,13 +109,20 @@ connector; `PORTITOR_GAIAX_COMPLIANCE_URL` and
 `PORTITOR_GAIAX_COMPLIANCE_DID` on the identity), their public and
 internal ports ([DEPLOYING](DEPLOYING.md)), and who calls them, including
 the consumer's application or connector on the data plane (port 8080,
-bearer token from the transfer).
+bearer token from the transfer). The internal management ports also
+answer the health checks, without the API key, and each container sends
+its traces and metrics over OTLP/HTTP to the operator's observability
+backend (an OpenTelemetry collector) only when
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set
+([ADR 0023](adr/0023-observability.md)).
 
 ![C2 Containers](diagrams/c2-containers.drawio.svg)
 
 The dataspace authority's side: the issuer, what it keeps, and the bundle
 that `portitor-issuer bundle build` signs offline with a key that never
-reaches the issuer.
+reaches the issuer. The issuer answers the same health checks on its
+management port and can send its traces and metrics to the authority's
+own observability backend.
 
 ![C2 Containers of the dataspace authority](diagrams/c2-dataspace-authority-containers.drawio.svg)
 
@@ -121,8 +131,9 @@ drawn from [DEPLOYING](DEPLOYING.md), the ADRs and the code.
 
 The deployment diagram: one participant's host (its HTTPS reverse
 proxy in front of the public ports 8080 and 8090, the STS reached only on
-the internal network, the management ports 8081 and 8091 never public,
-the `/data` volumes and the mounted keys and secrets), the authority's
+the internal network, the management ports 8081 and 8091 never public
+and probed there for health, the `/data` volumes and the mounted keys
+and secrets, the optional OpenTelemetry collector), the authority's
 host with the issuer (8070 public, 8071 internal) and its bundles folder,
 and the offline machine that builds and signs the bundles.
 
@@ -155,7 +166,10 @@ provider checks it for an offer that requires it
 ![Dynamic: Gaia-X onboarding and use](diagrams/dynamic-gaiax-onboarding.drawio.svg)
 
 **C3 Components**: inside each image, the adapters around the pure
-domain crates ([ADR 0004](adr/0004-hexagonal-architecture.md)).
+domain crates ([ADR 0004](adr/0004-hexagonal-architecture.md)). The
+shared `portitor-runtime` also holds the health checks (`health.rs`) and
+the traces and metrics (`telemetry.rs`) of all three
+([ADR 0023](adr/0023-observability.md)).
 
 ![C3 Components of portitor-connector](diagrams/c3-connector-components.drawio.svg)
 
@@ -274,9 +288,9 @@ ports.
 | 3 | `portitor-connector` | Control plane: catalog (datasets harvested into a read copy), contract negotiation, transfer; verifies DCP presentations, including Gaia-X compliance credentials from 0.8 ([ADR 0022](adr/0022-gaia-x-compliance-in-policies.md)); checks datasets and DSP messages against the authority's SHACL shapes. The data plane is its own module, linked into the connector for 0.x (see below) | Mandatory | DSP, DCP (verifier) |
 | 4 | `portitor-issuer` (from 0.6, [ADR 0018](adr/0018-issuer-component.md)) | Issues and revokes credentials (for example membership) to the participants the authority registered; publishes their status lists. From 0.7 it also serves the signed schema and vocabulary bundle, which `portitor-issuer bundle build` signs offline ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)) | Optional: one per dataspace, run by the dataspace authority, never on a participant's host | DCP (issuance) |
 
-### Images and crates in 0.8
+### Images and crates in 0.9
 
-Release 0.8 ships three images, built from one `Dockerfile` (one build
+Release 0.9 ships three images, built from one `Dockerfile` (one build
 target per image) and released, signed and attested together
 ([RELEASING.md](RELEASING.md)). Until the PostgreSQL adapter exists, each
 image keeps its state in its own SQLite file under `/data`.
@@ -287,9 +301,10 @@ image keeps its state in its own SQLite file under `/data`.
    +-----------------------------+        +----------------------------------+
    | portitor-connector          |  (1)   | portitor-identity                |
    | 8080 DSP, data plane        |------->| 8090 DID document, STS,          |
-   | 8081 management API         |  STS   |      credential service,         |
-   | /data/portitor.db           |        |      certificate chain           |
-   | /data/bundle-cache          |        | 8091 management API              |
+   | 8081 management API,        |  STS   |      credential service,         |
+   |      health checks          |        |      certificate chain           |
+   | /data/portitor.db           |        | 8091 management API,             |
+   | /data/bundle-cache          |        |      health checks               |
    +-----------------------------+        | /data/portitor-identity.db       |
           | (2) DSP request + token       +----------------------------------+
           v                                        ^ (3) DID document,     | (4) Gaia-X
@@ -303,8 +318,9 @@ image keeps its state in its own SQLite file under `/data`.
    | 8070 DID document, DCP issuer    |  (DCP issuance) and it delivers them
    |      service, status lists,      |  to their Storage API; verifiers
    |      bundles                     |  read its DID document and status
-   | 8071 management API              |  lists; connectors pull the
-   | /data/portitor-issuer.db         |  newest bundle version
+   | 8071 management API,             |  lists; connectors pull the
+   |      health checks               |  newest bundle version
+   | /data/portitor-issuer.db         |
    +----------------------------------+
 
  crates (-> means "uses"):
@@ -319,7 +335,9 @@ image keeps its state in its own SQLite file under `/data`.
    portitor-runtime   --> portitor-dcp, portitor-time
                                                 (adapters: HTTP client,
                                                  did:web resolver, API key,
-                                                 logging, shutdown)
+                                                 logging, shutdown, traces
+                                                 and metrics (OpenTelemetry),
+                                                 health checks)
    portitor-dps       --> portitor-dsp          (DataAddress)
    portitor-dsp, portitor-dcp --> portitor-time
    portitor-shacl     --> oxrdf, oxttl, oxjsonld (Oxigraph's RDF crates)

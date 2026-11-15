@@ -14,6 +14,7 @@
 //! - asking an issuer for credentials (holder side of DCP issuance),
 //!   [`issuance`];
 //! - a management API (API key, as the connector's), [`management`];
+//! - its readiness checks (ADR 0023), [`health`];
 //! - the X.509 chain of its key, [`certificate`], and Gaia-X onboarding,
 //!   [`gaiax`] (ADR 0021).
 //!
@@ -33,6 +34,7 @@ pub mod certificate;
 pub mod config;
 pub mod did_document;
 pub mod gaiax;
+pub mod health;
 pub mod issuance;
 pub mod management;
 pub mod presentation;
@@ -230,6 +232,11 @@ impl Identity {
     }
 }
 
+/// The route of the Secure Token Service. Its caller is the
+/// participant's own connector, so it is the one route whose caller's W3C
+/// trace context is taken (ADR 0023, section 4).
+pub const STS_ROUTE: &str = "/sts/token";
+
 /// The public HTTP routes: the DID document, the STS, the credential
 /// service (under the path of `PORTITOR_CREDENTIAL_SERVICE_URL`), the
 /// certificate chain and the public Gaia-X credentials (under the DID's
@@ -240,7 +247,7 @@ pub fn router(identity: Arc<Identity>) -> Router {
     let public = identity.public_path.clone();
     Router::new()
         .route(&identity.did_path, get(did_document::serve))
-        .route("/sts/token", post(sts::token))
+        .route(STS_ROUTE, post(sts::token))
         .route(
             &format!("{service}/presentations/query"),
             post(presentation::query),

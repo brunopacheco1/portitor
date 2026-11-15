@@ -188,8 +188,29 @@ impl DcpVerifier {
     /// The DID document cannot be read, has no Credential Service, or the
     /// STS signs for another identity.
     pub async fn check_own_identity(&self) -> Result<(), String> {
-        let own = self.participant_id.as_str();
         let doc = self.resolve_own_document().await?;
+        self.own_identity_agrees(&doc).await?;
+        tracing::info!(did = %self.participant_id, "own identity checked: DID document and STS agree");
+        Ok(())
+    }
+
+    /// The check of [`DcpVerifier::check_own_identity`] once, without
+    /// waiting between tries and without the log line: for the readiness
+    /// check (ADR 0023), which runs it again and again.
+    ///
+    /// # Errors
+    ///
+    /// As [`DcpVerifier::check_own_identity`].
+    pub async fn check_own_identity_once(&self) -> Result<(), String> {
+        // a verifier made with `for_readiness` tries once, without waiting
+        let doc = self.resolve_own_document().await?;
+        self.own_identity_agrees(&doc).await
+    }
+
+    /// Our DID document lists a Credential Service, and a token from our
+    /// STS is signed by a key in it with `iss` = `sub` = our DID.
+    async fn own_identity_agrees(&self, doc: &DidDocument) -> Result<(), String> {
+        let own = self.participant_id.as_str();
         if doc.credential_service().is_none() {
             return Err(format!(
                 "the DID document of {own} lists no CredentialService"
@@ -203,11 +224,31 @@ impl DcpVerifier {
         let token = self.sts.token(request).await?;
         // a cache of its own: this token is never presented anywhere
         let mut unused = JtiCache::default();
-        validate_self_issued(&token, &doc, own, now_secs(), LEEWAY, &mut unused).map_err(|e| {
+        validate_self_issued(&token, doc, own, now_secs(), LEEWAY, &mut unused).map_err(|e| {
             format!("PORTITOR_PARTICIPANT_ID is {own}, but the STS token is not signed as it: {e}")
         })?;
-        tracing::info!(did = %own, "own identity checked: DID document and STS agree");
         Ok(())
+    }
+
+    /// A verifier for the readiness check only: it reads our DID document
+    /// afresh each time (no cache), so a document that is no longer
+    /// served is noticed; tries once, without waiting; and its fetches
+    /// make no spans or measures (the check runs every few seconds, on
+    /// its own). `sts` should be unobserved too
+    /// ([`super::sts::StsClient::unobserved`]).
+    ///
+    /// # Errors
+    ///
+    /// The HTTP client cannot be built.
+    pub fn for_readiness(
+        settings: &AuthSettings,
+        sts: Arc<dyn SecureTokenService>,
+    ) -> Result<Self, String> {
+        let mut verifier = Self::new(settings, sts)?;
+        verifier.resolver = DidWebResolver::new(settings.allow_http, Duration::ZERO)?.unobserved();
+        verifier.http = verifier.http.unobserved();
+        verifier.start_tries = 1;
+        Ok(verifier)
     }
 
     async fn resolve_own_document(&self) -> Result<Arc<DidDocument>, String> {

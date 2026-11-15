@@ -253,7 +253,9 @@ pub fn config() -> Config {
         bind: "unused".to_owned(),
         credential_service_url: "https://holder.example/cs".to_owned(),
         db_file: "unused".into(),
-        management: None,
+        management: portitor_identity::config::ManagementConfig::health_only(
+            portitor_identity::config::DEFAULT_MANAGEMENT_BIND,
+        ),
         sts_client_id: HOLDER.to_owned(),
         sts_client_secret_file: "unused".into(),
         trusted_issuers: vec![ISSUER.to_owned()],

@@ -12,9 +12,6 @@
 //! and served at `GET /v1/openapi.json`; `docs/api/management-openapi.json`
 //! is a copy that a test keeps in step.
 
-use std::ffi::OsString;
-use std::path::PathBuf;
-
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
@@ -36,35 +33,16 @@ use crate::harvest::{EntryError, HarvestJob};
 use crate::system::xsd_date_time;
 pub use portitor_runtime::api_key::{ApiKey, MIN_KEY_LEN, Problem, problem, require_key};
 use portitor_runtime::api_key::{BearerKey, internal_error};
+use portitor_runtime::health;
 
-/// Where the management API listens, and its key.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ManagementConfig {
-    /// Address to listen on.
-    pub bind: String,
-    /// The file that holds the API key.
-    pub api_key_file: PathBuf,
-}
+/// Where the management port listens unless `PORTITOR_MANAGEMENT_BIND`
+/// says otherwise: on this machine only.
+pub const DEFAULT_MANAGEMENT_BIND: &str = "127.0.0.1:8081";
 
-impl ManagementConfig {
-    /// Reads `PORTITOR_MANAGEMENT_API_KEY_FILE` and `PORTITOR_MANAGEMENT_BIND`
-    /// (default `127.0.0.1:8081`) with `var`. Without a key file there is
-    /// no management API (`None`).
-    pub fn from_vars(var: impl Fn(&str) -> Option<OsString>) -> Option<Self> {
-        let api_key_file = PathBuf::from(var("PORTITOR_MANAGEMENT_API_KEY_FILE")?);
-        let bind = var("PORTITOR_MANAGEMENT_BIND").map_or_else(
-            || "127.0.0.1:8081".to_owned(),
-            |v| v.to_string_lossy().into_owned(),
-        );
-        Some(Self { bind, api_key_file })
-    }
-
-    /// Like [`ManagementConfig::from_vars`], from the environment.
-    #[must_use]
-    pub fn from_env() -> Option<Self> {
-        Self::from_vars(|k| std::env::var_os(k))
-    }
-}
+/// Where the management port listens, and the API key: the settings
+/// shared by the three components, read with
+/// `ManagementConfig::from_env(DEFAULT_MANAGEMENT_BIND)`.
+pub use portitor_runtime::management::ManagementConfig;
 
 /// 400 with the DSP error's reasons as the detail.
 fn refused(reason: &[Value]) -> Response {
@@ -748,7 +726,7 @@ fn next_after<T>(found: &[T], limit: usize, key: impl Fn(&T) -> &String) -> Opti
 #[openapi(
     info(
         title = "Portitor management API",
-        description = "Starts and follows contract negotiations and transfers in which this connector is the consumer, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description needs the API key.",
+        description = "Starts and follows contract negotiations and transfers in which this connector is the consumer, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only.",
         license(name = "Apache-2.0", identifier = "Apache-2.0"),
     ),
     paths(
@@ -789,7 +767,7 @@ pub struct ManagementApi;
 /// The `OpenAPI` description as pretty JSON, with the crate's version.
 #[must_use]
 pub fn openapi_json() -> String {
-    let mut doc = ManagementApi::openapi();
+    let mut doc = health::with_health_api(ManagementApi::openapi());
     env!("CARGO_PKG_VERSION").clone_into(&mut doc.info.version);
     doc.to_pretty_json().unwrap_or_default()
 }

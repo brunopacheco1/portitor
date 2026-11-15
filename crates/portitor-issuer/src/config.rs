@@ -46,8 +46,9 @@ pub struct Config {
     pub bind: String,
     /// The `SQLite` file (`PORTITOR_DB_FILE`).
     pub db_file: PathBuf,
-    /// The management API, if `PORTITOR_MANAGEMENT_API_KEY_FILE` is set.
-    pub management: Option<ManagementConfig>,
+    /// The management port: always the health checks, and the management
+    /// API when `PORTITOR_MANAGEMENT_API_KEY_FILE` is set.
+    pub management: ManagementConfig,
     /// Plain-HTTP DIDs and URLs allowed (`PORTITOR_ALLOW_HTTP_CALLBACKS`,
     /// tests only).
     pub allow_http: bool,
@@ -64,14 +65,10 @@ pub struct Config {
     pub bundle_dir: Option<PathBuf>,
 }
 
-/// Where the management API listens, and its key.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ManagementConfig {
-    /// Address to listen on (`PORTITOR_MANAGEMENT_BIND`).
-    pub bind: String,
-    /// The file that holds the API key.
-    pub api_key_file: PathBuf,
-}
+/// Where the management port listens, and the API key: the settings
+/// shared by the three components, read with
+/// `ManagementConfig::from_env(DEFAULT_MANAGEMENT_BIND)`.
+pub use portitor_runtime::management::ManagementConfig;
 
 /// A setting is missing or wrong.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -122,13 +119,7 @@ impl Config {
                 }
             },
         };
-        let management = text("PORTITOR_MANAGEMENT_API_KEY_FILE")
-            .filter(|v| !v.is_empty())
-            .map(|file| ManagementConfig {
-                bind: text("PORTITOR_MANAGEMENT_BIND")
-                    .unwrap_or_else(|| DEFAULT_MANAGEMENT_BIND.to_owned()),
-                api_key_file: PathBuf::from(file),
-            });
+        let management = ManagementConfig::from_vars(DEFAULT_MANAGEMENT_BIND, &var);
         Ok(Self {
             participant_id,
             key_file: PathBuf::from(required("PORTITOR_ISSUER_KEY_FILE")?),
@@ -192,7 +183,11 @@ mod tests {
         assert_eq!(config.bind, "0.0.0.0:8070");
         assert_eq!(config.db_file, PathBuf::from("/data/portitor-issuer.db"));
         assert_eq!(config.issuer_service_url, "https://issuer.example/issuer");
-        assert_eq!(config.management, None);
+        assert_eq!(
+            config.management,
+            ManagementConfig::health_only(DEFAULT_MANAGEMENT_BIND)
+        );
+        assert_eq!(config.management.bind, "127.0.0.1:8071");
         assert!(!config.allow_http);
         assert_eq!(config.max_active_per_holder, 10);
         assert_eq!(config.bundle_key_file, None);
@@ -220,10 +215,10 @@ mod tests {
         let config = read(&vars).unwrap();
         assert_eq!(
             config.management,
-            Some(ManagementConfig {
+            ManagementConfig {
                 bind: "127.0.0.1:8071".to_owned(),
-                api_key_file: PathBuf::from("/run/secrets/api")
-            })
+                api_key_file: Some(PathBuf::from("/run/secrets/api"))
+            }
         );
         assert!(config.allow_http);
     }

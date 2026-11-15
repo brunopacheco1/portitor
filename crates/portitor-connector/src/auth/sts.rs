@@ -72,18 +72,31 @@ impl std::fmt::Debug for StsClient {
 impl StsClient {
     /// A client for the STS in `settings`. Its HTTP client is used for
     /// the STS URL only, so `PORTITOR_STS_ALLOW_HTTP` allows plain HTTP
-    /// there and nowhere else.
+    /// there and nowhere else. The STS is our participant's own identity
+    /// component ([`portitor_runtime::telemetry::http::Peer::Own`]), so
+    /// the requests carry our trace context (ADR 0023, section 4).
     ///
     /// # Errors
     ///
     /// The HTTP client cannot be built.
     pub fn new(settings: &AuthSettings) -> Result<Self, String> {
+        let http = HttpSender::new(settings.allow_http || settings.sts_allow_http)?;
         Ok(Self {
-            http: HttpSender::new(settings.allow_http || settings.sts_allow_http)?,
+            http: http.for_own_service(),
             url: settings.sts_url.clone(),
             client_id: settings.sts_client_id.clone(),
             client_secret: settings.sts_client_secret.clone(),
         })
+    }
+
+    /// This client without spans, measures or trace context: for the
+    /// readiness check, which must not start traces of its own.
+    #[must_use]
+    pub fn unobserved(self) -> Self {
+        Self {
+            http: self.http.unobserved(),
+            ..self
+        }
     }
 
     /// The form body for `request`.

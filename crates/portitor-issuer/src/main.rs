@@ -9,27 +9,34 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use portitor_dcp::SigningKey;
-use portitor_issuer::config::Config;
+use portitor_issuer::config::{Config, DEFAULT_MANAGEMENT_BIND, ManagementConfig};
 use portitor_issuer::store::SqliteStore;
 use portitor_issuer::{Issuer, Ports, definitions};
-use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::directory::WebDirectory;
+use portitor_runtime::health;
 use portitor_runtime::http::HttpSender;
+use portitor_runtime::management::management_port;
 use portitor_runtime::serve::{
-    MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, bind_management, init_logging, serve, with_limits,
+    MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, run_component, serve, with_limits,
 };
 
 /// Without arguments, runs the issuer. `portitor-issuer bundle build
 /// ...` builds and signs a schema and vocabulary bundle offline instead
-/// (see `portitor_issuer::bundle_build`), and exits.
+/// (see `portitor_issuer::bundle_build`), and exits. `portitor-issuer
+/// health` asks the running issuer's readiness check (ADR 0023; for
+/// Docker's `HEALTHCHECK`), and exits 0 when it passes.
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    match args.split_first() {
-        None => serve_issuer(),
-        Some((command, rest)) if command == "bundle" => bundle_command(rest),
-        Some(_) => {
+    match args.as_slice() {
+        [] => serve_issuer(),
+        // `rest @ ..`: every argument after `bundle`, as a slice
+        [command, rest @ ..] if command == "bundle" => bundle_command(rest),
+        [command] if command == "health" => {
+            health::probe(&ManagementConfig::from_env(DEFAULT_MANAGEMENT_BIND).bind)
+        }
+        _ => {
             eprintln!(
-                "portitor-issuer takes no arguments, except for: {}",
+                "portitor-issuer takes no arguments, except for:\n  portitor-issuer health\n  {}",
                 portitor_issuer::bundle_build::USAGE
             );
             ExitCode::from(2)
@@ -53,14 +60,7 @@ fn bundle_command(args: &[OsString]) -> ExitCode {
 
 #[tokio::main]
 async fn serve_issuer() -> ExitCode {
-    init_logging();
-    match run().await {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            tracing::error!(%error, "portitor-issuer stopped");
-            ExitCode::FAILURE
-        }
-    }
+    run_component("portitor-issuer", run()).await
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -93,16 +93,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let issuer = Arc::new(issuer);
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
 
-    let management = if let Some(settings) = &config.management {
-        let key = ApiKey::read(&settings.api_key_file)
-            .map_err(|e| format!("PORTITOR_MANAGEMENT_API_KEY_FILE: {e}"))?;
-        let listener = bind_management(&settings.bind).await?;
-        let app = portitor_issuer::management::router(Arc::clone(&issuer), key);
-        Some((listener, app))
-    } else {
-        tracing::info!("management API off (PORTITOR_MANAGEMENT_API_KEY_FILE not set)");
-        None
-    };
+    // the management port always serves the health checks (ADR 0023);
+    // the management API only with its key
+    let checks = Arc::new(portitor_issuer::health::readiness_checks(
+        &issuer,
+        config.db_file.clone(),
+    ));
+    let management = management_port(&config.management, checks, |key| {
+        portitor_issuer::management::router(Arc::clone(&issuer), key)
+    })
+    .await?;
     tracing::info!(
         bind = %config.bind,
         did = %issuer.did(),
@@ -119,7 +119,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         REQUEST_TIMEOUT,
         MAX_CONCURRENT_REQUESTS,
     );
-    serve((listener, app), management).await?;
+    serve((listener, app), Some(management)).await?;
     Ok(())
 }
 

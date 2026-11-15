@@ -7,7 +7,7 @@ resolver = "3"
 members = ["crates/portitor-dsp", "crates/portitor-dcp", "crates/portitor-dps", "crates/portitor-time", "crates/portitor-runtime", "crates/portitor-bundle", "crates/portitor-connector", "crates/portitor-identity", "crates/portitor-issuer", "crates/portitor-shacl"]
 
 [workspace.package]
-version = "0.8.0"
+version = "0.9.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/brunopacheco1/portitor"
@@ -36,6 +36,17 @@ oxrdf = { version = "0.3.5", default-features = false }
 oxttl = { version = "0.2.5", default-features = false }
 # sh:pattern and XSD lexical forms in the SHACL engine; already in the lock through other crates
 regex = { version = "1.13", default-features = false, features = ["std", "unicode", "perf"] }
+# OpenTelemetry traces and metrics over OTLP/HTTP with Protocol Buffers (ADR 0023), only in
+# portitor-runtime's telemetry module. No default features: no gRPC (tonic), no reqwest, no
+# logs signal, and no `hyper-client` / opentelemetry-http `hyper` feature, which would turn on
+# HTTP/2 (h2) for the whole build; exports go through our own HTTPS client instead.
+# `internal-logs`: the SDK reports failed exports as log lines. Updates are grouped by
+# Dependabot: these crates are 0.x and change their API together.
+opentelemetry = { version = "0.33", default-features = false, features = ["trace", "metrics"] }
+opentelemetry-http = { version = "0.33", default-features = false }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["trace", "metrics", "http-proto", "internal-logs"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace", "metrics", "internal-logs"] }
+tracing-opentelemetry = { version = "0.34", default-features = false }
 ring = "0.17"
 # SQLite compiled in (bundled), so the static musl binary needs no system library
 rusqlite = { version = "0.42", features = ["bundled"] }

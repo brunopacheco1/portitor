@@ -13,7 +13,9 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use portitor_connector::http_client::Sender;
-use portitor_connector::management::{ApiKey, ManagementConfig, openapi_json, router};
+use portitor_connector::management::{
+    ApiKey, DEFAULT_MANAGEMENT_BIND, ManagementConfig, openapi_json, router,
+};
 use portitor_connector::{Config, Ports};
 use portitor_runtime::BoxFuture;
 use serde_json::{Value, json};
@@ -278,16 +280,23 @@ fn keys_and_configuration() {
                 .map(|(_, v)| OsString::from(v))
         }
     };
-    assert_eq!(ManagementConfig::from_vars(vars(&[])), None);
-    let c = ManagementConfig::from_vars(vars(&[("PORTITOR_MANAGEMENT_API_KEY_FILE", "/run/key")]))
-        .unwrap();
+    // no key file: the port is still bound, for the health checks
+    let c = ManagementConfig::from_vars(DEFAULT_MANAGEMENT_BIND, vars(&[]));
     assert_eq!(c.bind, "127.0.0.1:8081");
-    assert_eq!(c.api_key_file, std::path::PathBuf::from("/run/key"));
-    let c = ManagementConfig::from_vars(vars(&[
-        ("PORTITOR_MANAGEMENT_API_KEY_FILE", "/run/key"),
-        ("PORTITOR_MANAGEMENT_BIND", "0.0.0.0:9000"),
-    ]))
-    .unwrap();
+    assert_eq!(c.api_key_file, None);
+    let c = ManagementConfig::from_vars(
+        DEFAULT_MANAGEMENT_BIND,
+        vars(&[("PORTITOR_MANAGEMENT_API_KEY_FILE", "/run/key")]),
+    );
+    assert_eq!(c.bind, "127.0.0.1:8081");
+    assert_eq!(c.api_key_file, Some(std::path::PathBuf::from("/run/key")));
+    let c = ManagementConfig::from_vars(
+        DEFAULT_MANAGEMENT_BIND,
+        vars(&[
+            ("PORTITOR_MANAGEMENT_API_KEY_FILE", "/run/key"),
+            ("PORTITOR_MANAGEMENT_BIND", "0.0.0.0:9000"),
+        ]),
+    );
     assert_eq!(c.bind, "0.0.0.0:9000");
 }
 

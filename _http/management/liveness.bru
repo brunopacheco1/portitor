@@ -1,0 +1,22 @@
+meta {
+  name: Liveness
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{mgmtUrl}}/api/check/liveness
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+  res.body.isSystemHealthy: eq true
+}
+
+docs {
+  ADR 0023: liveness, EDC's HealthStatus shape. Checks only that the process answers
+  (component "process"). On the management port, no API key; served even when the
+  management API is off.
+}

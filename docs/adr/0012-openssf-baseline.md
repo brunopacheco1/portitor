@@ -29,6 +29,11 @@ for a project that has one maintainer today.
 - Moving to a higher level is decided before 1.0, in the 0.9 hardening
   release.
 
+Update (2026-11-15): the hardening release was renumbered 0.10 on
+2026-11-14 and split into 0.10 to 0.13 on 2026-11-15 (maintainer). The
+self-assessment and the decision on a higher level are in 0.13, the
+release candidate (ROADMAP).
+
 ## Consequences
 
 - Every level 1 control must hold for every release. Until the written

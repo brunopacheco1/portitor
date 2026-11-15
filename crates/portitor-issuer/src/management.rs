@@ -30,6 +30,7 @@ use portitor_dcp::message::{
     Context, CredentialObject, CredentialOfferMessage, CredentialOfferType,
 };
 use portitor_runtime::api_key::{ApiKey, BearerKey, Problem, internal_error, problem, require_key};
+use portitor_runtime::health;
 use portitor_runtime::system::{now_secs, xsd_date_time};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -411,7 +412,7 @@ async fn revoke(State(issuer): State<Arc<Issuer>>, Path(id): Path<String>) -> Re
 #[openapi(
     info(
         title = "Portitor issuer management API",
-        description = "Participants, offers, issued credentials and revocation of the dataspace authority's issuer. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description needs the API key.",
+        description = "Participants, offers, issued credentials and revocation of the dataspace authority's issuer. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only.",
         license(name = "Apache-2.0", identifier = "Apache-2.0"),
     ),
     paths(create_participant, list_participants, delete_participant, send_offer, list_credentials, revoke),
@@ -427,7 +428,7 @@ pub struct ManagementApi;
 /// The `OpenAPI` description as pretty JSON, with the crate's version.
 #[must_use]
 pub fn openapi_json() -> String {
-    let mut doc = ManagementApi::openapi();
+    let mut doc = health::with_health_api(ManagementApi::openapi());
     // `env!` reads the version from Cargo.toml at compile time.
     // `clone_into` is `doc.info.version = ....to_owned()`, reusing the
     // field's memory; clippy (`assigning_clones`) asks for this form.

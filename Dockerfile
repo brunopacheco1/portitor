@@ -16,6 +16,15 @@
 # An image holds only its binary and the CA certificate bundle: no shell, no
 # package manager, no libc. With nothing to run inside the image, buildx
 # builds every platform without emulation.
+#
+# Health (ADR 0023): each binary's `health` subcommand calls its own
+# GET /api/check/readiness on the management port (PORTITOR_MANAGEMENT_BIND;
+# 0.0.0.0 is called as 127.0.0.1) and exits 0 on HTTP 200, 1 otherwise, so
+# HEALTHCHECK needs no shell or curl. The management port always listens,
+# with or without PORTITOR_MANAGEMENT_API_KEY_FILE. While starting
+# (--start-period), a check runs every 2 s (--start-interval) and a failure
+# does not count; the connector's start check of its own identity may take
+# up to about 30 s.
 
 # CA certificates (Mozilla's bundle as packaged by Debian, MPL-2.0) so the
 # components can verify https addresses. Taken from distroless static,
@@ -54,10 +63,12 @@ LABEL org.opencontainers.image.title="portitor-identity" \
       org.opencontainers.image.description="Portitor identity: DID document, STS and credential service (DCP 1.0)"
 COPY dist/${TARGETARCH}/portitor-identity /portitor-identity
 ENV PORTITOR_DB_FILE=/data/portitor-identity.db
-# 8090: DID document, STS and credential service. 8091: management API, only
-# when PORTITOR_MANAGEMENT_API_KEY_FILE is set; it listens on 127.0.0.1
-# unless PORTITOR_MANAGEMENT_BIND says otherwise.
+# 8090: DID document, STS and credential service. 8091: health checks, and the
+# management API when PORTITOR_MANAGEMENT_API_KEY_FILE is set; it listens on
+# 127.0.0.1 unless PORTITOR_MANAGEMENT_BIND says otherwise.
 EXPOSE 8090 8091
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=60s --start-interval=2s \
+  CMD ["/portitor-identity", "health"]
 ENTRYPOINT ["/portitor-identity"]
 
 # Issuer: issues and revokes credentials for a dataspace authority (DCP, ADR 0018).
@@ -69,9 +80,12 @@ LABEL org.opencontainers.image.title="portitor-issuer" \
 COPY dist/${TARGETARCH}/portitor-issuer /portitor-issuer
 ENV PORTITOR_DB_FILE=/data/portitor-issuer.db
 # 8070: DID document, issuer metadata, credential requests and status, status
-# lists. 8071: management API, only when PORTITOR_MANAGEMENT_API_KEY_FILE is
-# set; it listens on 127.0.0.1 unless PORTITOR_MANAGEMENT_BIND says otherwise.
+# lists. 8071: health checks, and the management API when
+# PORTITOR_MANAGEMENT_API_KEY_FILE is set; it listens on 127.0.0.1 unless
+# PORTITOR_MANAGEMENT_BIND says otherwise.
 EXPOSE 8070 8071
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=60s --start-interval=2s \
+  CMD ["/portitor-issuer", "health"]
 ENTRYPOINT ["/portitor-issuer"]
 
 # Connector: DSP control plane and the built-in data plane.
@@ -81,7 +95,10 @@ LABEL org.opencontainers.image.title="portitor-connector" \
       org.opencontainers.image.description="Portitor connector for the Dataspace Protocol (DSP 2025-1)"
 COPY dist/${TARGETARCH}/portitor-connector /portitor-connector
 ENV PORTITOR_DB_FILE=/data/portitor.db
-# 8080: DSP. 8081: management API, only when PORTITOR_MANAGEMENT_API_KEY_FILE is
-# set; it listens on 127.0.0.1 unless PORTITOR_MANAGEMENT_BIND says otherwise.
+# 8080: DSP. 8081: health checks, and the management API when
+# PORTITOR_MANAGEMENT_API_KEY_FILE is set; it listens on 127.0.0.1 unless
+# PORTITOR_MANAGEMENT_BIND says otherwise.
 EXPOSE 8080 8081
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=60s --start-interval=2s \
+  CMD ["/portitor-connector", "health"]
 ENTRYPOINT ["/portitor-connector"]

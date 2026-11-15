@@ -397,6 +397,11 @@ on the heap", one type that holds either (`portitor-shacl/src/graph.rs`).
   `portitor-connector/src/harvest.rs`): a timer tick that comes during a
   long run is dropped, not queued.
 
+- `AtomicBool` is a `bool` that threads can share without a lock:
+  `store(true, Ordering::SeqCst)` sets it, `load(Ordering::SeqCst)` reads
+  it. `SeqCst` is the simplest and strictest ordering; Portitor uses no
+  other (`started` in `DatasetHarvester`, `portitor-connector/src/harvest.rs`).
+
 ### A snapshot swapped as a whole: `RwLock<Arc<View>>`
 
 ```rust
@@ -483,6 +488,40 @@ own name. The harvest's log lines use all three
 (`portitor-connector/src/harvest.rs`; `access_rights = ?access_rights` in
 `shacl.rs`).
 
+### Spans and log targets
+
+```rust
+let span = tracing::info_span!("http.server.request", http.route = route.as_deref(), "error.type" = Empty);
+let response = next.run(request).instrument(span.clone()).await;
+span.record("error.type", status.to_string());
+```
+
+A *span* is a stretch of work with a name and fields; log lines written
+while it runs belong to it. `.instrument(span)` runs a task inside the
+span every time the task is polled, also across `.await`s (a plain
+`span.enter()` would not survive an `.await`). `Empty` declares a field
+filled in later with `span.record`. A field name in quotes
+(`"error.type"`) is needed when a part is a Rust keyword. `otel.name`,
+`otel.kind` and `otel.status_code` are read by the OpenTelemetry layer
+as the span's name, kind and status (`portitor-runtime/src/telemetry/http.rs`).
+
+A field whose value is an `Option` is written only when it is `Some`:
+`portitor.dsp.role = kind.role_name()` leaves the field out of the span
+for an outbox without a role (`outbox.rs`), and `http.route =
+route.as_deref()` for a request that matched no route.
+
+`tracing::event!(target: STATE_EVENTS, tracing::Level::INFO, ...)`
+writes a log line with a chosen *target* instead of the module path; the
+OpenTelemetry layer copies only events with that target into traces
+(`portitor-connector/src/state_events.rs`). `event!` with the level
+spelled out is used there because `info!(target: ..., a.b = ...)` does
+not parse when the first field name has dots.
+
+`#[async_trait::async_trait]` on an `impl` block: the trait (here
+opentelemetry-http's `HttpClient`) was declared with that macro, so its
+`async fn` is really a function returning a boxed task, as `BoxFuture`
+does by hand (`OnTokio` in `portitor-runtime/src/telemetry.rs`).
+
 ## `async`, `.await` and background tasks
 
 `async fn` returns a task that runs when someone `.await`s it. While it
@@ -568,6 +607,99 @@ it, `notified()` waits for a ring. The issuer's outbox sleeps until the
 next delivery is due, or until a newly issued request rings
 (`portitor-issuer/src/delivery.rs`, `issue.rs`).
 
+```rust
+let _running = self.busy.lock().await;
+let fetched = self.source.fetch(/* ... */).await;
+```
+
+`tokio::sync::Mutex` is a lock that may be held across an `.await`; the
+`std::sync::Mutex` of the section above must not be. The bundle
+harvester holds it for a whole run, downloads included, so two runs
+never overlap (`BundleHarvester` in
+`portitor-connector/src/bundle_harvest.rs`).
+
+```rust
+let refreshing = async move {
+    loop {
+        check.refresh().await;
+        tokio::time::sleep(IDENTITY_REFRESH).await;
+    }
+};
+tokio::spawn(refreshing.instrument(tracing::Span::none()))
+```
+
+A background task that runs until the process stops: it checks our
+identity every 10 seconds and keeps the result, and the readiness probe
+only reads that result (`OwnIdentityCheck` in
+`portitor-connector/src/health.rs`). `.instrument(span)` runs the task in
+`span`; `Span::none()` is no span at all, so these runs start no trace.
+
+```rust
+let mut running = Vec::new();
+for (name, check) in &self.checks {
+    running.push((name, tokio::spawn(/* the check, with a timeout */)));
+}
+for (name, task) in running {
+    let outcome = task.await; /* ... */
+}
+```
+
+Start every task first, then await them one by one: they run at the
+same time, so the whole takes as long as the slowest, not the sum
+(`HealthChecks::run` in `portitor-runtime/src/health.rs`).
+
+```rust
+pub(crate) fn deliver<O: Outbox>(outbox: Arc<O>, out: O::Out) -> impl Future<Output = ()> {
+    let span = tracing::info_span!("dsp.outbox.deliver", /* ... */);
+    send_until_counter_party_acts(outbox, out).instrument(span)
+}
+```
+
+A plain `fn` that returns `impl Future` instead of an `async fn`: both
+give a task to await or spawn, but the body of an `async fn` runs only
+when the task first runs, while this body runs at the call. Here that
+matters: the span is made while the request that saved the message is
+still the current span, and the task, spawned with `tokio::spawn`, runs
+later inside it (`outbox.rs`). Spawning a task with
+`.instrument(span)` is how a background task keeps the trace of the
+request that started it.
+
+```rust
+fn post<'a>(&'a self, url: &'a str, body: &'a Value) -> BoxFuture<'a, Result<Value, String>> {
+    Box::pin(async move { self.json(json_post(url, body, None)?, url).await })
+}
+```
+
+`Box::pin(async move { ... })` is how a method that returns a
+`BoxFuture` is written: an `async` block (the task), `move` to take its
+arguments in, boxed and pinned (`BoxFuture` above). `HttpSender` in
+`portitor-runtime/src/http.rs`.
+
+```rust
+let exchange = async move {
+    let response = client.request(request).await?;
+    /* ... */
+    Ok::<_, opentelemetry_http::HttpError>(response)
+};
+```
+
+An `async` block has no declared return type, so when it uses `?` the
+compiler cannot tell which error type it returns. `Ok::<_, E>(value)`
+names it: `_` lets the compiler fill in the value's type, `E` is the
+error (`export` in `telemetry.rs`).
+
+```rust
+let response = match tokio::time::timeout(UPSTREAM_TIMEOUT, sent).await {
+    Ok(Ok(answer)) => answer,      // in time, and the request worked
+    Ok(Err(error)) => /* ... */,   // in time, but the request failed
+    Err(_) => /* ... */,           // no answer in time
+};
+```
+
+`timeout` wraps the task's own `Result` in one of its own, so there are
+two: the outer says whether it ended in time, the inner what the task
+gave (`fetch` in `data_plane.rs`).
+
 ## Lifetimes: `'a`
 
 `fn post<'a>(&'a self, url: &'a str, ...) -> BoxFuture<'a, ...>` says "the
@@ -589,6 +721,34 @@ pub struct TokenFrame<'a> {
 it points to" (`portitor-dcp/src/holder.rs`; also `Jws<'a>`, which keeps a
 slice of the token it was read from, and `Signer<'a>` in `keys.rs`). It saves copying
 the text for a value that only lives during one call.
+
+### `'static`
+
+`&'static str` is text that lives as long as the program: in practice a
+literal written in the code, such as `"portitor-connector"`. A function
+asks for it when it keeps the text for good (`telemetry::init`, the
+service name) or when the value must come from the code, not from a
+request (the metric attributes in `telemetry/metrics.rs`).
+`&'static [&'static str]` is the same for a list of texts:
+`&["/sts/token"]`, the trusted routes of `observe_requests`.
+
+A `'static` bound on a type, as in `F: Fn() -> ... + Send + Sync +
+'static` (`health::blocking`), says that the value borrows nothing that
+could end before it: it owns what it needs, often taken in with `move`.
+`tokio::spawn` and `std::thread::spawn` ask for it, because the task may
+outlive the function that started it.
+
+### Higher-ranked bounds: `for<'a>`
+
+```rust
+S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+```
+
+"For every lifetime `'lookup`": the subscriber can look up spans however
+long the borrow is. It appears where Portitor plugs into
+tracing-subscriber (`telemetry.rs`), copied from that library's docs,
+which ask for it. Nothing to decide there; read it as part of the trait's
+name.
 
 ## Errors in a `Box`
 
@@ -642,6 +802,10 @@ context loader). `.into()` turns a `String` into such a boxed error
   the signature covers exactly the file that is published, not a copy
   that serde wrote again (with other spaces or field order).
 - `#[must_use]`: the caller should use the return value.
+  `#[must_use = "..."]` adds the reason to the compiler's warning:
+  `Telemetry` says to call `shutdown()`, and `CallerTrace::join` that the
+  span is left when its guard is dropped (`telemetry.rs`,
+  `telemetry/http.rs`).
 - `#[cfg(test)]`: compiled only for tests. `#[cfg(feature = "tck")]`:
   compiled only in the DSP TCK build.
 - `#[allow(clippy::...)]`: switches off one lint here. A comment says
@@ -695,6 +859,10 @@ API needs (here the STS error list, `portitor-identity/src/sts.rs`).
 
 - `let _ = x;` ignores a result on purpose. A comment says why that is
   safe.
+- `drop(guard)` ends a lock (or any value) here instead of at the end of
+  the block, so others waiting for it go on at once
+  (`BundleCopy::replace` in `bundle_harvest.rs` frees the write lock
+  before it records the metrics).
 - `impl Trait` in an argument (`var: impl Fn(&str) -> Option<OsString>`)
   means "any type that implements `Trait`".
 - `pub(crate)` is visible inside this crate only.
@@ -716,7 +884,8 @@ API needs (here the STS error list, `portitor-identity/src/sts.rs`).
   value built the first time it is used, then shared by every thread for
   the rest of the program (the XSD patterns in
   `portitor-shacl/src/lexical.rs`). A regular expression is compiled
-  once, not on every check.
+  once, not on every check. The metric instruments are made the same way
+  (`INSTRUMENTS` in `portitor-runtime/src/telemetry/metrics.rs`).
 - `list.sort_by_cached_key(f)` sorts by `f(item)` but calls `f` only
   once per item; `sort_by_key` may call it many times. Worth it when the
   key is costly to make, such as the text of an RDF term

@@ -26,6 +26,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use portitor_runtime::api_key::{ApiKey, BearerKey, Problem, internal_error, problem, require_key};
+use portitor_runtime::health;
 use portitor_runtime::system::{new_uuid, now_secs, xsd_date_time};
 use serde::{Deserialize, Serialize};
 use utoipa::{OpenApi, ToSchema};
@@ -598,7 +599,7 @@ async fn list_compliance_runs(State(identity): State<Arc<Identity>>) -> Response
 #[openapi(
     info(
         title = "Portitor identity management API",
-        description = "Credential requests, credentials and offers of the participant this identity component holds, and its Gaia-X compliance runs. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description needs the API key.",
+        description = "Credential requests, credentials and offers of the participant this identity component holds, and its Gaia-X compliance runs. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only.",
         license(name = "Apache-2.0", identifier = "Apache-2.0"),
     ),
     paths(
@@ -634,7 +635,7 @@ pub struct ManagementApi;
 /// The `OpenAPI` description as pretty JSON, with the crate's version.
 #[must_use]
 pub fn openapi_json() -> String {
-    let mut doc = ManagementApi::openapi();
+    let mut doc = health::with_health_api(ManagementApi::openapi());
     env!("CARGO_PKG_VERSION").clone_into(&mut doc.info.version);
     doc.to_pretty_json().unwrap_or_default()
 }

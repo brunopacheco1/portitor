@@ -4,6 +4,7 @@
 
 //! Portitor binary.
 
+use std::ffi::OsString;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -11,29 +12,43 @@ use portitor_bundle::source::{BundleConfig, source_for};
 use portitor_bundle::store::CacheFolder;
 use portitor_connector::auth::{AuthSettings, CallerVerifier, Prover, dcp_adapters};
 use portitor_connector::bundle_harvest::BundleHarvester;
+use portitor_connector::health::{Dependencies, OwnIdentityCheck, readiness_checks};
+use portitor_connector::management::{DEFAULT_MANAGEMENT_BIND, ManagementConfig};
 use portitor_runtime::directory::{Directory, WebDirectory};
+use portitor_runtime::health;
+use portitor_runtime::management::management_port;
 use portitor_runtime::serve::{
-    MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, bind_management, init_logging, serve, with_limits,
+    MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, run_component, serve, with_limits,
 };
 
 /// The verifier and the prover (ADR 0016).
 type AuthAdapters = (Arc<dyn CallerVerifier>, Arc<dyn Prover>);
 
-#[tokio::main]
-async fn main() -> ExitCode {
-    init_logging();
-    match run().await {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            tracing::error!(%error, "portitor-connector stopped");
-            ExitCode::FAILURE
+/// Without arguments, runs the connector. `portitor-connector health`
+/// asks the running connector's readiness check instead (ADR 0023; for
+/// Docker's `HEALTHCHECK`), and exits 0 when it passes.
+fn main() -> ExitCode {
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    match args.as_slice() {
+        [] => serve_connector(),
+        [command] if command == "health" => {
+            health::probe(&ManagementConfig::from_env(DEFAULT_MANAGEMENT_BIND).bind)
+        }
+        _ => {
+            eprintln!("portitor-connector takes no arguments, except for: health");
+            ExitCode::from(2)
         }
     }
 }
 
+#[tokio::main]
+async fn serve_connector() -> ExitCode {
+    run_component("portitor-connector", run()).await
+}
+
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = portitor_connector::Config::from_env()?;
-    let sender = portitor_connector::HttpSender::new(config.allow_http_callbacks)?;
+    let sender = portitor_connector::dsp_sender(config.allow_http_callbacks)?;
     if config.allow_http_callbacks {
         tracing::warn!("http callback addresses allowed (PORTITOR_ALLOW_HTTP_CALLBACKS)");
     }
@@ -51,6 +66,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     {
         tracing::warn!("{warning}");
     }
+    // readiness (ADR 0023): the start check of our identity, run again
+    let identity_check = match &settings {
+        Some(settings) => {
+            let check = Arc::new(OwnIdentityCheck::new(settings)?);
+            // runs until the process stops; the probes read its results
+            check.spawn_refresh();
+            Some(check)
+        }
+        None => None,
+    };
     (ports.verifier, ports.prover) = auth_adapters(settings).await?;
     let bundle = start_bundle_harvest(&config, &mut ports).await?;
     // `build` runs the first harvest before it returns: blocking work (a
@@ -58,11 +83,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // before anything is served, like the bundle read above
     let (app, negotiator) = portitor_connector::build(&config, ports)?;
     schedule_harvest(&config, &negotiator);
+    let mut bundle_harvester = None;
     if let Some((harvester, start_job)) = bundle {
         let listener = negotiator.bundle_listener();
         // the start run goes into the job log, which exists from `build` on
         listener.record(start_job);
         let harvester = Arc::new(harvester);
+        bundle_harvester = Some(Arc::clone(&harvester));
         if harvester.schedule(listener).is_some() {
             tracing::info!(
                 refresh_seconds = harvester.refresh_seconds(),
@@ -83,18 +110,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let bind = std::env::var("PORTITOR_BIND").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
 
-    let management =
-        if let Some(settings) = portitor_connector::management::ManagementConfig::from_env() {
-            let key = portitor_connector::management::ApiKey::read(&settings.api_key_file)?;
-            let listener = bind_management(&settings.bind).await?;
-            Some((
-                listener,
-                portitor_connector::management::router(negotiator.clone(), key),
-            ))
-        } else {
-            tracing::info!("management API off (PORTITOR_MANAGEMENT_API_KEY_FILE not set)");
-            None
-        };
+    // the management port always serves the health checks (ADR 0023);
+    // the management API only with its key
+    let checks = Arc::new(readiness_checks(Dependencies {
+        db_file: config.db_file.clone(),
+        negotiator: negotiator.clone(),
+        bundle: bundle_harvester,
+        identity: identity_check,
+    }));
+    let settings = ManagementConfig::from_env(DEFAULT_MANAGEMENT_BIND);
+    let management = management_port(&settings, checks, |key| {
+        portitor_connector::management::router(negotiator.clone(), key)
+    })
+    .await?;
     tracing::info!(
         %bind,
         datasets = negotiator.catalog_size(),
@@ -103,7 +131,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     // the public routes: anyone can call them
     let app = with_limits(app, REQUEST_TIMEOUT, MAX_CONCURRENT_REQUESTS);
-    serve((listener, app), management).await?;
+    serve((listener, app), Some(management)).await?;
     Ok(())
 }
 

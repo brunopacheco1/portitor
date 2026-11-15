@@ -59,7 +59,9 @@ pub mod consumer_transfer;
 pub mod data_flows;
 pub mod data_plane;
 pub mod harvest;
+pub mod health;
 pub mod http_client;
+mod inbound;
 pub mod management;
 pub mod negotiation;
 mod outbox;
@@ -71,6 +73,7 @@ pub mod ports;
 pub mod bundle_harvest;
 // the bundle's rules: SHACL dataset check, message guard
 pub mod shacl;
+mod state_events;
 pub mod store;
 pub mod system;
 #[cfg(feature = "tck")]
@@ -79,6 +82,17 @@ pub mod transfer;
 
 pub use http_client::HttpSender;
 pub use ports::Ports;
+
+/// The HTTP client of the DSP messages we send to other participants
+/// (the outbox, state queries): it never sends our trace context, and
+/// its measures do not name the hosts (ADR 0023, section 4;
+/// `tests/trace_context.rs`). Plain `http://` only with `allow_http`.
+///
+/// # Errors
+/// The HTTP client cannot be built.
+pub fn dsp_sender(allow_http: bool) -> Result<HttpSender, String> {
+    HttpSender::new(allow_http)
+}
 
 /// Path prefix of the DSP 2025-1 endpoints.
 pub const DSP_PATH: &str = "/dsp/2025-1";
@@ -389,6 +403,13 @@ impl Negotiator {
     #[must_use]
     pub fn bundle_listener(&self) -> Arc<dyn bundle_harvest::BundleListener> {
         Arc::clone(&self.harvester) as _
+    }
+
+    /// Whether the start harvest ran ([`build`] runs it): readiness, ADR
+    /// 0023.
+    #[must_use]
+    pub fn harvest_started(&self) -> bool {
+        self.harvester.started()
     }
 
     /// How many datasets are in the catalog now.
@@ -762,8 +783,12 @@ async fn catalog_request(
     State(s): State<Arc<AppState>>,
     body: Result<Json<serde_json::Value>, JsonRejection>,
 ) -> Response {
-    let refused =
-        |reason: &str| respond::<()>(Outcome::BadRequest(CatalogError::new("400", reason)));
+    let refused = |reason: &str| {
+        portitor_runtime::telemetry::metrics::dsp_request_refused(
+            portitor_runtime::telemetry::metrics::Refusal::InvalidMessage,
+        );
+        respond::<()>(Outcome::BadRequest(CatalogError::new("400", reason)))
+    };
     match body {
         Ok(Json(value)) => match read_catalog_request(value) {
             Ok(msg) => respond(s.catalog.request(&msg)),

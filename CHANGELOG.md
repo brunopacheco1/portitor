@@ -12,6 +12,8 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-15
+
 ### Documentation
 
 - C1 and C2 diagrams redrawn with more context: C1 shows the dataspace
@@ -28,8 +30,7 @@ versions may change behaviour and configuration.
   three C4 dynamic diagrams in sequence style (`dynamic-join`,
   `dynamic-negotiate-transfer`, `dynamic-gaiax-onboarding`), shown in
   ARCHITECTURE.md under "Deployment and flows".
-- Documentation review after 0.8: the Compose demo defaults to the 0.8.0
-  images; the README links the website at its own address; AGENTS.md
+- Documentation review after 0.8: the README links the website at its own address; AGENTS.md
   names DCP v1.0.1 and Gaia-X as shipped; the security assurance case
   names the compliance issuer pin (`PORTITOR_GAIAX_COMPLIANCE_DID`) and
   that compliance credentials from unlisted services are skipped.
@@ -46,6 +47,110 @@ versions may change behaviour and configuration.
   shows the Gaia-X compliance checks (ADR 0022), presentations the `gx:`
   scope type rule (ADR 0021), and Gaia-X onboarding the steps of a run
   and its schedule.
+- [ADR 0023](docs/adr/0023-observability.md) (health checks, traces and
+  metrics; Proposed until the maintainer accepts it), with a section on
+  what changed while building, and the
+  [0.9 spike report](docs/spikes/0.9-opentelemetry.md) (OpenTelemetry
+  within the footprint budget).
+- The roadmap splits the hardening release 0.10 into 0.10 (supply
+  chain), 0.11 (security hardening), 0.12 (interoperability and
+  performance) and 0.13 (release candidate), each with exit criteria
+  from its items. ADR 0012, ADR 0017 and ADR 0021 note the new
+  numbers; RISKS_AND_TECHNICAL_DEBTS and SECURITY-ASSURANCE follow
+  them.
+- RISKS_AND_TECHNICAL_DEBTS: R-36 (the OpenTelemetry crates are 0.x),
+  R-37 (telemetry costs some throughput at saturation: 8% with export
+  off, 12% to 18% with it on; sampling does not win it back), TD-28 (no
+  trace across participants, by design), TD-29 (no OTLP logs, gRPC or
+  compression) and TD-30 (the outbox resends a message the counter-party
+  refused with a 4xx); TD-18 (operations) addressed. SECURITY-ASSURANCE:
+  telemetry off by default, operational data in the threat model, the
+  operator's monitoring as a trust boundary.
+- DEPLOYING: "Health and logs" with the health checks and probes,
+  "Traces and metrics" (variables, sampling, what a trace shows, the
+  metrics), an upgrade note "From 0.8 to 0.9", and security and network
+  notes for both.
+- TESTING: "Observability stack (by hand)", the health and telemetry
+  export tests, and how to run the Compose demo with local images.
+- RUST-IDIOMS: `AtomicBool`, spans with `.instrument`, and log targets.
+- `_http/` Bruno requests for the liveness and readiness checks of the
+  connector, the identity component and the issuer.
+
+### Added
+
+- Health checks in Eclipse EDC's Observability API shape on the
+  management port of the connector, the identity component and the
+  issuer, without the API key (ADR 0023): `GET /api/check/liveness`,
+  `/readiness`, `/startup`, `/health`, HTTP 200 or 503 with a
+  `HealthStatus` body. Readiness checks only the component's own
+  dependencies (its SQLite file, its key, its DID document or status
+  lists; for the connector the start harvest, the bundle and its own
+  DID document and STS), never other participants.
+- A `health` subcommand in each binary (`portitor-connector health`):
+  calls its own readiness check and exits 0 or 1. Each image has a
+  Docker `HEALTHCHECK` with it, and the Compose demo starts each
+  component once those it needs are healthy.
+- An optional observability stack for the Compose demo
+  (`examples/compose/observability.yaml`, ADR 0023 section 6): an
+  OpenTelemetry Collector, Jaeger and Prometheus, pinned by digest,
+  started by hand. `scripts/demo-compose.sh` takes it with
+  `EXTRA_COMPOSE=examples/compose/observability.yaml`. See TESTING,
+  "Observability stack (by hand)".
+- A quickstart on the website ("Try it"): what to install, how to run
+  the Compose demo, where to look and how to clean up. The README links
+  to it.
+- Traces and metrics with OpenTelemetry in all three components
+  ([ADR 0023](docs/adr/0023-observability.md)), off unless
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is set: OTLP over HTTP with Protocol
+  Buffers, sent with Portitor's own HTTPS client (no HTTP/2, no gRPC).
+  A span per request served (route templates only) and sent, a span per
+  DSP outbox delivery, and each negotiation and transfer state change as
+  a span event with its DSP process ids. Metrics:
+  `http.server.request.duration`, `http.client.request.duration` and
+  Portitor's own under `portitor.` (negotiations and transfers ended,
+  DSP requests refused, outbox resends and give-ups, harvest runs,
+  rejected datasets, bundle version in force); the list is in
+  DEPLOYING, section 6. The `traceparent` header crosses only calls
+  inside one participant (connector to its STS and to its data
+  sources); DSP calls carry none and ignore one received. With export
+  on, JSON log lines inside a span start with `trace_id`. New
+  dependencies: `opentelemetry`, `opentelemetry_sdk`,
+  `opentelemetry-otlp`, `opentelemetry-http` 0.33 and
+  `tracing-opentelemetry` 0.34, grouped in one Dependabot update.
+- Each negotiation and transfer state change is logged (INFO, target
+  `portitor::state`) with both process ids and the old and new state.
+- The health checks are neither traced nor measured, and the
+  connector's readiness work sends no `traceparent`.
+
+### Changed
+
+- The management port is always bound now (default `127.0.0.1`).
+  Without `PORTITOR_MANAGEMENT_API_KEY_FILE` it serves only the health
+  checks; with it, also the management API, as before. Two processes on
+  one host need different `PORTITOR_MANAGEMENT_BIND` ports.
+- The Compose demo's default images are 0.9.0: older images have no
+  `health` subcommand.
+- `portitor-connector` and `portitor-identity` refuse any argument other
+  than `health` (exit code 2); `portitor-issuer` takes `bundle build`
+  and `health`.
+- One parser for `PORTITOR_MANAGEMENT_BIND` and
+  `PORTITOR_MANAGEMENT_API_KEY_FILE` in all three components: values
+  are trimmed and an empty value counts as unset. An empty
+  `PORTITOR_MANAGEMENT_API_KEY_FILE` now switches the connector's
+  management API off.
+- If `OTEL_EXPORTER_OTLP_ENDPOINT` (or a signal-specific
+  `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or
+  `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`) is already in the environment,
+  for example set by the OpenTelemetry Operator, export turns on. Unset
+  it if you do not want export.
+- A failed readiness check is logged only when its result changes:
+  `readiness check failed` (WARN) when it starts failing,
+  `readiness check passes again` (INFO) when it recovers.
+- The start log line `management API listening` is now
+  `management port listening`: the port is bound also without the API.
+- `scripts/demo-compose.sh` runs `docker compose down --volumes
+  --remove-orphans` before deleting `examples/compose/run/`, so a second
+  run after `KEEP=1` works.
 
 ## [0.8.0] - 2026-11-15
 

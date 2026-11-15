@@ -77,8 +77,12 @@ Check each item and keep the answers in your own runbook.
 - [ ] **Storage.** A persistent volume for `/data` (negotiations, SQLite).
 - [ ] **Network.** Inbound: partners reach the DSP endpoints, including
   the consumer callbacks under `/dsp/2025-1/callback`, through your proxy.
-  Outbound: the connector calls the callback addresses partners give it
-  and, as consumer, the providers' DSP endpoints; allow only what it needs
+  Inbound from your probes and monitoring only: the management port
+  (health checks, [Health and logs](#health-and-logs)), never through
+  the proxy. Outbound: the connector calls the callback addresses
+  partners give it and, as consumer, the providers' DSP endpoints; with
+  telemetry on, also your OTLP receiver
+  ([Traces and metrics](#traces-and-metrics)). Allow only what it needs
   (see [Security](#5-security)).
 - [ ] **Trust.** Partners' TLS certificates must chain to a CA in the
   image's bundle, or to a private CA you add (see [Private CAs](#private-cas)).
@@ -110,8 +114,8 @@ All configuration is by environment variable. The full table is in the
 | `PORTITOR_BUNDLE_CACHE_DIR` | leave the default, `bundle-cache` next to `PORTITOR_DB_FILE` (`/data/bundle-cache` in the image) |
 | `PORTITOR_DB_FILE` | leave the image default, `/data/portitor.db` |
 | `PORTITOR_BIND` | leave the default, `0.0.0.0:8080` |
-| `PORTITOR_MANAGEMENT_API_KEY_FILE` | path of the mounted key file, or unset (management API off) |
-| `PORTITOR_MANAGEMENT_BIND` | `0.0.0.0:8081` in a container (publish it only on an internal interface); the default `127.0.0.1:8081` is unreachable from outside a container |
+| `PORTITOR_MANAGEMENT_API_KEY_FILE` | path of the mounted key file, or unset (management API off; the management port then serves only the [health checks](#health-and-logs)). The value is trimmed; an empty value counts as unset |
+| `PORTITOR_MANAGEMENT_BIND` | `0.0.0.0:8081` in a container (publish it only on an internal interface); the default `127.0.0.1:8081` is unreachable from outside a container. The port is always bound: it serves the [health checks](#health-and-logs), with or without the key |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | **unset** (never `true` in production) |
 | `PORTITOR_DATA_TOKEN_SECONDS` | leave the default, `3600`, unless consumers need longer to fetch; at most `31536000` (one year) |
 | `PORTITOR_STS_URL` | **required**: your identity's STS token endpoint, `<identity base URL>/sts/token` |
@@ -122,6 +126,7 @@ All configuration is by environment variable. The full table is in the
 | `PORTITOR_DCP_SCOPES` | leave the default, `org.eclipse.dspace.dcp.vc.type:MembershipCredential` (comma-separated). Each must be a DCP scope (`org.eclipse.dspace.dcp.vc.type:<Type>[:access]` or `org.eclipse.dspace.dcp.vc.id:<id>`); the type `VerifiableCredential` is refused, as it would let a partner read every credential. The connector does not start otherwise |
 | `PORTITOR_POLICY_CREDENTIALS` | unset, unless your offers constrain credential claims: the credential types they use, comma-separated, each `Type` or `Type=<scope>` (see [Credential constraints](#credential-constraints)) |
 | `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` | unset, unless your offers require Gaia-X compliance: comma-separated `did:web` DIDs of the compliance services you trust (see [Gaia-X compliance](#gaia-x-compliance)) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (no traces or metrics), or your OTLP receiver's base URL; see [Traces and metrics](#traces-and-metrics) for this and the other `OTEL_*` variables |
 | `RUST_LOG` | `info` (default); `debug` only while diagnosing |
 
 ### Credential constraints
@@ -420,9 +425,11 @@ Rules:
 - `docker stop` (SIGTERM) stops it cleanly; it stops taking requests and
   exits.
 - Kubernetes: one replica (`Deployment` with `strategy: Recreate`, or a
-  `StatefulSet`), a `PersistentVolumeClaim` on `/data`, and `/health` as
-  liveness probe. Mount the management key from a `Secret`, and do not put
-  the management port in an `Ingress`. There is no Helm chart yet.
+  `StatefulSet`), a `PersistentVolumeClaim` on `/data`, and the
+  [health checks](#health-and-logs) as probes (set
+  `PORTITOR_MANAGEMENT_BIND=0.0.0.0:8081` so the kubelet can reach them).
+  Mount the management key from a `Secret`, and do not put the management
+  port in an `Ingress`. There is no Helm chart yet.
 
 Check after start:
 
@@ -434,9 +441,16 @@ curl -s  https://connector.example.com/.well-known/dspace-version
 The log line `portitor-connector listening` shows the bind address, the number
 of datasets in the catalog after the start harvest, and the database file.
 `catalog ready` comes just before it.
-`management API listening` shows its address; `management API off` means
-no key file is set. A missing, unreadable or too short key file stops the
-start with an error.
+`management port listening` shows the management port's address; it is
+always bound, for the health checks. `management API off` means no key
+file is set (or the variable is empty): the port then serves only the
+health checks. A missing, unreadable or too short key file stops the
+start with an error. With telemetry on, `telemetry: exporting` comes
+first ([Traces and metrics](#traces-and-metrics)).
+
+The binary takes no arguments except `health`
+([Health and logs](#health-and-logs)); any other argument stops it with
+exit code 2.
 
 ## 4. Run the identity next to the connector
 
@@ -490,8 +504,9 @@ participant.
 | `PORTITOR_TRUSTED_ISSUERS` | required | comma-separated issuer DIDs |
 | `PORTITOR_BIND` | `0.0.0.0:8090` | leave the default |
 | `PORTITOR_DB_FILE` | `/data/portitor-identity.db` | leave the default |
-| `PORTITOR_MANAGEMENT_API_KEY_FILE` | unset (management API off) | path of the mounted key file |
-| `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8091` | `0.0.0.0:8091` in a container, published only on an internal interface |
+| `PORTITOR_MANAGEMENT_API_KEY_FILE` | unset (management API off; the port serves only the health checks; an empty value counts as unset) | path of the mounted key file |
+| `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8091` | `0.0.0.0:8091` in a container, published only on an internal interface. Always bound, for the health checks |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (no traces or metrics) | your OTLP receiver's base URL, if you collect them ([Traces and metrics](#traces-and-metrics)) |
 | `PORTITOR_SCOPE_TYPE_ALIASES` | `org.eclipse.edc.vc.type` | comma-separated scope aliases that mean "credentials of this type", besides DCP's `org.eclipse.dspace.dcp.vc.type` |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | unset | **unset** (`true` allows plain-HTTP DIDs and URLs, tests only) |
 | `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` | unset | Gaia-X only: path of the PEM chain of the identity key, the key's certificate first ([Gaia-X onboarding](#gaia-x-onboarding-optional)) |
@@ -511,6 +526,7 @@ participant.
 | public | `GET {base}/.well-known/x509CertificateChain.pem` | anyone, with a chain set (Gaia-X services read it through `x5u`). `{base}` is empty for a DID without a path, else the DID path (`/participants/a` for `did:web:host:participants:a`) |
 | public | `GET {base}/credentials/gaiax/{legal-person,terms-and-conditions,registration-number}` | anyone, with Gaia-X on; `{base}` as above |
 | management | `POST`, `GET /v1/credential-requests`, `GET /v1/credential-requests/{holderPid}`, `GET /v1/credentials`, `DELETE /v1/credentials/{id}`, `GET /v1/offers`, `POST /v1/offers/request`, `POST`, `GET /v1/gaiax/compliance`, `GET /v1/openapi.json` | operators ([OpenAPI](api/identity-management-openapi.json)) |
+| management | `GET /api/check/liveness`, `/readiness`, `/startup`, `/health` | probes, no API key, also without the management API ([Health and logs](#health-and-logs)). Readiness checks `database`, `key` and `did-document` |
 
 The public endpoints are described in
 [api/identity-openapi.json](api/identity-openapi.json).
@@ -533,7 +549,7 @@ and to check partners' credentials:
 | Port | Serves | Reached by | Expose |
 |---|---|---|---|
 | 8090 | DID document, credential service (presentation and Storage API), STS; with Gaia-X, the certificate chain and the Gaia-X credentials | partners and issuers (DID document, credential service); Gaia-X services (DID document, certificate chain); your connector (STS) | through your HTTPS reverse proxy, except `/sts/token`: your connector reaches it on the internal network |
-| 8091 | management API | your operators only | **never publicly**: host loopback or an internal network, never the public proxy |
+| 8091 | health checks; management API with its key | your operators and probes | **never publicly**: host loopback or an internal network, never the public proxy |
 
 ### Run
 
@@ -566,7 +582,8 @@ The same rules as for the connector apply: one container per database
 file, user `65532`, only `/data` writable, `docker stop` stops it cleanly.
 Kubernetes: one replica with a `PersistentVolumeClaim` on `/data`; the key
 and both secrets from `Secret`s mounted as files; only port 8090 in the
-`Ingress`.
+`Ingress`; probes on port 8091 as for the connector
+([Health and logs](#health-and-logs)).
 
 Check after start:
 
@@ -801,6 +818,8 @@ change breaks the Gaia-X credentials too: run again after one.
 | Log message (level) | Meaning |
 |---|---|
 | `portitor-identity listening` (INFO) | Started; shows the DID, the key id and the database |
+| `management port listening` (INFO, at start) | The management port's address (`bind`); always bound, for the health checks |
+| `telemetry: exporting` (INFO, at start) | Traces and metrics are exported ([Traces and metrics](#traces-and-metrics)) |
 | `STS token issued` (INFO) | Your connector got a token for the named audience |
 | `STS client refused` (INFO) | A wrong client id or secret at the STS |
 | `request refused` (INFO) | A caller's token was refused; `reason` says why (expired, replayed, wrong audience, untrusted issuer, ...). The caller only gets HTTP 401 |
@@ -884,6 +903,15 @@ DID, so usually not).
   kept in memory, and keys are compared in constant time. The port speaks
   plain HTTP: keep it on a private network or behind TLS, and never on the
   public proxy. To change the key, replace the file and restart.
+- **Health checks and telemetry (0.9).** The health checks answer
+  without a key and name what failed, so keep the management port on
+  an internal network, as for the management API. Traces and metrics
+  are off by default. Spans name your partners' hosts and the DSP
+  process ids, so send them only to a receiver you control, over
+  `https://` when it is not on your internal network, with its key in
+  `OTEL_EXPORTER_OTLP_HEADERS`. Your data sources receive a
+  `traceparent` header with telemetry on; partners never do
+  ([Traces and metrics](#traces-and-metrics)).
 - **The database file holds access tokens.** As consumer, the connector
   keeps the data address of each usable transfer, token included, in
   `/data/portitor.db` until the transfer ends (ADR 0014). Protect the volume
@@ -895,8 +923,84 @@ DID, so usually not).
 
 ### Health and logs
 
-- `GET /health` answers `ok` while the process runs. It does not check
-  the database or partners.
+- `GET /health` on the public port (and on the management port, with the
+  management API on) answers `ok` while the process runs. It checks
+  nothing.
+- **Health checks** (ADR 0023), the same in all three components, on the
+  **management port**, without the API key, also when the management API
+  is off. The answer is Eclipse EDC's `HealthStatus`: HTTP 200 when every
+  check passes, 503 otherwise
+  ([OpenAPI](api/management-openapi.json), tag `Health`):
+
+  ```json
+  {"isSystemHealthy": false, "componentResults": [
+    {"component": "database", "isHealthy": true, "failure": null},
+    {"component": "identity", "isHealthy": false,
+     "failure": {"messages": ["STS: HTTP 401 Unauthorized"], "failureDetail": "STS: HTTP 401 Unauthorized"}}]}
+  ```
+
+  | Path | Checks |
+  |---|---|
+  | `GET /api/check/liveness` | nothing but the process (component `process`) |
+  | `GET /api/check/readiness` | the component's own dependencies, never a partner (below) |
+  | `GET /api/check/startup`, `GET /api/check/health` | the same as readiness |
+
+  Readiness of the connector:
+  - `database`: the SQLite file answers.
+  - `harvest` (the start harvest ran) and `bundle` (a version is in
+    force; only with a bundle): start gates. The connector binds its
+    ports only after both, so they cannot fail while it serves.
+  - `identity`: the connector's DID document lists a credential service,
+    and its STS signs a token that the document's key verifies. The
+    document is read at the DID's own URL, as partners read it, so this
+    check also goes through your reverse proxy, DNS and certificate. A
+    background task runs it every 10 s, with a 3 s timeout; probes read
+    the last result. It fails only after 2 failures in a row (about
+    20 s), and passes again after one success. Before its first result
+    the connector is not ready.
+
+  Identity: `database`, `key` (the key is loaded and signs),
+  `did-document` (the DID document it serves names the participant and
+  lists that key). Issuer: `database`, `key`, `status-lists` (both
+  status lists it serves are signed by that key). These run in the
+  process, at each probe. Each check gets 0.5 s. A failure names the
+  check and why, never a key or token. A check is logged only when its
+  result changes: `readiness check failed` (WARN, with `component` and
+  `reason`) when it starts failing, `readiness check passes again`
+  (INFO) when it recovers. The health checks are neither traced nor
+  measured, and the background identity check sends no `traceparent`.
+- **`health` subcommand**: `portitor-connector health` (and
+  `portitor-identity health`, `portitor-issuer health`) calls its own
+  `GET /api/check/readiness` on `PORTITOR_MANAGEMENT_BIND` (`0.0.0.0` is
+  called as `127.0.0.1`), prints the answer, and exits 0 on HTTP 200, 1
+  otherwise or after 3 s. It needs the same `PORTITOR_MANAGEMENT_BIND` as
+  the running process. The connector and the identity take no other
+  argument (exit code 2); the issuer also takes `bundle build`.
+- **Docker**: each image has a `HEALTHCHECK` with that subcommand
+  (every 30 s, 5 s timeout, 3 retries; every 2 s during a 60 s start
+  period). `docker ps` shows `healthy` or `unhealthy`; Docker Compose can
+  start a service once another is healthy (`depends_on: condition:
+  service_healthy`, as in `examples/compose/compose.yaml`). The check
+  every 2 s during the start period (`--start-interval`) needs Docker
+  Engine 25 or later (Docker Desktop 4.27 or later).
+- **Kubernetes**: set `PORTITOR_MANAGEMENT_BIND=0.0.0.0:<port>` and probe
+  the management port (8081 connector, 8091 identity, 8071 issuer); keep
+  that port out of any `Service` that the public reaches:
+
+  ```yaml
+  startupProbe:
+    httpGet: {path: /api/check/startup, port: 8081}
+    periodSeconds: 2
+    failureThreshold: 60   # the start check of the identity may take ~30 s
+  livenessProbe:
+    httpGet: {path: /api/check/liveness, port: 8081}
+  readinessProbe:
+    httpGet: {path: /api/check/readiness, port: 8081}
+    periodSeconds: 10
+  ```
+
+  A failing readiness takes the pod out of its `Service`; it does not
+  restart it. Only liveness restarts, and it checks only the process.
 - Logs are JSON lines on stdout, one event per line. Collect them with
   your platform's log driver.
 
@@ -936,6 +1040,157 @@ DID, so usually not).
 | `bundle shapes: ignored by the SHACL engine` (INFO or WARN, at start) | A SHACL term the engine ignores (`sh:extends`, `sh:shape`, `sh:property` without `sh:path` at INFO: expected for HealthDCAT-AP and DCAT-AP; anything else at WARN) | Nothing at INFO; at WARN, ask the authority |
 | `bundle context: not used` (WARN, at start) | The bundle has a `context` file for a DSP 2025-1 context URL; the connector's own copy is used | Nothing |
 
+### Traces and metrics
+
+All three components (connector, identity, issuer) can send traces and
+metrics with OpenTelemetry ([ADR 0023](adr/0023-observability.md)).
+Export is **off** unless `OTEL_EXPORTER_OTLP_ENDPOINT`,
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or
+`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` is set. There is
+no Prometheus scrape endpoint: the components push over OTLP, to an
+OpenTelemetry Collector or any receiver that takes OTLP/HTTP (Prometheus
+3 with `--web.enable-otlp-receiver`, Jaeger).
+
+**Switch it on.** Set the receiver's base URL; the components add
+`/v1/traces` and `/v1/metrics`:
+
+```sh
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+```
+
+The start log then says `telemetry: exporting` (INFO), with `traces`
+and `metrics` set to `true` or `false`. Each signal needs an endpoint:
+the generic one counts for both, a signal-specific one only for its
+signal. So with only `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` set, traces
+are exported and metrics are not.
+
+Check before you upgrade: if `OTEL_EXPORTER_OTLP_ENDPOINT` is already
+in the environment (for example injected by the OpenTelemetry Operator),
+export turns on with 0.9.
+
+`http://` and `https://` are both allowed: the receiver is your own.
+An `https://` receiver needs the CA bundle, as for every other call
+([Private CAs](#private-cas)). Protocol: OTLP over HTTP with Protocol
+Buffers only (no gRPC, no JSON), without compression. A setting the SDK
+refuses is logged (`telemetry: export is off`, ERROR) and the component
+runs on with logs only. A value the SDK does not know for compression or
+temporality only gets an SDK warning; the default is used. A failed
+export is logged by the SDK (target `opentelemetry_sdk`); its data is
+dropped, and the next batch is sent as usual. At shutdown, the last
+spans and metrics get about 3 s together; what is not sent by then is
+lost, logged as `telemetry: shutdown took too long; the last data is
+lost` (WARN; also `telemetry: the last data was not sent` or
+`telemetry: shutdown failed` when the receiver refused it).
+
+**Variables.** Only OpenTelemetry's own variables; there is no
+`PORTITOR_*` setting. Read by the Rust SDK 0.33 that Portitor uses:
+
+| Variable | Use |
+|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Switches export on for both signals; the receiver's base URL |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | A full URL for one signal, used instead of the base URL; each also switches export on, for its signal |
+| `OTEL_EXPORTER_OTLP_HEADERS` (and `_TRACES_`, `_METRICS_`) | Headers for the receiver, `key=value,key2=value2`, for example an API key |
+| `OTEL_EXPORTER_OTLP_TIMEOUT` (and `_TRACES_`, `_METRICS_`) | Milliseconds an export may take (default 10000; each request is also cut off after 10 s) |
+| `OTEL_SERVICE_NAME` | `service.name`; default `portitor-connector`, `portitor-identity` or `portitor-issuer` |
+| `OTEL_RESOURCE_ATTRIBUTES` | More resource attributes, for example `deployment.environment.name=prod`; `service.version` is Portitor's version unless set here |
+| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | Which traces are kept (below); default every trace (`parentbased_always_on`) |
+| `OTEL_BSP_SCHEDULE_DELAY`, `OTEL_BSP_MAX_QUEUE_SIZE`, `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` | The batch of spans: milliseconds between exports (default 5000), spans kept waiting (2048; more are dropped), spans per export (512) |
+| `OTEL_METRIC_EXPORT_INTERVAL` | Milliseconds between metric exports (default 60000) |
+| `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` | `cumulative` (default), `delta` or `lowmemory`. Keep the default for Prometheus' OTLP receiver: it takes cumulative metrics, and delta only with an experimental feature flag ([Prometheus guide](https://prometheus.io/docs/guides/opentelemetry/)) |
+| `OTEL_EXPORTER_OTLP_COMPRESSION` (and `_TRACES_`, `_METRICS_`) | Read, but compression is not built in: the SDK logs a warning and sends uncompressed |
+| `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT`, `OTEL_SPAN_EVENT_COUNT_LIMIT`, `OTEL_SPAN_LINK_COUNT_LIMIT` | Limits per span (default 128 each) |
+
+No effect: `OTEL_SDK_DISABLED` (to switch export off, unset the
+endpoint variables), `OTEL_EXPORTER_OTLP_PROTOCOL` (always
+`http/protobuf`), `OTEL_BSP_EXPORT_TIMEOUT`,
+`OTEL_BSP_MAX_CONCURRENT_EXPORTS` and `OTEL_METRIC_EXPORT_TIMEOUT` (only
+the SDK's experimental async processors read them), and `OTEL_LOGS_*`
+(logs stay on stdout).
+
+**Cost and sampling.** In the 0.9 release measurements (one 4-core
+machine, 50 clients, `scripts/measure.sh`, mean of three runs) a
+connector served 2,074 DSP requests per second with 0.8.0, 1,909 with
+0.9 and export off, 1,820 with every request traced and 1,701 with one
+trace in ten kept. Runs vary by up to 15%, so these differences are
+close to the noise. Sampling did **not** raise throughput: the spans
+are made in the process either way. It lowers what is sent (about ten
+times fewer trace exports) and the load on your backend. To keep one
+trace in ten:
+
+```sh
+OTEL_TRACES_SAMPLER=parentbased_traceidratio
+OTEL_TRACES_SAMPLER_ARG=0.1
+```
+
+Metrics are not sampled: they count every request, except the health
+checks. With sampling, a log line can carry the trace id of a trace
+that was not kept.
+
+**What a trace shows.** One span per request served on the public and
+the management port (`GET /dsp/2025-1/negotiations/{pid}`: the route
+template, never the path with its ids), except the health checks, which
+get no span; one per HTTP call sent (`POST`, with the host and port
+called, never the URL); one per DSP outbox delivery
+(`dsp.outbox.deliver`); and each negotiation and transfer state change
+as a span event with both DSP process ids. Attributes are an allow-list:
+method, route, status code, host and port, process ids and states;
+never a token, an `Authorization` header, a key, a body or dataset
+contents. The bridge from Rust's `tracing` also adds where in the code
+the span was made (`code.*` attributes) and how long it was busy and
+idle (`busy_ns`, `idle_ns`). Other log lines are not copied into
+traces.
+
+**Trace context stays inside the participant.** A `traceparent` header
+(W3C Trace Context) is sent only on the connector's calls to its own
+STS and to its own data sources (the dataset's `portitor:source`), and
+read only on the identity component's `/sts/token`, and there only
+after the client id and secret are checked. DSP and DCP calls to
+other participants carry none, and one that arrives on the DSP port is
+ignored: each side starts its own trace. To follow one negotiation
+across two organisations, match the DSP process ids (`providerPid`,
+`consumerPid`) in both sides' logs.
+
+**Logs carry the trace id.** With export on, every JSON log line written
+inside a span starts with `"trace_id":"<32 hex digits>"`, the
+id of the trace it belongs to: search the logs for it. With export off,
+log lines are as before.
+
+**State changes in the log.** Each change is also one log line (INFO,
+target `portitor::state`): `negotiation state changed` or `transfer
+state changed`, with `portitor.dsp.process`, `portitor.dsp.role`,
+`portitor.dsp.provider_pid`, `portitor.dsp.consumer_pid`,
+`portitor.dsp.previous_state` (none for a new process) and
+`portitor.dsp.state`.
+
+**Metrics.** Names follow OpenTelemetry's
+[naming rules](https://opentelemetry.io/docs/specs/semconv/general/naming/);
+the two HTTP histograms are the
+[HTTP semantic conventions'](https://opentelemetry.io/docs/specs/semconv/http/http-metrics/),
+with their advised buckets (5 ms to 10 s). A Prometheus receiver turns
+dots into underscores and adds the unit, for example
+`http_server_request_duration_seconds` and
+`portitor_negotiation_ended_total`.
+
+| Name | Instrument, unit | Attributes | Component |
+|---|---|---|---|
+| `http.server.request.duration` | histogram, `s` | `http.request.method`, `http.route` (when a route matched), `http.response.status_code`, `url.scheme` (`http`: TLS ends before the component), `network.protocol.version`, `error.type` (5xx). Health checks are not measured | all |
+| `http.client.request.duration` | histogram, `s` | `http.request.method`, `server.address` and `server.port` (only for calls inside the participant: the own STS and data sources), `http.response.status_code` (when answered), `error.type` (4xx, 5xx, `timeout` or `_OTHER` when unanswered, or when the body of a 2xx answer cannot be read) | all |
+| `portitor.negotiation.ended` | counter, `{negotiation}` | `portitor.dsp.role` (`provider`, `consumer`), `portitor.dsp.state` (`FINALIZED`, `TERMINATED`) | connector |
+| `portitor.transfer.ended` | counter, `{transfer}` | `portitor.dsp.role`, `portitor.dsp.state` (`COMPLETED`, `TERMINATED`) | connector |
+| `portitor.dsp.request.refused` | counter, `{request}` | `error.type`: `unauthenticated` (HTTP 401), `invalid_message` or `message_rules` (the bundle's message shapes; both HTTP 400) | connector |
+| `portitor.outbox.message.resent` | counter, `{message}` | `portitor.outbox.name` (`dsp`, `credential_delivery`), and for `dsp` `portitor.dsp.process` (`negotiation`, `transfer`) and `portitor.dsp.role` | connector, issuer |
+| `portitor.outbox.message.given_up` | counter, `{message}` | as above | connector, issuer |
+| `portitor.harvest.run.ended` | counter, `{run}` | `portitor.harvest.kind` (`datasets`, `bundle`), `portitor.harvest.outcome` (`succeeded`, `partial`, `unchanged`, `failed`) | connector |
+| `portitor.harvest.dataset.rejected` | counter, `{dataset}` | `portitor.harvest.check` (the check of the job log) | connector |
+| `portitor.bundle.in_use` | gauge, `{bundle}` | `portitor.bundle.version`: 1 for the version in force, 0 for one replaced since the start | connector, with a bundle |
+
+A resend is a retry of a message, or a message saved before a restart
+and sent again; a give-up is a message the outbox stopped trying (the
+negotiation or transfer is then terminated or not started, as the log
+says; for the issuer, the delivery is `FAILED`). Every service also
+reports its `service.name`, `service.version` and the SDK's resource
+attributes.
+
 ### Backup and restore
 
 The database is `/data/portitor.db` plus, while the connector runs,
@@ -959,7 +1214,10 @@ from their saved state.
 2. Back up `/data`.
 3. Replace the container with the new image. Database migrations run at
    start, forward only.
-4. Check `/health` and the start log.
+4. Check the start log and the readiness check on the management port
+   (`GET /api/check/readiness` answers HTTP 200;
+   [Health and logs](#health-and-logs)). `/health` only shows that the
+   process runs.
 
 Rollback: an older version refuses a database that a newer version
 migrated (`database schema version N is newer than this Portitor`). Restore
@@ -1079,6 +1337,45 @@ Both are optional; without the new settings Portitor works as in 0.7.
    warns when `PORTITOR_POLICY_CREDENTIALS` lists
    `ParticipantComplianceCredential` and no service is set).
 
+#### From 0.8 to 0.9
+
+0.9 adds health checks, traces and metrics
+([ADR 0023](adr/0023-observability.md)). No database changes: a
+rollback to 0.8 works as it is, but 0.8 has no `/api/check` routes, so
+move your probes back to `/health` first.
+
+1. **Behaviour change:** the management port is always bound (connector
+   8081, identity 8091, issuer 8071; default address `127.0.0.1`), also
+   without `PORTITOR_MANAGEMENT_API_KEY_FILE`. It serves the health
+   checks without a key. On a shared host or pod, where that port is
+   already taken, set `PORTITOR_MANAGEMENT_BIND` to a free one, or the
+   component does not start. Never publish the port.
+2. **Probes:** move Kubernetes probes from `GET /health` to the checks
+   on the management port, with `PORTITOR_MANAGEMENT_BIND=0.0.0.0:<port>`
+   ([Health and logs](#health-and-logs)).
+3. **Docker `HEALTHCHECK`:** the images now check their own readiness,
+   so `docker ps` shows `healthy` or `unhealthy`. Docker Swarm replaces
+   an unhealthy container; plain `docker run` only shows it. A connector
+   whose own identity or STS is down becomes unhealthy (after about
+   20 s). The start interval of the check needs Docker Engine 25 or
+   later.
+4. **Telemetry:** export turns on if `OTEL_EXPORTER_OTLP_ENDPOINT` (or
+   `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
+   `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`) is already in the
+   environment, for example set by the OpenTelemetry Operator. Unset it
+   if you do not want export ([Traces and metrics](#traces-and-metrics)).
+5. **More log lines:** each negotiation and transfer state change is one
+   INFO line (target `portitor::state`). With export on, lines written
+   inside a request carry its `trace_id`. A failed readiness check is
+   logged when its result changes, not on every probe. The start line
+   `management API listening` is now `management port listening`.
+6. **Behaviour change:** `portitor-connector` and `portitor-identity`
+   refuse any argument other than `health` (exit code 2); the issuer
+   takes `bundle build` and `health`. An empty
+   `PORTITOR_MANAGEMENT_API_KEY_FILE` (or one of only spaces) now
+   counts as unset in all three components: the management API is off
+   and the port serves only the health checks.
+
 ## 7. Run the issuer (dataspace authority only)
 
 The issuer issues and revokes the dataspace's credentials with the
@@ -1129,8 +1426,9 @@ DID.
 | `PORTITOR_ISSUER_CREDENTIALS_FILE` | required | path of the mounted credential definitions file |
 | `PORTITOR_BIND` | `0.0.0.0:8070` | keep |
 | `PORTITOR_DB_FILE` | `/data/portitor-issuer.db` | keep the image default |
-| `PORTITOR_MANAGEMENT_API_KEY_FILE` | unset (management API off) | path of the mounted key file |
-| `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8071` | `0.0.0.0:8071` in a container, published only on an internal interface |
+| `PORTITOR_MANAGEMENT_API_KEY_FILE` | unset (management API off; the port serves only the health checks; an empty value counts as unset) | path of the mounted key file |
+| `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8071` | `0.0.0.0:8071` in a container, published only on an internal interface. Always bound, for the health checks |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (no traces or metrics) | your OTLP receiver's base URL, if you collect them ([Traces and metrics](#traces-and-metrics)) |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | unset | **unset**; `true` only for local tests with plain-HTTP DIDs |
 | `PORTITOR_ISSUER_BUNDLE_KEY_FILE` | unset | with a bundle: the **public** bundle key as a JWK (as `bundle build` prints it), so the private key stays offline; a PKCS#8 PEM is accepted too. Listed in the DID document as `<did>#bundle-key` under `assertionMethod`. The start fails if it is the credential key |
 | `PORTITOR_ISSUER_BUNDLE_DIR` | unset | with a bundle: the folder of built bundles, served read only at `GET /bundles/{version}/{path}` on the public port, and its `latest.json` at `GET /bundles/latest.json` |
@@ -1236,7 +1534,7 @@ version's manifest lists; anything else is 404.
 | Port | Serves | Reached by | Expose |
 |---|---|---|---|
 | 8070 | DID document, issuer metadata, credential requests and their status, status lists, bundles | participants' identities, verifiers, connectors | through your HTTPS reverse proxy |
-| 8071 | management API (participants, offers, revocation) | the authority's operators only | **never publicly** |
+| 8071 | health checks (`GET /api/check/...`, no key; readiness checks `database`, `key` and `status-lists`); management API (participants, offers, revocation) with its key | the authority's operators and probes | **never publicly** |
 
 The public endpoints are described in
 [api/issuer-openapi.json](api/issuer-openapi.json).
@@ -1247,6 +1545,8 @@ and `curl -sf https://issuer.example.com/issuer/metadata`.
 | Log message (level) | Meaning |
 |---|---|
 | `portitor-issuer listening` (INFO, at start) | Started; shows the DID, key id, issuer service URL and database |
+| `management port listening` (INFO, at start) | The management port's address (`bind`); always bound, for the health checks |
+| `telemetry: exporting` (INFO, at start) | Traces and metrics are exported ([Traces and metrics](#traces-and-metrics)) |
 | `credential offer sent` (INFO) / `credential offer not taken` (WARN) | An offer (`POST /v1/offers`) reached the holder, or not (the call answers 502) |
 | `credential request refused` (INFO) | A credential request was malformed and answered 400; `reason` says why |
 | `request refused` (INFO) | A caller's token was refused (401), for example a DID that is not registered |
@@ -1258,7 +1558,9 @@ and `curl -sf https://issuer.example.com/issuer/metadata`.
 ### Order
 
 1. Create the key, the credential definitions and the management key;
-   start the issuer and check that its DID document resolves.
+   start the issuer, check its readiness (`GET /api/check/readiness` on
+   the management port answers HTTP 200) and that its DID document
+   resolves.
 2. Register each participant (its DID and claims) through the management
    API. A DID that is not registered gets `401` from the issuer service.
 3. Give participants the issuer's DID; each adds it to
@@ -1289,7 +1591,8 @@ known risk and technical debt, with its status and target release):
   (ADR 0009). As consumer, the connector does not accept a provider's
   offer (DSP `OFFERED`) that has credential constraints; requests it
   sends itself are not affected.
-- No metrics endpoint yet.
+- No metrics scrape endpoint: metrics and traces are pushed over OTLP
+  ([Traces and metrics](#traces-and-metrics)).
 - Gaia-X: tested against a local Gaia-X compliance service in test mode
   (gx-compliance v2.16.0), not the Gaia-X Lab or a production clearing
   house. You get the registration number credential from a notary

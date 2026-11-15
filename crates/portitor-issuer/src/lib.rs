@@ -16,6 +16,7 @@
 //!   revocation, [`status_lists`];
 //! - a management API on its own port (API key): participants, offers,
 //!   issued credentials, revocation, [`management`];
+//! - its readiness checks (ADR 0023), [`health`];
 //! - the schema and vocabulary bundle (ADR 0005): `portitor-issuer bundle
 //!   build` signs one offline, [`bundle_build`]; the bundle key in the DID
 //!   document and serving built bundles, [`bundles`].
@@ -38,6 +39,7 @@ pub mod config;
 pub mod definitions;
 pub mod delivery;
 pub mod did_document;
+pub mod health;
 pub mod issue;
 pub mod management;
 pub mod requests;

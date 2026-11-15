@@ -268,7 +268,9 @@ impl World {
             issuer_service_url: SERVICE.to_owned(),
             bind: "unused".to_owned(),
             db_file: "unused".into(),
-            management: None,
+            management: portitor_issuer::config::ManagementConfig::health_only(
+                portitor_issuer::config::DEFAULT_MANAGEMENT_BIND,
+            ),
             allow_http: false,
             max_active_per_holder: setup.max_active_per_holder,
             bundle_key_file: None,
@@ -1278,4 +1280,73 @@ fn write_management_description() {
         format!("{}\n", openapi_json()),
     )
     .unwrap();
+}
+
+/// The health checks on the management port (ADR 0023): open, readiness
+/// on the issuer's own file, key and status lists, and the management API
+/// still behind its key.
+#[tokio::test]
+async fn health_checks_its_own_dependencies_without_the_key() {
+    use portitor_runtime::health::management_app;
+    let dir = TempDir::new();
+    let path = dir.0.join("issuer.db");
+    let world = World::with(Setup::on_file(&path, &SigningKey::generate().unwrap()));
+    let checks = Arc::new(portitor_issuer::health::readiness_checks(
+        &world.issuer,
+        path.clone(),
+    ));
+    let full = management_app(Arc::clone(&checks), Some(world.management.clone()));
+    let get = |path: &str| Request::get(path).body(Body::empty()).unwrap();
+    let (status, body) = call(&full, get("/api/check/readiness")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        json!({"isSystemHealthy": true, "componentResults": [
+            {"component": "database", "isHealthy": true, "failure": null},
+            {"component": "key", "isHealthy": true, "failure": null},
+            {"component": "status-lists", "isHealthy": true, "failure": null}
+        ]})
+    );
+    // the checks need no key; the management API still does
+    assert_eq!(
+        call(&full, get("/api/check/liveness")).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(&full, get("/v1/participants")).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    // without the API: the checks only
+    let checks_only = management_app(Arc::clone(&checks), None);
+    assert_eq!(
+        call(&checks_only, get("/api/check/startup")).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(&checks_only, get("/v1/participants")).await.0,
+        StatusCode::NOT_FOUND
+    );
+    // the file is gone: not ready, and the answer says which check failed
+    std::fs::remove_dir_all(&dir.0).unwrap();
+    let (status, body) = call(&checks_only, get("/api/check/health")).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["isSystemHealthy"], false);
+    assert_eq!(body["componentResults"][0]["component"], "database");
+    assert_eq!(body["componentResults"][0]["isHealthy"], false);
+    assert_eq!(body["componentResults"][2]["isHealthy"], true);
+}
+
+/// `portitor-issuer health x` and `portitor-issuer x` are usage errors: exit code 2, before
+/// anything starts.
+#[test]
+fn unknown_arguments_exit_with_2() {
+    for args in [&["health", "x"][..], &["x"][..]] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_portitor-issuer"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("takes no arguments"), "{stderr}");
+    }
 }

@@ -31,6 +31,7 @@ use portitor_dcp::issuance::{TokenTimes, delivery_token};
 use portitor_runtime::http::answered_status;
 use portitor_runtime::retry::retry_delay;
 use portitor_runtime::system::{new_uuid, now_secs};
+use portitor_runtime::telemetry::metrics;
 use serde_json::Value;
 
 use crate::store::{Delivery, DeliveryState};
@@ -97,6 +98,9 @@ pub async fn send_due_at(issuer: &Issuer, now: u64) {
         }
     };
     for delivery in due {
+        if delivery.attempts > 0 {
+            metrics::outbox_resent(metrics::Outbox::CredentialDelivery);
+        }
         let outcome = send(issuer, &delivery).await;
         record(issuer, &delivery, outcome, now);
     }
@@ -114,9 +118,11 @@ fn record(issuer: &Issuer, delivery: &Delivery, outcome: Result<(), String>, now
             let failed = delivery.attempts + 1;
             if is_permanent(&error) {
                 tracing::error!(issuer_pid = pid, %error, failed, "delivery refused by the holder, given up");
+                metrics::outbox_given_up(metrics::Outbox::CredentialDelivery);
                 issuer.store.end_delivery(pid, DeliveryState::Failed)
             } else if failed >= MAX_ATTEMPTS {
                 tracing::error!(issuer_pid = pid, %error, failed, "delivery given up");
+                metrics::outbox_given_up(metrics::Outbox::CredentialDelivery);
                 issuer.store.end_delivery(pid, DeliveryState::Failed)
             } else {
                 let next = now + retry_delay(failed);
