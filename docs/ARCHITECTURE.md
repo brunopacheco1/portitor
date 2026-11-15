@@ -85,16 +85,36 @@ CI) checks that they still match the code: every crate and image is
 drawn, every Rust file and type they name exists. Each release reviews
 them ([RELEASING.md](RELEASING.md), "Documentation review").
 
-**C1 System context**: who and what one participant's Portitor talks to,
-the issuer its dataspace authority runs and, for Gaia-X, a compliance
-service.
+**C1 System context**: one participant's Portitor in its dataspace. The
+dataspace authority runs the issuer and sets the rules (who is a member,
+which issuer DID members trust for `MembershipCredential`, the signed
+schema and vocabulary bundle); the members are organisations, each with
+one DID. Inside them: the operator, the data source, and the consumer's
+application that pulls the data with the transfer's token. Trust is
+system to system (see "Who holds the credentials" below). Gaia-X is
+optional: the compliance service (GXDCH), the GXDCH notary the operator
+asks once for the registration number credential, and the certificate
+authority that certifies the identity key. One Portitor serves one
+dataspace today ([TD-03](RISKS_AND_TECHNICAL_DEBTS.md#td-03)).
 
 ![C1 System context](diagrams/c1-system-context.drawio.svg)
 
-**C2 Containers**: the two images each participant runs, the issuer
-its dataspace authority runs, and what they keep.
+**C2 Containers**: the two images each participant runs, what they keep,
+the settings that say whom they trust (`PORTITOR_TRUSTED_ISSUERS`,
+`PORTITOR_GAIAX_COMPLIANCE_ISSUERS`, `PORTITOR_BUNDLE_URL` on the
+connector; `PORTITOR_GAIAX_COMPLIANCE_URL` and
+`PORTITOR_GAIAX_COMPLIANCE_DID` on the identity), their public and
+internal ports ([DEPLOYING](DEPLOYING.md)), and who calls them, including
+the consumer's application or connector on the data plane (port 8080,
+bearer token from the transfer).
 
 ![C2 Containers](diagrams/c2-containers.drawio.svg)
+
+The dataspace authority's side: the issuer, what it keeps, and the bundle
+that `portitor-issuer bundle build` signs offline with a key that never
+reaches the issuer.
+
+![C2 Containers of the dataspace authority](diagrams/c2-dataspace-authority-containers.drawio.svg)
 
 **C3 Components**: inside each image, the adapters around the pure
 domain crates ([ADR 0004](adr/0004-hexagonal-architecture.md)).
