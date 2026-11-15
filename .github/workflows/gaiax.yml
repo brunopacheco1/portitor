@@ -1,0 +1,69 @@
+# SPDX-FileCopyrightText: Portitor contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# The Gaia-X end-to-end test (docs/TESTING.md, ADRs 0021 and 0022):
+# Portitor identities get a Gaia-X compliance credential from a local
+# gx-compliance v2.16.0 in test mode, and a Portitor provider agrees a
+# contract only with a participant that holds one. No real Gaia-X trust
+# anchor; the compliance service loads its shapes and contexts from the
+# Gaia-X Lab Registry, so it also runs nightly.
+name: Gaia-X
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "Cargo.lock"
+      - "Dockerfile"
+      - "examples/issuer-credentials.json"
+      - "interop/gaiax/**"
+      - "scripts/gaiax-e2e.sh"
+      - "scripts/gaiax_test_notary.py"
+      - ".github/workflows/gaiax.yml"
+  schedule:
+    - cron: "53 2 * * *" # nightly: the Gaia-X Registry's shapes change without our code changing
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUST_TOOLCHAIN: "1.97.0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gaiax:
+    name: Gaia-X compliance between Portitor participants
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal -t x86_64-unknown-linux-musl
+          rustup default "$RUST_TOOLCHAIN"
+          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools python3-cryptography
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Build the Portitor images (as CI does)
+        run: |
+          cargo build --release --locked --target x86_64-unknown-linux-musl -p portitor-connector -p portitor-identity \
+            -p portitor-issuer
+          mkdir -p dist/amd64
+          cp target/x86_64-unknown-linux-musl/release/portitor-{connector,identity,issuer} dist/amd64/
+          docker build --target portitor-connector -t portitor-connector:ci .
+          docker build --target portitor-identity -t portitor-identity:ci .
+          docker build --target portitor-issuer -t portitor-issuer:ci .
+      - name: Run the Gaia-X test
+        env:
+          LOGS: gaiax.log
+        run: scripts/gaiax-e2e.sh
+      - name: Keep the container logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gaiax-logs
+          path: gaiax.log
+          if-no-files-found: ignore
+          retention-days: 7

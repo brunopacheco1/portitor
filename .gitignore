@@ -28,3 +28,7 @@ __pycache__/
 /interop/edc/run/
 /interop/edc/runtimes/**/build/
 /interop/edc/runtimes/.gradle/
+
+# the Gaia-X end-to-end test's generated test CA, keys and credentials
+# (scripts/gaiax-e2e.sh writes them)
+/interop/gaiax/run/

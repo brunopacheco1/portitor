@@ -27,6 +27,12 @@ versions may change behaviour and configuration.
   its SHA-256, checked after every restore or download), and the DSP TCK
   build's Gradle dependencies too (`setup-java` cache), since Maven
   Central answered HTTP 429; downloads are retried.
+- CI: a Gaia-X end-to-end test (`scripts/gaiax-e2e.sh`, workflow
+  `Gaia-X`): Portitor identities get a compliance credential from a local
+  gx-compliance v2.16.0 in test mode (ADR 0021), and a Portitor provider
+  agrees a contract only with a holder of one (ADR 0022). No real Gaia-X
+  trust anchor: a test CA and a test-only notary
+  (`scripts/gaiax_test_notary.py`). See docs/TESTING.md.
 
 ## [0.7.0] - 2026-11-15
 
