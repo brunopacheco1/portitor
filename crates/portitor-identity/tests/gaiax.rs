@@ -40,6 +40,8 @@ const COMPLIANCE: &str = "did:web:compliance.example";
 const NOTARY: &str = "did:web:notary.example";
 const GX: &str = "https://w3id.org/gaia-x/development#";
 const BASE: &str = "https://holder.example/credentials/gaiax";
+/// Why the fake service refuses, when told to.
+const REFUSAL: &str = "{\"message\":\"the registration number credential is not trusted\"}";
 
 /// The fake compliance service.
 struct FakeService {
@@ -48,6 +50,8 @@ struct FakeService {
     holder: Mutex<Option<DidDocument>>,
     /// Answer with a wrong digest.
     wrong_digest: AtomicBool,
+    /// Refuse with HTTP 409 and [`REFUSAL`].
+    refuse: AtomicBool,
     /// The `vcid` of each request.
     asked: Mutex<Vec<String>>,
 }
@@ -81,6 +85,9 @@ async fn standard_compliance(
     body: String,
 ) -> (StatusCode, String) {
     service.asked.lock().unwrap().push(asked.vcid.clone());
+    if service.refuse.load(Ordering::SeqCst) {
+        return (StatusCode::CONFLICT, REFUSAL.to_owned());
+    }
     if headers.get(header::CONTENT_TYPE).unwrap() != "application/vp+jwt" {
         return (StatusCode::UNSUPPORTED_MEDIA_TYPE, String::new());
     }
@@ -225,6 +232,7 @@ async fn setup() -> Setup {
         party: Party::new(COMPLIANCE),
         holder: Mutex::new(None),
         wrong_digest: AtomicBool::new(false),
+        refuse: AtomicBool::new(false),
         asked: Mutex::new(Vec::new()),
     });
     let app = Router::new()
@@ -418,6 +426,29 @@ async fn a_wrong_digest_is_refused_and_nothing_is_stored() {
     let (_, _, after) = get(&world.app, "/credentials/gaiax/legal-person").await;
     assert_eq!(before, after);
     assert_eq!(held_gaiax(world).len(), 4);
+}
+
+/// The service's reason for a refusal is in the run's error, as the
+/// management API lists it.
+#[tokio::test]
+async fn a_refusal_keeps_the_services_reason() {
+    let setup = setup().await;
+    let world = &setup.world;
+    setup.service.refuse.store(true, Ordering::SeqCst);
+    let run = run_now(&world.identity).await.unwrap();
+    assert_eq!(run.outcome, RunOutcome::Failed);
+    let expected = format!("compliance service: HTTP 409 Conflict: {REFUSAL}");
+    assert_eq!(run.error.as_deref(), Some(expected.as_str()));
+    let (status, runs) = call(
+        &world.management,
+        Request::get("/v1/gaiax/compliance")
+            .header(header::AUTHORIZATION, format!("Bearer {API_KEY}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(runs[0]["error"], expected);
 }
 
 #[tokio::test]

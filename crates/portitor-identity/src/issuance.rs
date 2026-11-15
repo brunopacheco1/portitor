@@ -65,10 +65,14 @@ impl SendError {
     #[must_use]
     pub fn from_http(error: &HttpError) -> Self {
         match error {
-            HttpError::Status(status) if is_definite_refusal(*status) => {
+            HttpError::Status(status) | HttpError::StatusWithBody(status, _)
+                if is_definite_refusal(*status) =>
+            {
                 Self::Refused(error.to_string())
             }
-            HttpError::Status(_) | HttpError::NoAnswer(_) => Self::Unknown(error.to_string()),
+            HttpError::Status(_) | HttpError::StatusWithBody(..) | HttpError::NoAnswer(_) => {
+                Self::Unknown(error.to_string())
+            }
         }
     }
 }
