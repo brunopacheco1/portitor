@@ -116,6 +116,44 @@ reaches the issuer.
 
 ![C2 Containers of the dataspace authority](diagrams/c2-dataspace-authority-containers.drawio.svg)
 
+**Deployment and flows**: two of the C4 model's supplementary views,
+drawn from [DEPLOYING](DEPLOYING.md), the ADRs and the code.
+
+The deployment diagram: one participant's host (its HTTPS reverse
+proxy in front of the public ports 8080 and 8090, the STS reached only on
+the internal network, the management ports 8081 and 8091 never public,
+the `/data` volumes and the mounted keys and secrets), the authority's
+host with the issuer (8070 public, 8071 internal) and its bundles folder,
+and the offline machine that builds and signs the bundles.
+
+![Deployment: a participant and the dataspace authority](diagrams/deployment.drawio.svg)
+
+Three dynamic diagrams, as sequences with numbered messages. Joining a
+dataspace: the authority registers the participant's DID, the identity
+asks the issuer for a `MembershipCredential` and the issuer delivers it
+to its Storage API ([ADR 0018](adr/0018-issuer-component.md)); then the
+connector proves membership to a verifier.
+
+![Dynamic: joining a dataspace](diagrams/dynamic-join.drawio.svg)
+
+Negotiating and transferring: the catalog, the DCP check of a caller,
+the contract negotiation to `FINALIZED` and a pull transfer whose data
+address the consumer's application uses at `/data/{flowId}` (ADRs
+[0007](adr/0007-outbox-and-proof-of-delivery.md),
+[0013](adr/0013-transfer-and-data-plane.md),
+[0014](adr/0014-transfers-as-consumer.md),
+[0016](adr/0016-dsp-caller-authentication.md),
+[0019](adr/0019-credential-constraints.md)).
+
+![Dynamic: negotiating a contract and transferring data](diagrams/dynamic-negotiate-transfer.drawio.svg)
+
+Gaia-X (optional): the identity gets its compliance credential from a
+compliance service ([ADR 0021](adr/0021-gaia-x-onboarding.md)), and a
+provider checks it for an offer that requires it
+([ADR 0022](adr/0022-gaia-x-compliance-in-policies.md)).
+
+![Dynamic: Gaia-X onboarding and use](diagrams/dynamic-gaiax-onboarding.drawio.svg)
+
 **C3 Components**: inside each image, the adapters around the pure
 domain crates ([ADR 0004](adr/0004-hexagonal-architecture.md)).
 

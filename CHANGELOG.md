@@ -23,6 +23,11 @@ versions may change behaviour and configuration.
   ports, who pulls from the data plane, the Gaia-X files) and the new
   `c2-dataspace-authority-containers` (the issuer, and the bundle built
   offline with `portitor-issuer bundle build`).
+- New C4 deployment diagram (`deployment`: hosts, proxies, ports,
+  volumes and mounts of a participant and the dataspace authority) and
+  three C4 dynamic diagrams in sequence style (`dynamic-join`,
+  `dynamic-negotiate-transfer`, `dynamic-gaiax-onboarding`), shown in
+  ARCHITECTURE.md under "Deployment and flows".
 
 ## [0.8.0] - 2026-11-15
 
