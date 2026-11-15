@@ -469,21 +469,25 @@ async fn the_management_api_starts_and_lists_runs() {
     assert_eq!(status, StatusCode::ACCEPTED, "{started}");
     assert_eq!(started["outcome"], "RUNNING");
     let id = started["id"].clone();
-    // wait for the run in the background
-    let mut runs = Value::Null;
-    for _ in 0..200 {
-        let (status, listed) = call(
-            &world.management,
-            authed(Request::get("/v1/gaiax/compliance")),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        runs = listed;
-        if runs[0]["outcome"] != "RUNNING" {
-            break;
+    // wait until the run in the background has ended; a busy test machine
+    // may take a while, so only a run that hangs reaches the 30 s limit
+    let ended = async {
+        loop {
+            let (status, listed) = call(
+                &world.management,
+                authed(Request::get("/v1/gaiax/compliance")),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            if listed[0]["outcome"] != "RUNNING" {
+                return listed;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
+    };
+    let Ok(runs) = tokio::time::timeout(std::time::Duration::from_secs(30), ended).await else {
+        panic!("the run did not end within 30 s");
+    };
     assert_eq!(runs[0]["id"], id);
     assert_eq!(runs[0]["outcome"], "SUCCEEDED", "{runs}");
     assert!(runs[0]["finished"].is_string());
