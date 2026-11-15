@@ -566,8 +566,11 @@ curl -s http://127.0.0.1:18490/credentials/gaiax/legal-person | cut -d. -f2 | ba
 # the consumer's negotiations (the script's are FINALIZED)
 curl -s -H "$CONN_KEY" http://127.0.0.1:18482/v1/negotiations | jq '.negotiations[] | {consumerPid, state}'
 
-# why the provider refused the outsider
-docker compose -f interop/gaiax/compose.yaml logs provider-connector | grep 'credential refused'
+# the outsider's negotiation of the same offer: TERMINATED, as it holds no
+# compliance credential (the provider logs a refused credential only when
+# one fails its checks: `credential refused`)
+OUT_KEY="authorization: Bearer $(cat interop/gaiax/run/outsider/connector-management.key)"
+curl -s -H "$OUT_KEY" http://127.0.0.1:18483/v1/negotiations | jq '.negotiations[] | {consumerPid, state}'
 ```
 
 Things worth trying:
