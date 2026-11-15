@@ -28,9 +28,40 @@ versions may change behaviour and configuration.
   as `gx:labelLevel`. A provider that lists
   `ParticipantComplianceCredential` in `PORTITOR_POLICY_CREDENTIALS`
   without a compliance service does not start.
+- Identity: the X.509 chain of its key (`PORTITOR_IDENTITY_CERTIFICATE_CHAIN`,
+  ADR 0021). The first certificate must be for the identity key, or the
+  identity does not start. Served at
+  `GET /.well-known/x509CertificateChain.pem` and named by `x5u` in the DID
+  document. The file is read again every minute; a new file for another
+  key is refused and logged, and the old chain stays.
+- Identity: Gaia-X onboarding (ADR 0021), on with
+  `PORTITOR_GAIAX_COMPLIANCE_URL` and `PORTITOR_GAIAX_PARTICIPANT_FILE`.
+  The identity signs `gx:LegalPerson` and `gx:Issuer` VC-JWTs, sends them
+  with the notary's registration number credential to the compliance
+  service (`POST {url}/api/credential-offers/standard-compliance`,
+  `application/vp+jwt`), checks the `gx:ParticipantComplianceCredential`
+  it answers (signature by the service's `did:web` key, type, id, every
+  `digestSRI`) and stores the four credentials. Runs at start without a
+  valid compliance credential, then at two thirds of its validity;
+  failed runs are retried with the outbox's delays. Management API:
+  `POST /v1/gaiax/compliance` (run now) and `GET /v1/gaiax/compliance`
+  (last runs). Public: `GET /credentials/gaiax/{name}` for the three
+  credentials sent.
+- `portitor-dcp`: `x509` (the P-256 key of a PEM chain's first
+  certificate, our own small DER reader), `gaiax_sign` (the Gaia-X
+  credentials, presentation and answer check), and
+  `SigningKey::sign_with_headers`. `portitor-runtime`:
+  `HttpSender::post_text`, `did_document::add_x5u`, and `retry` (the
+  outbox's retry delay).
 
 ### Changed
 
+- The DID documents of the identity and the issuer give their key
+  `alg: ES256` (RFC 7517 section 4.4; Gaia-X needs it). DCP ignores it.
+- The presentation API: a scope type `T` also matches a credential of
+  type `gx:T` whose `@context` names a Gaia-X context (ADR 0021), so
+  `ParticipantComplianceCredential` finds
+  `gx:ParticipantComplianceCredential`. Plain types match as before.
 - ADR 0005 (schema and vocabulary registry, with the bundle format) and
   ADR 0020 (dataset harvest) accepted by the maintainer after the 0.7
   release.

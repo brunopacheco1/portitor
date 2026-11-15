@@ -20,6 +20,7 @@ pub mod bundle;
 pub mod credential;
 mod did;
 pub mod gaiax;
+pub mod gaiax_sign;
 mod gzip;
 pub mod holder;
 mod id_token;
@@ -29,6 +30,7 @@ mod keys;
 pub mod message;
 pub mod scope;
 pub mod status_list;
+pub mod x509;
 
 pub use bundle::sha256_hex;
 pub use did::{DidDocument, Purpose, Relationship, Service, VerificationMethod, did_web_url};

@@ -74,7 +74,33 @@ pub fn build(own: &OwnDocument<'_>) -> Value {
             serde_json::json!([DID_CONTEXT, portitor_dcp::message::CONTEXT]),
         );
     }
+    // RFC 7517 section 4.4: the key is for ES256 only. Optional in JWK and
+    // ignored by DCP; Gaia-X services need it to import the key (ADR 0021).
+    set_key_member(&mut json, own.kid, "alg", "ES256");
     json
+}
+
+/// Adds `x5u` (RFC 7517 section 4.6), the URL of the key's X.509
+/// certificate chain, to the JWK of verification method `kid` in a
+/// document made by [`build`] (ADR 0021).
+pub fn add_x5u(document: &mut Value, kid: &str, url: &str) {
+    set_key_member(document, kid, "x5u", url);
+}
+
+/// Sets `name` to `value` in the `publicKeyJwk` of verification method
+/// `kid`. Nothing happens if there is no such method.
+fn set_key_member(document: &mut Value, kid: &str, name: &str, value: &str) {
+    let Some(Value::Array(methods)) = document.get_mut("verificationMethod") else {
+        return;
+    };
+    for method in methods {
+        if method.get("id").and_then(Value::as_str) != Some(kid) {
+            continue;
+        }
+        if let Some(Value::Object(jwk)) = method.get_mut("publicKeyJwk") {
+            jwk.insert(name.to_owned(), Value::from(value));
+        }
+    }
 }
 
 /// The HTTP path where `did:web` says the document of `did` is:
@@ -124,7 +150,21 @@ mod tests {
             service_url: "https://issuer.example/issuer",
         });
         assert_eq!(json["@context"][0], DID_CONTEXT);
+        assert_eq!(
+            json["verificationMethod"][0]["publicKeyJwk"]["alg"],
+            "ES256"
+        );
+        let mut with_chain = json.clone();
+        add_x5u(&mut with_chain, &kid, "https://issuer.example/chain.pem");
+        assert_eq!(
+            with_chain["verificationMethod"][0]["publicKeyJwk"]["x5u"],
+            "https://issuer.example/chain.pem"
+        );
         let document: DidDocument = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            document.verification_method[0].public_key_jwk,
+            key.public_jwk()
+        );
         for purpose in [Purpose::AssertionMethod, Purpose::CapabilityInvocation] {
             assert_eq!(document.key_for(Some(&kid), purpose).unwrap().id, kid);
         }

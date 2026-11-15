@@ -924,6 +924,7 @@ name = "portitor-identity"
 version = "0.7.0"
 dependencies = [
  "axum",
+ "base64",
  "portitor-dcp",
  "portitor-runtime",
  "rusqlite",

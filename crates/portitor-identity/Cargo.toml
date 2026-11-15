@@ -25,6 +25,7 @@ tracing.workspace = true
 utoipa.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
 tower = { version = "0.5", features = ["util"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 

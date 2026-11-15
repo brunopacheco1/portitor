@@ -304,6 +304,35 @@ impl HttpSender {
         String::from_utf8(bytes.to_vec()).map_err(|_| "the answer is not UTF-8 text".to_owned())
     }
 
+    /// POSTs `body` (text, for example a `vp+jwt`) with the media type
+    /// `content_type`, and returns the answer as text, read up to
+    /// `max_bytes`, waiting at most `timeout` for it. For services slower
+    /// than a participant, such as a Gaia-X compliance service, which
+    /// fetches documents itself before it answers.
+    ///
+    /// # Errors
+    ///
+    /// The URL is not allowed or the request failed
+    /// ([`HttpError::NoAnswer`]), or the answer is not HTTP 2xx
+    /// ([`HttpError::Status`]). Redirects are not followed: a `3xx` is a
+    /// status error.
+    pub async fn post_text(
+        &self,
+        url: &str,
+        content_type: &str,
+        body: String,
+        max_bytes: usize,
+        timeout: Duration,
+    ) -> Result<String, HttpError> {
+        let request = hyper::Request::post(url)
+            .header(hyper::header::CONTENT_TYPE, content_type)
+            .body(Full::new(Bytes::from(body)))
+            .map_err(|e| HttpError::NoAnswer(e.to_string()))?;
+        let (_headers, bytes) = self.call_within(url, request, max_bytes, timeout).await?;
+        String::from_utf8(bytes.to_vec())
+            .map_err(|_| HttpError::NoAnswer("the answer is not UTF-8 text".to_owned()))
+    }
+
     /// Sends `request` and reads the answer as JSON (`Value::Null` when it
     /// is empty or not JSON), up to [`MAX_ANSWER`] bytes. The error is
     /// text, as the [`Sender`] port carries it.
@@ -332,6 +361,18 @@ impl HttpSender {
         request: hyper::Request<Full<Bytes>>,
         max_bytes: usize,
     ) -> Result<(hyper::HeaderMap, Bytes), HttpError> {
+        self.call_within(url, request, max_bytes, SEND_TIMEOUT)
+            .await
+    }
+
+    /// Like [`HttpSender::call_with_headers`], waiting at most `timeout`.
+    async fn call_within(
+        &self,
+        url: &str,
+        request: hyper::Request<Full<Bytes>>,
+        max_bytes: usize,
+        timeout: Duration,
+    ) -> Result<(hyper::HeaderMap, Bytes), HttpError> {
         // the text names callbacks, the first use of this rule; it now
         // covers every outbound URL, and tests look for this text
         if !outbound_url_allowed(url, self.allow_http) {
@@ -347,10 +388,10 @@ impl HttpSender {
         // `timeout` gives an error only when the time is up; when the
         // exchange finished in time, `answer` is its own result, which may
         // be an error too, and is returned as it is
-        let Ok(answer) = tokio::time::timeout(SEND_TIMEOUT, exchange).await else {
+        let Ok(answer) = tokio::time::timeout(timeout, exchange).await else {
             return Err(HttpError::NoAnswer(format!(
                 "no answer within {}s",
-                SEND_TIMEOUT.as_secs()
+                timeout.as_secs()
             )));
         };
         answer
@@ -595,6 +636,29 @@ mod tests {
             .unwrap();
         assert_eq!(text, "a.b.c accept=application/vc+jwt");
         assert!(sender.get_text(&jwt, "text/plain", 3).await.is_err());
+        let echoed = sender
+            .post_text(
+                &url,
+                "application/vp+jwt",
+                "h.p.s".to_owned(),
+                1024,
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        let echoed: Value = serde_json::from_str(&echoed).unwrap();
+        assert_eq!(echoed["contentType"], "application/vp+jwt");
+        assert_eq!(echoed["body"], "h.p.s");
+        let too_long = sender
+            .post_text(
+                &url,
+                "text/plain",
+                "x".to_owned(),
+                3,
+                Duration::from_secs(5),
+            )
+            .await;
+        assert!(matches!(too_long, Err(HttpError::NoAnswer(_))));
     }
 
     #[tokio::test]
