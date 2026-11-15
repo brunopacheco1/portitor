@@ -54,12 +54,14 @@ versions may change behaviour and configuration.
   and named by `x5u` in the DID document. The file is read again every minute; a new file for another
   key is refused and logged, and the old chain stays.
 - Identity: Gaia-X onboarding (ADR 0021), on with
-  `PORTITOR_GAIAX_COMPLIANCE_URL` and `PORTITOR_GAIAX_PARTICIPANT_FILE`.
+  `PORTITOR_GAIAX_COMPLIANCE_URL`, `PORTITOR_GAIAX_COMPLIANCE_DID` and
+  `PORTITOR_GAIAX_PARTICIPANT_FILE`.
   The identity signs `gx:LegalPerson` and `gx:Issuer` VC-JWTs, sends them
   with the notary's registration number credential to the compliance
   service (`POST {url}/api/credential-offers/standard-compliance`,
   `application/vp+jwt`), checks the `gx:ParticipantComplianceCredential`
-  it answers (signature by the service's `did:web` key, type, id, every
+  it answers (issued by `PORTITOR_GAIAX_COMPLIANCE_DID` and signed by its
+  `did:web` key, type, id, every
   `digestSRI`) and stores the four credentials. Runs at start without a
   valid compliance credential, then at two thirds of its validity, at
   least a minute after the last good run; failed runs are retried with

@@ -73,9 +73,12 @@ Facts this ADR relies on (checked 2026-11-15; details in
 
 - Gaia-X is on when `PORTITOR_GAIAX_COMPLIANCE_URL` is set: the base URL
   of a compliance service (for example `https://compliance.lab.gaia-x.eu/v2`).
-  It needs `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` and
-  `PORTITOR_GAIAX_PARTICIPANT_FILE`; the identity does not start without
-  them.
+  It needs `PORTITOR_IDENTITY_CERTIFICATE_CHAIN`,
+  `PORTITOR_GAIAX_PARTICIPANT_FILE` and `PORTITOR_GAIAX_COMPLIANCE_DID`,
+  the service's `did:web` DID; the identity does not start without them.
+  An answer issued by any other DID is refused before that DID is
+  resolved (0.8 review: a wrong or hijacked URL must not hand the
+  identity a credential from an issuer verifiers do not trust).
 - The participant file (JSON) holds only Gaia-X terms, copied from the
   Gaia-X ontology the service expects:
   - `context`: the Gaia-X JSON-LD context IRI, for example

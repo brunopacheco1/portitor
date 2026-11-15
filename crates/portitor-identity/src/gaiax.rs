@@ -185,6 +185,8 @@ fn query_encode(text: &str) -> String {
 /// what keeps runs from overlapping.
 pub struct Onboarding {
     compliance: Arc<dyn GaiaxCompliance>,
+    /// The only DID whose answer is taken (`PORTITOR_GAIAX_COMPLIANCE_DID`).
+    compliance_did: String,
     participant_file: PathBuf,
     /// Held while a run is on.
     running: Arc<Mutex<()>>,
@@ -208,6 +210,7 @@ impl Onboarding {
     /// be read or is invalid.
     pub fn new(
         compliance: Arc<dyn GaiaxCompliance>,
+        compliance_did: &str,
         participant_file: &Path,
     ) -> Result<Self, String> {
         let participant = read_participant(participant_file)?;
@@ -217,6 +220,7 @@ impl Onboarding {
         );
         Ok(Self {
             compliance,
+            compliance_did: compliance_did.to_owned(),
             participant_file: participant_file.to_owned(),
             running: Arc::new(Mutex::new(())),
             ran: Notify::new(),
@@ -585,8 +589,9 @@ fn build_and_sign(
 }
 
 /// Steps 3 and 4: sends the presentation, asking for the compliance
-/// credential's id, and checks the answer: its type, id and digests, and
-/// its signature by a key of the service's `did:web` document.
+/// credential's id, and checks the answer: its type, id and digests, its
+/// issuer (the configured service's DID), and its signature by a key of
+/// that DID's `did:web` document.
 async fn send_and_check(
     identity: &Identity,
     onboarding: &Onboarding,
@@ -602,6 +607,14 @@ async fn send_and_check(
     let answer = Credential::parse(answer_text.trim())
         .map_err(|e| format!("compliance service answer: {e}"))?;
     check_answer(&answer, &vcid, &signed.sent).map_err(|e| e.to_string())?;
+    // only the configured service: checked before its DID is resolved, so
+    // an answer never makes the identity fetch a DID document it names
+    if answer.issuer != onboarding.compliance_did {
+        return Err(format!(
+            "compliance service answer: issued by {}, not by {} (PORTITOR_GAIAX_COMPLIANCE_DID)",
+            answer.issuer, onboarding.compliance_did
+        ));
+    }
     let service = identity
         .directory
         .did_document(&answer.issuer)

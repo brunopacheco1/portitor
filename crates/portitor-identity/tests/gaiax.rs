@@ -201,11 +201,12 @@ impl Files {
         Self { dir }
     }
 
-    fn config(&self, compliance_url: &str) -> Config {
+    fn config(&self, compliance_url: &str, compliance_did: &str) -> Config {
         Config {
             certificate_chain_file: Some(self.dir.join("chain.pem")),
             gaiax: Some(GaiaxConfig {
                 compliance_url: compliance_url.to_owned(),
+                compliance_did: compliance_did.to_owned(),
                 participant_file: self.dir.join("participant.json"),
             }),
             allow_http: true,
@@ -228,6 +229,12 @@ struct Setup {
 }
 
 async fn setup() -> Setup {
+    setup_trusting(COMPLIANCE).await
+}
+
+/// [`setup`], with `compliance_did` as `PORTITOR_GAIAX_COMPLIANCE_DID`
+/// (the fake service signs as [`COMPLIANCE`]).
+async fn setup_trusting(compliance_did: &str) -> Setup {
     let service = Arc::new(FakeService {
         party: Party::new(COMPLIANCE),
         holder: Mutex::new(None),
@@ -249,7 +256,7 @@ async fn setup() -> Setup {
     let files = Files::new(&notary);
     let adapter = HttpGaiaxCompliance::new(&url, true).unwrap();
     let world = World::try_with(
-        &files.config(&url),
+        &files.config(&url, compliance_did),
         Arc::new(SqliteStore::in_memory().unwrap()),
         SigningKey::from_pem(KEY).unwrap(),
         Some(Arc::new(adapter)),
@@ -428,6 +435,24 @@ async fn a_wrong_digest_is_refused_and_nothing_is_stored() {
     assert_eq!(held_gaiax(world).len(), 4);
 }
 
+/// An answer from another DID than `PORTITOR_GAIAX_COMPLIANCE_DID` is
+/// refused before that DID is resolved, even with a good signature.
+#[tokio::test]
+async fn an_answer_from_another_service_is_refused() {
+    let setup = setup_trusting("did:web:compliance.lab.example:v2").await;
+    let world = &setup.world;
+    let run = run_now(&world.identity).await.unwrap();
+    assert_eq!(run.outcome, RunOutcome::Failed);
+    let error = run.error.unwrap();
+    assert!(
+        error.contains(&format!(
+            "issued by {COMPLIANCE}, not by did:web:compliance.lab.example:v2"
+        )),
+        "{error}"
+    );
+    assert!(held_gaiax(world).is_empty());
+}
+
 /// The service's reason for a refusal is in the run's error, as the
 /// management API lists it.
 #[tokio::test]
@@ -533,7 +558,7 @@ async fn a_did_with_a_path_keeps_its_path() {
     let adapter = HttpGaiaxCompliance::new("http://127.0.0.1:1", true).unwrap();
     let config = Config {
         participant_id: "did:web:holder.example:participants:a".to_owned(),
-        ..files.config("http://127.0.0.1:1")
+        ..files.config("http://127.0.0.1:1", COMPLIANCE)
     };
     let world = World::try_with(
         &config,
@@ -569,7 +594,7 @@ async fn a_chain_for_another_key_stops_the_start() {
     std::fs::write(files.dir.join("chain.pem"), OTHER_CERT).unwrap();
     let adapter = HttpGaiaxCompliance::new("http://127.0.0.1:1", true).unwrap();
     let refused = World::try_with(
-        &files.config("http://127.0.0.1:1"),
+        &files.config("http://127.0.0.1:1", COMPLIANCE),
         Arc::new(SqliteStore::in_memory().unwrap()),
         SigningKey::from_pem(KEY).unwrap(),
         Some(Arc::new(adapter)),
@@ -590,7 +615,7 @@ async fn a_bad_participant_file_stops_the_start() {
     let start = || {
         let adapter = HttpGaiaxCompliance::new("http://127.0.0.1:1", true).unwrap();
         World::try_with(
-            &files.config("http://127.0.0.1:1"),
+            &files.config("http://127.0.0.1:1", COMPLIANCE),
             Arc::new(SqliteStore::in_memory().unwrap()),
             SigningKey::from_pem(KEY).unwrap(),
             Some(Arc::new(adapter)),

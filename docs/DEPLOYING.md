@@ -495,7 +495,8 @@ participant.
 | `PORTITOR_SCOPE_TYPE_ALIASES` | `org.eclipse.edc.vc.type` | comma-separated scope aliases that mean "credentials of this type", besides DCP's `org.eclipse.dspace.dcp.vc.type` |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | unset | **unset** (`true` allows plain-HTTP DIDs and URLs, tests only) |
 | `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` | unset | Gaia-X only: path of the PEM chain of the identity key, the key's certificate first ([Gaia-X onboarding](#gaia-x-onboarding-optional)) |
-| `PORTITOR_GAIAX_COMPLIANCE_URL` | unset (Gaia-X off) | base URL of a Gaia-X compliance service, for example `https://compliance.lab.gaia-x.eu/v2`; needs the two settings around it |
+| `PORTITOR_GAIAX_COMPLIANCE_URL` | unset (Gaia-X off) | base URL of a Gaia-X compliance service, for example `https://compliance.lab.gaia-x.eu/v2`; needs the settings around it |
+| `PORTITOR_GAIAX_COMPLIANCE_DID` | unset | Gaia-X only: the `did:web` DID of that service, for example `did:web:compliance.lab.gaia-x.eu:v2`; an answer signed by any other DID is refused |
 | `PORTITOR_GAIAX_PARTICIPANT_FILE` | unset | Gaia-X only: path of the participant file |
 
 ### Endpoints
@@ -769,7 +770,9 @@ Gaia-X ontology the compliance service expects:
 The identity reads the file at start (and refuses to start if it is
 wrong) and again at each run, so a changed file needs no restart.
 
-**Run it.** Set `PORTITOR_GAIAX_COMPLIANCE_URL`. At start, if there is no
+**Run it.** Set `PORTITOR_GAIAX_COMPLIANCE_URL` and the service's DID,
+`PORTITOR_GAIAX_COMPLIANCE_DID` (the identity refuses an answer signed by
+any other DID). At start, if there is no
 valid compliance credential, the identity runs at once; then it runs
 again when two thirds of the credential's validity have passed (it is
 valid at most 90 days). A failed run keeps the credentials you have and
@@ -1067,7 +1070,7 @@ Both are optional; without the new settings Portitor works as in 0.7.
    context. Plain types match as before.
 5. New identity settings, all optional:
    `PORTITOR_IDENTITY_CERTIFICATE_CHAIN`, `PORTITOR_GAIAX_COMPLIANCE_URL`,
-   `PORTITOR_GAIAX_PARTICIPANT_FILE`
+   `PORTITOR_GAIAX_COMPLIANCE_DID`, `PORTITOR_GAIAX_PARTICIPANT_FILE`
    ([Gaia-X onboarding](#gaia-x-onboarding-optional)). New connector
    setting, optional: `PORTITOR_GAIAX_COMPLIANCE_ISSUERS`
    ([Gaia-X compliance](#gaia-x-compliance)). Set it on the provider

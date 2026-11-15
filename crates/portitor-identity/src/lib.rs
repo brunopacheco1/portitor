@@ -148,8 +148,12 @@ impl Identity {
             (None, _) => None,
             (Some(_), None) => return Err("Gaia-X is on, but no compliance service".to_owned()),
             (Some(settings), Some(compliance)) => Some(
-                Onboarding::new(compliance, &settings.participant_file)
-                    .map_err(|e| format!("PORTITOR_GAIAX_PARTICIPANT_FILE: {e}"))?,
+                Onboarding::new(
+                    compliance,
+                    &settings.compliance_did,
+                    &settings.participant_file,
+                )
+                .map_err(|e| format!("PORTITOR_GAIAX_PARTICIPANT_FILE: {e}"))?,
             ),
         };
         let service_path = config::base_path(&config.credential_service_url)

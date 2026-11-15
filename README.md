@@ -324,7 +324,8 @@ set on the identity component, not the connector:
 | Variable (identity) | Default | Meaning |
 |---------------------|---------|---------|
 | `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` | none | PEM chain of the identity key, its certificate first; served at `/.well-known/x509CertificateChain.pem` (below the DID path, for a DID with one) and named by `x5u` in the DID document. The identity refuses to start if the first certificate is for another key |
-| `PORTITOR_GAIAX_COMPLIANCE_URL` | none (Gaia-X off) | Base URL of a Gaia-X compliance service; the identity gets and renews its participant's compliance credential. Needs the chain and the participant file |
+| `PORTITOR_GAIAX_COMPLIANCE_URL` | none (Gaia-X off) | Base URL of a Gaia-X compliance service; the identity gets and renews its participant's compliance credential. Needs the chain, the participant file and `PORTITOR_GAIAX_COMPLIANCE_DID` |
+| `PORTITOR_GAIAX_COMPLIANCE_DID` | none | The compliance service's `did:web` DID, for example `did:web:compliance.lab.gaia-x.eu:v2`. An answer signed by any other DID is refused |
 | `PORTITOR_GAIAX_PARTICIPANT_FILE` | none | JSON file: Gaia-X context, legal person claims, terms and conditions hash, and the path of the notary's registration number credential (DEPLOYING, "Gaia-X onboarding") |
 
 Licensed under [Apache-2.0](LICENSE) ([ADR 0010](docs/adr/0010-licence.md)).

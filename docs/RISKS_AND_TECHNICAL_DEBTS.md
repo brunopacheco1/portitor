@@ -67,7 +67,7 @@ checks this file:
 | [R-12](#r-12) | Gaia-X never tested with a real trust anchor or the Gaia-X Lab | Interoperability, security | 0.8 (maintainer, 2026-11-15) | Open | Later |
 | [R-13](#r-13) | The Gaia-X test depends on Gaia-X and w3id.org hosts | Delivery | 0.8 (spike, TESTING, 2026-11-15) | Mitigated | — |
 | [R-14](#r-14) | Gaia-X protocols move: the Compliance Dispatcher (OpenID4VP, OpenID4VCI) is announced, not released | Upstream churn | 0.8 (ADR 0021, 2026-11-15) | Mitigated | Later |
-| [R-15](#r-15) | Onboarding accepts a compliance answer from any issuer whose signature verifies | Security | 0.8 review (maintainer, 2026-11-15) | Open | 0.10 (proposed) |
+| [R-15](#r-15) | Onboarding accepts a compliance answer from any issuer whose signature verifies | Security | 0.8 review (maintainer, 2026-11-15) | Addressed | 0.8 |
 | [R-16](#r-16) | A Gaia-X compliance credential cannot be revoked | Security | 0.8 (spike, ADR 0022, 2026-11-15) | Accepted | — |
 | [R-17](#r-17) | Server-side request forgery through partner-chosen URLs | Security | 0.3 (ADR 0016 security notes, SECURITY-ASSURANCE) | Mitigated | — |
 | [R-18](#r-18) | No request size limit of Portitor's own on the public ports | Security | 0.5 (SECURITY-ASSURANCE) | Open | 0.9 per SECURITY-ASSURANCE (not in the roadmap) |
@@ -358,20 +358,24 @@ Totals: 35 risks (Open 11, Mitigated 14, Accepted 4, Addressed 6);
 <a id="r-15"></a>
 ### R-15 Onboarding accepts a compliance answer from any issuer whose signature verifies
 
-- **What.** During Gaia-X onboarding the identity resolves the DID named
-  as `issuer` in the compliance service's answer and checks the signature
-  with it (`crates/portitor-identity/src/gaiax.rs`, checked). It does not
-  check that this issuer is the compliance service it called.
+- **What.** During Gaia-X onboarding the identity resolved the DID named
+  as `issuer` in the compliance service's answer and checked the
+  signature with it, without checking that this issuer was the
+  compliance service it called.
 - **Why it matters.** Whoever answers at the configured URL could return
   a credential signed by any DID. The risk is limited: the URL is set by
   the operator and called over HTTPS, the answer must list exactly the
   digests sent, and connectors trust only the services in
   `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` (ADR 0022), so a credential from
   another issuer is skipped by verifiers.
-- **Current state: Open.** Raised and deferred in the 0.8 review
-  (maintainer, 2026-11-15, project chat).
-- **Next.** Proposed for 0.10: pin the expected compliance issuer DID in
-  the identity's settings.
+- **Current state: Addressed in 0.8.** Raised in the 0.8 review; the
+  maintainer asked to fix it before the release (2026-11-15). The
+  identity now needs `PORTITOR_GAIAX_COMPLIANCE_DID` with
+  `PORTITOR_GAIAX_COMPLIANCE_URL` and refuses an answer issued by any
+  other DID before resolving it (ADR 0021; test
+  `an_answer_from_another_service_is_refused` in
+  `crates/portitor-identity/tests/gaiax.rs`).
+- **Next.** None.
 
 <a id="r-16"></a>
 ### R-16 A Gaia-X compliance credential cannot be revoked

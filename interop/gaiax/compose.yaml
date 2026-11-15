@@ -130,6 +130,7 @@ services:
       # Gaia-X (ADR 0021)
       PORTITOR_IDENTITY_CERTIFICATE_CHAIN: /config/certificate-chain.pem
       PORTITOR_GAIAX_COMPLIANCE_URL: https://compliance.gaiax.test
+      PORTITOR_GAIAX_COMPLIANCE_DID: did:web:compliance.gaiax.test
       PORTITOR_GAIAX_PARTICIPANT_FILE: /config/participant.json
     volumes:
       - ./run/provider:/config:ro
@@ -181,6 +182,7 @@ services:
       PORTITOR_STS_CLIENT_SECRET_FILE: /config/sts-client-secret
       PORTITOR_IDENTITY_CERTIFICATE_CHAIN: /config/certificate-chain.pem
       PORTITOR_GAIAX_COMPLIANCE_URL: https://compliance.gaiax.test
+      PORTITOR_GAIAX_COMPLIANCE_DID: did:web:compliance.gaiax.test
       PORTITOR_GAIAX_PARTICIPANT_FILE: /config/participant.json
     volumes:
       - ./run/consumer:/config:ro

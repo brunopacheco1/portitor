@@ -67,6 +67,11 @@ pub struct GaiaxConfig {
     /// slash (`PORTITOR_GAIAX_COMPLIANCE_URL`), for example
     /// `https://compliance.lab.gaia-x.eu/v2`.
     pub compliance_url: String,
+    /// The `did:web` DID of that service (`PORTITOR_GAIAX_COMPLIANCE_DID`),
+    /// for example `did:web:compliance.lab.gaia-x.eu:v2`. An answer signed
+    /// by any other DID is refused, so a wrong or hijacked URL cannot hand
+    /// the identity a credential from an issuer verifiers do not trust.
+    pub compliance_did: String,
     /// The participant file (`PORTITOR_GAIAX_PARTICIPANT_FILE`).
     pub participant_file: PathBuf,
 }
@@ -189,6 +194,21 @@ fn gaiax_config(
             "not an https:// URL",
         ));
     }
+    let compliance_did = text("PORTITOR_GAIAX_COMPLIANCE_DID")
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| {
+            invalid(
+                "PORTITOR_GAIAX_COMPLIANCE_DID",
+                "required with PORTITOR_GAIAX_COMPLIANCE_URL",
+            )
+        })?;
+    // resolved like any did:web DID, with a path as the Gaia-X Lab's
+    if portitor_dcp::did_web_url(&compliance_did).is_err() {
+        return Err(invalid(
+            "PORTITOR_GAIAX_COMPLIANCE_DID",
+            "not a did:web DID",
+        ));
+    }
     let participant_file = text("PORTITOR_GAIAX_PARTICIPANT_FILE")
         .filter(|v| !v.is_empty())
         .ok_or_else(|| {
@@ -205,6 +225,7 @@ fn gaiax_config(
     }
     Ok(Some(GaiaxConfig {
         compliance_url: url.trim_end_matches('/').to_owned(),
+        compliance_did,
         participant_file: PathBuf::from(participant_file),
     }))
 }
@@ -272,6 +293,22 @@ mod tests {
         ));
         assert_eq!(
             read(&vars).unwrap_err().name,
+            "PORTITOR_GAIAX_COMPLIANCE_DID"
+        );
+        vars.push((
+            "PORTITOR_GAIAX_COMPLIANCE_DID",
+            "https://compliance.example",
+        ));
+        assert_eq!(
+            read(&vars).unwrap_err().name,
+            "PORTITOR_GAIAX_COMPLIANCE_DID"
+        );
+        vars.push((
+            "PORTITOR_GAIAX_COMPLIANCE_DID",
+            "did:web:compliance.example:v2",
+        ));
+        assert_eq!(
+            read(&vars).unwrap_err().name,
             "PORTITOR_GAIAX_PARTICIPANT_FILE"
         );
         vars.push((
@@ -288,6 +325,7 @@ mod tests {
             config.gaiax,
             Some(GaiaxConfig {
                 compliance_url: "https://compliance.example/v2".to_owned(),
+                compliance_did: "did:web:compliance.example:v2".to_owned(),
                 participant_file: PathBuf::from("/config/participant.json"),
             })
         );
