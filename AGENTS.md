@@ -36,7 +36,7 @@ Today's crates:
 - `crates/portitor-time`: `xsd:date` and `xsd:dateTime` parsing, shared by ODRL policies and credentials.
 - `crates/portitor-dps`: Data Plane Signaling v1.0-RC4: data flow messages, state machine, and the two ports between control plane and data plane.
 - `crates/portitor-shacl`: our own SHACL Core subset (ADR 0005) on Oxigraph's RDF crates: loads shapes and code lists, turns JSON-LD into RDF with local contexts only, validates. Pure, no I/O; refuses SHACL terms it does not implement.
-- `crates/portitor-runtime`: adapters shared by the binaries: outbound HTTP, did:web resolution with a cache, the management API key, SQLite files and migrations, logging and shutdown, the system clock.
+- `crates/portitor-runtime`: adapters shared by the binaries: outbound HTTP, did:web resolution with a cache, the management API key, SQLite files and migrations, logging and shutdown, the system clock, the health checks (`health.rs`), and traces and metrics with OpenTelemetry (`telemetry.rs`, `telemetry/`).
 - `crates/portitor-connector`: the connector binary (HTTP adapter and routes), one image (ADR 0003). Harvests datasets into a read copy (ADR 0020) and pulls the authority's signed bundle the same way (`bundle_harvest.rs`: `BundleHarvester`, `BundleCopy`, no rollback).
 - `crates/portitor-bundle`: adapter crate for the authority's signed bundle on a participant's side, reusable by any service: `source.rs` (`BundleSource` port, `UrlSource`, `FolderSource`, `PORTITOR_BUNDLE_*` settings) and `store.rs` (`BundleStore` port, `CacheFolder`: disk cache and version in use). How schemas are collected and stored is technical debt (`docs/RISKS_AND_TECHNICAL_DEBTS.md`, TD-01).
 - `crates/portitor-identity`: the identity component binary (ADR 0015): DID document, STS, credential service (presentation, Storage and offer APIs), management API, SQLite store, X.509 certificate chain and Gaia-X onboarding (ADR 0021); its own image.
@@ -87,6 +87,12 @@ cargo deny check
 - **Commits** are signed; `main` changes only through reviewed pull
   requests. Never force-push `main`, never disable a check or skip a test to
   get green.
+- **Telemetry** ([ADR 0023](docs/adr/0023-observability.md)):
+  OpenTelemetry code goes only in `crates/portitor-runtime/src/telemetry*`.
+  A new metric is a function in `telemetry/metrics.rs` with fixed
+  attribute values, never ids, URLs or untrusted input. No token, key,
+  header, body or path with ids in a span field. Send `traceparent` only
+  to services inside the participant (its own STS and data sources).
 - **Secrets:** never commit keys or tokens. Test keys live only in
   `tests/fixtures/` and are named `test-only-*`.
 

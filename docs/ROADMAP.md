@@ -416,6 +416,9 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
 - File the upstream reports drafted from 0.4 to 0.8 and link them
   (maintainer, 2026-11-15; earlier if an answer is needed to go on;
   [R-07](RISKS_AND_TECHNICAL_DEBTS.md#r-07)).
+- Exit: cargo-vet runs in CI with every crate audited or exempted; the
+  site shows the SonarQube and REUSE values; each upstream report filed
+  and linked.
 - Main risk: the audit load of cargo-vet.
 
 ## 0.11 Security hardening
@@ -435,6 +438,9 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
   cached") ([TD-06](RISKS_AND_TECHNICAL_DEBTS.md#td-06)).
 - Investigate key custody and key rotation
   ([TD-05](RISKS_AND_TECHNICAL_DEBTS.md#td-05)).
+- Exit: every parser has a fuzz target; the request limits per port and
+  route are tested; the status list cache is tested at 0 and 300 s; the
+  threat model review is recorded in SECURITY-ASSURANCE.
 - Main risk: a finding that needs a design change.
 
 ## 0.12 Interoperability and performance
@@ -443,6 +449,8 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
   1.0.0-RC7 refuses the Gaia-X compliance credential (ADR 0022). Simpl-Open
   stays under "Later" until a sandbox exists (ADR 0017).
 - Benchmarks published.
+- Exit: the EDC interop test passes against the newest EDC release;
+  the benchmarks are published in `docs/`.
 - Main risk: EDC changing under us.
 
 ## 0.13 Release candidate for 1.0

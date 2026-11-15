@@ -64,6 +64,16 @@ dataspace participants over HTTPS.
   signed by that DID's key and lists exactly the digests of what it sent,
   and refuses a certificate chain for another key
   ([ADR 0021](adr/0021-gaia-x-onboarding.md)).
+- **Telemetry off by default (0.9):** no trace or metric leaves a
+  component unless the operator sets an OTLP endpoint. With it set,
+  span and metric attributes are an allow-list: never a token, key,
+  `Authorization` header, body or dataset contents, and no URL path or
+  full URL (they hold ids and tokens). Trace context (`traceparent`)
+  goes only to services inside the participant (its own STS and data
+  sources); partners never receive ours, and one they send on the DSP
+  port is ignored ([ADR 0023](adr/0023-observability.md)). The health
+  checks answer without a key on the management port only, and their
+  failure messages name a check and a reason, never a secret.
 - **Authentic releases:** from 0.1.0, images are signed with cosign
   (keyless) and carry an SBOM and SLSA build provenance as attestations.
 
@@ -98,6 +108,7 @@ dataspace participants over HTTPS.
 | Internal services | A consumer gives a `callbackAddress` that points at an internal service, so the connector calls it (SSRF) | Only `https://` URLs with a host, unless the operator allows `http://`; the response body is never read; a 10 s timeout; blocking internal addresses *(planned)* |
 | Negotiation state | A consumer drives a negotiation out of order, or two messages race | The DSP state machine as a pure function in the domain; every change is a compare-and-update on a version number; a message that races our acknowledgement is accepted only as proof of delivery of our saved pending message (ADR 0007) |
 | Service availability | Crafted or oversized messages crash or exhaust a service | Typed parsing with no `unsafe`; axum's default limit of 2 MB on every parsed body, explicit limits per port *(planned, 0.11)*; fuzzing of the DSP, DCP and ODRL parsers, the SHACL shapes and JSON-LD readers, the bundle manifest and the Gaia-X compliance checks and JCS digest (ClusterFuzzLite), of every parser *(planned, 0.11)*; a nesting limit in SHACL validation |
+| Operational data (health answers, traces, metrics) | A caller reads health answers, or a receiver reads traces and metrics, and learns secrets, partners or process ids; a partner links our internal calls through trace context | Health checks only on the management port, which stays on the operator's network; failure messages without secrets; export off by default and only to the receiver the operator names; attribute allow-list (no tokens, keys, headers, bodies or id-bearing paths); client metrics name only hosts inside the participant (no untrusted cardinality); `traceparent` neither sent to nor taken from other participants, and taken on `/sts/token` only after the client is authenticated (ADR 0023) |
 | Users' supply chain | A tampered release or dependency | Pinned CI actions; signed commits; Dependabot, dependency review, OSV, cargo-deny (RustSec advisories, licence allowlist, crate sources) and ORT; signed images with SBOM and provenance attestations |
 
 ## Trust boundaries
@@ -120,6 +131,11 @@ dataspace participants over HTTPS.
 5. **The dataspace authority** signs the schema and vocabulary bundle
    offline; connectors trust it only through the bundle key in its
    `did:web` document.
+6. **The operator's monitoring (0.9).** Probes call the health checks on
+   the management port without a key. With telemetry on, the components
+   push traces and metrics to the OTLP receiver the operator names; that
+   receiver sees partners' hosts and DSP process ids, so it must be the
+   operator's own (DEPLOYING, "Security").
 
 ## Secure design principles applied
 
@@ -154,7 +170,13 @@ dataspace participants over HTTPS.
   the DSP TCK (metadata, catalog, negotiation and transfer groups), the
   DCP TCK (credential service, verifier and issuer tests), the EDC
   interoperability test and, from 0.8, the Gaia-X end-to-end test
-  against a local compliance service in test mode.
+  against a local compliance service in test mode. From 0.9,
+  `crates/portitor-runtime/tests/telemetry_export.rs` checks that
+  nothing is exported without an endpoint, that no secret or
+  `Authorization` value appears in any export, and that no trace context
+  crosses a DSP call; the health tests (`tests/health.rs` in the
+  connector and the identity, and the issuer's `tests/issuer.rs`) check
+  that the checks are open while the management API keeps its key.
 - **Static analysis:** Clippy pedantic with warnings as errors; CodeQL and
   SonarQube Cloud quality gate on every pull request.
 - **Supply chain:** pinned workflow actions, least-privilege workflow

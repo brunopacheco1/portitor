@@ -67,11 +67,16 @@ What others do (checked 2026-11-15):
   process:
   - connector: the SQLite file answers; the start harvest ran; the
     bundle is in force (when one is configured); its own DID document
-    resolves and its STS signs (the start check that exists since 0.5);
-  - identity: the SQLite file answers; the key is loaded; the DID
-    document is served;
-  - issuer: the SQLite file answers; the key is loaded; the status
-    lists are served.
+    resolves and its STS signs (the start check that exists since 0.5).
+    A background task runs this identity check every 10 s with a 3 s
+    timeout, and probes read its last result: the check fails only
+    after 2 failures in a row (about 20 s), passes again after one
+    success, and is not ready before its first result;
+  - identity, in the process: the SQLite file answers; the key is loaded
+    and signs; the DID document it serves names the participant and
+    lists that key;
+  - issuer, in the process: the SQLite file answers; the key is loaded
+    and signs; both status lists it serves are signed by that key.
 - `GET /health` on the public port stays as it is (`ok`).
 
 ### 2. A `health` subcommand for Docker
@@ -94,7 +99,8 @@ service_healthy`), so the Compose file shows the deployment order.
   `reqwest-*` and `grpc-tonic` features stay off.
 - The OpenTelemetry layer has its own level filter (`info`), separate
   from `RUST_LOG`, so the log level does not decide what is traced.
-- Every JSON log line inside a span carries its `trace_id`.
+- With export on, every JSON log line inside a span carries its
+  `trace_id`.
 
 ### 4. Trace context stays inside one participant
 
@@ -129,6 +135,38 @@ Compose file, adds an OpenTelemetry Collector, Jaeger and Prometheus,
 pinned by digest. It is started by hand and described in TESTING; CI
 does not run it. CI proves export with a test that uses an in-process
 OTLP receiver.
+
+### Changes made while building (2026-11-15)
+
+- The health checks get no span and no measure: probes every few
+  seconds would fill traces and metrics with noise. The connector's
+  background identity check is not traced and sends no `traceparent`.
+- Server spans carry no `url.path` and client spans no `url.full`, as
+  paths and URLs hold process ids and tokens. Server spans and the
+  server metric carry `http.route` (the route template); client spans
+  carry `server.address` and `server.port`.
+- The client metric carries `server.address` and `server.port` only for
+  calls inside the participant (its own STS and data sources). Other
+  hosts come from partners' DIDs and callback addresses, which are
+  untrusted input and would give the metric unbounded cardinality.
+- The identity joins an incoming `traceparent` on `/sts/token` only
+  after the client is authenticated, so an unauthenticated caller
+  cannot join our traces.
+- Each negotiation and transfer state change is also one INFO log line
+  (target `portitor::state`), not only a span event.
+- The connector's identity check runs in the background (every 10 s,
+  3 s timeout, not ready after 2 failures in a row), instead of in the
+  probe, so a slow STS never makes a probe slow.
+- `OTEL_*` variables with no effect: `OTEL_SDK_DISABLED`,
+  `OTEL_EXPORTER_OTLP_PROTOCOL` (the protocol is fixed),
+  `OTEL_BSP_EXPORT_TIMEOUT`, `OTEL_BSP_MAX_CONCURRENT_EXPORTS` and
+  `OTEL_METRIC_EXPORT_TIMEOUT` (only the SDK's experimental async
+  processors read them). `OTEL_EXPORTER_OTLP_COMPRESSION` is read, but
+  compression is not built in: the SDK logs a warning and sends
+  uncompressed.
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and
+  `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` switch export on too, each for
+  its own signal; `OTEL_EXPORTER_OTLP_ENDPOINT` counts for both.
 
 ## Consequences
 

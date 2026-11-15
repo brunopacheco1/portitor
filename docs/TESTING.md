@@ -178,6 +178,23 @@ Where the tests are:
   with `cargo test -p portitor-issuer --test issuer -- --ignored write_management_description`.
 - **Runtime and time** (`crates/portitor-runtime`, `crates/portitor-time`):
   unit tests next to the code (`cargo test -p portitor-runtime --lib`).
+- **Health checks** (ADR 0023): `crates/portitor-runtime/src/health.rs`
+  tests the `HealthStatus` answers, the time limit per check and the
+  `health` subcommand. `crates/portitor-connector/tests/health.rs` and
+  `crates/portitor-identity/tests/health.rs` check that the routes are
+  open without the API key, that readiness follows the component's own
+  dependencies (a removed SQLite file makes it not ready), and that the
+  management API keeps its key; for the issuer it is
+  `health_checks_its_own_dependencies_without_the_key` in
+  `crates/portitor-issuer/tests/issuer.rs`.
+- **Telemetry export** (ADR 0023):
+  `crates/portitor-runtime/tests/telemetry_export.rs` runs a child
+  process against a fake OTLP/HTTP receiver: nothing is sent and log
+  lines are unchanged without an endpoint; with one, server spans carry
+  the route template and never the path, client spans and the STS call
+  share the trace, no trace context crosses a DSP-like call, and no
+  secret or `Authorization` value appears in any export.
+  `cargo test -p portitor-runtime --test telemetry_export`.
 
 Rules for new tests:
 
@@ -771,9 +788,28 @@ first, and builds the demo bundle with the issuer image into
 running (the issuer's management API is then on `127.0.0.1:18071`, with
 the key in `examples/compose/run/issuer/management.key`; the provider's,
 with the harvest jobs, on `127.0.0.1:18081`, key in
-`examples/compose/run/provider/management.key`). The images must be 0.7
-or later: older ones have no bundle support. CI runs both on every pull request, with the binaries
-and images it has just built.
+`examples/compose/run/provider/management.key`). The images must be 0.9
+or later: the Compose file starts each service once the ones it needs
+are healthy (`condition: service_healthy`), which needs the image's
+`HEALTHCHECK`. Running it again after `KEEP=1` works: the script first
+removes the containers and volumes of the last run
+(`docker compose down --volumes --remove-orphans`), then `run/`. CI runs
+both on every pull request, with the binaries and images it has just
+built.
+
+Before the 0.9.0 images are released, or to try your own changes,
+build local images as for the [EDC interop test](#edc-interop-test)
+and name them:
+
+```sh
+mkdir -p dist/amd64
+cargo build --release --target x86_64-unknown-linux-musl -p portitor-connector -p portitor-identity -p portitor-issuer
+cp target/x86_64-unknown-linux-musl/release/portitor-{connector,identity,issuer} dist/amd64/
+docker build --target portitor-connector -t portitor-connector:ci .
+docker build --target portitor-identity -t portitor-identity:ci .
+docker build --target portitor-issuer -t portitor-issuer:ci .
+scripts/demo-compose.sh portitor-connector:ci portitor-identity:ci portitor-issuer:ci
+```
 
 By hand, a provider and a consumer with their identities: start the
 Compose demo and keep it running, then use the consumer's management API
@@ -801,13 +837,19 @@ Jaeger and Prometheus to the Compose demo
 `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318` on the issuer,
 both identities and both connectors; the collector
 (`examples/compose/otel-collector.yaml`) sends the traces to Jaeger and
-the metrics to Prometheus's OTLP endpoint. Only images that export
-OpenTelemetry (0.9 or later) send anything. It is started by hand; CI
-does not run it.
+the metrics to Prometheus's OTLP endpoint. It is started by hand; CI
+does not run it. Stop a demo that is still running first, with the
+`docker compose ... down --volumes` command above.
 
 ```sh
 EXTRA_COMPOSE=examples/compose/observability.yaml KEEP=1 scripts/demo-compose.sh
 ```
+
+The components send metrics every 60 s by default
+(`OTEL_METRIC_EXPORT_INTERVAL`). The overlay sets it to 10 s
+(`OTEL_METRIC_EXPORT_INTERVAL: "10000"` in its `x-otel` block), so
+with `KEEP=1` the metrics are in Prometheus about 10 s after the demo's
+calls.
 
 - Jaeger UI: <http://127.0.0.1:16686>, pick a Portitor service.
 - Prometheus UI: <http://127.0.0.1:9090>. Prometheus turns OpenTelemetry
@@ -815,11 +857,14 @@ EXTRA_COMPOSE=examples/compose/observability.yaml KEEP=1 scripts/demo-compose.sh
   suffix and a histogram is stored as `_bucket`, `_sum` and `_count`
   series ([`translation_strategy`](https://github.com/prometheus/prometheus/blob/v3.16.0/docs/configuration/configuration.md),
   default `UnderscoreEscapingWithSuffixes`). `service.name` becomes the
-  `job` label. So `http.server.request.duration` (seconds) is:
+  `job` label and `service.instance.id` the `instance` label (the
+  overlay sets it to `authority`, `provider` or `consumer`, so the two
+  connectors stay apart). So `http.server.request.duration` (seconds)
+  is:
 
 ```promql
 http_server_request_duration_seconds_count
-histogram_quantile(0.95, sum by (le, job) (rate(http_server_request_duration_seconds_bucket[5m])))
+histogram_quantile(0.95, sum by (le, job, instance) (rate(http_server_request_duration_seconds_bucket[5m])))
 ```
 
 Stop and remove everything, volumes included:
