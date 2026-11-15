@@ -521,6 +521,72 @@ without a change in Portitor, hence the nightly run.
 scripts/gaiax-e2e.sh            # KEEP=1 leaves it running, with interop/gaiax/run/
 ```
 
+## How to test Gaia-X compliance
+
+Three levels, from fast to complete. None needs a real Gaia-X service; a
+run against the Gaia-X Lab with a public `did:web` is future work
+([R-12](RISKS_AND_TECHNICAL_DEBTS.md#r-12)).
+
+**1. Unit and integration tests** (seconds, no Docker):
+
+```sh
+cargo test -p portitor-dcp gaiax          # JCS digests (RFC 8785), Gaia-X credentials, answer check
+cargo test -p portitor-identity --test gaiax   # onboarding against a fake compliance service
+cargo test -p portitor-connector auth::dcp     # ADR 0022 checks: admitted, refused, skipped
+cargo +nightly fuzz run gaiax_compliance -- -max_total_time=60   # see Fuzzing
+```
+
+**2. The end-to-end test** (about 5 minutes; Docker, Internet): build the
+Portitor images as for the [EDC interop test](#edc-interop-test), then run
+`scripts/gaiax-e2e.sh`. It ends with `== Done` when the compliant consumer
+gets a contract (`FINALIZED`) and the outsider is refused (`TERMINATED`);
+see [Gaia-X end-to-end test](#gaia-x-end-to-end-test) for what it sets up.
+
+**3. By hand, on the running data space.** `KEEP=1 scripts/gaiax-e2e.sh`
+leaves everything running, with the keys in `interop/gaiax/run/`. From
+the repository root:
+
+```sh
+# the management API keys of the consumer's identity and connector
+ID_KEY="authorization: Bearer $(cat interop/gaiax/run/consumer/identity-management.key)"
+CONN_KEY="authorization: Bearer $(cat interop/gaiax/run/consumer/connector-management.key)"
+
+# the onboarding runs (outcome, error with the service's reason) and a new one
+curl -s -H "$ID_KEY" http://127.0.0.1:18492/v1/gaiax/compliance | jq
+curl -s -X POST -H "$ID_KEY" http://127.0.0.1:18492/v1/gaiax/compliance
+
+# the credentials the identity holds: membership and the four Gaia-X ones
+curl -s -H "$ID_KEY" http://127.0.0.1:18492/v1/credentials | jq '.[] | {types, issuer}'
+
+# what the compliance service and verifiers read: the key's certificate
+# chain (named by x5u in the DID document) and the credentials sent
+curl -s http://127.0.0.1:18490/.well-known/x509CertificateChain.pem | openssl x509 -noout -subject -enddate
+curl -s http://127.0.0.1:18490/credentials/gaiax/legal-person | cut -d. -f2 | base64 -d 2>/dev/null | jq
+
+# the consumer's negotiations (the script's are FINALIZED)
+curl -s -H "$CONN_KEY" http://127.0.0.1:18482/v1/negotiations | jq '.negotiations[] | {consumerPid, state}'
+
+# why the provider refused the outsider
+docker compose -f interop/gaiax/compose.yaml logs provider-connector | grep 'credential refused'
+```
+
+Things worth trying:
+
+- **A failed run.** `docker compose -f interop/gaiax/compose.yaml stop compliance`,
+  start a run, and read the runs: it fails, the credentials of the last
+  good run stay, and it is retried with growing delays. Start the service
+  again and run once more.
+- **Another offer.** Edit `interop/gaiax/config/datasets.json` (for
+  example `gx:labelLevel` `eq` `L1`) and restart `provider-connector`: the
+  consumer's negotiation is now `TERMINATED`, as its label is `SC`.
+- **Another compliance service.** Set the provider's
+  `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` to another DID and restart it: the
+  compliance credential is skipped and the consumer is refused for this
+  offer, but still admitted to offers that need only membership.
+
+Clean up with `docker compose -f interop/gaiax/compose.yaml down -v` and
+`rm -rf interop/gaiax/run/`.
+
 ## Fuzzing
 
 Parsers and state machines are fuzzed with `cargo-fuzz` (libFuzzer). It

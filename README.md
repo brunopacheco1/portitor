@@ -33,6 +33,7 @@ Website: <https://brunopacheco1.github.io/portitor/> (objectives, minimum functi
 - Plan: [docs/ROADMAP.md](docs/ROADMAP.md); decisions: [docs/adr/](docs/adr/)
 - Known risks and technical debts: [docs/RISKS_AND_TECHNICAL_DEBTS.md](docs/RISKS_AND_TECHNICAL_DEBTS.md)
 - Deploying and operating: [docs/DEPLOYING.md](docs/DEPLOYING.md); testing: [docs/TESTING.md](docs/TESTING.md)
+- Trying Gaia-X compliance: [docs/TESTING.md](docs/TESTING.md#how-to-test-gaia-x-compliance)
 - Reading the Rust code: [docs/RUST-IDIOMS.md](docs/RUST-IDIOMS.md)
 - HTTP interfaces: [docs/api/](docs/api/) (OpenAPI 3.1: connector, management, identity, issuer)
 - Security: [SECURITY.md](SECURITY.md), [docs/SECURITY-ASSURANCE.md](docs/SECURITY-ASSURANCE.md)
