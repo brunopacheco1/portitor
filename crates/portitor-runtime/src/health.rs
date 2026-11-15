@@ -38,7 +38,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use utoipa::{OpenApi, ToSchema};
 
 use crate::BoxFuture;
 
@@ -364,6 +364,27 @@ pub async fn startup(state: State<Arc<HealthChecks>>) -> Response {
 )]
 pub async fn health(state: State<Arc<HealthChecks>>) -> Response {
     readiness(state).await
+}
+
+/// The `OpenAPI` description of the four check routes, the same in each
+/// component: merged into each management API's description
+/// ([`with_health_api`]).
+#[derive(OpenApi)]
+#[openapi(
+    paths(liveness, readiness, startup, health),
+    components(schemas(HealthStatus, ComponentResult, Failure)),
+    tags(
+        (name = "Health", description = "Health checks in Eclipse EDC's Observability API shape (ADR 0023). They need no API key, and neither does GET /health (plain `ok`). Served even when the management API is off.")
+    )
+)]
+pub struct HealthApi;
+
+/// `doc` with the check routes, their schemas and the `Health` tag of
+/// [`HealthApi`] added.
+#[must_use]
+pub fn with_health_api(mut doc: utoipa::openapi::OpenApi) -> utoipa::openapi::OpenApi {
+    doc.merge(HealthApi::openapi());
+    doc
 }
 
 /// The four check routes, open (no API key).

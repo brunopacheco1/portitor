@@ -33,7 +33,7 @@ use crate::harvest::{EntryError, HarvestJob};
 use crate::system::xsd_date_time;
 pub use portitor_runtime::api_key::{ApiKey, MIN_KEY_LEN, Problem, problem, require_key};
 use portitor_runtime::api_key::{BearerKey, internal_error};
-use portitor_runtime::health::{self, ComponentResult, Failure as HealthFailure, HealthStatus};
+use portitor_runtime::health;
 
 /// Where the management port listens unless `PORTITOR_MANAGEMENT_BIND`
 /// says otherwise: on this machine only.
@@ -726,14 +726,10 @@ fn next_after<T>(found: &[T], limit: usize, key: impl Fn(&T) -> &String) -> Opti
 #[openapi(
     info(
         title = "Portitor management API",
-        description = "Starts and follows contract negotiations and transfers in which this connector is the consumer, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description and the health checks needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only.",
+        description = "Starts and follows contract negotiations and transfers in which this connector is the consumer, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only.",
         license(name = "Apache-2.0", identifier = "Apache-2.0"),
     ),
     paths(
-        health::liveness,
-        health::readiness,
-        health::startup,
-        health::health,
         start,
         one,
         list,
@@ -746,9 +742,6 @@ fn next_after<T>(found: &[T], limit: usize, key: impl Fn(&T) -> &String) -> Opti
         one_harvest_job
     ),
     components(schemas(
-        HealthStatus,
-        ComponentResult,
-        HealthFailure,
         StartNegotiation,
         NegotiationView,
         NegotiationPage,
@@ -766,8 +759,7 @@ fn next_after<T>(found: &[T], limit: usize, key: impl Fn(&T) -> &String) -> Opti
     tags(
         (name = "Negotiations", description = "Contract negotiations as consumer (DSP 2025-1)"),
         (name = "Transfers", description = "Transfer processes as consumer (DSP 2025-1), pull only"),
-        (name = "Harvest", description = "Dataset harvest runs: datasets come from the source into the catalog (ADR 0020). Read only."),
-        (name = "Health", description = "Health checks in Eclipse EDC's Observability API shape (ADR 0023): no API key. Served even when the management API is off.")
+        (name = "Harvest", description = "Dataset harvest runs: datasets come from the source into the catalog (ADR 0020). Read only.")
     )
 )]
 pub struct ManagementApi;
@@ -775,7 +767,7 @@ pub struct ManagementApi;
 /// The `OpenAPI` description as pretty JSON, with the crate's version.
 #[must_use]
 pub fn openapi_json() -> String {
-    let mut doc = ManagementApi::openapi();
+    let mut doc = health::with_health_api(ManagementApi::openapi());
     env!("CARGO_PKG_VERSION").clone_into(&mut doc.info.version);
     doc.to_pretty_json().unwrap_or_default()
 }
