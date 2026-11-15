@@ -431,6 +431,9 @@ participant.
 | `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8091` | `0.0.0.0:8091` in a container, published only on an internal interface |
 | `PORTITOR_SCOPE_TYPE_ALIASES` | `org.eclipse.edc.vc.type` | comma-separated scope aliases that mean "credentials of this type", besides DCP's `org.eclipse.dspace.dcp.vc.type` |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | unset | **unset** (`true` allows plain-HTTP DIDs and URLs, tests only) |
+| `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` | unset | Gaia-X only: path of the PEM chain of the identity key, the key's certificate first ([Gaia-X onboarding](#gaia-x-onboarding-optional)) |
+| `PORTITOR_GAIAX_COMPLIANCE_URL` | unset (Gaia-X off) | base URL of a Gaia-X compliance service, for example `https://compliance.lab.gaia-x.eu/v2`; needs the two settings around it |
+| `PORTITOR_GAIAX_PARTICIPANT_FILE` | unset | Gaia-X only: path of the participant file |
 
 ### Endpoints
 
@@ -441,7 +444,9 @@ participant.
 | public | `POST <credential service>/presentations/query` | verifiers, with a self-issued ID token and an access token from your STS (DCP 5.4) |
 | public | `POST <credential service>/credentials`, `/offers` | trusted issuers (DCP 6.5, 6.6) |
 | public | `GET /health` | probes |
-| management | `POST`, `GET /v1/credential-requests`, `GET /v1/credential-requests/{holderPid}`, `GET /v1/credentials`, `DELETE /v1/credentials/{id}`, `GET /v1/offers`, `POST /v1/offers/request`, `GET /v1/openapi.json` | operators ([OpenAPI](api/identity-management-openapi.json)) |
+| public | `GET /.well-known/x509CertificateChain.pem` | anyone, with a chain set (Gaia-X services read it through `x5u`) |
+| public | `GET /credentials/gaiax/{legal-person,terms-and-conditions,registration-number}` | anyone, with Gaia-X on |
+| management | `POST`, `GET /v1/credential-requests`, `GET /v1/credential-requests/{holderPid}`, `GET /v1/credentials`, `DELETE /v1/credentials/{id}`, `GET /v1/offers`, `POST /v1/offers/request`, `POST`, `GET /v1/gaiax/compliance`, `GET /v1/openapi.json` | operators ([OpenAPI](api/identity-management-openapi.json)) |
 
 The public endpoints are described in
 [api/identity-openapi.json](api/identity-openapi.json).
@@ -592,6 +597,137 @@ curl -X POST localhost:8091/v1/credential-requests \
   -d '{"issuerDid": "did:web:issuer.example", "holderPid": "membership-2026"}'
 ```
 
+### Gaia-X onboarding (optional)
+
+The identity can get a Gaia-X compliance credential for its participant
+and keep it valid ([ADR 0021](adr/0021-gaia-x-onboarding.md)). It signs
+a legal person credential (`gx:LegalPerson`) and a terms and conditions
+credential (`gx:Issuer`) with its key, sends them with your registration
+number credential to a Gaia-X compliance service, checks the answer
+(`gx:ParticipantComplianceCredential`) and stores all four. Verifiers
+then get them through the presentation API, for example with the scope
+`org.eclipse.dspace.dcp.vc.type:ParticipantComplianceCredential` or
+`org.eclipse.dspace.dcp.vc.type:LegalPerson` (a scope type `T` also
+matches the Gaia-X type `gx:T`).
+
+You need three things.
+
+**1. A certificate for the identity key.** Gaia-X wants the key in the
+DID document to come with an X.509 chain that ends at a Gaia-X trust
+anchor. Keep the identity key; get a certificate for it:
+
+- Make a certificate request (CSR) with the identity key, for the host
+  of your DID:
+
+  ```sh
+  openssl req -new -key identity-key.pem -subj "/CN=identity.example.com" \
+    -addext "subjectAltName=DNS:identity.example.com" -out identity.csr
+  ```
+
+- For tests (the Gaia-X Lab accepts certificates that are not EV, its
+  compliance service README says): Let's Encrypt with your own key.
+  `certbot certonly --csr` signs your CSR, so the key never leaves you:
+
+  ```sh
+  certbot certonly --webroot -w /var/www/html --csr identity.csr \
+    --cert-path cert.pem --chain-path ca.pem --fullchain-path chain.pem
+  ```
+
+  `chain.pem` is the file to mount. certbot does not renew a `--csr`
+  certificate by itself: run the same command again before it expires
+  (Let's Encrypt certificates last 90 days).
+- For production: a certificate from a Gaia-X trust anchor, that is an
+  eIDAS trust service provider, or an EV SSL certificate where the Gaia-X
+  Registry has no other option
+  ([trust anchors](https://docs.gaia-x.eu/policy-rules-committee/compliance-document/25.10/Gaia-X_Trust_Anchors/)).
+  Give the provider the same CSR.
+
+Mount the chain (your certificate first, then the CA certificates) and
+set `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` to it. The identity refuses to
+start if the first certificate is not for its key. It serves the chain at
+`https://<your host>/.well-known/x509CertificateChain.pem` and points to
+it from the DID document (`x5u`). Route that path to the identity, like
+the DID document. It reads the file again every minute: put the renewed
+chain in place and nothing else is needed. A new file for another key is
+refused and logged; the old chain stays.
+
+**2. A registration number credential.** A notary of a Gaia-X Digital
+Clearing House (GXDCH) checks your registration number (VAT ID, LEI code,
+EORI, tax ID or a national company number) and signs a credential for
+it. Ask once, for example at the Gaia-X Lab notary
+(`https://registrationnumber.notary.lab.gaia-x.eu/v2`, API description
+at `/v2/docs`):
+
+```sh
+base=https://identity.example.com/credentials/gaiax/registration-number
+curl -s -G "https://registrationnumber.notary.lab.gaia-x.eu/v2/registration-numbers/vat-id/BE0762747721" \
+  --data-urlencode "vcId=$base" --data-urlencode "subjectId=$base#cs" \
+  > registration-number.jwt
+```
+
+Use `https://<your host>/credentials/gaiax/registration-number` as
+`vcId`, and the same with `#cs` as `subjectId`: the identity serves the
+credential at that URL. The answer is a VC-JWT; keep it as a file.
+
+**3. The participant file.** JSON, only Gaia-X terms, copied from the
+Gaia-X ontology the compliance service expects:
+
+```json
+{
+  "context": ["https://w3id.org/gaia-x/development#", {"schema": "https://schema.org/"}],
+  "legalPerson": {
+    "schema:name": "Example S.A.",
+    "gx:legalAddress": {"type": "gx:Address", "gx:countryCode": "BE",
+      "vcard:street-address": "1 Rue Example", "vcard:locality": "Bruxelles",
+      "vcard:postal-code": "1000"},
+    "gx:headquartersAddress": {"type": "gx:Address", "gx:countryCode": "BE",
+      "vcard:street-address": "1 Rue Example", "vcard:locality": "Bruxelles",
+      "vcard:postal-code": "1000"}
+  },
+  "termsAndConditions": "4bd7554097444c960292b4726c2efa1373485e8a5565d94d41195214c5e0ceb3",
+  "registrationNumberCredential": "registration-number.jwt"
+}
+```
+
+- `context`: the Gaia-X JSON-LD context, one IRI or a list. Add prefix
+  definitions your claims use and the Gaia-X context lacks (here
+  `schema:`).
+- `legalPerson`: the claims of your legal person credential, without
+  `id` and `gx:registrationNumber`: the identity writes both (the
+  registration number points to the subject of the notary's
+  credential).
+- `termsAndConditions`: the `gaiaxTermsAndConditions` hash the compliance
+  service expects (the value above is the one the 0.8 spike used).
+- `registrationNumberCredential`: the file from step 2, absolute or next
+  to the participant file.
+
+The identity reads the file at start (and refuses to start if it is
+wrong) and again at each run, so a changed file needs no restart.
+
+**Run it.** Set `PORTITOR_GAIAX_COMPLIANCE_URL`. At start, if there is no
+valid compliance credential, the identity runs at once; then it runs
+again when two thirds of the credential's validity have passed (it is
+valid at most 90 days). A failed run keeps the credentials you have and
+is tried again after 1, 2, 4 ... seconds, at most one hour apart. To run
+now, and to see the runs:
+
+```sh
+curl -X POST localhost:8091/v1/gaiax/compliance \
+  -H "Authorization: Bearer $(cat /srv/portitor/identity-management-key)"
+curl -s localhost:8091/v1/gaiax/compliance \
+  -H "Authorization: Bearer $(cat /srv/portitor/identity-management-key)"
+```
+
+Each run shows `started`, `finished`, `outcome` (`RUNNING`, `SUCCEEDED`
+or `FAILED`) and `error`. The legal person, terms and conditions and
+registration number credentials of the last good run are public at
+`https://<your host>/credentials/gaiax/{legal-person,terms-and-conditions,registration-number}`,
+so anyone can check the digests in the compliance credential.
+
+Network: outbound to the compliance service (`https://`); it calls back
+your DID document, the certificate chain and the notary's DID. A key
+change breaks the Gaia-X credentials too: run again after one.
+
 ### Logs and operation
 
 | Log message (level) | Meaning |
@@ -608,6 +744,10 @@ curl -X POST localhost:8091/v1/credential-requests \
 | `repeated delivery acknowledged` (INFO) | The issuer sent an answer again that closed a request before; nothing was stored twice |
 | `the issuer gave no usable Location for the request` (WARN) | The issuer took the request but gave no status URL on its own host; the delivery is still accepted, only the issuer's status cannot be shown |
 | `identity store failed` (ERROR) | The SQLite file could not be read or written |
+| `certificate chain reloaded` (INFO) | A renewed certificate chain for the same key is in use |
+| `new certificate chain refused; the old one stays` (ERROR) | The chain file changed but cannot be used: unreadable, not PEM, or for another key; `reason` says which |
+| `Gaia-X compliance credential stored` (INFO) | A run succeeded; `valid_until` is when the compliance credential expires |
+| `Gaia-X compliance run failed; the stored credentials stay` (ERROR) | A run failed; `error` says why (the service refused, its answer did not check out, ...). It is tried again |
 
 Backup, restore, upgrade and rollback work as for the connector, with
 `/data/portitor-identity.db*`. Used token ids (`jti`) are kept in memory

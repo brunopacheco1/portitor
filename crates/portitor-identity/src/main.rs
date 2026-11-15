@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use portitor_dcp::SigningKey;
 use portitor_identity::config::Config;
+use portitor_identity::gaiax::{GaiaxCompliance, HttpGaiaxCompliance};
 use portitor_identity::issuance::HttpIssuerClient;
 use portitor_identity::store::SqliteStore;
 use portitor_identity::{Identity, Ports};
@@ -40,12 +41,29 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("PORTITOR_STS_CLIENT_SECRET_FILE: {e}"))?;
     let store = SqliteStore::open(&config.db_file)
         .map_err(|e| format!("cannot open {}: {e}", config.db_file.display()))?;
+    let compliance = match &config.gaiax {
+        Some(gaiax) => {
+            let adapter = HttpGaiaxCompliance::new(&gaiax.compliance_url, config.allow_http)?;
+            Some(Arc::new(adapter) as Arc<dyn GaiaxCompliance>)
+        }
+        None => None,
+    };
     let ports = Ports {
         store: Arc::new(store),
         directory: Arc::new(WebDirectory::new(config.allow_http)?),
         issuers: Arc::new(HttpIssuerClient::new(config.allow_http)?),
+        compliance,
     };
     let identity = Arc::new(Identity::new(&config, key, sts_client_secret, ports)?);
+    if let Some(chain) = identity.certificate_chain() {
+        tokio::spawn(portitor_identity::certificate::watch(chain));
+    }
+    if identity.gaiax_on() {
+        tracing::info!("Gaia-X onboarding on (PORTITOR_GAIAX_COMPLIANCE_URL)");
+        tokio::spawn(portitor_identity::gaiax::run_schedule(Arc::clone(
+            &identity,
+        )));
+    }
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
 
     let management = if let Some(settings) = &config.management {
