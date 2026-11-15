@@ -27,7 +27,7 @@ carries the data to the other side. The project was called LDSC until 0.3
 
 Status: early prototype (0.x). Not for production use.
 
-Website: <https://brunopacheco1.github.io/portitor/> (objectives, minimum functionality, components, roadmap).
+Website: <https://bruno.pacheco.lu/portitor/> (objectives, minimum functionality, components, roadmap).
 
 - What it is and how it is built: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Plan: [docs/ROADMAP.md](docs/ROADMAP.md); decisions: [docs/adr/](docs/adr/)

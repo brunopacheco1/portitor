@@ -23,6 +23,11 @@ versions may change behaviour and configuration.
   ports, who pulls from the data plane, the Gaia-X files) and the new
   `c2-dataspace-authority-containers` (the issuer, and the bundle built
   offline with `portitor-issuer bundle build`).
+- Documentation review after 0.8: the Compose demo defaults to the 0.8.0
+  images; the README links the website at its own address; AGENTS.md
+  names DCP v1.0.1 and Gaia-X as shipped; the security assurance case
+  names the compliance issuer pin (`PORTITOR_GAIAX_COMPLIANCE_DID`) and
+  that compliance credentials from unlisted services are skipped.
 
 ## [0.8.0] - 2026-11-15
 
