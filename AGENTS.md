@@ -38,11 +38,11 @@ Today's crates:
 - `crates/portitor-shacl`: our own SHACL Core subset (ADR 0005) on Oxigraph's RDF crates: loads shapes and code lists, turns JSON-LD into RDF with local contexts only, validates. Pure, no I/O; refuses SHACL terms it does not implement.
 - `crates/portitor-runtime`: adapters shared by the binaries: outbound HTTP, did:web resolution with a cache, the management API key, SQLite files and migrations, logging and shutdown, the system clock.
 - `crates/portitor-connector`: the connector binary (HTTP adapter and routes), one image (ADR 0003). Harvests datasets into a read copy (ADR 0020) and pulls the authority's signed bundle the same way (`bundle_harvest.rs`: `BundleHarvester`, `BundleCopy`, no rollback).
-- `crates/portitor-bundle`: adapter crate for the authority's signed bundle on a participant's side, reusable by any service: `source.rs` (`BundleSource` port, `UrlSource`, `FolderSource`, `PORTITOR_BUNDLE_*` settings) and `store.rs` (`BundleStore` port, `CacheFolder`: disk cache and version in use). How schemas are collected and stored is technical debt (ROADMAP).
+- `crates/portitor-bundle`: adapter crate for the authority's signed bundle on a participant's side, reusable by any service: `source.rs` (`BundleSource` port, `UrlSource`, `FolderSource`, `PORTITOR_BUNDLE_*` settings) and `store.rs` (`BundleStore` port, `CacheFolder`: disk cache and version in use). How schemas are collected and stored is technical debt (`docs/RISKS_AND_TECHNICAL_DEBTS.md`, TD-01).
 - `crates/portitor-identity`: the identity component binary (ADR 0015): DID document, STS, credential service (presentation, Storage and offer APIs), management API, SQLite store, X.509 certificate chain and Gaia-X onboarding (ADR 0021); its own image.
 - `crates/portitor-issuer`: the issuer component binary (ADR 0018), run once per dataspace by its authority: DID document, DCP issuer service (metadata, credential requests and status), delivery outbox, status lists, management API, SQLite store; its own image. Also `portitor-issuer bundle build`, which signs a schema and vocabulary bundle offline, and the read-only bundle route.
 - `examples/`: the demos' datasets, data and Compose file, and the sources of the HealthDCAT-AP demo bundle (`examples/bundle/`).
-- `docs/`: architecture, ADRs, roadmap, security assurance, releasing.
+- `docs/`: architecture, ADRs, roadmap, risks and technical debts, security assurance, releasing.
 - `site/`: the project website (added in 0.1).
 
 ## Commands

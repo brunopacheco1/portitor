@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0
 
 - Status: **Accepted** (2026-11-15, by the maintainer, with the bundle
   format built in 0.7; how schemas are collected and stored stays open,
-  see the roadmap's technical debt)
+  see TD-01 in [RISKS_AND_TECHNICAL_DEBTS](../RISKS_AND_TECHNICAL_DEBTS.md#td-01))
 - Date: 2026-11-12, updated 2026-11-14
 - Build: release 0.7 (planned for 0.6 with the authority image on
   2026-11-12; moved to 0.7 by the maintainer, 2026-11-14)
@@ -226,8 +226,9 @@ SHACL 1.2 draft).
   (ADR 0020).
 - Technical debt (maintainer, 2026-11-14): how schemas are collected and
   stored is to be investigated further, so that Portitor follows an
-  existing standard rather than its own; see "Technical debt" in
-  `docs/ROADMAP.md`. The bundle source and store are in their own crate,
+  existing standard rather than its own; see TD-01 in
+  [RISKS_AND_TECHNICAL_DEBTS](../RISKS_AND_TECHNICAL_DEBTS.md#td-01)
+  (moved there from the roadmap's "Technical debt" on 2026-11-15). The bundle source and store are in their own crate,
   `portitor-bundle`, so they can be reused by other services or
   replaced as a whole.
 - The engine ignores `sh:extends` and `sh:shape` with a warning when the

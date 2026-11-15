@@ -1269,7 +1269,9 @@ Backup, restore, upgrade and rollback work as for the connector, with
 
 ## Known limits
 
-In this version (see also [SECURITY-ASSURANCE.md](SECURITY-ASSURANCE.md)):
+In this version (see also [SECURITY-ASSURANCE.md](SECURITY-ASSURANCE.md),
+and [RISKS_AND_TECHNICAL_DEBTS.md](RISKS_AND_TECHNICAL_DEBTS.md) for every
+known risk and technical debt, with its status and target release):
 
 - Partners are admitted by one credential type (`MembershipCredential`,
   `PORTITOR_DCP_SCOPES`); offers may add credential claims (ADR 0019),

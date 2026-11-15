@@ -190,8 +190,10 @@ organisation (user to system). The operator's management APIs are
 protected by an API key, and the data plane checks only the transfer's
 bearer token: whoever in the consumer's organisation holds it gets the
 data. How a consumer's users and applications prove who they are is
-open, listed as technical debt in the [roadmap](ROADMAP.md) ("Who calls
-the data plane, and with which credentials").
+open, listed as technical debt in
+[RISKS_AND_TECHNICAL_DEBTS](RISKS_AND_TECHNICAL_DEBTS.md#td-02) ("Who
+calls the data plane, and with which credentials", TD-02; and TD-04, user
+to system authentication).
 
 ## Components
 
@@ -289,7 +291,7 @@ image keeps its state in its own SQLite file under `/data`.
   verified) and `BundleStore` (the read copy on disk and the version in
   use). Its own crate so any service can reuse it (maintainer,
   2026-11-14); how schemas are collected and stored is technical debt
-  (`ROADMAP.md`).
+  ([TD-01](RISKS_AND_TECHNICAL_DEBTS.md#td-01)).
 - `portitor-dsp`, `portitor-dps`, `portitor-dcp`, `portitor-time`: domain
   crates (ADR 0004); CI checks they have no I/O dependency.
 - `portitor-shacl` (0.7): our own SHACL Core subset (ADR 0005), a domain

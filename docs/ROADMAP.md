@@ -272,7 +272,7 @@ Plan approved by the maintainer on 2026-11-14.
   connector pulls the newest version (or a fixed one), verifies it,
   caches it on disk and puts a new version in use without a restart.
   How schemas are collected and stored stays open: see
-  [Technical debt](#technical-debt).
+  [TD-01](RISKS_AND_TECHNICAL_DEBTS.md#td-01).
   HealthDCAT-AP release 8 is the baseline.
 - Our own SHACL Core engine, `portitor-shacl` (maintainer, 2026-11-14):
   shapes that use anything it does not implement are refused.
@@ -448,112 +448,16 @@ running without Gaia-X (maintainer, 2026-11-15).
 
 ## Technical debt
 
-Known open questions, kept here until they are investigated and
-decided. Each names what is in place now.
+Known open questions and shortcuts, kept with the risks in
+[RISKS_AND_TECHNICAL_DEBTS.md](RISKS_AND_TECHNICAL_DEBTS.md), the single
+list: what each is, what is in place now and what comes next. The open
+questions the maintainer asked to investigate:
 
-- **How schemas and vocabularies are collected and stored**
-  (maintainer, 2026-11-14: to be investigated further). In 0.7 the
-  authority publishes a signed bundle in a format Portitor defines
-  (`manifest.json`, `manifest.jws`, `latest.json`; [ADR 0005](adr/0005-schema-and-vocabulary-registry.md)),
-  and the connector pulls it into a disk cache (`portitor-bundle`).
-  Only its version fields come from a standard (W3C DCAT 3
-  `dcat:version` and `dcterms:issued`). No data space specification we
-  follow defines how an authority publishes schemas: Simpl-Open has its
-  own schema-manager API (versions numbered by the authority, pulled by
-  a sync adapter, not signed), and its versioning requirements are still
-  Proposed. Portitor must not invent a new standard, so the format may
-  change when this is decided. To investigate: how Simpl-Open, Gaia-X
-  and HealthData@EU authorities publish schemas, whether a DCAT catalogue
-  of schema distributions can replace `latest.json`, and where the
-  connector should keep them.
-- **Who calls the data plane, and with which credentials**
-  (maintainer, 2026-11-15: to be investigated, for a future release).
-  Today every credential is system to system (see "Who holds the
-  credentials" in [ARCHITECTURE](ARCHITECTURE.md)). Only participants are identified, and only in the control
-  plane: every DSP request carries a DCP token, and the connector checks
-  the caller's DID and credentials ([ADR 0016](adr/0016-dsp-caller-authentication.md),
-  [ADR 0019](adr/0019-credential-constraints.md)). The data plane checks
-  only the bearer token handed out when the transfer started
-  ([ADR 0013](adr/0013-transfer-and-data-plane.md)): whoever holds the
-  token gets the data until the transfer ends. No identity or credential
-  is checked on each data request, and the person or application behind
-  the consumer is never identified. To investigate: how a consumer's
-  users and applications prove who they are and which credentials they
-  hold when they call the data plane (for example a DCP token or a
-  verifiable presentation per request, OpenID4VP as Gaia-X Danube and
-  the EU Digital Identity Wallet use it, Simpl-Open's mTLS at its Tier 2
-  gateway, what the EDC data plane does); whether the policy is checked
-  again on each request; and how this fits the consent and API gateway
-  items under "Later". Standards check and an ADR before any code.
-- **A provider in several data spaces, each with its own rules**
-  (maintainer, 2026-11-15: to be investigated). A data
-  provider may belong to several data spaces at once: long-lived ones
-  that may or may not interoperate with each other (for example EHDS and
-  ICUDATA4EU), and short-lived ones set up for one use case. Each data
-  space authority may set its own rules, not only for dataset
-  descriptions (schemas and vocabularies) but also for offers: which
-  policy requirements and constraints apply, which credentials a
-  consumer must hold, and where data may be processed (for example the
-  data processing address or location). The same dataset may need a
-  different description and a different offer in each data space.
-  Today one connector serves one data space: it pulls one signed bundle
-  from one authority (`PORTITOR_BUNDLE_URL`, [ADR 0005](adr/0005-schema-and-vocabulary-registry.md)),
-  checks every dataset against that one bundle ([ADR 0020](adr/0020-dataset-harvest.md)),
-  and trusts one list of credential issuers ([ADR 0016](adr/0016-dsp-caller-authentication.md)).
-  Offers take their policies from the datasets file, with the left
-  operands of ADR 0009 and ADR 0019 only.
-  To investigate: one connector with several data space profiles (bundle,
-  trusted issuers, policy vocabulary and offer rules per data space) or
-  one connector per data space; how a dataset says which data spaces it
-  is offered in, and which schema and offer it has in each; how each data
-  space expresses constraints such as the processing location (ODRL
-  profiles, the data space's rulebook); how a caller's data space is known (its
-  credentials or the catalog it asks); how EHDS and other data spaces
-  publish their schemas; how short-lived data spaces are joined and left.
-  Standards check and an ADR before any code.
-- **User to system authentication and authorisation, governed per data
-  space** (maintainer, 2026-11-15: to be investigated). Today every
-  credential is system to system: held by a participant (an
-  organisation with one DID) and checked between connectors (see "Who
-  holds the credentials" in [ARCHITECTURE](ARCHITECTURE.md)). The people
-  and applications inside an organisation are not identified: the
-  management APIs use one API key per component, and the data plane
-  only checks the transfer's bearer token. To investigate:
-  - authentication: how a person or an application of a participant
-    proves who it is to the connector, the identity and the data plane
-    (for example OpenID Connect with the organisation's own identity
-    provider, OpenID4VP with the EU Digital Identity Wallet, what
-    Simpl-Open and EDC do), and how that links to the participant's DID;
-  - authorisation: who may do what (read the catalog, negotiate, start
-    a transfer, read data, manage the connector), whether a contract
-    agreed between participants can be narrowed to some users or roles,
-    and whether ODRL policies may name them (party collections,
-    constraints on the user's credentials);
-  - governance: which of these rules each data space authority sets (the
-    accepted identity providers or wallets, the roles, the credentials a
-    user needs, audit and consent, for example EHDS rules on who may see
-    health data) and how the authority distributes them, likely with the
-    bundle of [ADR 0005](adr/0005-schema-and-vocabulary-registry.md);
-  - several data spaces: a participant in several data spaces must meet
-    different user rules in each (see "A provider in several data
-    spaces" above), so the rules are per data space, not per connector.
-  Linked to "Who calls the data plane" above. Standards check and an ADR
-  before any code.
-- **Key custody and key rotation** (maintainer, 2026-11-15: a key
-  custody service such as OpenBao is probably better). Today each
-  component (identity, issuer, bundle signing) reads one P-256 private
-  key from a PEM file and lists one key in its `did:web` document, with
-  the key's thumbprint as its id. Rotation is manual and leaves a gap:
-  the old key leaves the DID document at once, so anything it signed
-  stops verifying. For the identity that is tokens and presentations
-  until verifiers reload the document (Portitor caches it 5 minutes);
-  for the issuer it is every credential and status list it ever signed,
-  so every participant needs new credentials. [ADR 0015](adr/0015-dcp-identity-component.md)
-  describes "add the new key, switch, remove the old key", but the code
-  cannot list two keys, so that overlap is not possible yet. To
-  investigate: a signer port with a key custody adapter (OpenBao transit
-  engine: P-256 signing, versioned keys, the private key never leaves
-  it), listing retired public keys next to the current one in the DID
-  document (DID Core allows several verification methods), how EDC
-  IdentityHub rotates keys, and whether this lands with the 0.10
-  hardening work.
+- [How schemas and vocabularies are collected and stored](RISKS_AND_TECHNICAL_DEBTS.md#td-01) (TD-01)
+- [Who calls the data plane, and with which credentials](RISKS_AND_TECHNICAL_DEBTS.md#td-02) (TD-02)
+- [A provider in several data spaces, each with its own rules](RISKS_AND_TECHNICAL_DEBTS.md#td-03) (TD-03)
+- [User to system authentication and authorisation, governed per data space](RISKS_AND_TECHNICAL_DEBTS.md#td-04) (TD-04)
+- [Key custody and key rotation](RISKS_AND_TECHNICAL_DEBTS.md#td-05) (TD-05)
+
+The other technical debts (TD-06 onwards) and the risks (R-01 onwards)
+are listed there too, with their status and target release.

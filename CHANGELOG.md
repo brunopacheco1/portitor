@@ -12,6 +12,15 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Documentation
+
+- New `docs/RISKS_AND_TECHNICAL_DEBTS.md`: every risk and technical debt
+  raised from 0.0 to 0.8, with its status (Open, Mitigated, Addressed,
+  Accepted) and target release. The roadmap's technical debt entries
+  moved there; the roadmap keeps their titles with links. README,
+  ARCHITECTURE, DEPLOYING ("Known limits"), RELEASING (the release
+  review checks the file), ADR 0005, AGENTS and the website link to it.
+
 ## [0.8.0] - 2026-11-15
 
 ### Added
