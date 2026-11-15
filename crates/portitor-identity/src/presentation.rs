@@ -14,6 +14,12 @@
 //!    access token allows (DCP 5.4.1.2: asking for more is not an error,
 //!    the answer just holds less), not expired, as one presentation per
 //!    profile (DCP "Homogeneity requirement").
+//!
+//! A scope by type `T` covers a credential whose `type` holds `T`, or
+//! holds `gx:T` while its `@context` names a Gaia-X context (ADR 0021,
+//! "Credential types and scopes"): the scope type
+//! `ParticipantComplianceCredential` covers a
+//! `gx:ParticipantComplianceCredential`.
 
 use std::sync::Arc;
 
@@ -22,7 +28,8 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use portitor_dcp::credential::Profile;
+use portitor_dcp::credential::{Credential, Profile};
+use portitor_dcp::gaiax::{contexts, matches_scope_type};
 use portitor_dcp::holder::{AccessToken, TokenFrame, sign_presentation};
 use portitor_dcp::message::{PresentationQueryMessage, PresentationResponseMessage, QueryError};
 use portitor_dcp::scope::Scope;
@@ -138,15 +145,37 @@ fn visible<'a>(
     let mut shown = Vec::new();
     for credential in credentials {
         let expired = credential.expires_at.is_some_and(|until| until <= now);
-        let types: Vec<&str> = credential.types.iter().map(String::as_str).collect();
+        let contexts = contexts_of(credential);
         let covered = allowed
             .iter()
-            .any(|scope| scope.allows(Some(&credential.id), &types));
+            .any(|scope| covers(scope, credential, &contexts));
         if covered && !expired {
             shown.push(credential);
         }
     }
     shown
+}
+
+/// Whether `scope` covers `credential`, whose JSON-LD contexts are
+/// `contexts`: by id, or by type with the Gaia-X rule of
+/// [`matches_scope_type`].
+fn covers(scope: &Scope, credential: &StoredCredential, contexts: &[String]) -> bool {
+    match scope {
+        Scope::ByType {
+            credential_type, ..
+        } => matches_scope_type(&credential.types, contexts, credential_type),
+        Scope::ById(_) => scope.allows(Some(&credential.id), &[]),
+    }
+}
+
+/// The `@context` entries of a stored credential's JWT payload. For a VC
+/// 1.1 JWT (contexts inside its `vc` claim) and a JWT that cannot be
+/// read, none: such a credential matches by its plain types only.
+fn contexts_of(credential: &StoredCredential) -> Vec<String> {
+    match Credential::parse(&credential.jwt).and_then(|read| read.payload()) {
+        Ok(payload) => contexts(&payload),
+        Err(_) => Vec::new(),
+    }
 }
 
 /// One signed presentation per profile that has credentials to show.
@@ -219,6 +248,55 @@ mod tests {
         assert!(
             visible(&credentials, &[], now).is_empty(),
             "no scope, nothing"
+        );
+    }
+
+    #[test]
+    fn gaiax_types_are_named_without_their_prefix() {
+        let key = portitor_dcp::SigningKey::generate().unwrap();
+        let payload = serde_json::json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2", "https://w3id.org/gaia-x/development#"],
+            "type": ["VerifiableCredential", "gx:ParticipantComplianceCredential"],
+            "issuer": "did:web:compliance.example",
+            "credentialSubject": {"id": "https://p.example/credentials/gaiax/compliance#cs"}
+        });
+        let compliance = StoredCredential {
+            types: vec![
+                "VerifiableCredential".to_owned(),
+                "gx:ParticipantComplianceCredential".to_owned(),
+            ],
+            profile: Profile::Vc20,
+            jwt: key.sign_json("#k", "vc+jwt", &payload).unwrap(),
+            ..held("compliance", "unused", None)
+        };
+        // the same types without a Gaia-X context: no match without the prefix
+        let mut plain = payload.clone();
+        plain["@context"] = serde_json::json!(["https://www.w3.org/ns/credentials/v2"]);
+        let elsewhere = StoredCredential {
+            id: "elsewhere".to_owned(),
+            jwt: key.sign_json("#k", "vc+jwt", &plain).unwrap(),
+            ..compliance.clone()
+        };
+        let credentials = [
+            compliance,
+            elsewhere,
+            held("m", "MembershipCredential", None),
+        ];
+        let shown = |scope: &str| -> Vec<String> {
+            let allowed = [Scope::parse(scope, &[]).unwrap()];
+            visible(&credentials, &allowed, 1_000)
+                .iter()
+                .map(|credential| credential.id.clone())
+                .collect()
+        };
+        assert_eq!(
+            shown("org.eclipse.dspace.dcp.vc.type:ParticipantComplianceCredential"),
+            ["compliance"]
+        );
+        assert_eq!(
+            shown("org.eclipse.dspace.dcp.vc.type:MembershipCredential"),
+            ["m"],
+            "plain types as before"
         );
     }
 }

@@ -166,6 +166,10 @@ pub struct Credential {
     pub validity: Validity,
     /// Where to look up revocation or suspension, if anywhere.
     pub status: Vec<StatusEntry>,
+    /// The validity the credential itself states (`issuanceDate` and
+    /// `expirationDate`, or `validFrom` and `validUntil`), without the
+    /// JWT's `nbf` and `exp`: see [`Credential::verify_stated_dates`].
+    stated_validity: Validity,
     jwt: String,
 }
 
@@ -223,6 +227,7 @@ impl Credential {
             subjects,
             validity: claimed.narrow(written),
             status: body.status,
+            stated_validity: written,
             jwt: jwt.to_owned(),
         })
     }
@@ -256,6 +261,7 @@ impl Credential {
             subjects: body.subjects,
             validity: claimed.narrow(written),
             status: body.status,
+            stated_validity: written,
             jwt: jwt.to_owned(),
         })
     }
@@ -264,6 +270,23 @@ impl Credential {
     #[must_use]
     pub fn jwt(&self) -> &str {
         &self.jwt
+    }
+
+    /// The JWT's payload, decoded but not verified. For a VC 2.0
+    /// credential that is the credential itself.
+    ///
+    /// # Errors
+    /// The JWT is malformed or its payload is not a JSON object.
+    pub fn payload(&self) -> Result<Map<String, Value>, CredentialError> {
+        payload_of(&self.jwt)
+    }
+
+    /// The validity the credential itself states: `validFrom` and
+    /// `validUntil` (VC 2.0), or `issuanceDate` and `expirationDate` (VC
+    /// 1.1). The JWT's `nbf` and `exp` are not in it.
+    #[must_use]
+    pub fn stated_validity(&self) -> Validity {
+        self.stated_validity
     }
 
     /// Whether `kind` is one of its types.
@@ -305,6 +328,28 @@ impl Credential {
         }
         verify_signature(&self.jwt, issuer, Purpose::AssertionMethod)?;
         self.validity.check(now, leeway)
+    }
+
+    /// Like [`Credential::verify`], but the validity period is only the
+    /// one the credential states (`validFrom` and `validUntil` in VC 2.0),
+    /// never the JWT's `nbf` and `exp`. For Gaia-X compliance credentials:
+    /// the compliance service writes its JWT times in milliseconds, so a
+    /// verifier must take validity from `validFrom` and `validUntil` only
+    /// (ADR 0022; 0.8 spike, finding 4).
+    ///
+    /// # Errors
+    /// Wrong DID document, key or signature, or not valid at `now`.
+    pub fn verify_stated_dates(
+        &self,
+        issuer: &DidDocument,
+        now: u64,
+        leeway: u64,
+    ) -> Result<(), CredentialError> {
+        if issuer.id != self.issuer {
+            return Err(CredentialError::Invalid("DID document is not the issuer's"));
+        }
+        verify_signature(&self.jwt, issuer, Purpose::AssertionMethod)?;
+        self.stated_validity.check(now, leeway)
     }
 }
 

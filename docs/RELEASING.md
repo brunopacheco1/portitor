@@ -84,6 +84,10 @@ pull request, or record why it stays.
   `pages.yml`) shows the release's features and the roadmap state.
 - [ROADMAP.md](ROADMAP.md) and the [CHANGELOG](../CHANGELOG.md) say what
   shipped.
+- [RISKS_AND_TECHNICAL_DEBTS.md](RISKS_AND_TECHNICAL_DEBTS.md): each open
+  item is checked against the release's code and gets its new status;
+  what the release raised (ADR consequences, spike risks, review
+  findings, "not in this release" lists) is added with a new id.
 
 ## Releasing a version
 

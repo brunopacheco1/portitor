@@ -6,7 +6,8 @@
 //! issuer for credentials, or only record a request made out of band (so
 //! the Storage API accepts the issuer's answer); read a request with its
 //! status at the issuer; list and delete credentials; list offers and ask
-//! for what one offers. Not part of DCP, so it is
+//! for what one offers; start and list Gaia-X compliance runs (ADR
+//! 0021). Not part of DCP, so it is
 //! served on its own port (`PORTITOR_MANAGEMENT_BIND`), and every call
 //! needs the API key (`Authorization: Bearer <key>`), as the connector's.
 //!
@@ -30,8 +31,9 @@ use serde::{Deserialize, Serialize};
 use utoipa::{OpenApi, ToSchema};
 
 use crate::Identity;
-use crate::issuance::{AskError, ask_issuer, issuer_status};
-use crate::store::{CredentialRequest, StoredCredential, StoredOffer};
+use crate::gaiax::{RUNS_LISTED, StartError, start_run};
+use crate::issuance::{AskError, ask_issuer, check_holder_pid, issuer_status};
+use crate::store::{CredentialRequest, GaiaxRun, StoredCredential, StoredOffer};
 
 /// A new credential request.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -275,6 +277,9 @@ async fn create_request(
             "issuerDid is not in PORTITOR_TRUSTED_ISSUERS",
         );
     }
+    if let Err(reason) = check_holder_pid(request.holder_pid.as_deref()) {
+        return problem(StatusCode::BAD_REQUEST, &reason);
+    }
     let holder_pid = request
         .holder_pid
         .filter(|pid| !pid.is_empty())
@@ -502,12 +507,98 @@ async fn request_offered(
     }
 }
 
+/// A Gaia-X compliance run (ADR 0021).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GaiaxRunView {
+    /// The run's id, counting up.
+    #[schema(example = 3)]
+    id: i64,
+    /// When it started (`xsd:dateTime`, UTC).
+    #[schema(example = "2026-11-15T12:00:00Z")]
+    started: String,
+    /// When it ended (`xsd:dateTime`, UTC); absent while it runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "2026-11-15T12:00:02Z")]
+    finished: Option<String>,
+    /// `RUNNING`, `SUCCEEDED` (the compliance credential was checked and
+    /// stored) or `FAILED` (the credentials stored before stay).
+    #[schema(example = "SUCCEEDED")]
+    outcome: String,
+    /// Why it failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "compliance service: HTTP 409 Conflict")]
+    error: Option<String>,
+}
+
+impl From<GaiaxRun> for GaiaxRunView {
+    fn from(run: GaiaxRun) -> Self {
+        Self {
+            id: run.id,
+            started: xsd_date_time(run.started_at),
+            finished: run.finished_at.map(xsd_date_time),
+            outcome: run.outcome.text().to_owned(),
+            error: run.error,
+        }
+    }
+}
+
+/// Start a Gaia-X compliance run now (ADR 0021): sign the legal person
+/// and terms and conditions credentials, send them with the registration
+/// number credential to the compliance service, and store the four
+/// credentials if its answer checks out. The run goes on in the
+/// background; `GET /v1/gaiax/compliance` shows how it ended.
+#[utoipa::path(
+    post,
+    path = "/v1/gaiax/compliance",
+    responses(
+        (status = 202, description = "Started", body = GaiaxRunView),
+        (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Gaia-X onboarding is off (PORTITOR_GAIAX_COMPLIANCE_URL not set)", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "A run is on", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(("api_key" = [])),
+    tag = "Gaia-X"
+)]
+async fn start_compliance_run(State(identity): State<Arc<Identity>>) -> Response {
+    match start_run(&identity) {
+        Ok(run) => (StatusCode::ACCEPTED, Json(GaiaxRunView::from(run))).into_response(),
+        Err(StartError::Off) => problem(
+            StatusCode::NOT_FOUND,
+            "Gaia-X onboarding is off (PORTITOR_GAIAX_COMPLIANCE_URL not set)",
+        ),
+        Err(StartError::Busy) => problem(StatusCode::CONFLICT, "a run is on"),
+        Err(StartError::Store(e)) => internal_error("identity store", &e),
+    }
+}
+
+/// List the last Gaia-X compliance runs, newest first (at most 50).
+#[utoipa::path(
+    get,
+    path = "/v1/gaiax/compliance",
+    responses(
+        (status = 200, description = "The runs", body = [GaiaxRunView]),
+        (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(("api_key" = [])),
+    tag = "Gaia-X"
+)]
+async fn list_compliance_runs(State(identity): State<Arc<Identity>>) -> Response {
+    match identity.store.gaiax_runs(RUNS_LISTED) {
+        Ok(runs) => {
+            let views: Vec<GaiaxRunView> = runs.into_iter().map(GaiaxRunView::from).collect();
+            Json(views).into_response()
+        }
+        Err(e) => internal_error("identity store", &e),
+    }
+}
+
 /// The `OpenAPI` description of the identity management API.
 #[derive(OpenApi)]
 #[openapi(
     info(
         title = "Portitor identity management API",
-        description = "Credential requests, credentials and offers of the participant this identity component holds. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description needs the API key.",
+        description = "Credential requests, credentials and offers of the participant this identity component holds, and its Gaia-X compliance runs. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description needs the API key.",
         license(name = "Apache-2.0", identifier = "Apache-2.0"),
     ),
     paths(
@@ -517,7 +608,9 @@ async fn request_offered(
         list_credentials,
         delete_credential,
         list_offers,
-        request_offered
+        request_offered,
+        start_compliance_run,
+        list_compliance_runs
     ),
     components(schemas(
         NewRequest,
@@ -527,10 +620,14 @@ async fn request_offered(
         OfferedRequest,
         CredentialView,
         OfferView,
+        GaiaxRunView,
         Problem
     )),
     modifiers(&BearerKey),
-    tags((name = "Credentials", description = "The participant's verifiable credentials (DCP v1.0.1)"))
+    tags(
+        (name = "Credentials", description = "The participant's verifiable credentials (DCP v1.0.1)"),
+        (name = "Gaia-X", description = "Gaia-X onboarding: the compliance credential (ADR 0021)")
+    )
 )]
 pub struct ManagementApi;
 
@@ -556,6 +653,10 @@ pub fn router(identity: Arc<Identity>, key: ApiKey) -> Router {
         .route("/v1/credentials/{id}", delete(delete_credential))
         .route("/v1/offers", get(list_offers))
         .route("/v1/offers/request", post(request_offered))
+        .route(
+            "/v1/gaiax/compliance",
+            post(start_compliance_run).get(list_compliance_runs),
+        )
         .route_layer(middleware::from_fn_with_state(key, require_key))
         .with_state(identity);
     let spec = openapi_json();

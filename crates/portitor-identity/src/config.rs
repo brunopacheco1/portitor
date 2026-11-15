@@ -53,6 +53,27 @@ pub struct Config {
     /// Plain-HTTP DIDs and URLs allowed (`PORTITOR_ALLOW_HTTP_CALLBACKS`,
     /// tests only).
     pub allow_http: bool,
+    /// The X.509 chain of the identity key, PEM, the key's certificate
+    /// first (`PORTITOR_IDENTITY_CERTIFICATE_CHAIN`, ADR 0021).
+    pub certificate_chain_file: Option<PathBuf>,
+    /// Gaia-X onboarding, if `PORTITOR_GAIAX_COMPLIANCE_URL` is set.
+    pub gaiax: Option<GaiaxConfig>,
+}
+
+/// Gaia-X onboarding settings (ADR 0021).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GaiaxConfig {
+    /// The base URL of a Gaia-X compliance service, without a trailing
+    /// slash (`PORTITOR_GAIAX_COMPLIANCE_URL`), for example
+    /// `https://compliance.lab.gaia-x.eu/v2`.
+    pub compliance_url: String,
+    /// The `did:web` DID of that service (`PORTITOR_GAIAX_COMPLIANCE_DID`),
+    /// for example `did:web:compliance.lab.gaia-x.eu:v2`. An answer signed
+    /// by any other DID is refused, so a wrong or hijacked URL cannot hand
+    /// the identity a credential from an issuer verifiers do not trust.
+    pub compliance_did: String,
+    /// The participant file (`PORTITOR_GAIAX_PARTICIPANT_FILE`).
+    pub participant_file: PathBuf,
 }
 
 /// Where the management API listens, and its key.
@@ -128,6 +149,12 @@ impl Config {
         let sts_client_secret_file = PathBuf::from(required("PORTITOR_STS_CLIENT_SECRET_FILE")?);
         let scope_type_aliases =
             text("PORTITOR_SCOPE_TYPE_ALIASES").unwrap_or_else(|| DEFAULT_TYPE_ALIASES.to_owned());
+        let allow_http =
+            text("PORTITOR_ALLOW_HTTP_CALLBACKS").is_some_and(|v| v.eq_ignore_ascii_case("true"));
+        let certificate_chain_file = text("PORTITOR_IDENTITY_CERTIFICATE_CHAIN")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from);
+        let gaiax = gaiax_config(&text, certificate_chain_file.is_some(), allow_http)?;
         Ok(Self {
             participant_id,
             key_file,
@@ -141,10 +168,66 @@ impl Config {
             sts_client_secret_file,
             trusted_issuers,
             scope_type_aliases: comma_list(&scope_type_aliases),
-            allow_http: text("PORTITOR_ALLOW_HTTP_CALLBACKS")
-                .is_some_and(|v| v.eq_ignore_ascii_case("true")),
+            allow_http,
+            certificate_chain_file,
+            gaiax,
         })
     }
+}
+
+/// The Gaia-X settings: none unless `PORTITOR_GAIAX_COMPLIANCE_URL` is
+/// set; then the participant file and the certificate chain are required
+/// (ADR 0021, "Onboarding"), and the URL must be one the shared HTTP
+/// client may call (`https://`, or `http://` with
+/// `PORTITOR_ALLOW_HTTP_CALLBACKS`).
+fn gaiax_config(
+    text: &impl Fn(&str) -> Option<String>,
+    has_chain: bool,
+    allow_http: bool,
+) -> Result<Option<GaiaxConfig>, ConfigError> {
+    let Some(url) = text("PORTITOR_GAIAX_COMPLIANCE_URL").filter(|v| !v.is_empty()) else {
+        return Ok(None);
+    };
+    if !portitor_runtime::http::outbound_url_allowed(&url, allow_http) {
+        return Err(invalid(
+            "PORTITOR_GAIAX_COMPLIANCE_URL",
+            "not an https:// URL",
+        ));
+    }
+    let compliance_did = text("PORTITOR_GAIAX_COMPLIANCE_DID")
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| {
+            invalid(
+                "PORTITOR_GAIAX_COMPLIANCE_DID",
+                "required with PORTITOR_GAIAX_COMPLIANCE_URL",
+            )
+        })?;
+    // resolved like any did:web DID, with a path as the Gaia-X Lab's
+    if portitor_dcp::did_web_url(&compliance_did).is_err() {
+        return Err(invalid(
+            "PORTITOR_GAIAX_COMPLIANCE_DID",
+            "not a did:web DID",
+        ));
+    }
+    let participant_file = text("PORTITOR_GAIAX_PARTICIPANT_FILE")
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| {
+            invalid(
+                "PORTITOR_GAIAX_PARTICIPANT_FILE",
+                "required with PORTITOR_GAIAX_COMPLIANCE_URL",
+            )
+        })?;
+    if !has_chain {
+        return Err(invalid(
+            "PORTITOR_IDENTITY_CERTIFICATE_CHAIN",
+            "required with PORTITOR_GAIAX_COMPLIANCE_URL",
+        ));
+    }
+    Ok(Some(GaiaxConfig {
+        compliance_url: url.trim_end_matches('/').to_owned(),
+        compliance_did,
+        participant_file: PathBuf::from(participant_file),
+    }))
 }
 
 fn invalid(name: &'static str, problem: &str) -> ConfigError {
@@ -197,6 +280,67 @@ mod tests {
         assert_eq!(config.scope_type_aliases, [DEFAULT_TYPE_ALIASES]);
         assert_eq!(config.management, None);
         assert!(!config.allow_http);
+        assert_eq!(config.certificate_chain_file, None);
+        assert_eq!(config.gaiax, None);
+    }
+
+    #[test]
+    fn gaiax_needs_a_participant_file_and_a_chain() {
+        let mut vars = MINIMAL.to_vec();
+        vars.push((
+            "PORTITOR_GAIAX_COMPLIANCE_URL",
+            "https://compliance.example/v2/",
+        ));
+        assert_eq!(
+            read(&vars).unwrap_err().name,
+            "PORTITOR_GAIAX_COMPLIANCE_DID"
+        );
+        vars.push((
+            "PORTITOR_GAIAX_COMPLIANCE_DID",
+            "https://compliance.example",
+        ));
+        assert_eq!(
+            read(&vars).unwrap_err().name,
+            "PORTITOR_GAIAX_COMPLIANCE_DID"
+        );
+        vars.push((
+            "PORTITOR_GAIAX_COMPLIANCE_DID",
+            "did:web:compliance.example:v2",
+        ));
+        assert_eq!(
+            read(&vars).unwrap_err().name,
+            "PORTITOR_GAIAX_PARTICIPANT_FILE"
+        );
+        vars.push((
+            "PORTITOR_GAIAX_PARTICIPANT_FILE",
+            "/config/participant.json",
+        ));
+        assert_eq!(
+            read(&vars).unwrap_err().name,
+            "PORTITOR_IDENTITY_CERTIFICATE_CHAIN"
+        );
+        vars.push(("PORTITOR_IDENTITY_CERTIFICATE_CHAIN", "/config/chain.pem"));
+        let config = read(&vars).unwrap();
+        assert_eq!(
+            config.gaiax,
+            Some(GaiaxConfig {
+                compliance_url: "https://compliance.example/v2".to_owned(),
+                compliance_did: "did:web:compliance.example:v2".to_owned(),
+                participant_file: PathBuf::from("/config/participant.json"),
+            })
+        );
+        assert_eq!(
+            config.certificate_chain_file,
+            Some(PathBuf::from("/config/chain.pem"))
+        );
+        // plain HTTP only in tests
+        vars.push(("PORTITOR_GAIAX_COMPLIANCE_URL", "http://compliance.example"));
+        assert_eq!(
+            read(&vars).unwrap_err().name,
+            "PORTITOR_GAIAX_COMPLIANCE_URL"
+        );
+        vars.push(("PORTITOR_ALLOW_HTTP_CALLBACKS", "true"));
+        assert!(read(&vars).is_ok());
     }
 
     #[test]

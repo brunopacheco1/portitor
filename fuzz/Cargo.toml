@@ -15,6 +15,7 @@ publish = false
 cargo-fuzz = true
 
 [dependencies]
+base64 = { version = "0.23", default-features = false, features = ["std"] }
 libfuzzer-sys = "0.4"
 portitor-dcp = { path = "../crates/portitor-dcp" }
 portitor-dsp = { path = "../crates/portitor-dsp" }
@@ -118,6 +119,13 @@ bench = false
 [[bin]]
 name = "shacl_jsonld"
 path = "fuzz_targets/shacl_jsonld.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gaiax_compliance"
+path = "fuzz_targets/gaiax_compliance.rs"
 test = false
 doc = false
 bench = false

@@ -38,7 +38,7 @@ use portitor_runtime::BoxFuture;
 use portitor_runtime::http::{HttpError, HttpSender, Sender as _};
 use portitor_runtime::system::{new_uuid, now_secs};
 
-use crate::store::{CredentialRequest, StoreError};
+use crate::store::{CredentialRequest, GAIAX_HOLDER_PID_PREFIX, StoreError};
 use crate::{Identity, TOKEN_SECONDS};
 
 /// How long the access token sent to an issuer stays valid, in seconds:
@@ -65,10 +65,14 @@ impl SendError {
     #[must_use]
     pub fn from_http(error: &HttpError) -> Self {
         match error {
-            HttpError::Status(status) if is_definite_refusal(*status) => {
+            HttpError::Status(status) | HttpError::StatusWithBody(status, _)
+                if is_definite_refusal(*status) =>
+            {
                 Self::Refused(error.to_string())
             }
-            HttpError::Status(_) | HttpError::NoAnswer(_) => Self::Unknown(error.to_string()),
+            HttpError::Status(_) | HttpError::StatusWithBody(..) | HttpError::NoAnswer(_) => {
+                Self::Unknown(error.to_string())
+            }
         }
     }
 }
@@ -182,6 +186,7 @@ pub(crate) async fn ask_issuer(
     credential_ids: Vec<String>,
     holder_pid: Option<String>,
 ) -> Result<CredentialRequest, AskError> {
+    check_holder_pid(holder_pid.as_deref()).map_err(AskError::Refused)?;
     let service = check_request(identity, issuer, &credential_ids).await?;
     let now = now_secs();
     let access_token_id = new_uuid();
@@ -201,6 +206,23 @@ pub(crate) async fn ask_issuer(
         return Err(AskError::Conflict);
     }
     send(identity, &service.base_url, request, access_token).await
+}
+
+/// Refuses a `holderPid` that starts with [`GAIAX_HOLDER_PID_PREFIX`].
+/// The identity stores its Gaia-X credentials under such ids and finds
+/// them by that prefix (`replace_gaiax_credentials` deletes every one), so
+/// an issuer's delivery under it would be replaced at the next Gaia-X run
+/// or served as a Gaia-X credential.
+///
+/// # Errors
+/// The reason, for a `400 Bad Request`.
+pub(crate) fn check_holder_pid(holder_pid: Option<&str>) -> Result<(), String> {
+    match holder_pid {
+        Some(pid) if pid.starts_with(GAIAX_HOLDER_PID_PREFIX) => Err(format!(
+            "holderPid must not start with {GAIAX_HOLDER_PID_PREFIX}: the identity keeps its Gaia-X credentials under it"
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// The checks before anything is recorded: a trusted issuer, at least

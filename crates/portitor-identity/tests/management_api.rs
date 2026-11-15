@@ -36,6 +36,8 @@ async fn every_call_needs_the_key_except_the_description() {
         ("GET", "/v1/credential-requests"),
         ("GET", "/v1/credential-requests/h-1"),
         ("POST", "/v1/offers/request"),
+        ("POST", "/v1/gaiax/compliance"),
+        ("GET", "/v1/gaiax/compliance"),
     ] {
         let request = Request::builder()
             .method(method)
@@ -82,6 +84,22 @@ async fn credential_requests() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     let (status, _) = call(&world.management, new_request(&json!({"issuer": ISSUER}))).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// `gaiax:` holder ids are the identity's own (its Gaia-X credentials),
+/// whether the request is only recorded or sent to the issuer.
+#[tokio::test]
+async fn gaiax_holder_pids_are_reserved() {
+    let world = World::new();
+    for body in [
+        json!({"issuerDid": ISSUER, "holderPid": "gaiax:compliance"}),
+        json!({"issuerDid": ISSUER, "holderPid": "gaiax:x", "credentialIds": ["membership"]}),
+    ] {
+        let (status, problem) = call(&world.management, new_request(&body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
+        let detail = problem["detail"].as_str().unwrap_or_default();
+        assert!(detail.contains("must not start with gaiax:"), "{problem}");
+    }
 }
 
 #[tokio::test]
@@ -161,6 +179,7 @@ fn published_description_is_current() {
         "/v1/credentials/{id}",
         "/v1/offers",
         "/v1/offers/request",
+        "/v1/gaiax/compliance",
     ] {
         assert!(spec["paths"][path].is_object(), "{path}");
     }

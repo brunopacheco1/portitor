@@ -51,6 +51,17 @@ dataspace participants over HTTPS.
   checked on its own when it is harvested; one that fails is rejected and
   logged, and the rest of the catalog and running transfers are not
   touched ([ADR 0020](adr/0020-dataset-harvest.md)).
+- **Gaia-X compliance credentials checked strictly (0.8):** a
+  connector accepts a `gx:ParticipantComplianceCredential` only from a
+  compliance service in `PORTITOR_GAIAX_COMPLIANCE_ISSUERS`, signed with
+  its `assertionMethod` key, valid now, and only with the
+  `gx:LegalPerson` credential it names by `digestSRI`, issued and signed
+  by the caller; one that fails refuses the caller
+  ([ADR 0022](adr/0022-gaia-x-compliance-in-policies.md)). The identity
+  stores a compliance service's answer only if it is signed by the
+  service's `did:web` key and lists exactly the digests of what it sent,
+  and refuses a certificate chain for another key
+  ([ADR 0021](adr/0021-gaia-x-onboarding.md)).
 - **Authentic releases:** from 0.1.0, images are signed with cosign
   (keyless) and carry an SBOM and SLSA build provenance as attestations.
 
@@ -78,12 +89,13 @@ dataspace participants over HTTPS.
 | Datasets and transfers | A party that is not authorised reads data or starts a transfer | DCP verification of every request (ADR 0016); ODRL policy checks (ADR 0009); credential constraints, checked at negotiation and again at each transfer request (ADR 0019) |
 | Participant identity | Forged or replayed self-issued tokens | Algorithm allow-list, key relationship check, audience check, expiry with bounded leeway, `jti` replay cache |
 | Credentials | A revoked, forged or someone else's credential admits a party | Only trusted issuers' credentials count, signed with an `assertionMethod` key; status lists fetched and checked, fail closed; a presentation with any failing credential is refused (DCP v1.0.1, 5.4.3); the issuer issues only to registered participants (ADR 0018) |
+| Gaia-X compliance | A forged compliance credential, or someone else's, admits a party | Only the compliance services the operator lists, separate from the dataspace's issuers; the service's signature; the `digestSRI` link to a legal person credential issued and signed by the caller; the holder binding is skipped for these two credentials only (ADR 0022) |
 | Private keys | Keys leak from the internet-facing connector | Keys live only in `portitor-identity` and `portitor-issuer`, not in the connector (ADR 0003) |
 | Schema and vocabulary bundle | A forged or changed bundle makes connectors accept bad datasets or refuse good ones | A separate bundle key, kept offline: the issuer holds only its public part and refuses to start if it is the credential key; signature checked against the authority's DID document; the version (never older than the one in use) and authority; SHA-256 of every file; size limits (manifest 1 MiB, 64 MiB per file, 256 MiB in all) and a 120 s timeout per download; a published version is never written again |
 | Validation code | Crafted shapes or JSON-LD make the connector fetch remote content, or exploit an XML parser | JSON-LD contexts come only from a map the caller fills (the bundle's and the DSP contexts), never from the network; no Portitor binary parses RDF/XML (`bundle build` refuses it, code lists travel as N-Triples); fuzz targets `shacl_load`, `shacl_jsonld` and `bundle_manifest` |
 | Internal services | A consumer gives a `callbackAddress` that points at an internal service, so the connector calls it (SSRF) | Only `https://` URLs with a host, unless the operator allows `http://`; the response body is never read; a 10 s timeout; blocking internal addresses *(planned)* |
 | Negotiation state | A consumer drives a negotiation out of order, or two messages race | The DSP state machine as a pure function in the domain; every change is a compare-and-update on a version number; a message that races our acknowledgement is accepted only as proof of delivery of our saved pending message (ADR 0007) |
-| Service availability | Crafted or oversized messages crash or exhaust a service | Typed parsing with no `unsafe`; request size limits *(planned, 0.9)*; fuzzing of the DSP, DCP and ODRL parsers, the SHACL shapes and JSON-LD readers and the bundle manifest (ClusterFuzzLite), of every parser *(planned, 0.10)*; a nesting limit in SHACL validation |
+| Service availability | Crafted or oversized messages crash or exhaust a service | Typed parsing with no `unsafe`; axum's default limit of 2 MB on every parsed body, explicit limits per port *(planned, 0.10)*; fuzzing of the DSP, DCP and ODRL parsers, the SHACL shapes and JSON-LD readers, the bundle manifest and the Gaia-X compliance checks and JCS digest (ClusterFuzzLite), of every parser *(planned, 0.10)*; a nesting limit in SHACL validation |
 | Users' supply chain | A tampered release or dependency | Pinned CI actions; signed commits; Dependabot, dependency review, OSV, cargo-deny (RustSec advisories, licence allowlist, crate sources) and ORT; signed images with SBOM and provenance attestations |
 
 ## Trust boundaries
@@ -95,6 +107,9 @@ dataspace participants over HTTPS.
    requests are not.
 2. **The DID web** (`did:web` documents fetched over HTTPS) is resolved
    through a port; the domain checks the keys it returns.
+   From 0.8 the identity also calls a Gaia-X compliance service through a
+   port (`GaiaxCompliance`) and the shared HTTP client (HTTPS only,
+   limits, no redirects), and checks its answer before storing it.
 3. **The data plane** receives signals only from its own control plane
    (in the same process for 0.x).
 4. **Operators** configure the services through environment variables
@@ -135,8 +150,9 @@ dataspace participants over HTTPS.
 
 - **Tests:** unit tests per crate; DSP and DCP JSON Schema tests; in CI,
   the DSP TCK (metadata, catalog, negotiation and transfer groups), the
-  DCP TCK (credential service, verifier and issuer tests) and the EDC
-  interoperability test.
+  DCP TCK (credential service, verifier and issuer tests), the EDC
+  interoperability test and, from 0.8, the Gaia-X end-to-end test
+  against a local compliance service in test mode.
 - **Static analysis:** Clippy pedantic with warnings as errors; CodeQL and
   SonarQube Cloud quality gate on every pull request.
 - **Supply chain:** pinned workflow actions, least-privilege workflow

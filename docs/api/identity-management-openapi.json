@@ -2,12 +2,12 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Portitor identity management API",
-    "description": "Credential requests, credentials and offers of the participant this identity component holds. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description needs the API key.",
+    "description": "Credential requests, credentials and offers of the participant this identity component holds, and its Gaia-X compliance runs. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description needs the API key.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.7.0"
+    "version": "0.8.0"
   },
   "paths": {
     "/v1/credential-requests": {
@@ -280,6 +280,99 @@
         ]
       }
     },
+    "/v1/gaiax/compliance": {
+      "get": {
+        "tags": [
+          "Gaia-X"
+        ],
+        "summary": "List the last Gaia-X compliance runs, newest first (at most 50).",
+        "operationId": "list_compliance_runs",
+        "responses": {
+          "200": {
+            "description": "The runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GaiaxRunView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API key",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Gaia-X"
+        ],
+        "summary": "Start a Gaia-X compliance run now (ADR 0021): sign the legal person\nand terms and conditions credentials, send them with the registration\nnumber credential to the compliance service, and store the four\ncredentials if its answer checks out. The run goes on in the\nbackground; `GET /v1/gaiax/compliance` shows how it ended.",
+        "operationId": "start_compliance_run",
+        "responses": {
+          "202": {
+            "description": "Started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GaiaxRunView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API key",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Gaia-X onboarding is off (PORTITOR_GAIAX_COMPLIANCE_URL not set)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A run is on",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/offers": {
       "get": {
         "tags": [
@@ -451,6 +544,49 @@
               "VerifiableCredential",
               "MembershipCredential"
             ]
+          }
+        }
+      },
+      "GaiaxRunView": {
+        "type": "object",
+        "description": "A Gaia-X compliance run (ADR 0021).",
+        "required": [
+          "id",
+          "started",
+          "outcome"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it failed.",
+            "example": "compliance service: HTTP 409 Conflict"
+          },
+          "finished": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it ended (`xsd:dateTime`, UTC); absent while it runs.",
+            "example": "2026-11-15T12:00:02Z"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The run's id, counting up.",
+            "example": 3
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`RUNNING`, `SUCCEEDED` (the compliance credential was checked and\nstored) or `FAILED` (the credentials stored before stay).",
+            "example": "SUCCEEDED"
+          },
+          "started": {
+            "type": "string",
+            "description": "When it started (`xsd:dateTime`, UTC).",
+            "example": "2026-11-15T12:00:00Z"
           }
         }
       },
@@ -719,6 +855,10 @@
     {
       "name": "Credentials",
       "description": "The participant's verifiable credentials (DCP v1.0.1)"
+    },
+    {
+      "name": "Gaia-X",
+      "description": "Gaia-X onboarding: the compliance credential (ADR 0021)"
     }
   ]
 }

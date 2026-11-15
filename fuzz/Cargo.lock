@@ -195,7 +195,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-dcp"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64",
  "miniz_oxide",
@@ -208,7 +208,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-dsp"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "portitor-time",
  "serde",
@@ -219,6 +219,7 @@ dependencies = [
 name = "portitor-fuzz"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "libfuzzer-sys",
  "portitor-dcp",
  "portitor-dsp",
@@ -229,7 +230,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-shacl"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "oxjsonld",
  "oxrdf",
@@ -242,7 +243,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-time"
-version = "0.7.0"
+version = "0.8.0"
 
 [[package]]
 name = "ppv-lite86"

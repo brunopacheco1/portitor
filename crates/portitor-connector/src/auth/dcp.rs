@@ -31,6 +31,21 @@
 //! holder whose credential was revoked and reissued must delete the
 //! revoked one from its identity (DEPLOYING).
 //!
+//! Gaia-X compliance (ADR 0022). A `gx:ParticipantComplianceCredential` is
+//! about a credential, not about the caller, so it gets its own checks
+//! ([`DcpVerifier::check_gaiax`]): its issuer is a trusted compliance
+//! service (`PORTITOR_GAIAX_COMPLIANCE_ISSUERS`), it is signed with that
+//! service's `assertionMethod` key and valid by its `validFrom` and
+//! `validUntil`, and the same presentation holds a `gx:LegalPerson`
+//! credential that it names by digest (`gx:compliantCredentials`,
+//! `digestSRI`), issued and signed by the caller. The holder binding is
+//! not applied to these two credentials; it stays for every other one. A
+//! compliance credential from a trusted service that fails makes its
+//! presentation invalid (step 8 above). A compliance credential from
+//! another service, and a legal person credential that no trusted
+//! compliance credential names, are skipped before anything is fetched
+//! for them, like credentials from untrusted issuers.
+//!
 //! The verified credentials go with the caller to the handler. When an
 //! offer or agreement has credential constraints (ADR 0019), the handler
 //! asks for more scopes with [`CallerVerifier::credentials`]: steps 3 and 4
@@ -52,6 +67,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use portitor_dcp::credential::{Credential, Presentation};
+use portitor_dcp::gaiax::{
+    COMPLIANCE_TYPE, GAIAX_PREFIX, LEGAL_PERSON_TYPE, compliant_credentials, contexts,
+    digest_sri_of, matches_scope_type,
+};
 use portitor_dcp::message::{PresentationQueryMessage, PresentationResponseMessage};
 use portitor_dcp::scope::merge_scopes;
 use portitor_dcp::status_list::{self, Status, StatusEntry};
@@ -64,7 +83,7 @@ use portitor_runtime::system::now_secs;
 use serde_json::Value;
 
 use super::sts::{SecureTokenService, TokenRequest};
-use super::{AuthSettings, Caller, CallerVerifier};
+use super::{AuthSettings, Caller, CallerVerifier, with_linked_scopes};
 
 /// Allowed clock difference between participants, in seconds.
 const LEEWAY: u64 = 60;
@@ -107,6 +126,8 @@ pub struct DcpVerifier {
     http: HttpSender,
     sts: Arc<dyn SecureTokenService>,
     trusted_issuers: Vec<String>,
+    /// The Gaia-X compliance services we trust (ADR 0022).
+    gaiax_compliance_issuers: Vec<String>,
     scopes: Vec<String>,
     /// Token ids already used (DCP 4.3.3, step 6). In memory: one replica
     /// per store (ADR 0016).
@@ -120,6 +141,7 @@ impl std::fmt::Debug for DcpVerifier {
         f.debug_struct("DcpVerifier")
             .field("participant_id", &self.participant_id)
             .field("trusted_issuers", &self.trusted_issuers)
+            .field("gaiax_compliance_issuers", &self.gaiax_compliance_issuers)
             .field("scopes", &self.scopes)
             .finish_non_exhaustive()
     }
@@ -146,7 +168,10 @@ impl DcpVerifier {
             http: HttpSender::new(settings.allow_http)?,
             sts,
             trusted_issuers: settings.trusted_issuers.clone(),
-            scopes: settings.scopes.clone(),
+            gaiax_compliance_issuers: settings.gaiax_compliance_issuers.clone(),
+            // a Gaia-X compliance scope brings its legal person scope, as
+            // on the prover's side (ADR 0022)
+            scopes: with_linked_scopes(&settings.scopes),
             used_token_ids: Mutex::new(JtiCache::default()),
             start_tries: START_TRIES,
             deadline: DEADLINE,
@@ -259,7 +284,7 @@ impl DcpVerifier {
             .ok_or("the caller sent no access token")?;
         let doc = self.resolver.resolve(&caller.id).await?;
         let checked = CheckedToken { doc, access_token };
-        let scopes = merge_scopes(&self.scopes, extra);
+        let scopes = with_linked_scopes(&merge_scopes(&self.scopes, extra));
         let presentations = self.query(&checked, &scopes).await?;
         self.check_presentations(&caller.id, &checked.doc, &presentations)
             .await
@@ -339,59 +364,221 @@ impl DcpVerifier {
         let now = now_secs();
         let mut verified = Vec::new();
         for jwt in jwts {
-            let presentation =
-                Presentation::parse(jwt).map_err(|e| format!("presentation: {e}"))?;
-            if presentation.holder != caller {
-                return Err("a presentation's holder is not the caller".to_owned());
+            let presentation = self.check_presentation(caller, holder, jwt, now)?;
+            // Gaia-X credentials first: they have their own rules (ADR 0022)
+            let gaiax = self
+                .check_gaiax(caller, holder, &presentation.credentials, now)
+                .await?;
+            verified.extend(gaiax);
+            let others = self
+                .check_dataspace_credentials(caller, &presentation.credentials, now)
+                .await?;
+            verified.extend(others);
+        }
+        Ok(verified)
+    }
+
+    /// One presentation: its holder is the caller, it is signed with the
+    /// caller's `authentication` key, meant for us and valid now, and it
+    /// holds at most [`MAX_CREDENTIALS`] credentials.
+    fn check_presentation(
+        &self,
+        caller: &str,
+        holder: &DidDocument,
+        jwt: &str,
+        now: u64,
+    ) -> Result<Presentation, String> {
+        let presentation = Presentation::parse(jwt).map_err(|e| format!("presentation: {e}"))?;
+        if presentation.holder != caller {
+            return Err("a presentation's holder is not the caller".to_owned());
+        }
+        presentation
+            .verify(holder, &self.participant_id, now, LEEWAY)
+            .map_err(|e| format!("presentation: {e}"))?;
+        if presentation.credentials.len() > MAX_CREDENTIALS {
+            return Err(format!(
+                "a presentation holds more than {MAX_CREDENTIALS} credentials"
+            ));
+        }
+        Ok(presentation)
+    }
+
+    /// Whether `credential` gets the Gaia-X checks of ADR 0022
+    /// ([`DcpVerifier::check_gaiax`]) instead of the dataspace ones: a
+    /// compliance or legal person credential whose issuer is not a
+    /// trusted dataspace issuer (`PORTITOR_TRUSTED_ISSUERS`). A trusted
+    /// issuer's `gx:LegalPerson` is about the caller like any other
+    /// dataspace credential, so it is checked as before 0.8, holder
+    /// binding included.
+    fn takes_gaiax_checks(&self, credential: &Credential) -> bool {
+        let gaiax_type = is_gaiax_compliance(credential) || is_legal_person(credential);
+        gaiax_type && !self.trusted_issuers.contains(&credential.issuer)
+    }
+
+    /// The credentials of one presentation that do not take the Gaia-X
+    /// checks ([`DcpVerifier::takes_gaiax_checks`]): from a trusted
+    /// issuer, about the caller, signed, valid now, not revoked or
+    /// suspended. Credentials from other issuers are skipped.
+    async fn check_dataspace_credentials(
+        &self,
+        caller: &str,
+        credentials: &[Credential],
+        now: u64,
+    ) -> Result<Vec<HeldCredential>, String> {
+        let mut verified = Vec::new();
+        for credential in credentials {
+            if self.takes_gaiax_checks(credential) {
+                continue;
             }
-            presentation
-                .verify(holder, &self.participant_id, now, LEEWAY)
-                .map_err(|e| format!("presentation: {e}"))?;
-            if presentation.credentials.len() > MAX_CREDENTIALS {
-                return Err(format!(
-                    "a presentation holds more than {MAX_CREDENTIALS} credentials"
-                ));
+            // skipped before its issuer's DID document or status list
+            // is fetched: an untrusted issuer could name any URL there
+            if !self.trusted_issuers.contains(&credential.issuer) {
+                tracing::debug!(issuer = %credential.issuer, "credential from an untrusted issuer skipped");
+                continue;
             }
-            for credential in &presentation.credentials {
-                // skipped before its issuer's DID document or status list
-                // is fetched: an untrusted issuer could name any URL there
-                if !self.trusted_issuers.contains(&credential.issuer) {
-                    tracing::debug!(issuer = %credential.issuer, "credential from an untrusted issuer skipped");
-                    continue;
-                }
-                // holder binding (DCP 5.4.3) and the fetch limit
-                if !credential.is_only_about(caller) {
-                    return Err(
-                        "a credential is not about the caller (credentialSubject.id)".to_owned(),
-                    );
-                }
-                if credential.status.len() > MAX_STATUS_ENTRIES {
-                    return Err(format!(
-                        "a credential has more than {MAX_STATUS_ENTRIES} status entries"
-                    ));
-                }
-                if let Err(reason) = self.check_credential(credential, now).await {
-                    // DCP 5.4.3, step 8: the whole presentation is
-                    // invalid; the log names the credential that failed
-                    tracing::info!(
-                        %caller,
-                        issuer = %credential.issuer,
-                        types = ?credential.types,
-                        %reason,
-                        "credential refused"
-                    );
-                    return Err(format!(
-                        "a {} credential fails its checks, so its presentation is invalid: {reason}",
-                        credential_types(credential)
-                    ));
-                }
-                verified.push(HeldCredential {
-                    types: credential.types.clone(),
-                    subjects: credential.subjects.clone(),
-                });
+            // holder binding (DCP 5.4.3) and the fetch limit
+            if !credential.is_only_about(caller) {
+                return Err(
+                    "a credential is not about the caller (credentialSubject.id)".to_owned(),
+                );
+            }
+            check_status_count(credential)?;
+            if let Err(reason) = self.check_credential(credential, now).await {
+                return Err(refused(caller, credential, &reason));
+            }
+            verified.push(held_credential(credential));
+        }
+        Ok(verified)
+    }
+
+    /// The Gaia-X credentials of one presentation (ADR 0022, module doc):
+    /// each `gx:ParticipantComplianceCredential` must come from a trusted
+    /// compliance service and name, by digest, a `gx:LegalPerson`
+    /// credential of the same presentation that the caller issued and
+    /// signed. Returns both kinds, checked: the compliance credentials
+    /// first. Legal person credentials that no compliance credential
+    /// names are skipped, without a fetch.
+    async fn check_gaiax(
+        &self,
+        caller: &str,
+        holder: &DidDocument,
+        credentials: &[Credential],
+        now: u64,
+    ) -> Result<Vec<HeldCredential>, String> {
+        let mut compliance = self
+            .check_compliance_credentials(caller, credentials, now)
+            .await?;
+        let mut verified = Vec::new();
+        for checked in &compliance {
+            verified.push(held_as(checked.credential, COMPLIANCE_TYPE));
+        }
+        let persons =
+            self.check_named_legal_persons(caller, holder, credentials, &mut compliance, now)?;
+        verified.extend(persons);
+        // a compliance credential vouches for a legal person credential;
+        // without it in the same presentation it says nothing about the
+        // caller (ADR 0022, step 4)
+        for checked in &compliance {
+            if !checked.linked {
+                let reason = format!(
+                    "it names no {LEGAL_PERSON_TYPE} credential of its presentation (digestSRI)"
+                );
+                return Err(refused(caller, checked.credential, &reason));
             }
         }
         Ok(verified)
+    }
+
+    /// The compliance credentials of one presentation from trusted
+    /// compliance services, each checked
+    /// ([`DcpVerifier::check_compliance_credential`]), with the digests
+    /// they name. None is linked yet. Those from other issuers are
+    /// skipped.
+    async fn check_compliance_credentials<'a>(
+        &self,
+        caller: &str,
+        credentials: &'a [Credential],
+        now: u64,
+    ) -> Result<Vec<ComplianceCheck<'a>>, String> {
+        let mut checked = Vec::new();
+        for credential in credentials {
+            if !is_gaiax_compliance(credential) || !self.takes_gaiax_checks(credential) {
+                continue;
+            }
+            // Skipped, not refused, like any credential from an untrusted
+            // issuer, and before its issuer's DID document is fetched. A
+            // participant of another clearing house can still use offers
+            // that need only a membership.
+            if !self.gaiax_compliance_issuers.contains(&credential.issuer) {
+                tracing::debug!(issuer = %credential.issuer, "gx:ParticipantComplianceCredential from an untrusted compliance service skipped");
+                continue;
+            }
+            if let Err(reason) = self.check_compliance_credential(credential, now).await {
+                return Err(refused(caller, credential, &reason));
+            }
+            checked.push(ComplianceCheck::new(credential));
+        }
+        Ok(checked)
+    }
+
+    /// The legal person credentials of one presentation that a checked
+    /// compliance credential names, each checked
+    /// ([`check_legal_person`]), without a fetch. Marks the compliance
+    /// credentials that name one as linked. The others are skipped.
+    fn check_named_legal_persons(
+        &self,
+        caller: &str,
+        holder: &DidDocument,
+        credentials: &[Credential],
+        compliance: &mut [ComplianceCheck<'_>],
+        now: u64,
+    ) -> Result<Vec<HeldCredential>, String> {
+        let mut verified = Vec::new();
+        for credential in credentials {
+            if !is_legal_person(credential) || !self.takes_gaiax_checks(credential) {
+                continue;
+            }
+            let digest = digest_sri_of(credential).map_err(|e| format!("credential: {e}"))?;
+            if !link(compliance, &digest) {
+                // like a credential from an untrusted issuer
+                tracing::debug!(issuer = %credential.issuer, "gx:LegalPerson credential that no trusted compliance credential names skipped");
+                continue;
+            }
+            if let Err(reason) = check_legal_person(caller, holder, credential, now) {
+                return Err(refused(caller, credential, &reason));
+            }
+            verified.push(held_as(credential, LEGAL_PERSON_TYPE));
+        }
+        Ok(verified)
+    }
+
+    /// One Gaia-X compliance credential from a trusted compliance service
+    /// (ADR 0022, steps 1 to 3): signed with that service's
+    /// `assertionMethod` key; valid now by `validFrom` and `validUntil`
+    /// only (the service writes its JWT times in milliseconds), and
+    /// `validUntil` is required; its
+    /// status, if it has one, as for any credential. The caller is not its
+    /// subject, so there is no holder binding.
+    async fn check_compliance_credential(
+        &self,
+        credential: &Credential,
+        now: u64,
+    ) -> Result<(), String> {
+        // The JWT's `exp` is not read (milliseconds), so `validUntil` is
+        // the only end. Without one the credential would never expire,
+        // which a compliance service must not issue (ADR 0022, step 2).
+        if credential.stated_validity().until.is_none() {
+            return Err("it has no validUntil (expirationDate in VC 1.1)".to_owned());
+        }
+        check_status_count(credential)?;
+        let issuer = self.resolver.resolve(&credential.issuer).await?;
+        credential
+            .verify_stated_dates(&issuer, now, LEEWAY)
+            .map_err(|e| format!("credential from {}: {e}", credential.issuer))?;
+        for entry in &credential.status {
+            self.check_status(credential, &issuer, entry, now).await?;
+        }
+        Ok(())
     }
 
     /// One credential about the caller (checked before): signed by its
@@ -444,6 +631,44 @@ impl DcpVerifier {
     }
 }
 
+/// A checked Gaia-X compliance credential of a presentation.
+struct ComplianceCheck<'a> {
+    credential: &'a Credential,
+    /// The `digestSRI` of each credential it names
+    /// (`gx:compliantCredentials`).
+    digests: Vec<String>,
+    /// Whether the presentation holds a legal person credential with one
+    /// of these digests.
+    linked: bool,
+}
+
+impl<'a> ComplianceCheck<'a> {
+    fn new(credential: &'a Credential) -> Self {
+        let mut digests = Vec::new();
+        for entry in compliant_credentials(credential) {
+            digests.push(entry.digest_sri);
+        }
+        Self {
+            credential,
+            digests,
+            linked: false,
+        }
+    }
+}
+
+/// Marks each compliance credential that names `digest` as linked.
+/// Returns whether any does.
+fn link(compliance: &mut [ComplianceCheck<'_>], digest: &str) -> bool {
+    let mut named = false;
+    for checked in compliance.iter_mut() {
+        if checked.digests.iter().any(|listed| listed == digest) {
+            checked.linked = true;
+            named = true;
+        }
+    }
+    named
+}
+
 impl CallerVerifier for DcpVerifier {
     fn verify<'a>(
         &'a self,
@@ -469,6 +694,129 @@ impl CallerVerifier for DcpVerifier {
             .await
         })
     }
+}
+
+/// Whether `credential` is a Gaia-X compliance credential
+/// (`gx:ParticipantComplianceCredential`).
+fn is_gaiax_compliance(credential: &Credential) -> bool {
+    credential.has_type(COMPLIANCE_TYPE)
+}
+
+/// Whether `credential` is a Gaia-X legal person credential
+/// (`gx:LegalPerson`).
+fn is_legal_person(credential: &Credential) -> bool {
+    credential.has_type(LEGAL_PERSON_TYPE)
+}
+
+/// One `gx:LegalPerson` credential that a trusted compliance credential
+/// names (ADR 0022, step 4): issued by the caller and signed with the
+/// caller's `assertionMethod` key (`holder` is the caller's DID
+/// document), valid now. Its subject is not the caller's DID, so there is
+/// no holder binding.
+///
+/// Its `credentialStatus` is not fetched. The caller issued it and
+/// controls its status lists, so a status says nothing the caller could
+/// not change, and fetching would only let the caller choose URLs that we
+/// fetch. The compliance credential's own validity bounds it.
+fn check_legal_person(
+    caller: &str,
+    holder: &DidDocument,
+    credential: &Credential,
+    now: u64,
+) -> Result<(), String> {
+    if credential.issuer != caller {
+        return Err(format!(
+            "its issuer {} is not the caller",
+            credential.issuer
+        ));
+    }
+    credential
+        .verify(holder, now, LEEWAY)
+        .map_err(|e| format!("credential from {}: {e}", credential.issuer))
+}
+
+/// The fetch limit on status entries: at most [`MAX_STATUS_ENTRIES`].
+fn check_status_count(credential: &Credential) -> Result<(), String> {
+    if credential.status.len() > MAX_STATUS_ENTRIES {
+        return Err(format!(
+            "a credential has more than {MAX_STATUS_ENTRIES} status entries"
+        ));
+    }
+    Ok(())
+}
+
+/// Logs a credential that failed its checks, and returns the reason the
+/// caller is refused: the whole presentation is invalid (DCP 5.4.3, step
+/// 8).
+fn refused(caller: &str, credential: &Credential, reason: &str) -> String {
+    tracing::info!(
+        %caller,
+        issuer = %credential.issuer,
+        types = ?credential.types,
+        %reason,
+        "credential refused"
+    );
+    format!(
+        "a {} credential fails its checks, so its presentation is invalid: {reason}",
+        credential_types(credential)
+    )
+}
+
+/// A checked credential as the policy evaluator reads it (ADR 0019).
+fn held_credential(credential: &Credential) -> HeldCredential {
+    HeldCredential {
+        types: policy_type_names(credential),
+        subjects: credential.subjects.clone(),
+    }
+}
+
+/// A checked Gaia-X credential as the policy evaluator reads it: as
+/// `gaiax_type` only (and its scope name), whatever other types it lists.
+/// Its signer vouches for that one type: a compliance service does not
+/// issue memberships, and the caller signs its own legal person
+/// credential, so another type there would be the caller's own claim.
+fn held_as(credential: &Credential, gaiax_type: &str) -> HeldCredential {
+    let mut types = vec![gaiax_type.to_owned()];
+    let credential_contexts = credential_contexts_of(credential);
+    if let Some(short) = gaiax_type.strip_prefix(GAIAX_PREFIX)
+        && matches_scope_type(&types, &credential_contexts, short)
+    {
+        types.push(short.to_owned());
+    }
+    HeldCredential {
+        types,
+        subjects: credential.subjects.clone(),
+    }
+}
+
+/// The `@context` entries of a credential, from its JWT's payload,
+/// decoded again here; none when the payload cannot be read.
+fn credential_contexts_of(credential: &Credential) -> Vec<String> {
+    match credential.payload() {
+        Ok(payload) => contexts(&payload),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// The type names a policy may use for `credential`: its types, and for a
+/// credential with a Gaia-X context each `gx:` type without its prefix,
+/// the way a scope names it (ADR 0021, `matches_scope_type`). So
+/// `gx:ParticipantComplianceCredential` is also
+/// `ParticipantComplianceCredential`, the type in the left operand
+/// `ParticipantComplianceCredential.gx:labelLevel` (ADR 0022).
+fn policy_type_names(credential: &Credential) -> Vec<String> {
+    let mut names = credential.types.clone();
+    let credential_contexts = credential_contexts_of(credential);
+    for credential_type in &credential.types {
+        let Some(short) = credential_type.strip_prefix(GAIAX_PREFIX) else {
+            continue;
+        };
+        let is_gaiax = matches_scope_type(&credential.types, &credential_contexts, short);
+        if is_gaiax && !names.iter().any(|name| name == short) {
+            names.push(short.to_owned());
+        }
+    }
+    names
 }
 
 /// A credential's types for a message, without the base type

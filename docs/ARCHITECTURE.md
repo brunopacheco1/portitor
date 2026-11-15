@@ -86,7 +86,8 @@ drawn, every Rust file and type they name exists. Each release reviews
 them ([RELEASING.md](RELEASING.md), "Documentation review").
 
 **C1 System context**: who and what one participant's Portitor talks to,
-and the issuer its dataspace authority runs.
+the issuer its dataspace authority runs and, for Gaia-X, a compliance
+service.
 
 ![C1 System context](diagrams/c1-system-context.drawio.svg)
 
@@ -107,7 +108,7 @@ with the files they live in:
 
 ![C3 Components of portitor-issuer](diagrams/c3-issuer-components.drawio.svg)
 
-**C4 Code**: seven flows, each drawn as a hexagon: the domain service or
+**C4 Code**: eight flows, each drawn as a hexagon: the domain service or
 function in the middle, the ports (traits, dashed yellow) it uses, the
 adapters behind them, and the HTTP edge that calls it. The names are the
 real type, trait, function and file names, so you can search the code
@@ -145,6 +146,14 @@ answers another participant's presentation query.
 
 ![C4 Code: STS tokens and presentations in portitor-identity](diagrams/c4-presentation-code.drawio.svg)
 
+How the identity component gets and renews its Gaia-X compliance
+credential: it signs the legal person and terms and conditions
+credentials with `portitor-dcp`, sends them through the `GaiaxCompliance`
+port to a Gaia-X compliance service, checks the answer and stores it
+([ADR 0021](adr/0021-gaia-x-onboarding.md)).
+
+![C4 Code: Gaia-X onboarding in portitor-identity](diagrams/c4-gaiax-onboarding-code.drawio.svg)
+
 How the connector harvests its datasets into a read copy: the source,
 a check of each entry, one transaction per run, then the copy that the
 catalog and the data plane read ([ADR 0020](adr/0020-dataset-harvest.md)).
@@ -157,6 +166,34 @@ issuer serves it, the connector verifies it through the authority's DID
 document and keeps it in a cache ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)).
 
 ![C4 Code: schema and vocabulary bundle](diagrams/c4-bundle-code.drawio.svg)
+
+## Who holds the credentials
+
+Every credential in Portitor is held by a **participant**: an
+organisation (a legal person) that runs a connector, named by one DID
+(`PORTITOR_PARTICIPANT_ID`). The credentials are system to system:
+
+- The identity is the participant's wallet, not a person's. It holds the
+  organisation's key, its credentials (for example `MembershipCredential`
+  from the dataspace issuer, and from 0.8 the Gaia-X `gx:LegalPerson` and
+  `gx:ParticipantComplianceCredential`) and signs the participant's DCP
+  tokens and presentations.
+- The issuer registers participants (DIDs), not people, and issues to
+  them.
+- The connector checks the calling participant on every DSP request
+  (control plane) and agrees contracts between participants
+  ([ADR 0016](adr/0016-dsp-caller-authentication.md),
+  [ADR 0019](adr/0019-credential-constraints.md)).
+
+Portitor does not identify the people or applications inside an
+organisation (user to system). The operator's management APIs are
+protected by an API key, and the data plane checks only the transfer's
+bearer token: whoever in the consumer's organisation holds it gets the
+data. How a consumer's users and applications prove who they are is
+open, listed as technical debt in
+[RISKS_AND_TECHNICAL_DEBTS](RISKS_AND_TECHNICAL_DEBTS.md#td-02) ("Who
+calls the data plane, and with which credentials", TD-02; and TD-04, user
+to system authentication).
 
 ## Components
 
@@ -172,13 +209,13 @@ ports.
 | # | Component (image) | Role | Mandatory? | Protocols |
 |---|---|---|---|---|
 | 1 | Database: one SQLite file per image today; PostgreSQL (external, not built by Portitor) later | State of negotiations, transfers, credentials | Mandatory | — |
-| 2 | `portitor-identity` | Holds the participant's DID, keys and credentials (including Gaia-X credentials from 0.8); asks issuers for credentials; answers presentation queries | Mandatory for each participant, unless an external DCP wallet is used, or the participant uses Simpl-Open x509 only | DCP (credential service) |
-| 3 | `portitor-connector` | Control plane: catalog (datasets harvested into a read copy), contract negotiation, transfer; verifies DCP presentations; checks datasets and DSP messages against the authority's SHACL shapes. The data plane is its own module, linked into the connector for 0.x (see below) | Mandatory | DSP, DCP (verifier) |
+| 2 | `portitor-identity` | Holds the participant's DID, keys and credentials; asks issuers for credentials; answers presentation queries. From 0.8 it also publishes the X.509 chain of its key and gets its Gaia-X compliance credential from a Gaia-X compliance service ([ADR 0021](adr/0021-gaia-x-onboarding.md)) | Mandatory for each participant, unless an external DCP wallet is used, or the participant uses Simpl-Open x509 only | DCP (credential service) |
+| 3 | `portitor-connector` | Control plane: catalog (datasets harvested into a read copy), contract negotiation, transfer; verifies DCP presentations, including Gaia-X compliance credentials from 0.8 ([ADR 0022](adr/0022-gaia-x-compliance-in-policies.md)); checks datasets and DSP messages against the authority's SHACL shapes. The data plane is its own module, linked into the connector for 0.x (see below) | Mandatory | DSP, DCP (verifier) |
 | 4 | `portitor-issuer` (from 0.6, [ADR 0018](adr/0018-issuer-component.md)) | Issues and revokes credentials (for example membership) to the participants the authority registered; publishes their status lists. From 0.7 it also serves the signed schema and vocabulary bundle, which `portitor-issuer bundle build` signs offline ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)) | Optional: one per dataspace, run by the dataspace authority, never on a participant's host | DCP (issuance) |
 
-### Images and crates in 0.7
+### Images and crates in 0.8
 
-Release 0.7 ships three images, built from one `Dockerfile` (one build
+Release 0.8 ships three images, built from one `Dockerfile` (one build
 target per image) and released, signed and attested together
 ([RELEASING.md](RELEASING.md)). Until the PostgreSQL adapter exists, each
 image keeps its state in its own SQLite file under `/data`.
@@ -189,13 +226,14 @@ image keeps its state in its own SQLite file under `/data`.
    +-----------------------------+        +----------------------------------+
    | portitor-connector          |  (1)   | portitor-identity                |
    | 8080 DSP, data plane        |------->| 8090 DID document, STS,          |
-   | 8081 management API         |  STS   |      credential service          |
-   | /data/portitor.db           |        | 8091 management API              |
-   | /data/bundle-cache          |        | /data/portitor-identity.db       |
-   +-----------------------------+        +----------------------------------+
-          | (2) DSP request + token
-          v                                        ^ (3) DID document,
-   partner's connector ----------------------------+     presentation query
+   | 8081 management API         |  STS   |      credential service,         |
+   | /data/portitor.db           |        |      certificate chain           |
+   | /data/bundle-cache          |        | 8091 management API              |
+   +-----------------------------+        | /data/portitor-identity.db       |
+          | (2) DSP request + token       +----------------------------------+
+          v                                        ^ (3) DID document,     | (4) Gaia-X
+   partner's connector ----------------------------+     presentation      v     credentials
+                                                         query       Gaia-X compliance service
 
  the dataspace authority runs one, for all participants:
 
@@ -235,7 +273,11 @@ image keeps its state in its own SQLite file under `/data`.
 - `portitor-identity`: binary; the participant's DID document, STS,
   credential service and management API (ADR 0015); asks issuers for
   credentials (holder side of DCP issuance, port `IssuerClient` in
-  `issuance.rs`, ADR 0018).
+  `issuance.rs`, ADR 0018). From 0.8, optionally, the X.509 chain of its
+  key (`certificate.rs`, served at `/.well-known/x509CertificateChain.pem`
+  and named by `x5u` in the DID document) and the Gaia-X onboarding
+  (`gaiax.rs`, port `GaiaxCompliance`, ADR 0021); see "Gaia-X (0.8)"
+  below.
 - `portitor-issuer`: binary; the dataspace authority's DID document, DCP
   issuer service (metadata, credential requests and their status),
   delivery outbox, status lists and management API (ADR 0018). Serves
@@ -249,7 +291,7 @@ image keeps its state in its own SQLite file under `/data`.
   verified) and `BundleStore` (the read copy on disk and the version in
   use). Its own crate so any service can reuse it (maintainer,
   2026-11-14); how schemas are collected and stored is technical debt
-  (`ROADMAP.md`).
+  ([TD-01](RISKS_AND_TECHNICAL_DEBTS.md#td-01)).
 - `portitor-dsp`, `portitor-dps`, `portitor-dcp`, `portitor-time`: domain
   crates (ADR 0004); CI checks they have no I/O dependency.
 - `portitor-shacl` (0.7): our own SHACL Core subset (ADR 0005), a domain
@@ -261,7 +303,9 @@ a self-issued ID token addressed to the partner; (2) it sends that token
 with its DSP request; (3) the partner's connector checks the token against
 the participant's DID document and queries the participant's credential
 service for the credentials it needs. The connector never holds the
-participant's private key.
+participant's private key. (4) With Gaia-X on, the identity sends the
+participant's Gaia-X credentials to a compliance service and keeps the
+compliance credential it gets back (see "Gaia-X (0.8)" below).
 
 In the connector (ADR 0016) this is two ports in `auth.rs`, with their DCP
 adapters in `auth/dcp.rs` and `auth/sts.rs`:
@@ -300,6 +344,39 @@ consumer, only the provider it was started with may use its callbacks. At
 start the connector resolves its own DID document and checks that its STS
 signs for it. Tests use fake ports; the `tck` build maps the DSP TCK's
 fixed header to the TCK participant.
+
+### Gaia-X (0.8)
+
+Gaia-X does not use DCP, so the two Gaia-X parts sit next to the DCP
+code ([ADR 0021](adr/0021-gaia-x-onboarding.md),
+[ADR 0022](adr/0022-gaia-x-compliance-in-policies.md); C2, C3 and C4
+diagrams above):
+
+- Identity, onboarding. With `PORTITOR_GAIAX_COMPLIANCE_URL` set, the
+  identity signs the participant's `gx:LegalPerson` and `gx:Issuer`
+  credentials with its own key (`portitor_dcp::gaiax_sign`), wraps them
+  with the notary's registration number credential in a `vp+jwt`, and
+  sends it to a Gaia-X compliance service through the `GaiaxCompliance`
+  port (`HttpGaiaxCompliance`: `POST {url}/api/credential-offers/standard-compliance`).
+  It checks the `gx:ParticipantComplianceCredential` it gets back (issued
+  by `PORTITOR_GAIAX_COMPLIANCE_DID`, checked before that DID is
+  resolved; the service's signature; the id asked for; the `digestSRI`
+  of each credential sent) and stores the four credentials, so the presentation
+  API returns them like any other credential. A run happens at start
+  without a valid compliance credential, then at two thirds of its
+  validity, and on `POST /v1/gaiax/compliance`; runs are kept in the
+  table `gaiax_run`. The compliance service reads the identity's DID
+  document and, through `x5u`, the certificate chain; for a DID with a
+  path, the chain and the credentials are served below that path.
+- Connector, policies. A policy may name
+  `ParticipantComplianceCredential.<claim path>` as a left operand. The
+  DCP verifier accepts that credential only from a service in
+  `PORTITOR_GAIAX_COMPLIANCE_ISSUERS`, and only with the `gx:LegalPerson`
+  credential it names by `digestSRI`, issued and signed by the caller,
+  and with a `validUntil`. A compliance credential from a service not
+  listed is skipped, like a credential from an untrusted issuer, so the
+  caller can still use offers that need only other credentials. Policies
+  see Gaia-X credentials only by their Gaia-X type.
 
 ### Datasets and shapes (0.7)
 
@@ -373,11 +450,15 @@ Then for each participant:
 2. Storage: a volume for each image's SQLite file (PostgreSQL later).
 3. Identity (`portitor-identity`): publish the `did:web` document over
    HTTPS, then ask the issuer for a membership credential (DCP issuance).
-   For Gaia-X (from 0.8), the participant also obtains a Compliance
-   credential from a Gaia-X Digital Clearing House.
+   For Gaia-X (from 0.8): get a certificate for the identity key and the
+   notary's registration number credential, write the participant file,
+   and set the compliance service's URL; the identity then gets and
+   renews the compliance credential itself.
 4. Connector (`portitor-connector`): point it at the identity and the
    database, trust the issuer's DID, give it its datasets file and, with
-   a bundle, the bundle's URL, version and authority.
+   a bundle, the bundle's URL, version and authority. Offers that require
+   Gaia-X compliance also need the trusted compliance services
+   (`PORTITOR_GAIAX_COMPLIANCE_ISSUERS`).
 
 ## Data plane: inside the connector or separate?
 

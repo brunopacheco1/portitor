@@ -272,7 +272,7 @@ Plan approved by the maintainer on 2026-11-14.
   connector pulls the newest version (or a fixed one), verifies it,
   caches it on disk and puts a new version in use without a restart.
   How schemas are collected and stored stays open: see
-  [Technical debt](#technical-debt).
+  [TD-01](RISKS_AND_TECHNICAL_DEBTS.md#td-01).
   HealthDCAT-AP release 8 is the baseline.
 - Our own SHACL Core engine, `portitor-shacl` (maintainer, 2026-11-14):
   shapes that use anything it does not implement are refused.
@@ -319,18 +319,40 @@ Plan approved by the maintainer on 2026-11-14.
 
 ## 0.8 Gaia-X Trust Framework (Danube)
 
-- The identity component obtains and stores the participant's Gaia-X
-  credentials (for example LegalPerson, registration number, terms and
-  conditions) and the Gaia-X Compliance credential from a Gaia-X Digital
-  Clearing House (GXDCH).
-- Credentials use Gaia-X's required format: VC Data Model 2.0, encoded as
-  VC-JWT (`typ: vc+jwt`), `kid` pointing to a did:web verification method.
-- The connector can require a valid Gaia-X Compliance credential in an
-  ODRL policy, and presents its own one over DCP.
-- Publish the catalog's datasets with Gaia-X-compatible DCAT descriptions.
-- Exit: a participant set up from scratch gets a Compliance credential
-  from a GXDCH (test environment) and negotiates with an EDC connector
-  under a policy that requires it.
+Plan approved by the maintainer on 2026-11-15. Gaia-X does not use DCP,
+and EDC 1.0.0-RC7 refuses a credential that is not about the holder's
+DID, which the Gaia-X compliance credential is not. So Gaia-X policies
+are tested between Portitor connectors, and the EDC interop test keeps
+running without Gaia-X (maintainer, 2026-11-15).
+
+- Spike (go/no-go): a local Gaia-X compliance service accepts a
+  presentation signed with a Portitor ES256 key. Result: go
+  ([spike report](spikes/0.8-gaia-x-compliance.md)).
+- The identity component publishes the X.509 chain of its key (`x5u`)
+  and onboards to Gaia-X: it signs the LegalPerson and terms and
+  conditions credentials, sends them with the notary's registration
+  number credential to a compliance service, stores the compliance
+  credential and renews it ([ADR 0021](adr/0021-gaia-x-onboarding.md)).
+- The connector checks a Gaia-X compliance credential from a trusted
+  compliance service, tied to the caller through the digest of its
+  LegalPerson credential, and policies can require it
+  ([ADR 0022](adr/0022-gaia-x-compliance-in-policies.md)).
+- CI: a Gaia-X job with a local compliance service (pinned image, Gaia-X
+  test mode); the DCP TCK jar is cached (Maven Central answered HTTP 429
+  on 2026-11-15).
+- Reviews before the release: engineering and testing, readability
+  (`docs/RUST-IDIOMS.md`), documentation (C4 diagrams, OpenAPI, website,
+  DEPLOYING).
+- Exit: a participant set up from scratch gets a
+  `ParticipantComplianceCredential` from the local compliance service in
+  CI, and a Portitor consumer negotiates with a Portitor provider under a
+  policy that requires it; a consumer without it is refused; a tampered
+  LegalPerson credential and an untrusted compliance service are refused.
+  The DCP TCK (issuer, credential service, verifier), the DSP TCK and the
+  EDC interop test stay green.
+- Not in 0.8 (see "Later"): the real Gaia-X Lab, Gaia-X DCAT and service
+  offering credentials, OpenID4VC, label levels 1 to 3, calling the
+  notary, Gaia-X with EDC.
 
 ## 0.9 Operations
 
@@ -351,7 +373,15 @@ Plan approved by the maintainer on 2026-11-14.
   audited (own audits or imported sets, such as Mozilla's and Google's) or
   explicitly exempted; CI fails on an unaudited change. Deferred from 0.1
   (decided 2026-11-11) because it turns each dependency bump into review work.
-- Interoperability tests against Eclipse EDC and Simpl-Open (with Gaia-X).
+- Interoperability tests against Eclipse EDC, without Gaia-X: EDC
+  1.0.0-RC7 refuses the Gaia-X compliance credential (ADR 0022). Simpl-Open
+  stays under "Later" until a sandbox exists (ADR 0017).
+- Explicit request size limits per port and route, set by Portitor
+  (today axum's default of 2 MB on every parsed body; data plane bodies
+  are streamed), with tests ([R-18](RISKS_AND_TECHNICAL_DEBTS.md#r-18)).
+- File the upstream reports drafted from 0.4 to 0.8 and link them
+  (maintainer, 2026-11-15; earlier if an answer is needed to go on;
+  [R-07](RISKS_AND_TECHNICAL_DEBTS.md#r-07)).
 - Cache status list credentials in the connector's DCP verifier
   (maintainer, 2026-11-14): `PORTITOR_STATUS_LIST_CACHE_SECONDS`, default
   300 (5 minutes), 0 checks on every request, at most 3600; only lists
@@ -390,6 +420,15 @@ Plan approved by the maintainer on 2026-11-14.
   search (SPARQL), with its own ADR.
 - Check other participants' catalogs against the bundle (warnings only,
   ADR 0005); bundle expiry and bundle key rotation.
+- Gaia-X beyond 0.8 (maintainer, 2026-11-15): a test against the real
+  Gaia-X Lab or a production clearing house, once Portitor runs beyond a
+  laptop (needs a public `did:web` and a CA certificate); Gaia-X-compatible
+  DCAT descriptions and service offering credentials, with a federated
+  catalogue; OpenID4VCI and OpenID4VP to the Gaia-X Compliance Dispatcher
+  when its wallet flow ships; label levels 1 to 3; calling the
+  registration number notary; trust anchors and compliance issuers read
+  from the Gaia-X Registry; asking EDC how it would accept Gaia-X
+  compliance credentials.
 - Explore Simpl-Open features that are not part of DSP, DCP, Data Plane
   Signaling or EDC, but add security or complete what a data space
   participant can do (maintainer, 2026-11-15). First candidates:
@@ -417,39 +456,16 @@ Plan approved by the maintainer on 2026-11-14.
 
 ## Technical debt
 
-Known open questions, kept here until they are investigated and
-decided. Each names what is in place now.
+Known open questions and shortcuts, kept with the risks in
+[RISKS_AND_TECHNICAL_DEBTS.md](RISKS_AND_TECHNICAL_DEBTS.md), the single
+list: what each is, what is in place now and what comes next. The open
+questions the maintainer asked to investigate:
 
-- **How schemas and vocabularies are collected and stored**
-  (maintainer, 2026-11-14: to be investigated further). In 0.7 the
-  authority publishes a signed bundle in a format Portitor defines
-  (`manifest.json`, `manifest.jws`, `latest.json`; [ADR 0005](adr/0005-schema-and-vocabulary-registry.md)),
-  and the connector pulls it into a disk cache (`portitor-bundle`).
-  Only its version fields come from a standard (W3C DCAT 3
-  `dcat:version` and `dcterms:issued`). No data space specification we
-  follow defines how an authority publishes schemas: Simpl-Open has its
-  own schema-manager API (versions numbered by the authority, pulled by
-  a sync adapter, not signed), and its versioning requirements are still
-  Proposed. Portitor must not invent a new standard, so the format may
-  change when this is decided. To investigate: how Simpl-Open, Gaia-X
-  and HealthData@EU authorities publish schemas, whether a DCAT catalogue
-  of schema distributions can replace `latest.json`, and where the
-  connector should keep them.
-- **Key custody and key rotation** (maintainer, 2026-11-15: a key
-  custody service such as OpenBao is probably better). Today each
-  component (identity, issuer, bundle signing) reads one P-256 private
-  key from a PEM file and lists one key in its `did:web` document, with
-  the key's thumbprint as its id. Rotation is manual and leaves a gap:
-  the old key leaves the DID document at once, so anything it signed
-  stops verifying. For the identity that is tokens and presentations
-  until verifiers reload the document (Portitor caches it 5 minutes);
-  for the issuer it is every credential and status list it ever signed,
-  so every participant needs new credentials. [ADR 0015](adr/0015-dcp-identity-component.md)
-  describes "add the new key, switch, remove the old key", but the code
-  cannot list two keys, so that overlap is not possible yet. To
-  investigate: a signer port with a key custody adapter (OpenBao transit
-  engine: P-256 signing, versioned keys, the private key never leaves
-  it), listing retired public keys next to the current one in the DID
-  document (DID Core allows several verification methods), how EDC
-  IdentityHub rotates keys, and whether this lands with the 0.10
-  hardening work.
+- [How schemas and vocabularies are collected and stored](RISKS_AND_TECHNICAL_DEBTS.md#td-01) (TD-01)
+- [Who calls the data plane, and with which credentials](RISKS_AND_TECHNICAL_DEBTS.md#td-02) (TD-02)
+- [A provider in several data spaces, each with its own rules](RISKS_AND_TECHNICAL_DEBTS.md#td-03) (TD-03)
+- [User to system authentication and authorisation, governed per data space](RISKS_AND_TECHNICAL_DEBTS.md#td-04) (TD-04)
+- [Key custody and key rotation](RISKS_AND_TECHNICAL_DEBTS.md#td-05) (TD-05)
+
+The other technical debts (TD-06 onwards) and the risks (R-01 onwards)
+are listed there too, with their status and target release.

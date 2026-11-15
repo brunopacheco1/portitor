@@ -847,7 +847,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "portitor-bundle"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "http-body-util",
  "hyper",
@@ -860,7 +860,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-connector"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "axum",
  "base64",
@@ -887,7 +887,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-dcp"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64",
  "jsonschema",
@@ -901,7 +901,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-dps"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "jsonschema",
  "portitor-dsp",
@@ -911,7 +911,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-dsp"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "jsonschema",
  "portitor-time",
@@ -921,9 +921,10 @@ dependencies = [
 
 [[package]]
 name = "portitor-identity"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "axum",
+ "base64",
  "portitor-dcp",
  "portitor-runtime",
  "rusqlite",
@@ -938,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-issuer"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "axum",
  "futures-util",
@@ -956,7 +957,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-runtime"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "axum",
  "http-body-util",
@@ -979,7 +980,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-shacl"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "oxjsonld",
  "oxrdf",
@@ -992,7 +993,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-time"
-version = "0.7.0"
+version = "0.8.0"
 
 [[package]]
 name = "ppv-lite86"

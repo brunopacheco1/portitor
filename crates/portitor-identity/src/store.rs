@@ -265,6 +265,104 @@ pub trait IdentityStore: Send + Sync {
     /// # Errors
     /// The store fails.
     fn offers(&self) -> Result<Vec<StoredOffer>, StoreError>;
+
+    /// Replaces the credentials of the last Gaia-X compliance run (those
+    /// whose `holder_pid` starts with [`GAIAX_HOLDER_PID_PREFIX`]) with
+    /// `credentials`, all at once (ADR 0021). A credential with the `id`
+    /// of one held from another issuer is not replaced.
+    ///
+    /// # Errors
+    /// The store fails, or a credential has the `id` of one from another
+    /// issuer. Then nothing is changed.
+    fn replace_gaiax_credentials(&self, credentials: &[StoredCredential])
+    -> Result<(), StoreError>;
+
+    /// Records that a Gaia-X compliance run started at `started_at`, and
+    /// returns its id. Only the last [`GAIAX_RUNS_KEPT`] runs are kept.
+    ///
+    /// # Errors
+    /// The store fails.
+    fn start_gaiax_run(&self, started_at: u64) -> Result<i64, StoreError>;
+
+    /// Records how run `id` ended.
+    ///
+    /// # Errors
+    /// The store fails.
+    fn finish_gaiax_run(
+        &self,
+        id: i64,
+        finished_at: u64,
+        outcome: RunOutcome,
+        error: Option<&str>,
+    ) -> Result<(), StoreError>;
+
+    /// Marks the runs still `RUNNING` as failed at `now`: a restart
+    /// stopped them. Returns how many.
+    ///
+    /// # Errors
+    /// The store fails.
+    fn abandon_gaiax_runs(&self, now: u64) -> Result<usize, StoreError>;
+
+    /// The last `limit` Gaia-X compliance runs, newest first.
+    ///
+    /// # Errors
+    /// The store fails.
+    fn gaiax_runs(&self, limit: usize) -> Result<Vec<GaiaxRun>, StoreError>;
+}
+
+/// The `holder_pid` of the credentials a Gaia-X compliance run stores
+/// starts with this, followed by the credential's name (`legal-person`,
+/// `terms-and-conditions`, `registration-number`, `compliance`).
+pub const GAIAX_HOLDER_PID_PREFIX: &str = "gaiax:";
+
+/// How many Gaia-X compliance runs are kept.
+pub const GAIAX_RUNS_KEPT: i64 = 100;
+
+/// How a Gaia-X compliance run ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunOutcome {
+    /// Still running.
+    Running,
+    /// The compliance credential was received, checked and stored.
+    Succeeded,
+    /// It failed; the credentials stored before stay.
+    Failed,
+}
+
+impl RunOutcome {
+    /// How the outcome is written: `RUNNING`, `SUCCEEDED` or `FAILED`.
+    #[must_use]
+    pub fn text(self) -> &'static str {
+        match self {
+            Self::Running => "RUNNING",
+            Self::Succeeded => "SUCCEEDED",
+            Self::Failed => "FAILED",
+        }
+    }
+
+    fn from_text(text: &str) -> Result<Self, StoreError> {
+        match text {
+            "RUNNING" => Ok(Self::Running),
+            "SUCCEEDED" => Ok(Self::Succeeded),
+            "FAILED" => Ok(Self::Failed),
+            other => Err(StoreError(format!("unknown run outcome {other}"))),
+        }
+    }
+}
+
+/// One Gaia-X compliance run (ADR 0021).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GaiaxRun {
+    /// The run's id, counting up.
+    pub id: i64,
+    /// When it started, seconds since 1970.
+    pub started_at: u64,
+    /// When it ended, seconds since 1970; none while it runs.
+    pub finished_at: Option<u64>,
+    /// How it ended.
+    pub outcome: RunOutcome,
+    /// Why it failed.
+    pub error: Option<String>,
 }
 
 /// Schema migrations, applied in order (see `portitor_runtime::sqlite`).
@@ -299,6 +397,14 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE credential_request ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE credential_request ADD COLUMN issuer_pid TEXT;
     ALTER TABLE credential_request ADD COLUMN send_error TEXT",
+    // 0.8: Gaia-X compliance runs (ADR 0021)
+    "CREATE TABLE gaiax_run (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at  INTEGER NOT NULL,
+        finished_at INTEGER,
+        outcome     TEXT NOT NULL,
+        error       TEXT
+    )",
 ];
 
 /// The columns of a credential request, in the order of the `INSERT` in
@@ -442,34 +548,8 @@ impl IdentityStore for SqliteStore {
             )));
         }
         for credential in credentials {
-            let types =
-                serde_json::to_string(&credential.types).map_err(|e| StoreError(e.to_string()))?;
             // a credential id held from another issuer is not replaced
-            let written = tx.execute(
-                &format!(
-                    "INSERT INTO credential ({CREDENTIAL_COLUMNS})
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                     ON CONFLICT (id) DO UPDATE SET types = excluded.types,
-                         profile = excluded.profile, expires_at = excluded.expires_at,
-                         holder_pid = excluded.holder_pid, jwt = excluded.jwt
-                     WHERE credential.issuer = excluded.issuer"
-                ),
-                params![
-                    credential.id,
-                    credential.issuer,
-                    types,
-                    credential.profile.alias(),
-                    credential.expires_at,
-                    credential.holder_pid,
-                    credential.jwt
-                ],
-            )?;
-            if written == 0 {
-                return Err(StoreError(format!(
-                    "credential {} is held from another issuer",
-                    credential.id
-                )));
-            }
+            insert_credential(&tx, credential)?;
         }
         tx.commit()?;
         Ok(Delivered::Stored)
@@ -537,6 +617,132 @@ impl IdentityStore for SqliteStore {
         }
         Ok(found)
     }
+
+    fn replace_gaiax_credentials(
+        &self,
+        credentials: &[StoredCredential],
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM credential WHERE substr(holder_pid, 1, ?2) = ?1",
+            params![
+                GAIAX_HOLDER_PID_PREFIX,
+                i64::try_from(GAIAX_HOLDER_PID_PREFIX.len()).unwrap_or_default()
+            ],
+        )?;
+        for credential in credentials {
+            insert_credential(&tx, credential)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn start_gaiax_run(&self, started_at: u64) -> Result<i64, StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO gaiax_run (started_at, outcome) VALUES (?1, ?2)",
+            params![seconds(started_at), RunOutcome::Running.text()],
+        )?;
+        let id = tx.last_insert_rowid();
+        tx.execute(
+            "DELETE FROM gaiax_run WHERE id <= ?1",
+            [id - GAIAX_RUNS_KEPT],
+        )?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    fn finish_gaiax_run(
+        &self,
+        id: i64,
+        finished_at: u64,
+        outcome: RunOutcome,
+        error: Option<&str>,
+    ) -> Result<(), StoreError> {
+        self.conn().execute(
+            "UPDATE gaiax_run SET finished_at = ?2, outcome = ?3, error = ?4 WHERE id = ?1",
+            params![id, seconds(finished_at), outcome.text(), error],
+        )?;
+        Ok(())
+    }
+
+    fn abandon_gaiax_runs(&self, now: u64) -> Result<usize, StoreError> {
+        let changed = self.conn().execute(
+            "UPDATE gaiax_run SET finished_at = ?1, outcome = ?2,
+                 error = 'stopped by a restart' WHERE outcome = ?3",
+            params![
+                seconds(now),
+                RunOutcome::Failed.text(),
+                RunOutcome::Running.text()
+            ],
+        )?;
+        Ok(changed)
+    }
+
+    fn gaiax_runs(&self, limit: usize) -> Result<Vec<GaiaxRun>, StoreError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, started_at, finished_at, outcome, error FROM gaiax_run
+                 ORDER BY id DESC LIMIT ?1",
+        )?;
+        let mut rows = stmt.query([i64::try_from(limit).unwrap_or(i64::MAX)])?;
+        let mut found = Vec::new();
+        while let Some(row) = rows.next()? {
+            let started_at: i64 = row.get("started_at")?;
+            let finished_at: Option<i64> = row.get("finished_at")?;
+            let outcome: String = row.get("outcome")?;
+            found.push(GaiaxRun {
+                id: row.get("id")?,
+                started_at: u64::try_from(started_at).unwrap_or_default(),
+                finished_at: finished_at.map(|at| u64::try_from(at).unwrap_or_default()),
+                outcome: RunOutcome::from_text(&outcome)?,
+                error: row.get("error")?,
+            });
+        }
+        Ok(found)
+    }
+}
+
+/// Seconds since 1970 as `SQLite` stores them.
+fn seconds(at: u64) -> i64 {
+    i64::try_from(at).unwrap_or(i64::MAX)
+}
+
+/// Writes `credential`; one with the same `id` from the same issuer is
+/// replaced, one from another issuer is not (an error).
+fn insert_credential(
+    tx: &rusqlite::Transaction<'_>,
+    credential: &StoredCredential,
+) -> Result<(), StoreError> {
+    let types = serde_json::to_string(&credential.types).map_err(|e| StoreError(e.to_string()))?;
+    let written = tx.execute(
+        &format!(
+            "INSERT INTO credential ({CREDENTIAL_COLUMNS})
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT (id) DO UPDATE SET types = excluded.types,
+                 profile = excluded.profile, expires_at = excluded.expires_at,
+                 holder_pid = excluded.holder_pid, jwt = excluded.jwt
+             WHERE credential.issuer = excluded.issuer"
+        ),
+        params![
+            credential.id,
+            credential.issuer,
+            types,
+            credential.profile.alias(),
+            credential.expires_at,
+            credential.holder_pid,
+            credential.jwt
+        ],
+    )?;
+    if written == 0 {
+        return Err(StoreError(format!(
+            "credential {} is held from another issuer",
+            credential.id
+        )));
+    }
+    Ok(())
 }
 
 /// Whether request `holder_pid` was closed by `answer` (the same
@@ -697,6 +903,75 @@ mod tests {
         assert!(store.delete_credential("c-1").unwrap());
         assert!(!store.delete_credential("c-1").unwrap());
         check_sent_requests_and_offers(store);
+        check_gaiax(store);
+    }
+
+    /// Run by [`check`]: Gaia-X credentials and runs.
+    fn check_gaiax(store: &dyn IdentityStore) {
+        let gaiax = |id: &str, name: &str| StoredCredential {
+            holder_pid: format!("{GAIAX_HOLDER_PID_PREFIX}{name}"),
+            ..credential(id, "did:web:holder.example")
+        };
+        let before = store.credentials().unwrap().len();
+        store
+            .replace_gaiax_credentials(&[gaiax("g-1", "legal-person"), gaiax("g-2", "compliance")])
+            .unwrap();
+        assert_eq!(store.credentials().unwrap().len(), before + 2);
+        // the next run replaces them all, also one whose id changed
+        store
+            .replace_gaiax_credentials(&[gaiax("g-1", "legal-person"), gaiax("g-3", "compliance")])
+            .unwrap();
+        let ids: Vec<String> = store
+            .credentials()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.holder_pid.starts_with(GAIAX_HOLDER_PID_PREFIX))
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(ids, ["g-1", "g-3"]);
+        // the id of a credential held from another issuer: refused, and
+        // nothing changes
+        assert!(store.add_request(&request("h-9")).unwrap());
+        let other = credential("c-9", "did:web:issuer.example");
+        store
+            .deliver("h-9", answer("i-9", RequestStatus::Issued), &[other])
+            .unwrap();
+        let taken = gaiax("c-9", "legal-person");
+        assert!(store.replace_gaiax_credentials(&[taken]).is_err());
+        assert_eq!(store.credentials().unwrap().len(), before + 3);
+        assert!(store.delete_credential("c-9").unwrap());
+
+        let first = store.start_gaiax_run(100).unwrap();
+        store
+            .finish_gaiax_run(first, 101, RunOutcome::Failed, Some("HTTP 500"))
+            .unwrap();
+        let second = store.start_gaiax_run(200).unwrap();
+        let runs = store.gaiax_runs(10).unwrap();
+        assert_eq!(runs.len(), 2);
+        assert_eq!(
+            runs[1],
+            GaiaxRun {
+                id: first,
+                started_at: 100,
+                finished_at: Some(101),
+                outcome: RunOutcome::Failed,
+                error: Some("HTTP 500".to_owned()),
+            }
+        );
+        assert_eq!(runs[0].id, second);
+        assert_eq!(runs[0].outcome, RunOutcome::Running);
+        assert_eq!(store.abandon_gaiax_runs(300).unwrap(), 1);
+        let abandoned = &store.gaiax_runs(1).unwrap()[0];
+        assert_eq!(abandoned.outcome, RunOutcome::Failed);
+        assert_eq!(abandoned.finished_at, Some(300));
+        // only the last runs are kept
+        for at in 0..120 {
+            store.start_gaiax_run(at).unwrap();
+        }
+        assert_eq!(
+            store.gaiax_runs(1_000).unwrap().len(),
+            usize::try_from(GAIAX_RUNS_KEPT).unwrap()
+        );
     }
 
     /// Run by [`check`], after its requests `h-1` and `h-3`.

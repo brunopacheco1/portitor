@@ -1,0 +1,32 @@
+[
+  {
+    "@id": "gaiax-compliant-only",
+    "@type": "Dataset",
+    "dct:title": "Gaia-X test data",
+    "dct:description": "Offered only to participants with a Gaia-X compliance credential of label level SC (ADR 0022).",
+    "hasPolicy": [
+      {
+        "@id": "gaiax-compliant-only:offer:sc",
+        "@type": "Offer",
+        "permission": [
+          {
+            "action": "use",
+            "constraint": [
+              {
+                "leftOperand": "ParticipantComplianceCredential.gx:labelLevel",
+                "operator": "eq",
+                "rightOperand": "SC"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "distribution": [
+      {
+        "@type": "Distribution",
+        "format": "HttpData-PULL"
+      }
+    ]
+  }
+]

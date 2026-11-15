@@ -26,7 +26,8 @@ env:
   DSP_TCK_REF: v1.0.2
   DSP_TCK_COMMIT: ee22d21a2dae9ea387695fd96fc3cab405809a05
   # the released DCP TCK 1.2.1 jar (git tag v1.2.1 is 58a14449d5b8), checked by
-  # its SHA-256; building it from source needs a Java 17 toolchain as well
+  # its SHA-256 (and cached under it); building it from source needs a Java 17
+  # toolchain as well
   DCP_TCK_JAR: https://repo1.maven.org/maven2/org/eclipse/dataspacetck/dcp/dcp-tck/1.2.1/dcp-tck-1.2.1-all.jar
   DCP_TCK_SHA256: 2b21af2213c0e89ac1c10d716e59cca58ca24c9e2f38094329500ca299828bd4
 
@@ -46,6 +47,12 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
+          # the DSP TCK build's Gradle dependencies, from Maven Central
+          cache: gradle
+          cache-dependency-path: |
+            dsp-tck/**/*.gradle*
+            dsp-tck/**/gradle-wrapper.properties
+            dsp-tck/gradle/*.versions.toml
       - name: Install Rust
         run: |
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
@@ -100,10 +107,19 @@ jobs:
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
           rustup default "$RUST_TOOLCHAIN"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Maven Central rate-limits (HTTP 429): keep the jar between runs,
+      # keyed on its SHA-256, and check it every time
+      - name: Cache TCK
+        id: dcp-tck-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/dcp-tck.jar
+          key: dcp-tck-${{ env.DCP_TCK_SHA256 }}
       - name: Download TCK
-        run: |
-          curl -sSfL -o "$RUNNER_TEMP/dcp-tck.jar" "$DCP_TCK_JAR"
-          echo "$DCP_TCK_SHA256  $RUNNER_TEMP/dcp-tck.jar" | sha256sum -c -
+        if: steps.dcp-tck-cache.outputs.cache-hit != 'true'
+        run: curl -sSfL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/dcp-tck.jar" "$DCP_TCK_JAR"
+      - name: Check TCK
+        run: echo "$DCP_TCK_SHA256  $RUNNER_TEMP/dcp-tck.jar" | sha256sum -c -
       - name: Start portitor-identity
         env:
           PORTITOR_PARTICIPANT_ID: did:web:localhost%3A8090
@@ -171,10 +187,19 @@ jobs:
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
           rustup default "$RUST_TOOLCHAIN"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Maven Central rate-limits (HTTP 429): keep the jar between runs,
+      # keyed on its SHA-256, and check it every time
+      - name: Cache TCK
+        id: dcp-tck-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/dcp-tck.jar
+          key: dcp-tck-${{ env.DCP_TCK_SHA256 }}
       - name: Download TCK
-        run: |
-          curl -sSfL -o "$RUNNER_TEMP/dcp-tck.jar" "$DCP_TCK_JAR"
-          echo "$DCP_TCK_SHA256  $RUNNER_TEMP/dcp-tck.jar" | sha256sum -c -
+        if: steps.dcp-tck-cache.outputs.cache-hit != 'true'
+        run: curl -sSfL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/dcp-tck.jar" "$DCP_TCK_JAR"
+      - name: Check TCK
+        run: echo "$DCP_TCK_SHA256  $RUNNER_TEMP/dcp-tck.jar" | sha256sum -c -
       - name: Start portitor-identity and the connector
         env:
           PORTITOR_PARTICIPANT_ID: did:web:localhost%3A8090
@@ -234,10 +259,19 @@ jobs:
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
           rustup default "$RUST_TOOLCHAIN"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Maven Central rate-limits (HTTP 429): keep the jar between runs,
+      # keyed on its SHA-256, and check it every time
+      - name: Cache TCK
+        id: dcp-tck-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/dcp-tck.jar
+          key: dcp-tck-${{ env.DCP_TCK_SHA256 }}
       - name: Download TCK
-        run: |
-          curl -sSfL -o "$RUNNER_TEMP/dcp-tck.jar" "$DCP_TCK_JAR"
-          echo "$DCP_TCK_SHA256  $RUNNER_TEMP/dcp-tck.jar" | sha256sum -c -
+        if: steps.dcp-tck-cache.outputs.cache-hit != 'true'
+        run: curl -sSfL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/dcp-tck.jar" "$DCP_TCK_JAR"
+      - name: Check TCK
+        run: echo "$DCP_TCK_SHA256  $RUNNER_TEMP/dcp-tck.jar" | sha256sum -c -
       - name: Run TCK against portitor-issuer
         run: scripts/dcp-issuer-tck.sh "$RUNNER_TEMP/dcp-tck.jar"
       # the same issuer as a bundle authority (ADR 0005): its DID document

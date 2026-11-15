@@ -121,6 +121,7 @@ All configuration is by environment variable. The full table is in the
 | `PORTITOR_TRUSTED_ISSUERS` | **required**: comma-separated DIDs trusted to issue credentials (`MembershipCredential` and those of credential constraints) |
 | `PORTITOR_DCP_SCOPES` | leave the default, `org.eclipse.dspace.dcp.vc.type:MembershipCredential` (comma-separated). Each must be a DCP scope (`org.eclipse.dspace.dcp.vc.type:<Type>[:access]` or `org.eclipse.dspace.dcp.vc.id:<id>`); the type `VerifiableCredential` is refused, as it would let a partner read every credential. The connector does not start otherwise |
 | `PORTITOR_POLICY_CREDENTIALS` | unset, unless your offers constrain credential claims: the credential types they use, comma-separated, each `Type` or `Type=<scope>` (see [Credential constraints](#credential-constraints)) |
+| `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` | unset, unless your offers require Gaia-X compliance: comma-separated `did:web` DIDs of the compliance services you trust (see [Gaia-X compliance](#gaia-x-compliance)) |
 | `RUST_LOG` | `info` (default); `debug` only while diagnosing |
 
 ### Credential constraints
@@ -160,6 +161,65 @@ for example only data processors in the EU:
 
   (as in the Minimum Viable Dataspace, commit 17bb5b8,
   `k8s/provider/application/controlplane-config.yaml`).
+
+### Gaia-X compliance
+
+An offer may admit only participants that a Gaia-X compliance service
+has checked (ADR 0022). The service issues a
+`gx:ParticipantComplianceCredential`. Its claim `gx:labelLevel` holds
+the label, for example `SC`. A policy reads it like any credential
+claim:
+
+```json
+"permission": [{"action": "use", "constraint": [
+  {"leftOperand": "ParticipantComplianceCredential.gx:labelLevel", "operator": "eq", "rightOperand": "SC"}
+]}]
+```
+
+Set `PORTITOR_POLICY_CREDENTIALS` on the provider **and** on consumers,
+and `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` on the provider:
+
+```sh
+PORTITOR_POLICY_CREDENTIALS=ParticipantComplianceCredential
+PORTITOR_GAIAX_COMPLIANCE_ISSUERS=did:web:compliance.lab.gaia-x.eu:v2
+```
+
+- `ParticipantComplianceCredential` stands for the scope
+  `org.eclipse.dspace.dcp.vc.type:ParticipantComplianceCredential:read`.
+  Both sides add the `LegalPerson` scope with the same alias and access
+  part (here `org.eclipse.dspace.dcp.vc.type:LegalPerson:read`). The
+  consumer's identity then presents both credentials.
+- `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` lists the compliance services you
+  trust. It is separate from `PORTITOR_TRUSTED_ISSUERS`: a compliance
+  service is not a dataspace issuer. A consumer does not need it. A
+  provider without it admits no one to these offers; the start log
+  warns.
+- What the provider checks: the compliance credential comes from a
+  listed service and is signed with its `assertionMethod` key (PS256 or
+  ES256). It is valid now by `validFrom` and `validUntil`, and it must
+  have a `validUntil` (the service writes its JWT times in milliseconds,
+  so those are ignored). The same
+  presentation holds a `gx:LegalPerson` credential whose digest
+  (`digestSRI`) the compliance credential lists. That credential is
+  issued and signed by the consumer. Its `credentialStatus`, if any, is
+  not fetched: the consumer controls that list.
+- A compliance credential from a service you do not list is skipped, like
+  a credential from an issuer you do not trust: the consumer can still
+  use offers that need only other credentials (Gaia-X has several
+  clearing houses).
+- A `gx:LegalPerson` issued by one of your `PORTITOR_TRUSTED_ISSUERS` is
+  an ordinary dataspace credential and checked as before 0.8. Policies
+  see Gaia-X credentials only by their Gaia-X type.
+- These two credentials are about a credential, not about the
+  consumer's DID, so the subject check is skipped for them only. Every
+  other credential must still be about the consumer.
+- A compliance credential from a listed service that fails a check makes
+  its presentation invalid: the consumer is refused, and the log says why (`credential
+  refused`). A `gx:LegalPerson` credential that no trusted compliance
+  credential names is ignored.
+- Only Portitor connectors meet these policies today. EDC applies the
+  subject check to every credential, so it refuses the compliance
+  credential (ADR 0022).
 
 ### Dataset harvest
 
@@ -409,6 +469,9 @@ participant.
 - [ ] **Management API key.** As for the connector, if you ask issuers
   for credentials or manage credentials.
 - [ ] **Storage.** A persistent volume for `/data` (credentials, SQLite).
+- [ ] **Gaia-X** (optional, from 0.8): a certificate for the identity
+  key, the notary's registration number credential and a participant
+  file ([Gaia-X onboarding](#gaia-x-onboarding-optional)).
 - [ ] **Network.** Inbound from other participants, through your proxy:
   the DID document and the credential service. Inbound from your own
   connector only: the STS (`/sts/token`). Outbound: other participants'
@@ -431,6 +494,10 @@ participant.
 | `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8091` | `0.0.0.0:8091` in a container, published only on an internal interface |
 | `PORTITOR_SCOPE_TYPE_ALIASES` | `org.eclipse.edc.vc.type` | comma-separated scope aliases that mean "credentials of this type", besides DCP's `org.eclipse.dspace.dcp.vc.type` |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | unset | **unset** (`true` allows plain-HTTP DIDs and URLs, tests only) |
+| `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` | unset | Gaia-X only: path of the PEM chain of the identity key, the key's certificate first ([Gaia-X onboarding](#gaia-x-onboarding-optional)) |
+| `PORTITOR_GAIAX_COMPLIANCE_URL` | unset (Gaia-X off) | base URL of a Gaia-X compliance service, for example `https://compliance.lab.gaia-x.eu/v2`; needs the settings around it |
+| `PORTITOR_GAIAX_COMPLIANCE_DID` | unset | Gaia-X only: the `did:web` DID of that service, for example `did:web:compliance.lab.gaia-x.eu:v2`; an answer signed by any other DID is refused |
+| `PORTITOR_GAIAX_PARTICIPANT_FILE` | unset | Gaia-X only: path of the participant file |
 
 ### Endpoints
 
@@ -441,7 +508,9 @@ participant.
 | public | `POST <credential service>/presentations/query` | verifiers, with a self-issued ID token and an access token from your STS (DCP 5.4) |
 | public | `POST <credential service>/credentials`, `/offers` | trusted issuers (DCP 6.5, 6.6) |
 | public | `GET /health` | probes |
-| management | `POST`, `GET /v1/credential-requests`, `GET /v1/credential-requests/{holderPid}`, `GET /v1/credentials`, `DELETE /v1/credentials/{id}`, `GET /v1/offers`, `POST /v1/offers/request`, `GET /v1/openapi.json` | operators ([OpenAPI](api/identity-management-openapi.json)) |
+| public | `GET {base}/.well-known/x509CertificateChain.pem` | anyone, with a chain set (Gaia-X services read it through `x5u`). `{base}` is empty for a DID without a path, else the DID path (`/participants/a` for `did:web:host:participants:a`) |
+| public | `GET {base}/credentials/gaiax/{legal-person,terms-and-conditions,registration-number}` | anyone, with Gaia-X on; `{base}` as above |
+| management | `POST`, `GET /v1/credential-requests`, `GET /v1/credential-requests/{holderPid}`, `GET /v1/credentials`, `DELETE /v1/credentials/{id}`, `GET /v1/offers`, `POST /v1/offers/request`, `POST`, `GET /v1/gaiax/compliance`, `GET /v1/openapi.json` | operators ([OpenAPI](api/identity-management-openapi.json)) |
 
 The public endpoints are described in
 [api/identity-openapi.json](api/identity-openapi.json).
@@ -463,7 +532,7 @@ and to check partners' credentials:
 
 | Port | Serves | Reached by | Expose |
 |---|---|---|---|
-| 8090 | DID document, credential service (presentation and Storage API), STS | partners and issuers (DID document, credential service); your connector (STS) | through your HTTPS reverse proxy, except `/sts/token`: your connector reaches it on the internal network |
+| 8090 | DID document, credential service (presentation and Storage API), STS; with Gaia-X, the certificate chain and the Gaia-X credentials | partners and issuers (DID document, credential service); Gaia-X services (DID document, certificate chain); your connector (STS) | through your HTTPS reverse proxy, except `/sts/token`: your connector reaches it on the internal network |
 | 8091 | management API | your operators only | **never publicly**: host loopback or an internal network, never the public proxy |
 
 ### Run
@@ -592,6 +661,141 @@ curl -X POST localhost:8091/v1/credential-requests \
   -d '{"issuerDid": "did:web:issuer.example", "holderPid": "membership-2026"}'
 ```
 
+### Gaia-X onboarding (optional)
+
+The identity can get a Gaia-X compliance credential for its participant
+and keep it valid ([ADR 0021](adr/0021-gaia-x-onboarding.md)). It signs
+a legal person credential (`gx:LegalPerson`) and a terms and conditions
+credential (`gx:Issuer`) with its key, sends them with your registration
+number credential to a Gaia-X compliance service, checks the answer
+(`gx:ParticipantComplianceCredential`) and stores all four. Verifiers
+then get them through the presentation API, for example with the scope
+`org.eclipse.dspace.dcp.vc.type:ParticipantComplianceCredential` or
+`org.eclipse.dspace.dcp.vc.type:LegalPerson` (a scope type `T` also
+matches the Gaia-X type `gx:T`).
+
+You need three things.
+
+**1. A certificate for the identity key.** Gaia-X wants the key in the
+DID document to come with an X.509 chain that ends at a Gaia-X trust
+anchor. Keep the identity key; get a certificate for it:
+
+- Make a certificate request (CSR) with the identity key, for the host
+  of your DID:
+
+  ```sh
+  openssl req -new -key identity-key.pem -subj "/CN=identity.example.com" \
+    -addext "subjectAltName=DNS:identity.example.com" -out identity.csr
+  ```
+
+- For tests (the Gaia-X Lab accepts certificates that are not EV, its
+  compliance service README says): Let's Encrypt with your own key.
+  `certbot certonly --csr` signs your CSR, so the key never leaves you:
+
+  ```sh
+  certbot certonly --webroot -w /var/www/html --csr identity.csr \
+    --cert-path cert.pem --chain-path ca.pem --fullchain-path chain.pem
+  ```
+
+  `chain.pem` is the file to mount. certbot does not renew a `--csr`
+  certificate by itself: run the same command again before it expires
+  (Let's Encrypt certificates last 90 days).
+- For production: a certificate from a Gaia-X trust anchor, that is an
+  eIDAS trust service provider, or an EV SSL certificate where the Gaia-X
+  Registry has no other option
+  ([trust anchors](https://docs.gaia-x.eu/policy-rules-committee/compliance-document/25.10/Gaia-X_Trust_Anchors/)).
+  Give the provider the same CSR.
+
+Mount the chain (your certificate first, then the CA certificates) and
+set `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` to it. The identity refuses to
+start if the first certificate is not for its key. It serves the chain at
+`https://<your host>/.well-known/x509CertificateChain.pem` (below the DID
+path, for a DID with one) and points to
+it from the DID document (`x5u`). Route that path to the identity, like
+the DID document. It reads the file again every minute: put the renewed
+chain in place and nothing else is needed. A new file for another key is
+refused and logged; the old chain stays.
+
+**2. A registration number credential.** A notary of a Gaia-X Digital
+Clearing House (GXDCH) checks your registration number (VAT ID, LEI code,
+EORI, tax ID or a national company number) and signs a credential for
+it. Ask once, for example at the Gaia-X Lab notary
+(`https://registrationnumber.notary.lab.gaia-x.eu/v2`, API description
+at `/v2/docs`):
+
+```sh
+base=https://identity.example.com/credentials/gaiax/registration-number
+curl -s -G "https://registrationnumber.notary.lab.gaia-x.eu/v2/registration-numbers/vat-id/BE0762747721" \
+  --data-urlencode "vcId=$base" --data-urlencode "subjectId=$base#cs" \
+  > registration-number.jwt
+```
+
+Use `https://<your host>/credentials/gaiax/registration-number` (below the
+DID path, for a DID with one) as
+`vcId`, and the same with `#cs` as `subjectId`: the identity serves the
+credential at that URL. The answer is a VC-JWT; keep it as a file.
+
+**3. The participant file.** JSON, only Gaia-X terms, copied from the
+Gaia-X ontology the compliance service expects:
+
+```json
+{
+  "context": ["https://w3id.org/gaia-x/development#", {"schema": "https://schema.org/"}],
+  "legalPerson": {
+    "schema:name": "Example S.A.",
+    "gx:legalAddress": {"type": "gx:Address", "gx:countryCode": "BE",
+      "vcard:street-address": "1 Rue Example", "vcard:locality": "Bruxelles",
+      "vcard:postal-code": "1000"},
+    "gx:headquartersAddress": {"type": "gx:Address", "gx:countryCode": "BE",
+      "vcard:street-address": "1 Rue Example", "vcard:locality": "Bruxelles",
+      "vcard:postal-code": "1000"}
+  },
+  "termsAndConditions": "4bd7554097444c960292b4726c2efa1373485e8a5565d94d41195214c5e0ceb3",
+  "registrationNumberCredential": "registration-number.jwt"
+}
+```
+
+- `context`: the Gaia-X JSON-LD context, one IRI or a list. Add prefix
+  definitions your claims use and the Gaia-X context lacks (here
+  `schema:`).
+- `legalPerson`: the claims of your legal person credential, without
+  `id` and `gx:registrationNumber`: the identity writes both (the
+  registration number points to the subject of the notary's
+  credential).
+- `termsAndConditions`: the `gaiaxTermsAndConditions` hash the compliance
+  service expects (the value above is the one the 0.8 spike used).
+- `registrationNumberCredential`: the file from step 2, absolute or next
+  to the participant file.
+
+The identity reads the file at start (and refuses to start if it is
+wrong) and again at each run, so a changed file needs no restart.
+
+**Run it.** Set `PORTITOR_GAIAX_COMPLIANCE_URL` and the service's DID,
+`PORTITOR_GAIAX_COMPLIANCE_DID` (the identity refuses an answer signed by
+any other DID). At start, if there is no
+valid compliance credential, the identity runs at once; then it runs
+again when two thirds of the credential's validity have passed (it is
+valid at most 90 days). A failed run keeps the credentials you have and
+is tried again after 1, 2, 4 ... seconds, at most one hour apart. To run
+now, and to see the runs:
+
+```sh
+curl -X POST localhost:8091/v1/gaiax/compliance \
+  -H "Authorization: Bearer $(cat /srv/portitor/identity-management-key)"
+curl -s localhost:8091/v1/gaiax/compliance \
+  -H "Authorization: Bearer $(cat /srv/portitor/identity-management-key)"
+```
+
+Each run shows `started`, `finished`, `outcome` (`RUNNING`, `SUCCEEDED`
+or `FAILED`) and `error`. The legal person, terms and conditions and
+registration number credentials of the last good run are public at
+`https://<your host>/credentials/gaiax/{legal-person,terms-and-conditions,registration-number}`,
+so anyone can check the digests in the compliance credential.
+
+Network: outbound to the compliance service (`https://`); it calls back
+your DID document, the certificate chain and the notary's DID. A key
+change breaks the Gaia-X credentials too: run again after one.
+
 ### Logs and operation
 
 | Log message (level) | Meaning |
@@ -608,6 +812,10 @@ curl -X POST localhost:8091/v1/credential-requests \
 | `repeated delivery acknowledged` (INFO) | The issuer sent an answer again that closed a request before; nothing was stored twice |
 | `the issuer gave no usable Location for the request` (WARN) | The issuer took the request but gave no status URL on its own host; the delivery is still accepted, only the issuer's status cannot be shown |
 | `identity store failed` (ERROR) | The SQLite file could not be read or written |
+| `certificate chain reloaded` (INFO) | A renewed certificate chain for the same key is in use |
+| `new certificate chain refused; the old one stays` (ERROR) | The chain file changed but cannot be used: unreadable, not PEM, or for another key; `reason` says which |
+| `Gaia-X compliance credential stored` (INFO) | A run succeeded; `valid_until` is when the compliance credential expires |
+| `Gaia-X compliance run failed; the stored credentials stay` (ERROR) | A run failed; `error` says why (the service refused, its answer did not check out, ...). It is tried again |
 
 Backup, restore, upgrade and rollback work as for the connector, with
 `/data/portitor-identity.db*`. Used token ids (`jti`) are kept in memory
@@ -836,6 +1044,41 @@ against the authority's signed bundle (ADR 0005).
    (`PORTITOR_ISSUER_BUNDLE_DIR`, `PORTITOR_ISSUER_BUNDLE_KEY_FILE`, both
    optional; [section 7](#7-run-the-issuer-dataspace-authority-only)).
 
+#### From 0.7 to 0.8
+
+0.8 adds Gaia-X: the identity can get a Gaia-X compliance credential
+(ADR 0021) and the connector can require one in a policy (ADR 0022).
+Both are optional; without the new settings Portitor works as in 0.7.
+
+1. Back up `/data/portitor-identity.db*`. On its first start, the 0.8
+   identity migrates its database forward to schema version 3 (new
+   table `gaiax_run`, the Gaia-X compliance runs). This happens with or
+   without Gaia-X on. The connector's and the issuer's databases are
+   unchanged.
+2. Downgrade: a 0.7 identity refuses the migrated file (`database schema
+   version 3 is newer than this Portitor (2)`) and does not start. To go
+   back to 0.7, stop the identity, restore the backup from step 1 and
+   start the 0.7 image. Credentials received after the backup are lost;
+   ask the issuer again. Migrations only run forward; there is no way
+   down without the backup. The connector and the issuer can go back to
+   0.7 as they are.
+3. **Behaviour change:** the DID documents of the identity and the issuer
+   give their key `alg: ES256` (RFC 7517 section 4.4). DCP ignores it;
+   nothing to do.
+4. **Behaviour change:** in the presentation API a scope type `T` also
+   matches a credential of type `gx:T` whose `@context` names a Gaia-X
+   context. Plain types match as before.
+5. New identity settings, all optional:
+   `PORTITOR_IDENTITY_CERTIFICATE_CHAIN`, `PORTITOR_GAIAX_COMPLIANCE_URL`,
+   `PORTITOR_GAIAX_COMPLIANCE_DID`, `PORTITOR_GAIAX_PARTICIPANT_FILE`
+   ([Gaia-X onboarding](#gaia-x-onboarding-optional)). New connector
+   setting, optional: `PORTITOR_GAIAX_COMPLIANCE_ISSUERS`
+   ([Gaia-X compliance](#gaia-x-compliance)). Set it on the provider
+   before you publish an offer that requires Gaia-X compliance; without
+   it the provider refuses every compliance credential (the start log
+   warns when `PORTITOR_POLICY_CREDENTIALS` lists
+   `ParticipantComplianceCredential` and no service is set).
+
 ## 7. Run the issuer (dataspace authority only)
 
 The issuer issues and revokes the dataspace's credentials with the
@@ -1029,7 +1272,9 @@ Backup, restore, upgrade and rollback work as for the connector, with
 
 ## Known limits
 
-In this version (see also [SECURITY-ASSURANCE.md](SECURITY-ASSURANCE.md)):
+In this version (see also [SECURITY-ASSURANCE.md](SECURITY-ASSURANCE.md),
+and [RISKS_AND_TECHNICAL_DEBTS.md](RISKS_AND_TECHNICAL_DEBTS.md) for every
+known risk and technical debt, with its status and target release):
 
 - Partners are admitted by one credential type (`MembershipCredential`,
   `PORTITOR_DCP_SCOPES`); offers may add credential claims (ADR 0019),
@@ -1045,12 +1290,17 @@ In this version (see also [SECURITY-ASSURANCE.md](SECURITY-ASSURANCE.md)):
   offer (DSP `OFFERED`) that has credential constraints; requests it
   sends itself are not affected.
 - No metrics endpoint yet.
+- Gaia-X: tested against a local Gaia-X compliance service in test mode
+  (gx-compliance v2.16.0), not the Gaia-X Lab or a production clearing
+  house. You get the registration number credential from a notary
+  yourself; label levels 1 to 3, service offering credentials and
+  OpenID4VC are not supported. A Gaia-X compliance credential is checked
+  between Portitor connectors only; EDC does not accept it (ADR 0022).
 - Datasets come only from the datasets file; no other harvest source yet.
   No API writes datasets or policies.
 - SHACL: the subset `portitor-shacl` implements (ADR 0005). Shapes that
   use anything else are refused when the bundle is loaded; `sh:extends`
-  and `sh:shape` are ignored with a warning. A new bundle version needs a
-  restart.
+  and `sh:shape` are ignored with a warning.
 - Transfers: pull only. A data access token ends `PORTITOR_DATA_TOKEN_SECONDS`
   after the transfer starts and is not renewed; the consumer then asks for
   a new transfer. Only `GET` of the whole source; no credentials are sent

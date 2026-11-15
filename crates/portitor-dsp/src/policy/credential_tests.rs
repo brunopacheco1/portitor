@@ -118,6 +118,65 @@ fn operators_compare_the_claim() {
     }
 }
 
+/// ADR 0022: Gaia-X claims are prefixed names, such as `gx:labelLevel`;
+/// the type stays a plain name, which the verifier gives a Gaia-X
+/// credential (its `gx:` type without the prefix).
+#[test]
+fn gaiax_claims_may_hold_a_colon() {
+    const COMPLIANCE: &str = "ParticipantComplianceCredential";
+    let mut types = types();
+    types.add(
+        COMPLIANCE,
+        "org.eclipse.dspace.dcp.vc.type:ParticipantComplianceCredential:read",
+    );
+    let mut caller = caller();
+    caller.understood = types.clone();
+    caller.held.push(HeldCredential {
+        types: vec![
+            "VerifiableCredential".to_owned(),
+            "gx:ParticipantComplianceCredential".to_owned(),
+            COMPLIANCE.to_owned(),
+        ],
+        subjects: vec![
+            json!({"id": "https://c.example/vc#cs", "gx:labelLevel": "SC"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ],
+    });
+    let label = "ParticipantComplianceCredential.gx:labelLevel";
+    for (c, expected) in [
+        (constraint(label, "eq", json!("SC")), true),
+        (constraint(label, "isAnyOf", json!(["SC", "L1"])), true),
+        (constraint(label, "eq", json!("L1")), false),
+        (
+            constraint(
+                "ParticipantComplianceCredential.labelLevel",
+                "eq",
+                json!("SC"),
+            ),
+            false,
+        ),
+    ] {
+        assert_eq!(validate(&offer(json!([c])), &types), Ok(()), "{c}");
+        assert_eq!(holds_for(c.clone(), &caller).is_ok(), expected, "{c}");
+    }
+    // a colon in the type is still an IRI or a prefixed name
+    let prefixed = constraint(
+        "gx:ParticipantComplianceCredential.gx:labelLevel",
+        "eq",
+        json!("SC"),
+    );
+    assert!(validate(&offer(json!([prefixed])), &types).is_err());
+    assert_eq!(
+        credential_scopes(
+            &offer(json!([constraint(label, "eq", json!("SC"))])),
+            &types
+        ),
+        ["org.eclipse.dspace.dcp.vc.type:ParticipantComplianceCredential:read"]
+    );
+}
+
 #[test]
 fn a_missing_claim_never_grants_access() {
     for left in [

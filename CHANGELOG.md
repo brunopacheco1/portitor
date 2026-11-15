@@ -12,8 +12,87 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-15
+
+### Documentation
+
+- New `docs/RISKS_AND_TECHNICAL_DEBTS.md`: every risk and technical debt
+  raised from 0.0 to 0.8, with its status (Open, Mitigated, Addressed,
+  Accepted) and target release. The roadmap's technical debt entries
+  moved there; the roadmap keeps their titles with links. README,
+  ARCHITECTURE, DEPLOYING ("Known limits"), RELEASING (the release
+  review checks the file), ADR 0005, AGENTS and the website link to it.
+
+### Added
+
+- Gaia-X compliance in policies (ADR 0022). An offer can require a
+  Gaia-X compliance credential, for example
+  `ParticipantComplianceCredential.gx:labelLevel` `eq` `SC`. New
+  connector setting `PORTITOR_GAIAX_COMPLIANCE_ISSUERS`: the compliance
+  services trusted, separate from `PORTITOR_TRUSTED_ISSUERS`. The
+  verifier accepts a `gx:ParticipantComplianceCredential` from such a
+  service (PS256 or ES256, validity from `validFrom` and `validUntil`
+  only, `validUntil` required) with the `gx:LegalPerson` credential it
+  names by `digestSRI`, issued and signed by the caller; the holder
+  binding is skipped for these two only, and the legal person
+  credential's status is not fetched (the caller controls it). Policies
+  see these two only as their Gaia-X type. A compliance credential from
+  a service not trusted is skipped, so its holder can still use offers
+  that need only a membership. A `gx:LegalPerson` from an issuer in
+  `PORTITOR_TRUSTED_ISSUERS` is checked like any data space credential.
+  The `digestSRI` (RFC 8785 JCS) writes numbers exactly as JavaScript
+  does (serde_json `float_roundtrip`). A compliance scope brings the
+  `LegalPerson` scope on both sides. A credential claim path may now hold a prefixed name such
+  as `gx:labelLevel`. The start log warns when
+  `PORTITOR_POLICY_CREDENTIALS` lists `ParticipantComplianceCredential`
+  without a compliance service.
+- Identity: the X.509 chain of its key (`PORTITOR_IDENTITY_CERTIFICATE_CHAIN`,
+  ADR 0021). The first certificate must be for the identity key, or the
+  identity does not start. Served at
+  `GET /.well-known/x509CertificateChain.pem` below the DID's path
+  (`/participants/a/.well-known/...` for `did:web:host:participants:a`)
+  and named by `x5u` in the DID document. The file is read again every minute; a new file for another
+  key is refused and logged, and the old chain stays.
+- Identity: Gaia-X onboarding (ADR 0021), on with
+  `PORTITOR_GAIAX_COMPLIANCE_URL`, `PORTITOR_GAIAX_COMPLIANCE_DID` and
+  `PORTITOR_GAIAX_PARTICIPANT_FILE`.
+  The identity signs `gx:LegalPerson` and `gx:Issuer` VC-JWTs, sends them
+  with the notary's registration number credential to the compliance
+  service (`POST {url}/api/credential-offers/standard-compliance`,
+  `application/vp+jwt`), checks the `gx:ParticipantComplianceCredential`
+  it answers (issued by `PORTITOR_GAIAX_COMPLIANCE_DID` and signed by its
+  `did:web` key, type, id, every
+  `digestSRI`) and stores the four credentials. Runs at start without a
+  valid compliance credential, then at two thirds of its validity, at
+  least a minute after the last good run; failed runs are retried with
+  the outbox's delays. A run the service refuses keeps the start of its
+  answer (up to 2 KiB) in the run's error and log. Management API:
+  `POST /v1/gaiax/compliance` (run now) and `GET /v1/gaiax/compliance`
+  (last runs). Public: `GET /credentials/gaiax/{name}` for the three
+  credentials sent, below the DID's path like the chain; credential ids
+  keep that path, so participants on one host do not collide. A
+  credential request's `holderPid` must not start with `gaiax:` (400):
+  the identity keeps its Gaia-X credentials under those ids.
+- `portitor-dcp`: `x509` (the P-256 key of a PEM chain's first
+  certificate, our own small DER reader), `gaiax_sign` (the Gaia-X
+  credentials, presentation and answer check), and
+  `SigningKey::sign_with_headers`. `portitor-runtime`:
+  `HttpSender::post_text`, `did_document::add_x5u`, and `retry` (the
+  outbox's retry delay).
+
 ### Changed
 
+- ADR 0021 (Gaia-X onboarding) and ADR 0022 (Gaia-X compliance in
+  policies) accepted by the maintainer before the release.
+- Roadmap 0.10: explicit request size limits per port (today axum's 2 MB
+  default on parsed bodies), filing the upstream reports, and the interop
+  line without Simpl-Open and Gaia-X.
+- The DID documents of the identity and the issuer give their key
+  `alg: ES256` (RFC 7517 section 4.4; Gaia-X needs it). DCP ignores it.
+- The presentation API: a scope type `T` also matches a credential of
+  type `gx:T` whose `@context` names a Gaia-X context (ADR 0021), so
+  `ParticipantComplianceCredential` finds
+  `gx:ParticipantComplianceCredential`. Plain types match as before.
 - ADR 0005 (schema and vocabulary registry, with the bundle format) and
   ADR 0020 (dataset harvest) accepted by the maintainer after the 0.7
   release.
@@ -23,6 +102,30 @@ versions may change behaviour and configuration.
   SECURITY-ASSURANCE describe the bundle that follows the newest version
   instead of a pinned one, and the 0.6 to 0.7 upgrade names database
   schema version 8. The 0.7.0 entry carries its tag date.
+- CI: the DCP TCK jar is cached between runs (`actions/cache`, keyed on
+  its SHA-256, checked after every restore or download), and the DSP TCK
+  build's Gradle dependencies too (`setup-java` cache), since Maven
+  Central answered HTTP 429; downloads are retried.
+- CI: a Gaia-X end-to-end test (`scripts/gaiax-e2e.sh`, workflow
+  `Gaia-X`): Portitor identities get a compliance credential from a local
+  gx-compliance v2.16.0 in test mode (ADR 0021), and a Portitor provider
+  agrees a contract only with a holder of one (ADR 0022). No real Gaia-X
+  trust anchor: a test CA and a test-only notary
+  (`scripts/gaiax_test_notary.py`). See docs/TESTING.md.
+- Version 0.8.0 in `Cargo.toml` and every OpenAPI file in `docs/api/`
+  (the documentation check needs both). The DID document descriptions
+  in `identity-openapi.json` and `issuer-openapi.json` name `alg`, `x5u`
+  and the issuer's bundle key.
+- Docs, release review: the C4 diagrams show the Gaia-X compliance
+  service (C1, C2), the certificate chain and the onboarding in the
+  identity (C2, C3) and the trusted compliance services of the connector
+  (C3); a new C4 diagram of the Gaia-X onboarding flow
+  (`c4-gaiax-onboarding-code.drawio.svg`). ARCHITECTURE has a Gaia-X
+  section; DEPLOYING has the 0.7 to 0.8 upgrade (identity database
+  schema version 3, no way back without the backup) and the Gaia-X
+  limits, and no longer says a new bundle version needs a restart;
+  TESTING lists the Gaia-X unit and integration tests;
+  SECURITY-ASSURANCE covers Gaia-X; the website shows 0.8 as done.
 
 ## [0.7.0] - 2026-11-15
 

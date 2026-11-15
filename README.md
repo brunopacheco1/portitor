@@ -8,6 +8,13 @@ SPDX-License-Identifier: Apache-2.0
 
 A small and fast connector that implements the
 Eclipse Dataspace Protocol (DSP) and the Decentralized Claims Protocol (DCP).
+From 0.8 it can also get a participant's Gaia-X compliance credential and
+require one in a policy (Gaia-X Trust Framework).
+
+Credentials are system to system: each one is held by a participant, an
+organisation with one DID, and checked between connectors. Portitor does
+not identify the people or applications inside an organisation
+([who holds the credentials](docs/ARCHITECTURE.md#who-holds-the-credentials)).
 
 The name: in Latin a *portitor* is both the customs officer at a port, who
 checks goods against the rules, and the ferryman who carries them across.
@@ -24,7 +31,9 @@ Website: <https://brunopacheco1.github.io/portitor/> (objectives, minimum functi
 
 - What it is and how it is built: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Plan: [docs/ROADMAP.md](docs/ROADMAP.md); decisions: [docs/adr/](docs/adr/)
+- Known risks and technical debts: [docs/RISKS_AND_TECHNICAL_DEBTS.md](docs/RISKS_AND_TECHNICAL_DEBTS.md)
 - Deploying and operating: [docs/DEPLOYING.md](docs/DEPLOYING.md); testing: [docs/TESTING.md](docs/TESTING.md)
+- Trying Gaia-X compliance: [docs/TESTING.md](docs/TESTING.md#how-to-test-gaia-x-compliance)
 - Reading the Rust code: [docs/RUST-IDIOMS.md](docs/RUST-IDIOMS.md)
 - HTTP interfaces: [docs/api/](docs/api/) (OpenAPI 3.1: connector, management, identity, issuer)
 - Security: [SECURITY.md](SECURITY.md), [docs/SECURITY-ASSURANCE.md](docs/SECURITY-ASSURANCE.md)
@@ -94,6 +103,7 @@ Configuration (environment variables):
 | `PORTITOR_TRUSTED_ISSUERS` | none (**required**) | Comma-separated DIDs trusted to issue credentials: the `MembershipCredential` and those of credential constraints |
 | `PORTITOR_DCP_SCOPES` | `org.eclipse.dspace.dcp.vc.type:MembershipCredential` | Comma-separated scopes asked from callers' credential services, and granted to the counter-party in our tokens |
 | `PORTITOR_POLICY_CREDENTIALS` | none (`MembershipCredential` only) | Comma-separated credential types that offers may constrain, each `Type` (scope `org.eclipse.dspace.dcp.vc.type:<Type>:read`) or `Type=<scope>` ([ADR 0019](docs/adr/0019-credential-constraints.md)) |
+| `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` | none (no Gaia-X compliance credential accepted) | Comma-separated `did:web` DIDs of the Gaia-X compliance services you trust, for example `did:web:compliance.lab.gaia-x.eu:v2`; separate from `PORTITOR_TRUSTED_ISSUERS` ([ADR 0022](docs/adr/0022-gaia-x-compliance-in-policies.md)) |
 
 As provider, the connector agrees to a request for an offer in its
 catalog, then finalizes once the consumer verifies. It sends its messages
@@ -133,6 +143,12 @@ Policies (minimal ODRL, [ADR 0009](docs/adr/0009-minimal-odrl-policies.md),
     `MembershipCredential`). It holds if one of the consumer's verified
     credentials of that type has the claim, as text, and the comparison is
     true; a missing claim never grants access.
+  - Gaia-X compliance ([ADR 0022](docs/adr/0022-gaia-x-compliance-in-policies.md)):
+    `ParticipantComplianceCredential.gx:labelLevel` with `eq` `SC` admits
+    only consumers with a Gaia-X compliance credential of that label.
+    List `ParticipantComplianceCredential` in
+    `PORTITOR_POLICY_CREDENTIALS` and its service in
+    `PORTITOR_GAIAX_COMPLIANCE_ISSUERS`.
 
   `and`, `andSequence`, `or` and `xone` combine them.
 - Anything else is refused (fail closed): a dataset whose offer uses it
@@ -302,5 +318,15 @@ identity component and the issuer (`portitor-issuer`, run once per
 dataspace by its authority) have their own settings and APIs: see
 DEPLOYING sections 4 and 7, and their OpenAPI files in
 [docs/api/](docs/api/).
+
+Gaia-X onboarding ([ADR 0021](docs/adr/0021-gaia-x-onboarding.md)) is
+set on the identity component, not the connector:
+
+| Variable (identity) | Default | Meaning |
+|---------------------|---------|---------|
+| `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` | none | PEM chain of the identity key, its certificate first; served at `/.well-known/x509CertificateChain.pem` (below the DID path, for a DID with one) and named by `x5u` in the DID document. The identity refuses to start if the first certificate is for another key |
+| `PORTITOR_GAIAX_COMPLIANCE_URL` | none (Gaia-X off) | Base URL of a Gaia-X compliance service; the identity gets and renews its participant's compliance credential. Needs the chain, the participant file and `PORTITOR_GAIAX_COMPLIANCE_DID` |
+| `PORTITOR_GAIAX_COMPLIANCE_DID` | none | The compliance service's `did:web` DID, for example `did:web:compliance.lab.gaia-x.eu:v2`. An answer signed by any other DID is refused |
+| `PORTITOR_GAIAX_PARTICIPANT_FILE` | none | JSON file: Gaia-X context, legal person claims, terms and conditions hash, and the path of the notary's registration number credential (DEPLOYING, "Gaia-X onboarding") |
 
 Licensed under [Apache-2.0](LICENSE) ([ADR 0010](docs/adr/0010-licence.md)).

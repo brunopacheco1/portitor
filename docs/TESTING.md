@@ -22,6 +22,7 @@ project checks every change. All commands run from the repository root.
 | DSP conformance (TCK) | see [below](#dsp-conformance-tck) | every PR (`TCK`) |
 | DCP conformance: identity component, connector as verifier, issuer (TCK) | see [below](#dcp-conformance-tck) | every PR (`TCK`) |
 | Interoperability with EDC v1.0.0-RC7 | `scripts/edc-interop.sh`, see [below](#edc-interop-test) | PRs that touch `crates/`, `Cargo.lock`, the `Dockerfile`, `interop/edc/`, the script or its workflow, and nightly (`EDC interop`) |
+| Gaia-X compliance between Portitor participants, against a local Gaia-X compliance service in test mode | `scripts/gaiax-e2e.sh`, see [below](#gaia-x-end-to-end-test) | PRs that touch `crates/`, `Cargo.lock`, the `Dockerfile`, `interop/gaiax/`, the scripts or the workflow, and nightly (`Gaia-X`) |
 | Fuzzing | see [below](#fuzzing) | every PR (short), weekly (long) |
 | Two participants authenticate with DCP, agree a contract and transfer a file | `scripts/demo.sh`, see [below](#two-connectors) | every PR (`CI`) |
 | The same in Docker Compose | `scripts/demo-compose.sh` | every PR (`CI`) |
@@ -80,6 +81,11 @@ Where the tests are:
   revoked one is still refused (DCP 5.4.3, step 8), and once the revoked
   one is deleted the consumer is admitted again. The
   SQLite store is tested on an in-memory database and on a real file.
+  Gaia-X compliance (ADR 0022): `src/auth/dcp/tests.rs` admits a caller
+  with a compliance credential and its linked `gx:LegalPerson`, reads the
+  label for a policy, and refuses a tampered or someone else's legal
+  person credential, an untrusted or forged compliance service and an
+  expired compliance credential.
 - **Dataset harvest** (connector, ADR 0020): `src/harvest/tests.rs`
   runs harvests with fixed sources and the in-memory store: add, update,
   unchanged snapshot, a rejected entry that keeps the previous good
@@ -145,12 +151,20 @@ Where the tests are:
 - **DCP crate** (`crates/portitor-dcp`): `tests/spec.rs` parses the DCP
   v1.0.1 examples into the Portitor types and checks what Portitor writes
   back against the official JSON Schemas; `tests/gaia_x_ps256.rs` checks
-  PS256 signatures as Gaia-X uses them.
+  PS256 signatures as Gaia-X uses them. Unit tests next to the code cover
+  the Gaia-X credentials and the check of the compliance service's answer
+  (`gaiax_sign.rs`), the digests (`gaiax.rs`, RFC 8785 examples) and the
+  certificate reader (`x509.rs`, with `test-only-*` certificates in
+  `tests/fixtures/`).
 - **Identity** (`crates/portitor-identity`), the same in-memory router
   tests: `tests/credential_service.rs` (DID document, STS, presentation
   API, Storage API and offers; every path in
   [docs/api/identity-openapi.json](api/identity-openapi.json) is served),
   `tests/issuance.rs` (the holder side of issuance against a fake issuer),
+  `tests/gaiax.rs` (Gaia-X onboarding against a fake compliance service
+  over HTTP: the presentation it gets, the stored and served credentials,
+  a wrong digest refused, the runs in the management API, a certificate
+  chain for another key or a bad participant file stopping the start),
   and `tests/management_api.rs` (API key, credential requests and
   credentials; also checks
   [identity-management-openapi.json](api/identity-management-openapi.json),
@@ -435,6 +449,147 @@ EDC v1.0.0-RC7 sources):
   `openssl` (`identity_api_token` in `scripts/edc-interop.sh`), and
   serves the key set from the `identity-api-jwks` web server.
 
+## Gaia-X end-to-end test
+
+`scripts/gaiax-e2e.sh` runs a small data space in Docker Compose
+(`interop/gaiax/compose.yaml`) with a local Gaia-X compliance service:
+gx-compliance v2.16.0 with Memgraph 3.9.0, both pinned by digest, in the
+test mode Gaia-X documents for local testing
+([developer-and-local-testing.md](https://gitlab.com/gaia-x/lab/compliance/gx-compliance/-/blob/development/docs/developer-and-local-testing.md)).
+The participants are Portitor identities and connectors, members by a
+`MembershipCredential` from a `portitor-issuer`:
+
+- provider (`did:web:provider.gaiax.test`) and consumer
+  (`did:web:consumer.gaiax.test`), both with Gaia-X on (ADR 0021): a
+  certificate for the identity key (`PORTITOR_IDENTITY_CERTIFICATE_CHAIN`),
+  a participant file (`PORTITOR_GAIAX_PARTICIPANT_FILE`) and a
+  registration number credential (`gx:VatID`);
+- an outsider (`did:web:outsider-identity%3A8090`), a member without
+  Gaia-X.
+
+For each run the script makes a test CA and, from it, the certificates of
+the identity keys, of the compliance service (RSA, PS256) and of the
+public names. An nginx service (`tls`) answers for the `*.gaiax.test`
+names over HTTPS and HTTP: the compliance service resolves `did:web` over
+HTTPS only and trusts the test CA through `NODE_EXTRA_CA_CERTS`; the
+Portitor components trust it through `SSL_CERT_DIR` (as in
+[DEPLOYING](DEPLOYING.md#private-cas)). The registration number
+credentials are signed by `scripts/gaiax_test_notary.py`, a stand-in for
+a Gaia-X notary with its own `did:web`.
+
+It checks, in this order:
+
+1. the compliance service's DID resolves over HTTPS; each Gaia-X
+   identity's DID document has `alg: ES256` and an `x5u` that serves the
+   chain it was given;
+2. each identity asks the issuer for its `MembershipCredential`;
+3. the consumer's identity runs its onboarding (`POST /v1/gaiax/compliance`)
+   and then holds a `gx:ParticipantComplianceCredential` issued by
+   `did:web:compliance.gaiax.test`;
+4. the consumer negotiates the provider's offer, whose constraint is
+   `ParticipantComplianceCredential.gx:labelLevel` `eq` `SC` (ADR 0022;
+   the provider trusts the service through
+   `PORTITOR_GAIAX_COMPLIANCE_ISSUERS`): `FINALIZED`;
+5. the outsider negotiates the same offer: `TERMINATED`.
+
+What it proves: a Portitor identity can build the presentation a Gaia-X
+compliance service accepts, the service's answer is stored and presented
+over DCP, and a Portitor provider checks it (issuer, signature, the link
+to the caller's `gx:LegalPerson`) before it agrees.
+
+What it does not prove:
+
+- **No real Gaia-X trust anchor.** `DISABLE_SIGNATURE_CHECK=true`: the
+  service does not check certificate chains against the Gaia-X Registry,
+  so any certificate from the test CA is accepted. `production=false`: it
+  accepts a registration number credential from any issuer, so the test
+  notary's credentials prove nothing.
+- Not the Gaia-X Lab (`compliance.lab.gaia-x.eu`) nor a GXDCH notary; a
+  test against the Lab with a public `did:web` is future work
+  ([spike 0.8](spikes/0.8-gaia-x-compliance.md)).
+- Not EDC: the EDC interop test runs without Gaia-X (ADR 0022).
+
+It needs Internet access: the compliance service loads the Gaia-X shapes,
+ontology and JSON-LD contexts from `registry.lab.gaia-x.eu` (through
+`w3id.org`) and the credentials context from `www.w3.org`, with Node.js
+clients that ignore `HTTPS_PROXY`. A change there can break the test
+without a change in Portitor, hence the nightly run.
+
+```sh
+# builds the Portitor images as for the EDC interop test (above), then:
+# needs docker compose, curl, jq, openssl and python3 with `cryptography`
+scripts/gaiax-e2e.sh            # KEEP=1 leaves it running, with interop/gaiax/run/
+```
+
+## How to test Gaia-X compliance
+
+Three levels, from fast to complete. None needs a real Gaia-X service; a
+run against the Gaia-X Lab with a public `did:web` is future work
+([R-12](RISKS_AND_TECHNICAL_DEBTS.md#r-12)).
+
+**1. Unit and integration tests** (seconds, no Docker):
+
+```sh
+cargo test -p portitor-dcp gaiax          # JCS digests (RFC 8785), Gaia-X credentials, answer check
+cargo test -p portitor-identity --test gaiax   # onboarding against a fake compliance service
+cargo test -p portitor-connector auth::dcp     # ADR 0022 checks: admitted, refused, skipped
+cargo +nightly fuzz run gaiax_compliance -- -max_total_time=60   # see Fuzzing
+```
+
+**2. The end-to-end test** (about 5 minutes; Docker, Internet): build the
+Portitor images as for the [EDC interop test](#edc-interop-test), then run
+`scripts/gaiax-e2e.sh`. It ends with `== Done` when the compliant consumer
+gets a contract (`FINALIZED`) and the outsider is refused (`TERMINATED`);
+see [Gaia-X end-to-end test](#gaia-x-end-to-end-test) for what it sets up.
+
+**3. By hand, on the running data space.** `KEEP=1 scripts/gaiax-e2e.sh`
+leaves everything running, with the keys in `interop/gaiax/run/`. From
+the repository root:
+
+```sh
+# the management API keys of the consumer's identity and connector
+ID_KEY="authorization: Bearer $(cat interop/gaiax/run/consumer/identity-management.key)"
+CONN_KEY="authorization: Bearer $(cat interop/gaiax/run/consumer/connector-management.key)"
+
+# the onboarding runs (outcome, error with the service's reason) and a new one
+curl -s -H "$ID_KEY" http://127.0.0.1:18492/v1/gaiax/compliance | jq
+curl -s -X POST -H "$ID_KEY" http://127.0.0.1:18492/v1/gaiax/compliance
+
+# the credentials the identity holds: membership and the four Gaia-X ones
+curl -s -H "$ID_KEY" http://127.0.0.1:18492/v1/credentials | jq '.[] | {types, issuer}'
+
+# what the compliance service and verifiers read: the key's certificate
+# chain (named by x5u in the DID document) and the credentials sent
+curl -s http://127.0.0.1:18490/.well-known/x509CertificateChain.pem | openssl x509 -noout -subject -enddate
+curl -s http://127.0.0.1:18490/credentials/gaiax/legal-person | cut -d. -f2 | base64 -d 2>/dev/null | jq
+
+# the consumer's negotiations (the script's are FINALIZED)
+curl -s -H "$CONN_KEY" http://127.0.0.1:18482/v1/negotiations | jq '.negotiations[] | {consumerPid, state}'
+
+# the outsider's negotiation of the same offer: TERMINATED, as it holds no
+# compliance credential (the provider logs a refused credential only when
+# one fails its checks: `credential refused`)
+OUT_KEY="authorization: Bearer $(cat interop/gaiax/run/outsider/connector-management.key)"
+curl -s -H "$OUT_KEY" http://127.0.0.1:18483/v1/negotiations | jq '.negotiations[] | {consumerPid, state}'
+```
+
+Things worth trying:
+
+- **A failed run.** `docker compose -f interop/gaiax/compose.yaml stop compliance`,
+  start a run, and read the runs: it fails, the credentials of the last
+  good run stay, and it is retried with growing delays. Start the service
+  again and run once more.
+- **Another offer.** Edit `interop/gaiax/config/datasets.json` (for
+  example `gx:labelLevel` `eq` `L1`) and restart `provider-connector`: the
+  consumer's negotiation is now `TERMINATED`, as its label is `SC`.
+- **Another compliance service.** Set the provider's
+  `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` to another DID and restart it: the
+  compliance credential is skipped and the consumer is refused for this
+  offer, but still admitted to offers that need only membership.
+
+Clean up with `docker compose -f interop/gaiax/compose.yaml down -v` and
+`rm -rf interop/gaiax/run/`.
+
 ## Fuzzing
 
 Parsers and state machines are fuzzed with `cargo-fuzz` (libFuzzer). It
@@ -450,8 +605,10 @@ Targets (`fuzz/fuzz_targets`): `dsp_messages`, `dsp_negotiation`, `dsp_transfer`
 `odrl_policy`, `dcp_token_parse`, `dcp_token_validate`, `dcp_messages`,
 `dcp_status_list`, `dcp_credentials`, `dcp_access_token`, `dcp_did_document`,
 `bundle_manifest` (the bundle manifest and its signature), `shacl_load`
-(Turtle shapes loaded by `portitor-shacl`) and `shacl_jsonld` (JSON-LD to
-RDF with local contexts). A new parser of untrusted input
+(Turtle shapes loaded by `portitor-shacl`), `shacl_jsonld` (JSON-LD to
+RDF with local contexts) and `gaiax_compliance` (the RFC 8785 JCS form and
+`digestSRI` of any JSON, the Gaia-X compliance credential's list and the
+answer check; the JCS form must not change when applied again). A new parser of untrusted input
 gets a target. In CI, ClusterFuzzLite fuzzes every pull request briefly
 (`cflite_pr.yml`) and runs longer each week (`cflite_batch.yml`). A crash
 is a bug: add the input that caused it as a regression test.

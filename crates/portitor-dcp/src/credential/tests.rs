@@ -448,6 +448,28 @@ fn vc20_validity_is_checked() {
     );
 }
 
+/// ADR 0022: a Gaia-X compliance credential's validity comes from
+/// `validFrom` and `validUntil` only; JWT times in milliseconds (or any
+/// other `nbf` and `exp`) are ignored.
+#[test]
+fn stated_dates_ignore_the_jwt_times() {
+    let issuer = Party::new(ISSUER);
+    let milliseconds = json!({"nbf": NOW * 1000, "exp": (NOW + 600) * 1000});
+    let credential = Credential::parse(&vc20(&issuer, ALICE, &milliseconds)).unwrap();
+    assert!(credential.verify(&issuer.doc, NOW, 0).is_err());
+    assert_eq!(credential.verify_stated_dates(&issuer.doc, NOW, 0), Ok(()));
+    let past = json!({"validUntil": "2026-11-13T16:00:00Z", "exp": NOW + 600});
+    assert_eq!(
+        Credential::parse(&vc20(&issuer, ALICE, &past))
+            .unwrap()
+            .verify_stated_dates(&issuer.doc, NOW, 0),
+        Err(CredentialError::Invalid("expired"))
+    );
+    // the signature still counts
+    let other = Party::new(BOB);
+    assert!(credential.verify_stated_dates(&other.doc, NOW, 0).is_err());
+}
+
 #[test]
 fn envelope_edge_cases() {
     let issuer = Party::new(ISSUER);

@@ -15,6 +15,7 @@ use axum::http::{Request, StatusCode, header};
 use portitor_dcp::message::{CredentialRequestMessage, CredentialStatus};
 use portitor_dcp::{Claims, DidDocument, Relationship, Service, SigningKey, VerificationMethod};
 use portitor_identity::config::Config;
+use portitor_identity::gaiax::GaiaxCompliance;
 use portitor_identity::issuance::{IssuerClient, SendError};
 use portitor_identity::store::{IdentityStore, SqliteStore};
 use portitor_identity::{Identity, Ports};
@@ -258,6 +259,8 @@ pub fn config() -> Config {
         trusted_issuers: vec![ISSUER.to_owned()],
         scope_type_aliases: vec!["org.eclipse.edc.vc.type".to_owned()],
         allow_http: false,
+        certificate_chain_file: None,
+        gaiax: None,
     }
 }
 
@@ -273,27 +276,43 @@ impl World {
 
     /// A world whose identity component has `config` and `store`.
     pub fn with_store(config: &Config, store: Arc<dyn IdentityStore>) -> Self {
+        Self::try_with(config, store, SigningKey::generate().unwrap(), None).unwrap()
+    }
+
+    /// A world whose identity component has `config`, `store`, `key` and
+    /// the Gaia-X compliance service `compliance`, or why the identity
+    /// does not start.
+    pub fn try_with(
+        config: &Config,
+        store: Arc<dyn IdentityStore>,
+        key: SigningKey,
+        compliance: Option<Arc<dyn GaiaxCompliance>>,
+    ) -> Result<Self, String> {
         let directory = Arc::new(FakeDirectory::default());
         let issuer_service = Arc::new(FakeIssuer::default());
         let issuer = Party::new(ISSUER);
         let verifier = Party::new(VERIFIER);
         directory.add(&issuer);
         directory.add(&verifier);
-        let key = SigningKey::generate().unwrap();
         let holder_key = SigningKey::from_pkcs8(key.pkcs8()).unwrap();
         let ports = Ports {
             store,
             directory: Arc::clone(&directory) as _,
             issuers: Arc::clone(&issuer_service) as _,
+            compliance,
         };
-        let identity =
-            Arc::new(Identity::new(config, key, ApiKey::new(STS_SECRET).unwrap(), ports).unwrap());
+        let identity = Arc::new(Identity::new(
+            config,
+            key,
+            ApiKey::new(STS_SECRET).unwrap(),
+            ports,
+        )?);
         let app = portitor_identity::router(Arc::clone(&identity));
         let management = portitor_identity::management::router(
             Arc::clone(&identity),
             ApiKey::new(API_KEY).unwrap(),
         );
-        Self {
+        Ok(Self {
             identity,
             app,
             management,
@@ -302,7 +321,7 @@ impl World {
             issuer,
             verifier,
             holder_key,
-        }
+        })
     }
 
     /// The key id of the identity component's key in its DID document.
