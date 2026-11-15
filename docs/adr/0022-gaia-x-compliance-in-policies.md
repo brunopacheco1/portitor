@@ -98,6 +98,13 @@ trusted compliance credential names is skipped too.
 - The left operand is ADR 0019's: `ParticipantComplianceCredential.<path>`,
   for example `ParticipantComplianceCredential.gx:labelLevel` `eq` `SC`.
   No new ODRL vocabulary.
+- Policies see a checked compliance credential only as
+  `gx:ParticipantComplianceCredential` (and
+  `ParticipantComplianceCredential`), and the linked legal person
+  credential only as `gx:LegalPerson` (and `LegalPerson`), whatever
+  other types they list: their signers vouch for that type only. So a
+  compliance credential also typed `MembershipCredential` neither lets
+  the caller in nor meets a membership constraint.
 - `PORTITOR_POLICY_CREDENTIALS` must list
   `ParticipantComplianceCredential` with its scope, as for any type.
 - When a policy needs `ParticipantComplianceCredential`, both sides add

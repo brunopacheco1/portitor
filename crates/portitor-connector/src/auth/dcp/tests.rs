@@ -1387,6 +1387,52 @@ async fn other_credentials_keep_the_holder_binding() {
     assert!(err.contains("not about the caller"), "{err}");
 }
 
+/// ADR 0022: a compliance credential counts only as a compliance
+/// credential. Typed `MembershipCredential` too, it neither lets the
+/// caller in nor meets a membership constraint.
+#[tokio::test]
+async fn a_compliance_credential_is_held_only_as_one() {
+    let ds = dataspace().await;
+    let (person, digest) = legal_person(&ds.holder, "Portitor Test S.A.");
+    let mut payload = compliance_payload(&ds.compliance.did, &[&digest], &json!({}));
+    payload["type"] = json!([
+        "VerifiableCredential",
+        "gx:ParticipantComplianceCredential",
+        MEMBERSHIP
+    ]);
+    payload["credentialSubject"]["role"] = json!("provider");
+    let also_member = ds.compliance.sign(&payload);
+    // without a real membership, the caller is not let in
+    ds.answer20(&[person.clone(), also_member.clone()]);
+    let err = ds.refusal().await;
+    assert!(err.contains("no MembershipCredential"), "{err}");
+    // with one, the compliance credential's role is not read as a member's
+    ds.answer20(&[ds.member20(), person, also_member]);
+    let caller = ds.verify(&ds.header()).await.unwrap();
+    assert_eq!(
+        caller.credentials[0].types,
+        [
+            "gx:ParticipantComplianceCredential",
+            "ParticipantComplianceCredential"
+        ]
+    );
+    assert_eq!(
+        caller.credentials[1].types,
+        ["gx:LegalPerson", "LegalPerson"]
+    );
+    let offer: portitor_dsp::Offer = serde_json::from_value(json!({"@id": "o", "@type": "Offer",
+        "permission": [{"action": "use", "constraint": [{
+            "leftOperand": "MembershipCredential.role", "operator": "eq",
+            "rightOperand": "provider"}]}]}))
+    .unwrap();
+    let held = portitor_dsp::policy::CallerCredentials {
+        understood: compliance_types(),
+        held: caller.credentials.clone(),
+    };
+    let now = xsd_date_time(now_secs());
+    assert!(portitor_dsp::policy::permissions_hold(&offer, &now, &held).is_err());
+}
+
 /// A `gx:LegalPerson` from a trusted dataspace issuer is a dataspace
 /// credential, checked as before 0.8: accepted when it is about the
 /// caller, with no compliance credential, and refused when it is not.

@@ -470,7 +470,7 @@ impl DcpVerifier {
             .await?;
         let mut verified = Vec::new();
         for checked in &compliance {
-            verified.push(held_credential(checked.credential));
+            verified.push(held_as(checked.credential, COMPLIANCE_TYPE));
         }
         let persons = self
             .check_named_legal_persons(caller, holder, credentials, &mut compliance, now)
@@ -551,7 +551,7 @@ impl DcpVerifier {
             {
                 return Err(refused(caller, credential, &reason));
             }
-            verified.push(held_credential(credential));
+            verified.push(held_as(credential, LEGAL_PERSON_TYPE));
         }
         Ok(verified)
     }
@@ -775,6 +775,34 @@ fn held_credential(credential: &Credential) -> HeldCredential {
     }
 }
 
+/// A checked Gaia-X credential as the policy evaluator reads it: as
+/// `gaiax_type` only (and its scope name), whatever other types it lists.
+/// Its signer vouches for that one type: a compliance service does not
+/// issue memberships, and the caller signs its own legal person
+/// credential, so another type there would be the caller's own claim.
+fn held_as(credential: &Credential, gaiax_type: &str) -> HeldCredential {
+    let mut types = vec![gaiax_type.to_owned()];
+    let credential_contexts = credential_contexts_of(credential);
+    if let Some(short) = gaiax_type.strip_prefix(GAIAX_PREFIX)
+        && matches_scope_type(&types, &credential_contexts, short)
+    {
+        types.push(short.to_owned());
+    }
+    HeldCredential {
+        types,
+        subjects: credential.subjects.clone(),
+    }
+}
+
+/// The `@context` entries of a credential, from its JWT's payload,
+/// decoded again here; none when the payload cannot be read.
+fn credential_contexts_of(credential: &Credential) -> Vec<String> {
+    match credential.payload() {
+        Ok(payload) => contexts(&payload),
+        Err(_) => Vec::new(),
+    }
+}
+
 /// The type names a policy may use for `credential`: its types, and for a
 /// credential with a Gaia-X context each `gx:` type without its prefix,
 /// the way a scope names it (ADR 0021, `matches_scope_type`). So
@@ -783,11 +811,7 @@ fn held_credential(credential: &Credential) -> HeldCredential {
 /// `ParticipantComplianceCredential.gx:labelLevel` (ADR 0022).
 fn policy_type_names(credential: &Credential) -> Vec<String> {
     let mut names = credential.types.clone();
-    // the `@context` is in the JWT's payload, decoded again here
-    let credential_contexts = match credential.payload() {
-        Ok(payload) => contexts(&payload),
-        Err(_) => return names,
-    };
+    let credential_contexts = credential_contexts_of(credential);
     for credential_type in &credential.types {
         let Some(short) = credential_type.strip_prefix(GAIAX_PREFIX) else {
             continue;
