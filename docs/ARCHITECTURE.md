@@ -358,19 +358,25 @@ diagrams above):
   with the notary's registration number credential in a `vp+jwt`, and
   sends it to a Gaia-X compliance service through the `GaiaxCompliance`
   port (`HttpGaiaxCompliance`: `POST {url}/api/credential-offers/standard-compliance`).
-  It checks the `gx:ParticipantComplianceCredential` it gets back (the
-  service's signature, the id asked for, the `digestSRI` of each
-  credential sent) and stores the four credentials, so the presentation
+  It checks the `gx:ParticipantComplianceCredential` it gets back (issued
+  by `PORTITOR_GAIAX_COMPLIANCE_DID`, checked before that DID is
+  resolved; the service's signature; the id asked for; the `digestSRI`
+  of each credential sent) and stores the four credentials, so the presentation
   API returns them like any other credential. A run happens at start
   without a valid compliance credential, then at two thirds of its
   validity, and on `POST /v1/gaiax/compliance`; runs are kept in the
   table `gaiax_run`. The compliance service reads the identity's DID
-  document and, through `x5u`, the certificate chain.
+  document and, through `x5u`, the certificate chain; for a DID with a
+  path, the chain and the credentials are served below that path.
 - Connector, policies. A policy may name
   `ParticipantComplianceCredential.<claim path>` as a left operand. The
   DCP verifier accepts that credential only from a service in
   `PORTITOR_GAIAX_COMPLIANCE_ISSUERS`, and only with the `gx:LegalPerson`
-  credential it names by `digestSRI`, issued and signed by the caller.
+  credential it names by `digestSRI`, issued and signed by the caller,
+  and with a `validUntil`. A compliance credential from a service not
+  listed is skipped, like a credential from an untrusted issuer, so the
+  caller can still use offers that need only other credentials. Policies
+  see Gaia-X credentials only by their Gaia-X type.
 
 ### Datasets and shapes (0.7)
 
