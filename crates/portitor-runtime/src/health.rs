@@ -176,12 +176,26 @@ impl Check for Blocking {
 /// order they are shown.
 #[derive(Default)]
 pub struct HealthChecks {
-    checks: Vec<(String, Arc<dyn Check>)>,
+    checks: Vec<Named>,
+}
+
+/// One check of [`HealthChecks`].
+struct Named {
+    name: String,
+    check: Arc<dyn Check>,
+    /// Whether the check passed the last time it ran; `None` before the
+    /// first run. Only a change is logged (see [`change_to_log`]), not every
+    /// probe: orchestrators probe every few seconds.
+    last_healthy: std::sync::Mutex<Option<bool>>,
 }
 
 impl std::fmt::Debug for HealthChecks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let names: Vec<&str> = self.checks.iter().map(|(name, _)| name.as_str()).collect();
+        let names: Vec<&str> = self
+            .checks
+            .iter()
+            .map(|named| named.name.as_str())
+            .collect();
         f.debug_struct("HealthChecks")
             .field("checks", &names)
             .finish()
@@ -198,7 +212,11 @@ impl HealthChecks {
 
     /// Adds the check `name`.
     pub fn add(&mut self, name: &str, check: Arc<dyn Check>) {
-        self.checks.push((name.to_owned(), check));
+        self.checks.push(Named {
+            name: name.to_owned(),
+            check,
+            last_healthy: std::sync::Mutex::new(None),
+        });
     }
 
     /// Runs every check at the same time, each cut off after `timeout`,
@@ -206,29 +224,70 @@ impl HealthChecks {
     pub async fn run(&self, timeout: Duration) -> HealthStatus {
         // start every check on its own task first ...
         let mut running = Vec::new();
-        for (name, check) in &self.checks {
-            let check = Arc::clone(check);
+        for named in &self.checks {
+            let check = Arc::clone(&named.check);
             let task = tokio::spawn(async move {
                 match tokio::time::timeout(timeout, check.check()).await {
                     Ok(outcome) => outcome,
                     Err(_) => Err(format!("no answer within {} ms", timeout.as_millis())),
                 }
             });
-            running.push((name, task));
+            running.push((named, task));
         }
         // ... then wait for each in turn: the slowest sets the time
         let mut results = Vec::new();
-        for (name, task) in running {
+        for (named, task) in running {
             let outcome = match task.await {
                 Ok(outcome) => outcome,
                 Err(_) => Err("the check stopped unexpectedly".to_owned()),
             };
-            if let Err(reason) = &outcome {
-                tracing::warn!(component = %name, %reason, "readiness check failed");
-            }
-            results.push(ComponentResult::new(name, outcome));
+            named.log_change(&outcome);
+            results.push(ComponentResult::new(&named.name, outcome));
         }
         HealthStatus::of(results)
+    }
+}
+
+impl Named {
+    /// Logs `outcome` when it differs from the check's last one: a WARN
+    /// when the check starts failing, an INFO when it passes again.
+    fn log_change(&self, outcome: &Result<(), String>) {
+        let healthy = outcome.is_ok();
+        // a poisoned lock only means a panic while it was held; the
+        // `Option<bool>` in it is still valid
+        let mut last = self
+            .last_healthy
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = last.replace(healthy);
+        match (change_to_log(previous, healthy), outcome) {
+            (Some(Change::Failed), Err(reason)) => {
+                tracing::warn!(component = %self.name, %reason, "readiness check failed");
+            }
+            (Some(Change::Recovered), _) => {
+                tracing::info!(component = %self.name, "readiness check passes again");
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A change of a check's result worth a log line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Change {
+    /// It fails now, and did not before (or never ran).
+    Failed,
+    /// It passes now, and failed before.
+    Recovered,
+}
+
+/// The change from `previous` (`None`: the check never ran) to `healthy`,
+/// if it is one to log. A first run that passes is not logged.
+fn change_to_log(previous: Option<bool>, healthy: bool) -> Option<Change> {
+    match (previous, healthy) {
+        (Some(false), true) => Some(Change::Recovered),
+        (None | Some(true), false) => Some(Change::Failed),
+        _ => None,
     }
 }
 
@@ -643,6 +702,16 @@ mod tests {
         let err = signed_by(&jws, &key.public_jwk()).unwrap_err();
         assert!(err.contains("not signed by"), "{err}");
         assert!(signed_by("", &key.public_jwk()).is_err());
+    }
+
+    #[test]
+    fn only_changes_are_logged() {
+        assert_eq!(change_to_log(None, true), None);
+        assert_eq!(change_to_log(None, false), Some(Change::Failed));
+        assert_eq!(change_to_log(Some(true), false), Some(Change::Failed));
+        assert_eq!(change_to_log(Some(false), false), None);
+        assert_eq!(change_to_log(Some(false), true), Some(Change::Recovered));
+        assert_eq!(change_to_log(Some(true), true), None);
     }
 
     #[test]

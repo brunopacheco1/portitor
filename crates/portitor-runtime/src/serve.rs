@@ -18,7 +18,6 @@ use axum::middleware::Next;
 use axum::response::Response;
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
-use tracing_subscriber::EnvFilter;
 
 use crate::api_key::problem;
 use crate::telemetry::http::observe_requests;
@@ -32,19 +31,6 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// How many requests the public server works on at once. Further requests
 /// wait for a free slot, within [`REQUEST_TIMEOUT`].
 pub const MAX_CONCURRENT_REQUESTS: usize = 256;
-
-/// JSON logs on standard output; the level comes from `RUST_LOG`
-/// (default `info`). No traces or metrics: the servers use
-/// [`crate::telemetry::init`] instead; this is for short commands that
-/// serve nothing.
-pub fn init_logging() {
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
-}
 
 /// The limits of [`with_limits`], shared by every request.
 #[derive(Debug, Clone)]
@@ -116,13 +102,13 @@ pub async fn shutdown() {
     tracing::info!("shutting down");
 }
 
-/// Binds the management API's socket, and logs where it listens.
+/// Binds the management port's socket, and logs where it listens.
 ///
 /// # Errors
 /// The address is invalid or taken.
 pub async fn bind_management(bind: &str) -> std::io::Result<TcpListener> {
     let listener = TcpListener::bind(bind).await?;
-    tracing::info!(bind = %bind, "management API listening");
+    tracing::info!(bind = %bind, "management port listening");
     Ok(listener)
 }
 
