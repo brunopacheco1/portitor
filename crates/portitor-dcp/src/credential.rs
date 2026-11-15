@@ -266,6 +266,15 @@ impl Credential {
         &self.jwt
     }
 
+    /// The JWT's payload, decoded but not verified. For a VC 2.0
+    /// credential that is the credential itself.
+    ///
+    /// # Errors
+    /// The JWT is malformed or its payload is not a JSON object.
+    pub fn payload(&self) -> Result<Map<String, Value>, CredentialError> {
+        payload_of(&self.jwt)
+    }
+
     /// Whether `kind` is one of its types.
     #[must_use]
     pub fn has_type(&self, kind: &str) -> bool {

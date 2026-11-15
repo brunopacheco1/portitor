@@ -19,6 +19,7 @@
 pub mod bundle;
 pub mod credential;
 mod did;
+pub mod gaiax;
 mod gzip;
 pub mod holder;
 mod id_token;
