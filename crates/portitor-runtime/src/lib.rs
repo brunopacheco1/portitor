@@ -6,7 +6,7 @@
 //! component and the issuer): outbound HTTP, `did:web` resolution and the
 //! directory of other parties' documents, the check of a DCP caller's
 //! token, the management API key, logging and shutdown, `SQLite` files,
-//! settings, and the system clock.
+//! settings, the retry delay, and the system clock.
 //!
 //! The protocol crates (`portitor-dsp`, `portitor-dcp`) do no I/O; this
 //! crate is where I/O shared by more than one binary lives.
@@ -19,6 +19,7 @@ pub mod did;
 pub mod did_document;
 pub mod directory;
 pub mod http;
+pub mod retry;
 pub mod serve;
 pub mod settings;
 pub mod sqlite;

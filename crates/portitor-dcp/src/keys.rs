@@ -184,6 +184,29 @@ impl SigningKey {
             typ: Some(typ.to_owned()),
         };
         let header_json = serde_json::to_vec(&header).map_err(|_| Error::Malformed("header"))?;
+        self.sign_parts(&header_json, payload)
+    }
+
+    /// Signs any JSON payload as a compact JWS with `alg: ES256` and the
+    /// other header members in `headers` (for example `typ`, `cty`, `iss`
+    /// and `kid`, as Gaia-X credentials need). An `alg` in `headers` is
+    /// ignored: this key signs ES256 only.
+    ///
+    /// # Errors
+    /// Fails if the payload cannot be written as JSON, or signing fails.
+    pub fn sign_with_headers(
+        &self,
+        headers: &serde_json::Map<String, serde_json::Value>,
+        payload: &impl Serialize,
+    ) -> Result<String, Error> {
+        let mut header = headers.clone();
+        header.insert("alg".to_owned(), serde_json::Value::from("ES256"));
+        let header_json = serde_json::to_vec(&header).map_err(|_| Error::Malformed("header"))?;
+        self.sign_parts(&header_json, payload)
+    }
+
+    /// Signs `header_json` (the JOSE header, already JSON) and `payload`.
+    fn sign_parts(&self, header_json: &[u8], payload: &impl Serialize) -> Result<String, Error> {
         let claims_json = serde_json::to_vec(payload).map_err(|_| Error::Malformed("claims"))?;
         let header_b64 = B64.encode(header_json);
         let claims_b64 = B64.encode(claims_json);
