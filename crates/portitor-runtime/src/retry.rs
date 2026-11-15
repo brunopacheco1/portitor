@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! How long to wait before trying a failed call again: the outbox retry
-//! policy of the issuer's delivery (`portitor-issuer`, `delivery.rs`), for
-//! any component that retries a call on its own (the identity's Gaia-X
-//! compliance runs, ADR 0021).
+//! How long to wait before trying a failed call again: twice as long
+//! after each failure, at most an hour. One policy for every component
+//! that retries on its own: the issuer's delivery outbox
+//! (`portitor-issuer`, `delivery.rs`, ADR 0018) and the identity's Gaia-X
+//! compliance runs (`portitor-identity`, `gaiax.rs`, ADR 0021).
 
 /// The longest wait between two tries: one hour.
 pub const MAX_RETRY_DELAY: u64 = 3_600;

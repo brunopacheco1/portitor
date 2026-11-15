@@ -834,7 +834,7 @@ async fn a_delivery_is_given_up_after_the_last_try() {
     for tried in 1..delivery::MAX_ATTEMPTS {
         delivery::send_due_at(&world.issuer, now).await;
         assert_eq!(world.delivery().await, ("PENDING".to_owned(), Some(tried)));
-        now += delivery::MAX_RETRY_DELAY;
+        now += portitor_runtime::retry::MAX_RETRY_DELAY;
     }
     delivery::send_due_at(&world.issuer, now).await;
     assert_eq!(world.sender.tries(), delivery::MAX_ATTEMPTS);

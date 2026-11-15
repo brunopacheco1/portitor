@@ -14,7 +14,8 @@
 //!
 //! A send that failed for a passing reason (no answer, the holder's DID
 //! or credential service not found, or the answers 401, 408, 429 and
-//! 5xx) is tried again later, waiting twice as long each time; after
+//! 5xx) is tried again later, waiting twice as long each time, at most
+//! an hour (`portitor_runtime::retry`); after
 //! [`MAX_ATTEMPTS`] the delivery is given up. Any other 4xx answer (400,
 //! 403, 404, ...) means the holder will not take this message: it is
 //! given up at once. Either way it is logged and shown as `FAILED` by the
@@ -28,6 +29,7 @@ use std::time::Duration;
 
 use portitor_dcp::issuance::{TokenTimes, delivery_token};
 use portitor_runtime::http::answered_status;
+use portitor_runtime::retry::retry_delay;
 use portitor_runtime::system::{new_uuid, now_secs};
 use serde_json::Value;
 
@@ -38,21 +40,8 @@ use crate::{Issuer, TOKEN_SECONDS, issue};
 /// [`retry_delay`], the last try is about 8 hours after the first.
 pub const MAX_ATTEMPTS: u32 = 20;
 
-/// The longest wait between two tries: one hour.
-pub const MAX_RETRY_DELAY: u64 = 3_600;
-
 /// How long the outbox sleeps when nothing is due, unless woken.
 const IDLE: Duration = Duration::from_secs(60);
-
-/// The wait before the next try, after `failed` failed tries: 1, 2, 4
-/// ... seconds, at most [`MAX_RETRY_DELAY`].
-#[must_use]
-pub fn retry_delay(failed: u32) -> u64 {
-    let doubled = 1_u64
-        .checked_shl(failed.saturating_sub(1))
-        .unwrap_or(u64::MAX);
-    doubled.min(MAX_RETRY_DELAY)
-}
 
 /// Whether a failed send should not be tried again: the holder answered
 /// with a 4xx status other than 401 (its check of our token may pass
@@ -195,12 +184,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn waits_double_up_to_an_hour() {
-        assert_eq!(retry_delay(1), 1);
-        assert_eq!(retry_delay(2), 2);
-        assert_eq!(retry_delay(5), 16);
-        assert_eq!(retry_delay(13), 3_600);
-        assert_eq!(retry_delay(100), 3_600);
+    fn the_last_try_is_about_8_hours_after_the_first() {
         let total: u64 = (1..MAX_ATTEMPTS).map(retry_delay).sum();
         assert!(total > 7 * 3_600 && total < 9 * 3_600, "{total}");
     }

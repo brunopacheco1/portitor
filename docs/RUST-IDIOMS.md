@@ -705,7 +705,7 @@ API needs (here the STS error list, `portitor-identity/src/sts.rs`).
   `None` (`status_url` in `portitor-identity/src/issuance.rs`).
 - `a.saturating_sub(b)` stops at 0 instead of going below;
   `1_u64.checked_shl(n)` is `1 << n`, or `None` when `n` is too large
-  (`retry_delay` in `portitor-issuer/src/delivery.rs`).
+  (`retry_delay` in `portitor-runtime/src/retry.rs`).
 - `[Profile; 2]` is a list of exactly two `Profile`s, fixed when the
   program is built (`PROFILES` in `status_lists.rs`).
 - `env!("CARGO_PKG_VERSION")` is the crate's version from `Cargo.toml`,
