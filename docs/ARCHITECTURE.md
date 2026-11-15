@@ -277,9 +277,9 @@ ports.
 | 3 | `portitor-connector` | Control plane: catalog (datasets harvested into a read copy), contract negotiation, transfer; verifies DCP presentations, including Gaia-X compliance credentials from 0.8 ([ADR 0022](adr/0022-gaia-x-compliance-in-policies.md)); checks datasets and DSP messages against the authority's SHACL shapes. The data plane is its own module, linked into the connector for 0.x (see below) | Mandatory | DSP, DCP (verifier) |
 | 4 | `portitor-issuer` (from 0.6, [ADR 0018](adr/0018-issuer-component.md)) | Issues and revokes credentials (for example membership) to the participants the authority registered; publishes their status lists. From 0.7 it also serves the signed schema and vocabulary bundle, which `portitor-issuer bundle build` signs offline ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)) | Optional: one per dataspace, run by the dataspace authority, never on a participant's host | DCP (issuance) |
 
-### Images and crates in 0.8
+### Images and crates in 0.9
 
-Release 0.8 ships three images, built from one `Dockerfile` (one build
+Release 0.9 ships three images, built from one `Dockerfile` (one build
 target per image) and released, signed and attested together
 ([RELEASING.md](RELEASING.md)). Until the PostgreSQL adapter exists, each
 image keeps its state in its own SQLite file under `/data`.
@@ -290,9 +290,10 @@ image keeps its state in its own SQLite file under `/data`.
    +-----------------------------+        +----------------------------------+
    | portitor-connector          |  (1)   | portitor-identity                |
    | 8080 DSP, data plane        |------->| 8090 DID document, STS,          |
-   | 8081 management API         |  STS   |      credential service,         |
-   | /data/portitor.db           |        |      certificate chain           |
-   | /data/bundle-cache          |        | 8091 management API              |
+   | 8081 management API,        |  STS   |      credential service,         |
+   |      health checks          |        |      certificate chain           |
+   | /data/portitor.db           |        | 8091 management API,             |
+   | /data/bundle-cache          |        |      health checks               |
    +-----------------------------+        | /data/portitor-identity.db       |
           | (2) DSP request + token       +----------------------------------+
           v                                        ^ (3) DID document,     | (4) Gaia-X
@@ -306,8 +307,9 @@ image keeps its state in its own SQLite file under `/data`.
    | 8070 DID document, DCP issuer    |  (DCP issuance) and it delivers them
    |      service, status lists,      |  to their Storage API; verifiers
    |      bundles                     |  read its DID document and status
-   | 8071 management API              |  lists; connectors pull the
-   | /data/portitor-issuer.db         |  newest bundle version
+   | 8071 management API,             |  lists; connectors pull the
+   |      health checks               |  newest bundle version
+   | /data/portitor-issuer.db         |
    +----------------------------------+
 
  crates (-> means "uses"):
@@ -322,7 +324,9 @@ image keeps its state in its own SQLite file under `/data`.
    portitor-runtime   --> portitor-dcp, portitor-time
                                                 (adapters: HTTP client,
                                                  did:web resolver, API key,
-                                                 logging, shutdown)
+                                                 logging, shutdown, traces
+                                                 and metrics (OpenTelemetry),
+                                                 health checks)
    portitor-dps       --> portitor-dsp          (DataAddress)
    portitor-dsp, portitor-dcp --> portitor-time
    portitor-shacl     --> oxrdf, oxttl, oxjsonld (Oxigraph's RDF crates)
