@@ -484,6 +484,23 @@ decided. Each names what is in place now.
   gateway, what the EDC data plane does); whether the policy is checked
   again on each request; and how this fits the consent and API gateway
   items under "Later". Standards check and an ADR before any code.
+- **A provider in several data spaces, each with its own dataset
+  schemas** (maintainer, 2026-11-15: to be investigated). A data
+  provider may belong to several data spaces at once: long-lived ones
+  that may or may not interoperate with each other (for example EHDS and
+  ICUDATA4EU), and short-lived ones set up for one use case. Each data
+  space authority may require its own dataset schemas and vocabularies.
+  Today one connector serves one data space: it pulls one signed bundle
+  from one authority (`PORTITOR_BUNDLE_URL`, [ADR 0005](adr/0005-schema-and-vocabulary-registry.md)),
+  checks every dataset against that one bundle ([ADR 0020](adr/0020-dataset-harvest.md)),
+  and trusts one list of credential issuers ([ADR 0016](adr/0016-dsp-caller-authentication.md)).
+  To investigate: one connector with several data space profiles (bundle,
+  trusted issuers, policies per data space) or one connector per data
+  space; how a dataset says which data spaces it is offered in and which
+  schema it follows in each; how a caller's data space is known (its
+  credentials or the catalog it asks); how EHDS and other data spaces
+  publish their schemas; how short-lived data spaces are joined and left.
+  Standards check and an ADR before any code.
 - **Key custody and key rotation** (maintainer, 2026-11-15: a key
   custody service such as OpenBao is probably better). Today each
   component (identity, issuer, bundle signing) reads one P-256 private
