@@ -55,6 +55,9 @@ versions may change behaviour and configuration.
   started by hand. `scripts/demo-compose.sh` takes it with
   `EXTRA_COMPOSE=examples/compose/observability.yaml`. See TESTING,
   "Observability stack (by hand)".
+- A quickstart on the website ("Try it"): what to install, how to run
+  the Compose demo, where to look and how to clean up. The README links
+  to it.
 
 ## [0.8.0] - 2026-11-15
 
