@@ -23,7 +23,7 @@
     "/.well-known/did.json": {
       "get": {
         "summary": "The participant's DID document (did:web)",
-        "description": "Served at the path the did:web method gives for PORTITOR_PARTICIPANT_ID: /.well-known/did.json for a DID without a path, /<path>/did.json otherwise. One P-256 verification method (authentication, assertionMethod, capabilityInvocation), whose publicKeyJwk has alg ES256 (RFC 7517 section 4.4) and, when PORTITOR_IDENTITY_CERTIFICATE_CHAIN is set, x5u: the URL of /.well-known/x509CertificateChain.pem (RFC 7517 section 4.6, ADR 0021); and the CredentialService entry.",
+        "description": "Served at the path the did:web method gives for PORTITOR_PARTICIPANT_ID: /.well-known/did.json for a DID without a path, /<path>/did.json otherwise. One P-256 verification method (authentication, assertionMethod, capabilityInvocation), whose publicKeyJwk has alg ES256 (RFC 7517 section 4.4) and, when PORTITOR_IDENTITY_CERTIFICATE_CHAIN is set, x5u: the URL of /.well-known/x509CertificateChain.pem, below the DID path for a DID with one (RFC 7517 section 4.6, ADR 0021); and the CredentialService entry.",
         "operationId": "didDocument",
         "responses": {
           "200": {
@@ -210,7 +210,7 @@
     "/.well-known/x509CertificateChain.pem": {
       "get": {
         "summary": "The X.509 certificate chain of the participant's key",
-        "description": "The file PORTITOR_IDENTITY_CERTIFICATE_CHAIN, PEM: the certificate for the key in the DID document first, then its chain. The DID document's JWK points here with x5u (RFC 7517 section 4.6), as Gaia-X needs (ADR 0021). A renewed file for the same key is served without a restart. 404 when no chain is set.",
+        "description": "The file PORTITOR_IDENTITY_CERTIFICATE_CHAIN, PEM: the certificate for the key in the DID document first, then its chain. The DID document's JWK points here with x5u (RFC 7517 section 4.6), as Gaia-X needs (ADR 0021). For a DID with a path (did:web:host:participants:a) the route is below that path: /participants/a/.well-known/x509CertificateChain.pem. A renewed file for the same key is served without a restart. 404 when no chain is set.",
         "operationId": "certificateChain",
         "responses": {
           "200": {
@@ -224,7 +224,7 @@
     "/credentials/gaiax/{name}": {
       "get": {
         "summary": "A Gaia-X credential of the participant, as VC-JWT",
-        "description": "The credentials the last good Gaia-X compliance run sent (ADR 0021), at their ids, so anyone can recompute their digests: legal-person (gx:LegalPerson) and terms-and-conditions (gx:Issuer), signed by the participant's key, and registration-number, the registration number credential a GXDCH notary issued. The compliance credential itself is not served here; verifiers get it through the presentation API.",
+        "description": "The credentials the last good Gaia-X compliance run sent (ADR 0021), at their ids, so anyone can recompute their digests; for a DID with a path the route is below that path (/participants/a/credentials/gaiax/{name}): legal-person (gx:LegalPerson) and terms-and-conditions (gx:Issuer), signed by the participant's key, and registration-number, the registration number credential a GXDCH notary issued. The compliance credential itself is not served here; verifiers get it through the presentation API.",
         "operationId": "gaiaxCredential",
         "parameters": [
           {

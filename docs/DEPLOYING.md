@@ -196,16 +196,25 @@ PORTITOR_GAIAX_COMPLIANCE_ISSUERS=did:web:compliance.lab.gaia-x.eu:v2
   warns.
 - What the provider checks: the compliance credential comes from a
   listed service and is signed with its `assertionMethod` key (PS256 or
-  ES256). It is valid now by `validFrom` and `validUntil` (the service
-  writes its JWT times in milliseconds, so those are ignored). The same
+  ES256). It is valid now by `validFrom` and `validUntil`, and it must
+  have a `validUntil` (the service writes its JWT times in milliseconds,
+  so those are ignored). The same
   presentation holds a `gx:LegalPerson` credential whose digest
   (`digestSRI`) the compliance credential lists. That credential is
-  issued and signed by the consumer.
+  issued and signed by the consumer. Its `credentialStatus`, if any, is
+  not fetched: the consumer controls that list.
+- A compliance credential from a service you do not list is skipped, like
+  a credential from an issuer you do not trust: the consumer can still
+  use offers that need only other credentials (Gaia-X has several
+  clearing houses).
+- A `gx:LegalPerson` issued by one of your `PORTITOR_TRUSTED_ISSUERS` is
+  an ordinary dataspace credential and checked as before 0.8. Policies
+  see Gaia-X credentials only by their Gaia-X type.
 - These two credentials are about a credential, not about the
   consumer's DID, so the subject check is skipped for them only. Every
   other credential must still be about the consumer.
-- A compliance credential that fails a check makes its presentation
-  invalid: the consumer is refused, and the log says why (`credential
+- A compliance credential from a listed service that fails a check makes
+  its presentation invalid: the consumer is refused, and the log says why (`credential
   refused`). A `gx:LegalPerson` credential that no trusted compliance
   credential names is ignored.
 - Only Portitor connectors meet these policies today. EDC applies the
@@ -498,8 +507,8 @@ participant.
 | public | `POST <credential service>/presentations/query` | verifiers, with a self-issued ID token and an access token from your STS (DCP 5.4) |
 | public | `POST <credential service>/credentials`, `/offers` | trusted issuers (DCP 6.5, 6.6) |
 | public | `GET /health` | probes |
-| public | `GET /.well-known/x509CertificateChain.pem` | anyone, with a chain set (Gaia-X services read it through `x5u`) |
-| public | `GET /credentials/gaiax/{legal-person,terms-and-conditions,registration-number}` | anyone, with Gaia-X on |
+| public | `GET {base}/.well-known/x509CertificateChain.pem` | anyone, with a chain set (Gaia-X services read it through `x5u`). `{base}` is empty for a DID without a path, else the DID path (`/participants/a` for `did:web:host:participants:a`) |
+| public | `GET {base}/credentials/gaiax/{legal-person,terms-and-conditions,registration-number}` | anyone, with Gaia-X on; `{base}` as above |
 | management | `POST`, `GET /v1/credential-requests`, `GET /v1/credential-requests/{holderPid}`, `GET /v1/credentials`, `DELETE /v1/credentials/{id}`, `GET /v1/offers`, `POST /v1/offers/request`, `POST`, `GET /v1/gaiax/compliance`, `GET /v1/openapi.json` | operators ([OpenAPI](api/identity-management-openapi.json)) |
 
 The public endpoints are described in
@@ -699,7 +708,8 @@ anchor. Keep the identity key; get a certificate for it:
 Mount the chain (your certificate first, then the CA certificates) and
 set `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` to it. The identity refuses to
 start if the first certificate is not for its key. It serves the chain at
-`https://<your host>/.well-known/x509CertificateChain.pem` and points to
+`https://<your host>/.well-known/x509CertificateChain.pem` (below the DID
+path, for a DID with one) and points to
 it from the DID document (`x5u`). Route that path to the identity, like
 the DID document. It reads the file again every minute: put the renewed
 chain in place and nothing else is needed. A new file for another key is
@@ -719,7 +729,8 @@ curl -s -G "https://registrationnumber.notary.lab.gaia-x.eu/v2/registration-numb
   > registration-number.jwt
 ```
 
-Use `https://<your host>/credentials/gaiax/registration-number` as
+Use `https://<your host>/credentials/gaiax/registration-number` (below the
+DID path, for a DID with one) as
 `vcId`, and the same with `#cs` as `subjectId`: the identity serves the
 credential at that URL. The answer is a VC-JWT; keep it as a file.
 
