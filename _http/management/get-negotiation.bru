@@ -10,10 +10,17 @@ get {
   auth: inherit
 }
 
+script:post-response {
+  if (res.body && res.body.agreement) {
+    bru.setVar("mgmtAgreementId", res.body.agreement["@id"]);
+  }
+}
+
 assert {
   res.status: eq 200
 }
 
 docs {
   Within a second the state is FINALIZED and the negotiation holds the agreement.
+  Saves mgmtAgreementId for "Start transfer".
 }

@@ -1,0 +1,19 @@
+meta {
+  name: List participants
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{issuerMgmtUrl}}/v1/participants
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  The registered participants and their claims (memberOf).
+}

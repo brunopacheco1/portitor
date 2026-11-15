@@ -33,6 +33,15 @@ versions may change behaviour and configuration.
   names DCP v1.0.1 and Gaia-X as shipped; the security assurance case
   names the compliance issuer pin (`PORTITOR_GAIAX_COMPLIANCE_DID`) and
   that compliance credentials from unlisted services are skipped.
+- The `_http/` Bruno collection covers what was built since 0.4:
+  transfers and their data, harvest jobs, the identity's credentials,
+  credential requests and Gaia-X runs, and the issuer's participants and
+  credentials. `scripts/dev-identities.sh` serves `examples/data`, and the
+  `weather-stations` dataset of `examples/datasets.json` has a
+  `portitor:source`, so a transfer runs in the VS Code set-up. The STS
+  token script no longer uses `URLSearchParams`, which the Bruno CLI's
+  script runtime lacks. Roadmap 0.10: get the website's SonarQube Cloud
+  and REUSE values shown.
 - C4 code diagrams brought up to date with 0.8: caller authentication
   shows the Gaia-X compliance checks (ADR 0022), presentations the `gx:`
   scope type rule (ADR 0021), and Gaia-X onboarding the steps of a run

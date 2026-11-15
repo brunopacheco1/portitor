@@ -1,0 +1,18 @@
+meta {
+  name: identity
+}
+
+auth {
+  mode: bearer
+}
+
+auth:bearer {
+  token: {{identityApiKey}}
+}
+
+docs {
+  Management API of a portitor-identity (docs/api/identity-management-openapi.json):
+  the provider's in the "single" environment, the consumer's in "two-connectors".
+  Put that identity's key (target/vscode-dcp/<provider or consumer>/identity-management.key)
+  in the environment's secret identityApiKey.
+}

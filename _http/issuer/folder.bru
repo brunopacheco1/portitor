@@ -1,0 +1,17 @@
+meta {
+  name: issuer
+}
+
+auth {
+  mode: bearer
+}
+
+auth:bearer {
+  token: {{issuerApiKey}}
+}
+
+docs {
+  Management API of the data space's portitor-issuer (docs/api/issuer-management-openapi.json),
+  started by scripts/dev-identities.sh. Put target/vscode-dcp/issuer/management.key in the
+  environment's secret issuerApiKey.
+}

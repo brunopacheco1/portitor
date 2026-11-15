@@ -3,6 +3,7 @@
     "@id": "weather-stations",
     "@type": "Dataset",
     "dct:title": "Weather stations",
+    "portitor:source": "http://127.0.0.1:9105/weather-stations.csv",
     "dct:description": "Hourly readings from public weather stations.",
     "dcat:keyword": [
       "weather",
