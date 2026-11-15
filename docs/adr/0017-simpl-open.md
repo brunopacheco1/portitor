@@ -187,7 +187,8 @@ Portitor invests in.
 - **0.6 (credential-based policies):** make the policy operand for
   credentials general enough that Simpl's `identityAttributes` operand
   (`hasPart`, `isAllOf`) can be added as one more operand.
-- **0.9 (interop tests):** replace "Interoperability tests against
+- **0.9 (interop tests; now 0.12 in the ROADMAP, and parked under
+  "Later" until a Simpl-Open sandbox exists):** replace "Interoperability tests against
   Simpl-Open" with a DSP-level test against `connector-be` in its local
   mode (mocked identity attributes, no gateway). It needs only the Simpl
   JSON token on outgoing calls, in the test build. A full test through

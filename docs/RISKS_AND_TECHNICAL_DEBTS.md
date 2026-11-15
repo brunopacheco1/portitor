@@ -57,7 +57,7 @@ checks this file:
 | [R-02](#r-02) | One maintainer: no two-person review | Delivery, security | 0.1 (ADR 0012, maintainer, 2026-11-11) | Accepted | until a second maintainer |
 | [R-03](#r-03) | Pre-1.0 JSON-LD and VC crates | Dependency | 0.0 (ADR 0002, 2026-11-11) | Mitigated | — |
 | [R-04](#r-04) | Dependencies are not audited crate by crate (cargo-vet) | Dependency, security | 0.1 (maintainer, 2026-11-11 and 2026-11-12) | Open | 0.10 |
-| [R-05](#r-05) | No written OpenSSF Baseline level 1 self-assessment | Security | 0.1 (ADR 0012, maintainer, 2026-11-12) | Open | 0.10 |
+| [R-05](#r-05) | No written OpenSSF Baseline level 1 self-assessment | Security | 0.1 (ADR 0012, maintainer, 2026-11-12) | Open | 0.13 |
 | [R-06](#r-06) | Data Plane Signaling is a draft (v1.0-RC4) | Upstream churn | 0.0 (ARCHITECTURE, 2026-11-11) | Mitigated | until Signaling 1.0 |
 | [R-07](#r-07) | Upstream findings not reported yet | Upstream churn, interoperability | 0.4 to 0.8 (maintainer, 2026-11-13 to 2026-11-15) | Open | 0.10 |
 | [R-08](#r-08) | The DSP TCK v1.0.2 needs a test-only build | Interoperability | 0.4, 0.5 (ADR 0014, ADR 0016, 2026-11-13) | Mitigated | — |
@@ -70,7 +70,7 @@ checks this file:
 | [R-15](#r-15) | Onboarding accepts a compliance answer from any issuer whose signature verifies | Security | 0.8 review (maintainer, 2026-11-15) | Addressed | 0.8 |
 | [R-16](#r-16) | A Gaia-X compliance credential cannot be revoked | Security | 0.8 (spike, ADR 0022, 2026-11-15) | Accepted | — |
 | [R-17](#r-17) | Server-side request forgery through partner-chosen URLs | Security | 0.3 (ADR 0016 security notes, SECURITY-ASSURANCE) | Mitigated | — |
-| [R-18](#r-18) | No request size limit of Portitor's own on the public ports | Security | 0.5 (SECURITY-ASSURANCE) | Mitigated | 0.10 |
+| [R-18](#r-18) | No request size limit of Portitor's own on the public ports | Security | 0.5 (SECURITY-ASSURANCE) | Mitigated | 0.11 |
 | [R-19](#r-19) | Consumer's data access tokens in the SQLite file and the management API | Security | 0.4 (ADR 0014, 2026-11-13) | Mitigated | — |
 | [R-20](#r-20) | The issuer key is the root of trust of a data space | Security | 0.6 (ADR 0018, 2026-11-14) | Mitigated | — |
 | [R-21](#r-21) | Bugs in Portitor's own SHACL engine, and new SHACL components in later profiles | Security, upstream churn | 0.6 spike (ADR 0005, 2026-11-14) | Mitigated | — |
@@ -81,7 +81,7 @@ checks this file:
 | [R-26](#r-26) | ODRL `dateTime` definition read from memory | Interoperability | 0.3 (ADR 0009, 2026-11-12) | Open | before 1.0 |
 | [R-27](#r-27) | CI downloads from Maven Central and GitHub | Delivery | 0.8 (2026-11-15) | Mitigated | — |
 | [R-28](#r-28) | 0.8 Gaia-X code had no fuzz target | Security | 0.8 (sweep for this file, 2026-11-15) | Addressed | 0.8 |
-| [R-29](#r-29) | DCP costs about 2 ms per request and 13 times fewer requests under load | Performance | 0.5 (ADR 0002 section 7, 2026-11-13) | Open | 0.10 (with TD-06) |
+| [R-29](#r-29) | DCP costs about 2 ms per request and 13 times fewer requests under load | Performance | 0.5 (ADR 0002 section 7, 2026-11-13) | Open | 0.11 (with TD-06) |
 | [R-30](#r-30) | DSP callers were not authenticated | Security | 0.3 (ADR 0007, 2026-11-12) | Addressed | done in 0.5 |
 | [R-31](#r-31) | RSA timing advisory in the pure-Rust `rsa` crate | Security, dependency | 0.0 (ADR 0002, 2026-11-11) | Addressed | done in 0.0 |
 | [R-32](#r-32) | XML parser advisories through RDF/XML code lists and rudof | Security, dependency | 0.6 spike (2026-11-14) | Addressed | done in 0.7 |
@@ -92,8 +92,8 @@ checks this file:
 | [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | — |
 | [TD-03](#td-03) | A provider in several data spaces, each with its own rules | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | — |
 | [TD-04](#td-04) | User to system authentication and authorisation, governed per data space | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | — |
-| [TD-05](#td-05) | Key custody and key rotation | Technical debt | 0.5 (ADR 0015); 0.7 close-out (maintainer, 2026-11-15) | Open | 0.10 (to investigate) |
-| [TD-06](#td-06) | Status lists are not cached in the connector's DCP verifier | Technical debt | 0.6 (maintainer, 2026-11-14) | Open | 0.10 |
+| [TD-05](#td-05) | Key custody and key rotation | Technical debt | 0.5 (ADR 0015); 0.7 close-out (maintainer, 2026-11-15) | Open | 0.11 (to investigate) |
+| [TD-06](#td-06) | Status lists are not cached in the connector's DCP verifier | Technical debt | 0.6 (maintainer, 2026-11-14) | Open | 0.11 |
 | [TD-07](#td-07) | STS tokens and presentations are not cached | Technical debt | 0.5 (ADR 0016) | Open | — |
 | [TD-08](#td-08) | One replica per SQLite file; no PostgreSQL adapter | Technical debt | 0.3 (ADR 0006, maintainer, 2026-11-12) | Accepted | Later |
 | [TD-09](#td-09) | Used token ids are kept in memory only | Technical debt | 0.5 (ADR 0015, ADR 0016, 2026-11-13) | Accepted | with TD-08 |
@@ -192,9 +192,11 @@ Totals: 35 risks (Open 11, Mitigated 14, Accepted 4, Addressed 6);
 - **Why it matters.** Until then, level 1 rests on settings and CI, not
   on evidence anyone can check.
 - **Current state: Open.** [SECURITY-ASSURANCE](SECURITY-ASSURANCE.md#openssf-baseline)
-  says it comes in 0.10. ADR 0012 still says "0.9 hardening release":
-  written before the renumbering of 2026-11-14.
-- **Next.** ROADMAP 0.10; decide there whether 1.0 aims higher.
+  says it comes in the release candidate, 0.13. ADR 0012 says "0.9
+  hardening release": written before the renumbering of 2026-11-14 and
+  the split of 0.10 into 0.10 to 0.13 (maintainer, 2026-11-15).
+- **Next.** ROADMAP 0.13, last, so it assesses the final state; decide
+  there whether 1.0 aims higher.
 
 <a id="r-06"></a>
 ### R-06 Data Plane Signaling is a draft (v1.0-RC4)
@@ -421,7 +423,7 @@ Totals: 35 risks (Open 11, Mitigated 14, Accepted 4, Addressed 6);
   design. The public ports have a 60 s limit per request and at most 256
   requests at once (DEPLOYING, section 5); presentations, status lists
   (16 MiB after decompression) and bundles have their own limits.
-- **Next.** ROADMAP 0.10: explicit limits per port and route, set by
+- **Next.** ROADMAP 0.11: explicit limits per port and route, set by
   Portitor rather than the framework default, with tests.
 
 <a id="r-19"></a>
@@ -506,7 +508,7 @@ Totals: 35 risks (Open 11, Mitigated 14, Accepted 4, Addressed 6);
 - **Why it matters.** Portitor is not a Simpl participant; reference
   counterpart number two (ADR 0011) is untested.
 - **Current state: Accepted** (parked by the maintainer, 2026-11-13,
-  until a Simpl-Open sandbox exists). The ROADMAP 0.10 line now keeps EDC
+  until a Simpl-Open sandbox exists). The ROADMAP 0.12 line keeps EDC
   only, without Gaia-X, and points Simpl-Open to "Later" (2026-11-15).
 - **Next.** ROADMAP "Later"; re-check the facts before any Simpl work.
 
@@ -572,7 +574,7 @@ Totals: 35 risks (Open 11, Mitigated 14, Accepted 4, Addressed 6);
   issuers.
 - **Current state: Open.** DID documents are cached 5 minutes; nothing
   else (TD-06, TD-07).
-- **Next.** Status list caching in 0.10 (TD-06); measure again.
+- **Next.** Status list caching in 0.11 (TD-06); measure again.
 
 <a id="r-30"></a>
 ### R-30 DSP callers were not authenticated
@@ -759,9 +761,9 @@ Linked to [TD-02](#td-02). Standards check and an ADR before any code.
 Raised in ADR 0015 (0.5: "no key rotation API", rotation manual) and
 ADR 0018 (0.6); recorded by the maintainer at the 0.7 close-out,
 2026-11-15 (a key custody service such as OpenBao is probably better).
-Status: **Open**; whether it lands with the 0.10 hardening work is part
-of the investigation (ROADMAP; ADR 0021 says "key rotation stays in
-0.10").
+Status: **Open**; the investigation is in ROADMAP 0.11 (security
+hardening; ADR 0021 says "key rotation stays in 0.10", written before
+0.10 was split on 2026-11-15).
 
 Today each component (identity, issuer, bundle signing) reads one P-256
 private key from a PEM file and lists one key in its `did:web` document,
@@ -781,7 +783,7 @@ port with a key custody adapter (OpenBao transit engine: P-256 signing,
 versioned keys, the private key never leaves it), listing retired public
 keys next to the current one in the DID document (DID Core allows
 several verification methods), how EDC IdentityHub rotates keys, and
-whether this lands with the 0.10 hardening work.
+whether the change itself lands in 0.11 or later.
 
 <a id="td-06"></a>
 ### TD-06 Status lists are not cached in the connector's DCP verifier
@@ -792,7 +794,7 @@ whether this lands with the 0.10 hardening work.
 - **Why it matters.** Cost per request (R-29) and load on the issuer.
 - **Current state: Open.** No status list cache in the code (checked: no
   `PORTITOR_STATUS_LIST_CACHE_SECONDS`).
-- **Next.** ROADMAP 0.10 (maintainer, 2026-11-14):
+- **Next.** ROADMAP 0.11 (maintainer, 2026-11-14):
   `PORTITOR_STATUS_LIST_CACHE_SECONDS`, default 300, 0 checks on every
   request, at most 3600; only lists that were fetched and verified are
   cached, never longer than the list's own expiry; the trade-off (a
@@ -992,7 +994,7 @@ whether this lands with the 0.10 hardening work.
   (DEPLOYING, "Upgrade and rollback").
 - **Current state: Accepted** (DEPLOYING, since 0.3; each upgrade note
   says which database moves).
-- **Next.** Revisit at the 0.10 API and config freeze.
+- **Next.** Revisit at the 0.13 API and config freeze.
 
 <a id="td-23"></a>
 ### TD-23 ADRs 0021 and 0022 were built but still Proposed

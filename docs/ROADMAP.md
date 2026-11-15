@@ -77,8 +77,9 @@ OpenSSF:
   Reaching **passing** moved to 0.2.
 - OpenSSF Baseline **level 1** (version 2026-08-28) is the target for all
   of 0.x ([ADR 0012](adr/0012-openssf-baseline.md)). The written
-  self-assessment moved to the hardening release, now 0.10 (maintainer,
-  2026-11-12; renumbered 2026-11-14).
+  self-assessment moved to the hardening release (maintainer,
+  2026-11-12), renumbered 0.10 on 2026-11-14; since the split of
+  2026-11-15 it is in 0.13, the release candidate.
 
 Exit: a "hello" binary ships as a signed image through the full pipeline,
 all checks green, Scorecard published.
@@ -356,32 +357,73 @@ running without Gaia-X (maintainer, 2026-11-15).
 
 ## 0.9 Operations
 
-- Health and readiness endpoints, structured logs, metrics (OpenTelemetry).
-- Docker Compose for a two-participant demo dataspace, documented
-  deployment order.
-- Exit: a new user runs the demo from the website in under 15 minutes.
+Plan approved by the maintainer on 2026-11-15. The two-participant demo
+in Docker Compose exists since 0.4; 0.9 adds what an operator needs to
+run Portitor and what a new user needs to try it
+([ADR 0023](adr/0023-observability.md)).
 
-## 0.10 Hardening and release candidate for 1.0
+- Spike (go/no-go): OpenTelemetry in the connector within the footprint
+  budget (at most +25% binary size and idle memory against 0.8.0, start
+  time unchanged), and `cargo deny` still green
+  ([spike report](spikes/0.9-opentelemetry.md)).
+- Liveness and readiness in the connector, the identity component and
+  the issuer, on the management port without the API key, with the paths,
+  status codes and body of EDC's Observability API
+  (`/api/check/liveness`, `/readiness`, `/startup`, `/health`). Readiness
+  checks only the component's own dependencies, never other
+  participants. `GET /health` on the public port stays.
+- A `health` subcommand in each binary for Docker `HEALTHCHECK`, as the
+  images hold no shell; the Compose demo waits for each component to be
+  ready, so the file itself shows the deployment order.
+- Traces and metrics with OpenTelemetry over OTLP/HTTP, off unless
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is set, configured with OpenTelemetry's
+  own variables. Trace context stays inside one participant: DSP calls
+  to other participants carry no `traceparent`. HTTP metrics follow the
+  OpenTelemetry semantic conventions; a short list of Portitor metrics
+  covers negotiations, transfers, refused DSP requests, the outbox, the
+  harvest and the bundle. Log lines carry the `trace_id`.
+- An optional Compose file with an OpenTelemetry Collector, Jaeger and
+  Prometheus, started by hand and described in TESTING (not run in CI).
+- A quickstart on the website.
+- Reviews before the release: engineering and testing, readability
+  (`docs/RUST-IDIOMS.md`), documentation (C4 diagrams, OpenAPI, website,
+  DEPLOYING, `_http`).
+- Exit: readiness fails when a component's own dependency is down
+  (tested) and the Compose demo starts in order on it; with an OTLP
+  endpoint set, a negotiation and a transfer show as traces and metrics;
+  without it nothing is exported and the footprint stays in budget; a new
+  user runs the demo from the website in under 15 minutes (timed by the
+  maintainer on a clean machine). The DSP TCK, the DCP TCK, the EDC
+  interop test and the Gaia-X test stay green.
 
-- Threat model review, fuzzing on every parser (ClusterFuzzLite),
-  benchmarks published.
-- OpenSSF Best Practices **silver**.
-- OpenSSF Baseline **level 1** self-assessment, control by control, in
-  `docs/SECURITY-ASSURANCE.md` (moved from 0.1, maintainer, 2026-11-12);
-  decide whether 1.0 aims at a higher level.
+The hardening release planned as 0.10 is split into four smaller
+releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
+0.13.
+
+## 0.10 Supply chain
+
 - Dependency review with **cargo-vet**: every crate version in `Cargo.lock`
   audited (own audits or imported sets, such as Mozilla's and Google's) or
   explicitly exempted; CI fails on an unaudited change. Deferred from 0.1
-  (decided 2026-11-11) because it turns each dependency bump into review work.
-- Interoperability tests against Eclipse EDC, without Gaia-X: EDC
-  1.0.0-RC7 refuses the Gaia-X compliance credential (ADR 0022). Simpl-Open
-  stays under "Later" until a sandbox exists (ADR 0017).
-- Explicit request size limits per port and route, set by Portitor
-  (today axum's default of 2 MB on every parsed body; data plane bodies
-  are streamed), with tests ([R-18](RISKS_AND_TECHNICAL_DEBTS.md#r-18)).
+  (decided 2026-11-11) because it turns each dependency bump into review
+  work ([R-04](RISKS_AND_TECHNICAL_DEBTS.md#r-04)).
+- Website trust values (maintainer, 2026-11-15): the site shows "not
+  available" for the SonarQube Cloud quality gate and for REUSE. Register
+  the repository with the REUSE API (open since 0.1), check that the
+  quality gate can be read without a token
+  (`api/qualitygates/project_status`), and check that the site shows
+  both after its next build.
 - File the upstream reports drafted from 0.4 to 0.8 and link them
   (maintainer, 2026-11-15; earlier if an answer is needed to go on;
   [R-07](RISKS_AND_TECHNICAL_DEBTS.md#r-07)).
+- Main risk: the audit load of cargo-vet.
+
+## 0.11 Security hardening
+
+- Threat model review; fuzzing on every parser (ClusterFuzzLite).
+- Explicit request size limits per port and route, set by Portitor
+  (today axum's default of 2 MB on every parsed body; data plane bodies
+  are streamed), with tests ([R-18](RISKS_AND_TECHNICAL_DEBTS.md#r-18)).
 - Cache status list credentials in the connector's DCP verifier
   (maintainer, 2026-11-14): `PORTITOR_STATUS_LIST_CACHE_SECONDS`, default
   300 (5 minutes), 0 checks on every request, at most 3600; only lists
@@ -390,15 +432,29 @@ running without Gaia-X (maintainer, 2026-11-15).
   that long to be seen. EDC v1.0.0-RC7 caches for 15 minutes by default
   (`edc.iam.credential.revocation.cache.validity`). Demos, the EDC test
   and the TCK runs use 0. Amends ADR 0016 ("Presentations are not
-  cached").
-- Website trust values (maintainer, 2026-11-15): the site shows "not
-  available" for the SonarQube Cloud quality gate and for REUSE. Register
-  the repository with the REUSE API (open since 0.1), check that the
-  quality gate can be read without a token
-  (`api/qualitygates/project_status`), and check that the site shows
-  both after its next build.
+  cached") ([TD-06](RISKS_AND_TECHNICAL_DEBTS.md#td-06)).
+- Investigate key custody and key rotation
+  ([TD-05](RISKS_AND_TECHNICAL_DEBTS.md#td-05)).
+- Main risk: a finding that needs a design change.
+
+## 0.12 Interoperability and performance
+
+- Interoperability tests against Eclipse EDC, without Gaia-X: EDC
+  1.0.0-RC7 refuses the Gaia-X compliance credential (ADR 0022). Simpl-Open
+  stays under "Later" until a sandbox exists (ADR 0017).
+- Benchmarks published.
+- Main risk: EDC changing under us.
+
+## 0.13 Release candidate for 1.0
+
 - API and config freeze, upgrade notes, documentation review.
+- OpenSSF Best Practices **silver**.
+- OpenSSF Baseline **level 1** self-assessment, control by control, in
+  `docs/SECURITY-ASSURANCE.md` (moved from 0.1, maintainer, 2026-11-12),
+  done last so it assesses the final state; decide whether 1.0 aims at a
+  higher level ([R-05](RISKS_AND_TECHNICAL_DEBTS.md#r-05)).
 - Exit: Scorecard at least 8/10; no open high findings in Sonar or CodeQL.
+- Main risk: freezing too early or too late.
 
 ## Later (not planned for a release yet)
 
