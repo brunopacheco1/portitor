@@ -468,7 +468,8 @@ decided. Each names what is in place now.
   connector should keep them.
 - **Who calls the data plane, and with which credentials**
   (maintainer, 2026-11-15: to be investigated, for a future release).
-  Today only participants are identified, and only in the control
+  Today every credential is system to system (see "Who holds the
+  credentials" in [ARCHITECTURE](ARCHITECTURE.md)). Only participants are identified, and only in the control
   plane: every DSP request carries a DCP token, and the connector checks
   the caller's DID and credentials ([ADR 0016](adr/0016-dsp-caller-authentication.md),
   [ADR 0019](adr/0019-credential-constraints.md)). The data plane checks

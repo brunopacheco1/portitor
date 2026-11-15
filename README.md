@@ -11,6 +11,11 @@ Eclipse Dataspace Protocol (DSP) and the Decentralized Claims Protocol (DCP).
 From 0.8 it can also get a participant's Gaia-X compliance credential and
 require one in a policy (Gaia-X Trust Framework).
 
+Credentials are system to system: each one is held by a participant, an
+organisation with one DID, and checked between connectors. Portitor does
+not identify the people or applications inside an organisation
+([who holds the credentials](docs/ARCHITECTURE.md#who-holds-the-credentials)).
+
 The name: in Latin a *portitor* is both the customs officer at a port, who
 checks goods against the rules, and the ferryman who carries them across.
 A connector does both: it checks every exchange against agreed policies and

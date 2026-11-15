@@ -167,6 +167,32 @@ document and keeps it in a cache ([ADR 0005](adr/0005-schema-and-vocabulary-regi
 
 ![C4 Code: schema and vocabulary bundle](diagrams/c4-bundle-code.drawio.svg)
 
+## Who holds the credentials
+
+Every credential in Portitor is held by a **participant**: an
+organisation (a legal person) that runs a connector, named by one DID
+(`PORTITOR_PARTICIPANT_ID`). The credentials are system to system:
+
+- The identity is the participant's wallet, not a person's. It holds the
+  organisation's key, its credentials (for example `MembershipCredential`
+  from the dataspace issuer, and from 0.8 the Gaia-X `gx:LegalPerson` and
+  `gx:ParticipantComplianceCredential`) and signs the participant's DCP
+  tokens and presentations.
+- The issuer registers participants (DIDs), not people, and issues to
+  them.
+- The connector checks the calling participant on every DSP request
+  (control plane) and agrees contracts between participants
+  ([ADR 0016](adr/0016-dsp-caller-authentication.md),
+  [ADR 0019](adr/0019-credential-constraints.md)).
+
+Portitor does not identify the people or applications inside an
+organisation (user to system). The operator's management APIs are
+protected by an API key, and the data plane checks only the transfer's
+bearer token: whoever in the consumer's organisation holds it gets the
+data. How a consumer's users and applications prove who they are is
+open, listed as technical debt in the [roadmap](ROADMAP.md) ("Who calls
+the data plane, and with which credentials").
+
 ## Components
 
 One mono repo, one version. Each component is a **module** of the mono

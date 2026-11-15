@@ -107,7 +107,8 @@ fetch() { # url [curl flags]: a request from inside the network, trusting the te
 CA=$RUN/ca
 
 new_ec_key() { # file: a P-256 key
-  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$1" 2>/dev/null
+  local file=$1
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$file" 2>/dev/null
 }
 
 issue_certificate() { # key common-name dns-names(comma-separated) out: a leaf from the test CA
@@ -120,7 +121,8 @@ issue_certificate() { # key common-name dns-names(comma-separated) out: a leaf f
 }
 
 chain() { # leaf out: the leaf, then the test CA
-  cat "$1" "$CA/ca.pem" >"$2"
+  local leaf=$1 out=$2
+  cat "$leaf" "$CA/ca.pem" >"$out"
 }
 
 step "Make a test CA and its certificates"
@@ -290,7 +292,8 @@ done
 # --- 5. Gaia-X onboarding -------------------------------------------------------------
 
 has_compliance_credential() { # name: true once it holds one from the compliance service
-  identity_api "$1" GET /v1/credentials | jq -e --arg issuer "$COMPLIANCE_DID" \
+  local name=$1
+  identity_api "$name" GET /v1/credentials | jq -e --arg issuer "$COMPLIANCE_DID" \
     'any(.[]; (.types | index("gx:ParticipantComplianceCredential")) and .issuer == $issuer)' \
     >/dev/null
 }
