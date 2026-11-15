@@ -936,6 +936,126 @@ DID, so usually not).
 | `bundle shapes: ignored by the SHACL engine` (INFO or WARN, at start) | A SHACL term the engine ignores (`sh:extends`, `sh:shape`, `sh:property` without `sh:path` at INFO: expected for HealthDCAT-AP and DCAT-AP; anything else at WARN) | Nothing at INFO; at WARN, ask the authority |
 | `bundle context: not used` (WARN, at start) | The bundle has a `context` file for a DSP 2025-1 context URL; the connector's own copy is used | Nothing |
 
+### Traces and metrics
+
+All three components (connector, identity, issuer) can send traces and
+metrics with OpenTelemetry ([ADR 0023](adr/0023-observability.md)).
+Export is **off** unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set. There is
+no Prometheus scrape endpoint: the components push over OTLP, to an
+OpenTelemetry Collector or any receiver that takes OTLP/HTTP (Prometheus
+3 with `--web.enable-otlp-receiver`, Jaeger).
+
+**Switch it on.** Set the receiver's base URL; the components add
+`/v1/traces` and `/v1/metrics`:
+
+```sh
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+```
+
+`http://` and `https://` are both allowed: the receiver is your own.
+An `https://` receiver needs the CA bundle, as for every other call
+([Private CAs](#private-cas)). Protocol: OTLP over HTTP with Protocol
+Buffers only (no gRPC, no JSON), without compression. A setting the SDK
+refuses is logged (`telemetry: export is off`, ERROR) and the component
+runs on with logs only. A failed export is logged by the SDK (target
+`opentelemetry_sdk`); its data is dropped, and the next batch is sent as
+usual.
+
+**Variables.** Only OpenTelemetry's own variables; there is no
+`PORTITOR_*` setting. Read by the Rust SDK 0.33 that Portitor uses:
+
+| Variable | Use |
+|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Switches export on; the receiver's base URL |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | A full URL for one signal, instead of the base URL (export is on only with `OTEL_EXPORTER_OTLP_ENDPOINT` set) |
+| `OTEL_EXPORTER_OTLP_HEADERS` (and `_TRACES_`, `_METRICS_`) | Headers for the receiver, `key=value,key2=value2`, for example an API key |
+| `OTEL_EXPORTER_OTLP_TIMEOUT` (and `_TRACES_`, `_METRICS_`) | Milliseconds an export may take (default 10000; each request is also cut off after 10 s) |
+| `OTEL_SERVICE_NAME` | `service.name`; default `portitor-connector`, `portitor-identity` or `portitor-issuer` |
+| `OTEL_RESOURCE_ATTRIBUTES` | More resource attributes, for example `deployment.environment.name=prod`; `service.version` is Portitor's version unless set here |
+| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | Which traces are kept (below); default every trace (`parentbased_always_on`) |
+| `OTEL_BSP_SCHEDULE_DELAY`, `OTEL_BSP_MAX_QUEUE_SIZE`, `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` | The batch of spans: milliseconds between exports (default 5000), spans kept waiting (2048; more are dropped), spans per export (512) |
+| `OTEL_METRIC_EXPORT_INTERVAL` | Milliseconds between metric exports (default 60000) |
+| `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT`, `OTEL_SPAN_EVENT_COUNT_LIMIT`, `OTEL_SPAN_LINK_COUNT_LIMIT` | Limits per span (default 128 each) |
+
+Not read: `OTEL_SDK_DISABLED` (to switch export off, unset
+`OTEL_EXPORTER_OTLP_ENDPOINT`), `OTEL_EXPORTER_OTLP_PROTOCOL` (always
+`http/protobuf`), `OTEL_EXPORTER_OTLP_COMPRESSION` (compression is not
+built in), `OTEL_BSP_EXPORT_TIMEOUT`, `OTEL_BSP_MAX_CONCURRENT_EXPORTS`
+and `OTEL_METRIC_EXPORT_TIMEOUT` (only the SDK's experimental async
+processors read them), and `OTEL_LOGS_*` (logs stay on stdout).
+
+**Sampling.** With every request traced, a connector served about 20%
+fewer DSP requests per second at saturation in the 0.9 measurements
+([spike](spikes/0.9-opentelemetry.md)); idle cost is small. On a busy
+connector keep a share of the traces, for example one in ten:
+
+```sh
+OTEL_TRACES_SAMPLER=parentbased_traceidratio
+OTEL_TRACES_SAMPLER_ARG=0.1
+```
+
+Metrics are not sampled: they count every request.
+
+**What a trace shows.** One span per request served on the public and
+the management port (`GET /dsp/2025-1/negotiations/{pid}`: the route
+template, never the path with its ids), one per HTTP call sent (`POST`,
+with the host and port called), one per DSP outbox delivery
+(`dsp.outbox.deliver`), and each negotiation and transfer state change
+as a span event with both DSP process ids. Attributes are an allow-list:
+method, route, status code, host and port, process ids and states;
+never a token, an `Authorization` header, a key, a body or dataset
+contents. Other log lines are not copied into traces.
+
+**Trace context stays inside the participant.** A `traceparent` header
+(W3C Trace Context) is sent only on the connector's calls to its own
+STS and to its own data sources (the dataset's `portitor:source`), and
+read only on the identity component's `/sts/token`. DSP and DCP calls to
+other participants carry none, and one that arrives on the DSP port is
+ignored: each side starts its own trace. To follow one negotiation
+across two organisations, match the DSP process ids (`providerPid`,
+`consumerPid`) in both sides' logs.
+
+**Logs carry the trace id.** With export on, every JSON log line written
+during a traced request starts with `"trace_id":"<32 hex digits>"`, the
+id of the trace it belongs to: search the logs for it. With export off,
+log lines are as before.
+
+**State changes in the log.** Each change is also one log line (INFO,
+target `portitor::state`): `negotiation state changed` or `transfer
+state changed`, with `portitor.dsp.process`, `portitor.dsp.role`,
+`portitor.dsp.provider_pid`, `portitor.dsp.consumer_pid`,
+`portitor.dsp.previous_state` (none for a new process) and
+`portitor.dsp.state`.
+
+**Metrics.** Names follow OpenTelemetry's
+[naming rules](https://opentelemetry.io/docs/specs/semconv/general/naming/);
+the two HTTP histograms are the
+[HTTP semantic conventions'](https://opentelemetry.io/docs/specs/semconv/http/http-metrics/),
+with their advised buckets (5 ms to 10 s). A Prometheus receiver turns
+dots into underscores and adds the unit, for example
+`http_server_request_duration_seconds` and
+`portitor_negotiation_ended_total`.
+
+| Name | Instrument, unit | Attributes | Component |
+|---|---|---|---|
+| `http.server.request.duration` | histogram, `s` | `http.request.method`, `http.route` (when a route matched), `http.response.status_code`, `url.scheme` (`http`: TLS ends before the component), `network.protocol.version`, `error.type` (5xx) | all |
+| `http.client.request.duration` | histogram, `s` | `http.request.method`, `server.address`, `server.port`, `http.response.status_code` (when answered), `error.type` (4xx, 5xx, `timeout` or `_OTHER` when unanswered) | all |
+| `portitor.negotiation.ended` | counter, `{negotiation}` | `portitor.dsp.role` (`provider`, `consumer`), `portitor.dsp.state` (`FINALIZED`, `TERMINATED`) | connector |
+| `portitor.transfer.ended` | counter, `{transfer}` | `portitor.dsp.role`, `portitor.dsp.state` (`COMPLETED`, `TERMINATED`) | connector |
+| `portitor.dsp.request.refused` | counter, `{request}` | `error.type`: `unauthenticated` (HTTP 401), `invalid_message` or `message_rules` (the bundle's message shapes; both HTTP 400) | connector |
+| `portitor.outbox.message.resent` | counter, `{message}` | `portitor.outbox.name` (`dsp`, `credential_delivery`), and for `dsp` `portitor.dsp.process` (`negotiation`, `transfer`) and `portitor.dsp.role` | connector, issuer |
+| `portitor.outbox.message.given_up` | counter, `{message}` | as above | connector, issuer |
+| `portitor.harvest.run.ended` | counter, `{run}` | `portitor.harvest.kind` (`datasets`, `bundle`), `portitor.harvest.outcome` (`succeeded`, `partial`, `unchanged`, `failed`) | connector |
+| `portitor.harvest.dataset.rejected` | counter, `{dataset}` | `portitor.harvest.check` (the check of the job log) | connector |
+| `portitor.bundle.in_use` | gauge, `{bundle}` | `portitor.bundle.version`: 1 for the version in force, 0 for one replaced since the start | connector, with a bundle |
+
+A resend is a retry of a message, or a message saved before a restart
+and sent again; a give-up is a message the outbox stopped trying (the
+negotiation or transfer is then terminated or not started, as the log
+says; for the issuer, the delivery is `FAILED`). Every service also
+reports its `service.name`, `service.version` and the SDK's resource
+attributes.
+
 ### Backup and restore
 
 The database is `/data/portitor.db` plus, while the connector runs,
@@ -1289,7 +1409,8 @@ known risk and technical debt, with its status and target release):
   (ADR 0009). As consumer, the connector does not accept a provider's
   offer (DSP `OFFERED`) that has credential constraints; requests it
   sends itself are not affected.
-- No metrics endpoint yet.
+- No metrics scrape endpoint: metrics and traces are pushed over OTLP
+  ([Traces and metrics](#traces-and-metrics)).
 - Gaia-X: tested against a local Gaia-X compliance service in test mode
   (gx-compliance v2.16.0), not the Gaia-X Lab or a production clearing
   house. You get the registration number credential from a notary

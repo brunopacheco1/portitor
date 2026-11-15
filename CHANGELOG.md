@@ -12,6 +12,29 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Added
+
+- Traces and metrics with OpenTelemetry in all three components
+  ([ADR 0023](docs/adr/0023-observability.md)), off unless
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is set: OTLP over HTTP with Protocol
+  Buffers, sent with Portitor's own HTTPS client (no HTTP/2, no gRPC).
+  A span per request served (route templates only) and sent, a span per
+  DSP outbox delivery, and each negotiation and transfer state change as
+  a span event with its DSP process ids. Metrics:
+  `http.server.request.duration`, `http.client.request.duration` and
+  Portitor's own under `portitor.` (negotiations and transfers ended,
+  DSP requests refused, outbox resends and give-ups, harvest runs,
+  rejected datasets, bundle version in force); the list is in
+  DEPLOYING, section 6. The `traceparent` header crosses only calls
+  inside one participant (connector to its STS and to its data
+  sources); DSP calls carry none and ignore one received. With export
+  on, JSON log lines inside a span start with `trace_id`. New
+  dependencies: `opentelemetry`, `opentelemetry_sdk`,
+  `opentelemetry-otlp`, `opentelemetry-http` 0.33 and
+  `tracing-opentelemetry` 0.34, grouped in one Dependabot update.
+- Each negotiation and transfer state change is logged (INFO, target
+  `portitor::state`) with both process ids and the old and new state.
+
 ### Documentation
 
 - C1 and C2 diagrams redrawn with more context: C1 shows the dataspace

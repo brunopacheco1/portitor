@@ -65,7 +65,10 @@ judged against it.
     Docker Compose demo needs no file edits.
 11. **Observable.** Structured JSON logs, metrics and traces
     (OpenTelemetry), health and readiness endpoints. *Check:* every
-    protocol state change is logged with its process id.
+    protocol state change is logged with its process ids; a CI test
+    proves that traces and metrics are exported only when an OTLP
+    endpoint is set, and hold no token
+    ([ADR 0023](adr/0023-observability.md)).
 12. **Hexagonal architecture.** Pure domain crates, ports as traits,
     adapters for HTTP, storage and DID resolution
     ([ADR 0004](adr/0004-hexagonal-architecture.md)). *Check:* domain crates

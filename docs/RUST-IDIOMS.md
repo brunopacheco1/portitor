@@ -483,6 +483,35 @@ own name. The harvest's log lines use all three
 (`portitor-connector/src/harvest.rs`; `access_rights = ?access_rights` in
 `shacl.rs`).
 
+### Spans and log targets
+
+```rust
+let span = tracing::info_span!("http.server.request", http.route = route.as_deref(), "error.type" = Empty);
+let response = next.run(request).instrument(span.clone()).await;
+span.record("error.type", status.to_string());
+```
+
+A *span* is a stretch of work with a name and fields; log lines written
+while it runs belong to it. `.instrument(span)` runs a task inside the
+span every time the task is polled, also across `.await`s (a plain
+`span.enter()` would not survive an `.await`). `Empty` declares a field
+filled in later with `span.record`. A field name in quotes
+(`"error.type"`) is needed when a part is a Rust keyword. `otel.name`,
+`otel.kind` and `otel.status_code` are read by the OpenTelemetry layer
+as the span's name, kind and status (`portitor-runtime/src/telemetry/http.rs`).
+
+`tracing::event!(target: STATE_EVENTS, tracing::Level::INFO, ...)`
+writes a log line with a chosen *target* instead of the module path; the
+OpenTelemetry layer copies only events with that target into traces
+(`portitor-connector/src/state_events.rs`). `event!` with the level
+spelled out is used there because `info!(target: ..., a.b = ...)` does
+not parse when the first field name has dots.
+
+`#[async_trait::async_trait]` on an `impl` block: the trait (here
+opentelemetry-http's `HttpClient`) was declared with that macro, so its
+`async fn` is really a function returning a boxed task, as `BoxFuture`
+does by hand (`OnTokio` in `portitor-runtime/src/telemetry.rs`).
+
 ## `async`, `.await` and background tasks
 
 `async fn` returns a task that runs when someone `.await`s it. While it
