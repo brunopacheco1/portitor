@@ -71,6 +71,7 @@ pub mod ports;
 pub mod bundle_harvest;
 // the bundle's rules: SHACL dataset check, message guard
 pub mod shacl;
+mod state_events;
 pub mod store;
 pub mod system;
 #[cfg(feature = "tck")]
@@ -762,8 +763,12 @@ async fn catalog_request(
     State(s): State<Arc<AppState>>,
     body: Result<Json<serde_json::Value>, JsonRejection>,
 ) -> Response {
-    let refused =
-        |reason: &str| respond::<()>(Outcome::BadRequest(CatalogError::new("400", reason)));
+    let refused = |reason: &str| {
+        portitor_runtime::telemetry::metrics::dsp_request_refused(
+            portitor_runtime::telemetry::metrics::Refusal::InvalidMessage,
+        );
+        respond::<()>(Outcome::BadRequest(CatalogError::new("400", reason)))
+    };
     match body {
         Ok(Json(value)) => match read_catalog_request(value) {
             Ok(msg) => respond(s.catalog.request(&msg)),

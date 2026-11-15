@@ -40,6 +40,7 @@ use portitor_dsp::policy::{CallerCredentials, CredentialTypes, HeldCredential, M
 use portitor_dsp::transfer::TransferError;
 use portitor_runtime::BoxFuture;
 use portitor_runtime::settings::comma_list;
+use portitor_runtime::telemetry::metrics::{self, Refusal};
 
 pub mod dcp;
 pub mod sts;
@@ -244,6 +245,7 @@ pub async fn require_caller(
         Err(reason) => {
             let path = request.uri().path();
             tracing::warn!(%path, %reason, "DSP request refused: caller not authenticated");
+            metrics::dsp_request_refused(Refusal::Unauthenticated);
             unauthorized(path)
         }
     }

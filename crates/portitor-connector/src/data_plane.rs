@@ -45,6 +45,8 @@ use portitor_dsp::transfer::{DataAddress, DataAddressType, EndpointProperty};
 use crate::http_client::{HttpsClient, bearer_token_in, https_client};
 use crate::ports::AnyFlowStore;
 use crate::system::{new_uuid, now_secs};
+use portitor_runtime::telemetry::http::{ClientCall, TraceContext};
+use tracing::Instrument as _;
 
 /// The `endpointType` of the data address sent over DSP. It is the value
 /// of the DSP 2025-1 examples, the DSP TCK and EDC's DSP tests (ADR 0013);
@@ -491,14 +493,30 @@ pub(crate) async fn serve(
 }
 
 /// GETs `url` and turns a 2xx answer into our response, streaming the body.
+/// The data source is our participant's own, so the request carries our
+/// trace context (ADR 0023, section 4). Its span ends when the answer's
+/// headers came; the body is streamed afterwards.
 async fn fetch(client: &HttpsClient, url: &str) -> Result<Response, String> {
-    let request = hyper::Request::get(url)
+    let mut request = hyper::Request::get(url)
         .body(Full::new(Bytes::new()))
         .map_err(|e| e.to_string())?;
-    let answer = tokio::time::timeout(UPSTREAM_TIMEOUT, client.request(request))
-        .await
-        .map_err(|_| format!("no answer within {}s", UPSTREAM_TIMEOUT.as_secs()))?
-        .map_err(|e| e.to_string())?;
+    let mut call = ClientCall::start(&mut request, TraceContext::Send);
+    let sent = client.request(request).instrument(call.span().clone());
+    let answer = match tokio::time::timeout(UPSTREAM_TIMEOUT, sent).await {
+        Ok(Ok(answer)) => {
+            call.answered(answer.status().as_u16());
+            call.end();
+            answer
+        }
+        Ok(Err(error)) => {
+            call.end();
+            return Err(error.to_string());
+        }
+        Err(_) => {
+            call.end_timed_out();
+            return Err(format!("no answer within {}s", UPSTREAM_TIMEOUT.as_secs()));
+        }
+    };
     if !answer.status().is_success() {
         return Err(format!("upstream answered HTTP {}", answer.status()));
     }

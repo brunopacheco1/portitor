@@ -28,6 +28,7 @@ use portitor_dsp::transfer::{
     TransferCompletionMessage, TransferError, TransferStartMessage, TransferSuspensionMessage,
     TransferTerminationMessage, Transition,
 };
+use portitor_runtime::telemetry::metrics;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -325,6 +326,10 @@ impl Outbox for TransferConsumer {
 
     fn link(&self) -> &Link {
         &self.link
+    }
+
+    fn kind(&self) -> metrics::Outbox {
+        metrics::Outbox::Transfer(metrics::Role::Consumer)
     }
 
     fn delivered(&self, out: &Outgoing, ack: Option<&Value>) -> Result<Option<Outgoing>, Failure> {

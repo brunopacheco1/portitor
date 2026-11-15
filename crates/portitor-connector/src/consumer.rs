@@ -30,6 +30,7 @@ use portitor_dsp::negotiation::{
     Transition,
 };
 use portitor_dsp::policy::credential_scopes;
+use portitor_runtime::telemetry::metrics::{self, Refusal};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -226,7 +227,10 @@ impl Consumer {
                 reason,
             ))
         };
-        let Json(value) = body.map_err(|e| invalid("", &e.body_text()))?;
+        let Json(value) = body.map_err(|e| {
+            metrics::dsp_request_refused(Refusal::InvalidMessage);
+            invalid("", &e.body_text())
+        })?;
         let provider_pid = value
             .get("providerPid")
             .and_then(Value::as_str)
@@ -235,8 +239,14 @@ impl Consumer {
         self.link
             .guard
             .check(Direction::Inbound, message_type, &value)
-            .map_err(|r| invalid(&provider_pid, &r.to_string()))?;
-        serde_json::from_value(value).map_err(|e| invalid(&provider_pid, &e.to_string()))
+            .map_err(|r| {
+                metrics::dsp_request_refused(Refusal::MessageRules);
+                invalid(&provider_pid, &r.to_string())
+            })?;
+        serde_json::from_value(value).map_err(|e| {
+            metrics::dsp_request_refused(Refusal::InvalidMessage);
+            invalid(&provider_pid, &e.to_string())
+        })
     }
 
     /// Answers the provider and starts sending our next message, if any.
@@ -262,6 +272,10 @@ impl Outbox for Consumer {
 
     fn link(&self) -> &Link {
         &self.link
+    }
+
+    fn kind(&self) -> metrics::Outbox {
+        metrics::Outbox::Negotiation(metrics::Role::Consumer)
     }
 
     /// A request or an acceptance may lead the provider to agree, after it

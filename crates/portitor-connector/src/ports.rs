@@ -13,15 +13,14 @@ use std::time::Duration;
 
 use portitor_dps::state::DataFlowState;
 use portitor_dsp::guard::{AllowAll, MessageGuard};
-use portitor_dsp::negotiation::Agreement;
 use portitor_dsp::negotiation::consumer::{
     ConsumerDecider, ConsumerDecision, ConsumerNegotiation, ConsumerStore,
 };
 use portitor_dsp::negotiation::provider::{
     Decider, Decision, Negotiation, NegotiationStore, StoreError,
 };
+use portitor_dsp::negotiation::{Agreement, NegotiationState};
 use portitor_dsp::policy::CredentialTypes;
-use portitor_dsp::transfer::DataAddress;
 use portitor_dsp::transfer::consumer::{
     AgreementProvider, ConsumerTransfer, ConsumerTransferDecider, ConsumerTransferDecision,
     ConsumerTransferStore, HeldAgreements,
@@ -29,6 +28,7 @@ use portitor_dsp::transfer::consumer::{
 use portitor_dsp::transfer::provider::{
     Agreements, DataFlows, Transfer, TransferDecider, TransferDecision, TransferStore,
 };
+use portitor_dsp::transfer::{DataAddress, TransferState};
 
 use crate::auth::{CallerVerifier, NoTokens, Prover, RefuseAll};
 use crate::consumer::InMemoryConsumerNegotiations;
@@ -36,6 +36,7 @@ use crate::consumer_transfer::InMemoryConsumerTransfers;
 use crate::data_plane::{Flow, FlowStore, FlowStoreError, InMemoryFlows};
 use crate::http_client::Sender;
 use crate::negotiation::InMemoryNegotiations;
+use crate::state_events::{self, Role};
 use crate::transfer::{InMemoryTransfers, NoDataFlows};
 
 /// How often and how fast to retry a message the consumer did not take.
@@ -305,19 +306,42 @@ pub type AnyConsumerStore = Shared<dyn ConsumerStore + Send + Sync>;
 /// The consumer's negotiation policy chosen at start.
 pub type AnyConsumerDecider = Shared<dyn ConsumerDecider + Send + Sync>;
 
+// The four process stores below also report each state change
+// (`state_events`): `insert` is a new process; `replace_if` reads the
+// state before the write, and reports only when the write happened on
+// exactly that version (compare-and-update, ADR 0007), so the state read
+// is the one replaced.
+
 impl NegotiationStore for AnyStore {
     fn get(&self, provider_pid: &str) -> Result<Option<Negotiation>, StoreError> {
         self.0.get(provider_pid)
     }
     fn insert(&self, negotiation: &Negotiation) -> Result<(), StoreError> {
-        self.0.insert(negotiation)
+        self.0.insert(negotiation)?;
+        saved_as_provider(negotiation, None);
+        Ok(())
     }
     fn replace_if(&self, negotiation: &Negotiation, expected: u64) -> Result<bool, StoreError> {
-        self.0.replace_if(negotiation, expected)
+        let before = self.0.get(&negotiation.provider_pid)?;
+        let replaced = self.0.replace_if(negotiation, expected)?;
+        if replaced && let Some(before) = before.filter(|before| before.version == expected) {
+            saved_as_provider(negotiation, Some(before.state));
+        }
+        Ok(replaced)
     }
     fn pending(&self) -> Result<Vec<Negotiation>, StoreError> {
         self.0.pending()
     }
+}
+
+fn saved_as_provider(negotiation: &Negotiation, before: Option<NegotiationState>) {
+    state_events::negotiation_saved(
+        Role::Provider,
+        &negotiation.provider_pid,
+        &negotiation.consumer_pid,
+        before,
+        negotiation.state,
+    );
 }
 
 impl Decider for AnyDecider {
@@ -331,14 +355,21 @@ impl ConsumerStore for AnyConsumerStore {
         self.0.get(consumer_pid)
     }
     fn insert(&self, negotiation: &ConsumerNegotiation) -> Result<(), StoreError> {
-        self.0.insert(negotiation)
+        self.0.insert(negotiation)?;
+        saved_as_consumer(negotiation, None);
+        Ok(())
     }
     fn replace_if(
         &self,
         negotiation: &ConsumerNegotiation,
         expected: u64,
     ) -> Result<bool, StoreError> {
-        self.0.replace_if(negotiation, expected)
+        let before = self.0.get(&negotiation.consumer_pid)?;
+        let replaced = self.0.replace_if(negotiation, expected)?;
+        if replaced && let Some(before) = before.filter(|before| before.version == expected) {
+            saved_as_consumer(negotiation, Some(before.state));
+        }
+        Ok(replaced)
     }
     fn list(
         &self,
@@ -350,6 +381,16 @@ impl ConsumerStore for AnyConsumerStore {
     fn pending(&self) -> Result<Vec<ConsumerNegotiation>, StoreError> {
         self.0.pending()
     }
+}
+
+fn saved_as_consumer(negotiation: &ConsumerNegotiation, before: Option<NegotiationState>) {
+    state_events::negotiation_saved(
+        Role::Consumer,
+        negotiation.provider_pid.as_deref().unwrap_or_default(),
+        &negotiation.consumer_pid,
+        before,
+        negotiation.state,
+    );
 }
 
 impl ConsumerDecider for AnyConsumerDecider {
@@ -375,14 +416,31 @@ impl TransferStore for AnyTransferStore {
         self.0.get(provider_pid)
     }
     fn insert(&self, transfer: &Transfer) -> Result<(), StoreError> {
-        self.0.insert(transfer)
+        self.0.insert(transfer)?;
+        transfer_saved_as_provider(transfer, None);
+        Ok(())
     }
     fn replace_if(&self, transfer: &Transfer, expected: u64) -> Result<bool, StoreError> {
-        self.0.replace_if(transfer, expected)
+        let before = self.0.get(&transfer.provider_pid)?;
+        let replaced = self.0.replace_if(transfer, expected)?;
+        if replaced && let Some(before) = before.filter(|before| before.version == expected) {
+            transfer_saved_as_provider(transfer, Some(before.state));
+        }
+        Ok(replaced)
     }
     fn pending(&self) -> Result<Vec<Transfer>, StoreError> {
         self.0.pending()
     }
+}
+
+fn transfer_saved_as_provider(transfer: &Transfer, before: Option<TransferState>) {
+    state_events::transfer_saved(
+        Role::Provider,
+        &transfer.provider_pid,
+        &transfer.consumer_pid,
+        before,
+        transfer.state,
+    );
 }
 
 impl Agreements for AnyAgreements {
@@ -435,10 +493,17 @@ impl ConsumerTransferStore for AnyConsumerTransferStore {
         self.0.get(consumer_pid)
     }
     fn insert(&self, transfer: &ConsumerTransfer) -> Result<(), StoreError> {
-        self.0.insert(transfer)
+        self.0.insert(transfer)?;
+        transfer_saved_as_consumer(transfer, None);
+        Ok(())
     }
     fn replace_if(&self, transfer: &ConsumerTransfer, expected: u64) -> Result<bool, StoreError> {
-        self.0.replace_if(transfer, expected)
+        let before = self.0.get(&transfer.consumer_pid)?;
+        let replaced = self.0.replace_if(transfer, expected)?;
+        if replaced && let Some(before) = before.filter(|before| before.version == expected) {
+            transfer_saved_as_consumer(transfer, Some(before.state));
+        }
+        Ok(replaced)
     }
     fn pending(&self) -> Result<Vec<ConsumerTransfer>, StoreError> {
         self.0.pending()
@@ -446,6 +511,16 @@ impl ConsumerTransferStore for AnyConsumerTransferStore {
     fn list(&self, after: Option<&str>, limit: usize) -> Result<Vec<ConsumerTransfer>, StoreError> {
         self.0.list(after, limit)
     }
+}
+
+fn transfer_saved_as_consumer(transfer: &ConsumerTransfer, before: Option<TransferState>) {
+    state_events::transfer_saved(
+        Role::Consumer,
+        transfer.provider_pid.as_deref().unwrap_or_default(),
+        &transfer.consumer_pid,
+        before,
+        transfer.state,
+    );
 }
 
 impl ConsumerTransferDecider for AnyConsumerTransferDecider {

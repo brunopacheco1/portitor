@@ -27,6 +27,7 @@ use portitor_dsp::transfer::{
     TransferStartMessage, TransferState, TransferSuspensionMessage, TransferTerminationMessage,
     Transition,
 };
+use portitor_runtime::telemetry::metrics::{self, Refusal};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -222,6 +223,10 @@ impl Outbox for TransferProvider {
         &self.link
     }
 
+    fn kind(&self) -> metrics::Outbox {
+        metrics::Outbox::Transfer(metrics::Role::Provider)
+    }
+
     fn message(out: &Outgoing) -> Message<'_> {
         Message::new(
             &out.provider_pid,
@@ -263,7 +268,10 @@ pub(crate) fn read_message<T: DeserializeOwned>(
     refuse: impl Fn(&str, &str) -> TransferError,
 ) -> Result<T, Box<TransferError>> {
     let refuse = |other_pid: &str, reason: &str| Box::new(refuse(other_pid, reason));
-    let Json(value) = body.map_err(|e| refuse("", &e.body_text()))?;
+    let Json(value) = body.map_err(|e| {
+        metrics::dsp_request_refused(Refusal::InvalidMessage);
+        refuse("", &e.body_text())
+    })?;
     let other_pid = value
         .get(other_pid_key)
         .and_then(Value::as_str)
@@ -271,8 +279,14 @@ pub(crate) fn read_message<T: DeserializeOwned>(
         .to_owned();
     guard
         .check(Direction::Inbound, message_type, &value)
-        .map_err(|r| refuse(&other_pid, &r.to_string()))?;
-    serde_json::from_value(value).map_err(|e| refuse(&other_pid, &e.to_string()))
+        .map_err(|r| {
+            metrics::dsp_request_refused(Refusal::MessageRules);
+            refuse(&other_pid, &r.to_string())
+        })?;
+    serde_json::from_value(value).map_err(|e| {
+        metrics::dsp_request_refused(Refusal::InvalidMessage);
+        refuse(&other_pid, &e.to_string())
+    })
 }
 
 pub(crate) fn bad_request(e: TransferError) -> Response {

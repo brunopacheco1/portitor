@@ -28,6 +28,7 @@ use portitor_dsp::Dataset;
 /// same `SQLite` file as the negotiations, so it reuses their store error
 /// (named after negotiations, but it means "the store failed").
 pub use portitor_dsp::negotiation::provider::StoreError;
+use portitor_runtime::telemetry::metrics;
 
 mod check;
 mod copy;
@@ -506,12 +507,15 @@ impl DatasetHarvester {
     pub fn record_bundle_run(&self, job: JobRecord) -> Result<u64, StoreError> {
         let _running = self.busy.lock().unwrap_or_else(PoisonError::into_inner);
         let status = self.store.status()?;
-        self.store.commit(&Commit {
+        let (kind, outcome) = (job.kind.name(), job.outcome.name());
+        let id = self.store.commit(&Commit {
             job,
             errors: Vec::new(),
             writes: Vec::new(),
             status,
-        })
+        })?;
+        metrics::harvest_run_ended(kind, outcome);
+        Ok(id)
     }
 
     /// Checks the stored datasets again if the rules are not the ones
@@ -696,10 +700,19 @@ impl DatasetHarvester {
             self.reload()?;
         }
         log_run(id, &commit);
+        measure_run(&commit);
         Ok(HarvestJob {
             id,
             record: commit.job,
         })
+    }
+}
+
+/// The run's metrics: how it ended, and the rejected entries by check.
+fn measure_run(commit: &Commit) {
+    metrics::harvest_run_ended(commit.job.kind.name(), commit.job.outcome.name());
+    for error in &commit.errors {
+        metrics::datasets_rejected(error.kind.name(), 1);
     }
 }
 

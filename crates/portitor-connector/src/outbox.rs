@@ -22,7 +22,9 @@ use std::sync::Arc;
 
 use portitor_dsp::guard::{Direction, MessageGuard};
 use portitor_dsp::policy::CredentialTypes;
+use portitor_runtime::telemetry::metrics;
 use serde_json::Value;
+use tracing::Instrument as _;
 
 use crate::auth::Prover;
 use crate::http_client::Sender;
@@ -118,6 +120,9 @@ pub(crate) trait Outbox: Send + Sync + 'static {
     /// How to send.
     fn link(&self) -> &Link;
 
+    /// Which outbox this is, for the metrics: the process and our role.
+    fn kind(&self) -> metrics::Outbox;
+
     /// The scopes, beyond the configured ones, that the counter-party may
     /// read with the token sent with the message: those an offer's
     /// credential constraints need (ADR 0019). None by default, so the
@@ -169,6 +174,8 @@ pub(crate) trait Outbox: Send + Sync + 'static {
 pub(crate) fn resume<O: Outbox>(outbox: &Arc<O>, pending: Vec<O::Out>) -> usize {
     let count = pending.len();
     for out in pending {
+        // a message saved before the stop is sent again
+        metrics::outbox_resent(outbox.kind());
         tokio::spawn(deliver(Arc::clone(outbox), out));
     }
     count
@@ -176,13 +183,34 @@ pub(crate) fn resume<O: Outbox>(outbox: &Arc<O>, pending: Vec<O::Out>) -> usize 
 
 /// Sends `out` and whatever follows from it, until the counter-party has
 /// to act or the process ends (the rules are in the module doc).
-pub(crate) async fn deliver<O: Outbox>(outbox: Arc<O>, mut out: O::Out) {
+///
+/// The returned task runs in a span made now, a child of the current
+/// span (the request that saved the message, if any), so its outbound
+/// calls and state changes join that request's trace even though the
+/// task runs later, on its own (`tokio::spawn`).
+pub(crate) fn deliver<O: Outbox>(outbox: Arc<O>, out: O::Out) -> impl Future<Output = ()> {
+    let (process, role) = match outbox.kind() {
+        metrics::Outbox::Negotiation(role) => ("negotiation", role.name()),
+        metrics::Outbox::Transfer(role) => ("transfer", role.name()),
+        metrics::Outbox::CredentialDelivery => ("credential_delivery", ""),
+    };
+    let span = tracing::info_span!(
+        "dsp.outbox.deliver",
+        portitor.dsp.process = process,
+        portitor.dsp.role = role,
+        portitor.dsp.pid = O::message(&out).pid,
+    );
+    deliver_in_turn(outbox, out).instrument(span)
+}
+
+/// The work of [`deliver`].
+async fn deliver_in_turn<O: Outbox>(outbox: Arc<O>, mut out: O::Out) {
     loop {
         let msg = O::message(&out);
         let (pid, first) = (msg.pid.to_owned(), msg.first);
         let scopes = outbox.scopes(&out);
         let reached = |state| O::reached(&out, state);
-        let next = match attempt(outbox.link(), &msg, &scopes, reached).await {
+        let next = match attempt(outbox.link(), outbox.kind(), &msg, &scopes, reached).await {
             Outcome::Acknowledged(answer) => outbox.delivered(&out, Some(&answer)),
             Outcome::ArrivedBefore | Outcome::TerminationUnanswered => outbox.delivered(&out, None),
             Outcome::NotStarted => outbox.not_started(&out).map(|()| None),
@@ -222,11 +250,12 @@ enum Outcome {
 /// only when the send failed.
 async fn attempt(
     link: &Link,
+    kind: metrics::Outbox,
     msg: &Message<'_>,
     scopes: &[String],
     reached: impl FnOnce(Value) -> bool,
 ) -> Outcome {
-    let failure = match send(link, msg, scopes).await {
+    let failure = match send(link, kind, msg, scopes).await {
         Ok(answer) => return Outcome::Acknowledged(answer),
         Err(failure) => failure,
     };
@@ -242,6 +271,10 @@ async fn attempt(
         Outcome::Unreachable
     };
     log_unanswered(msg.pid, &outcome, &failure);
+    // the message did not arrive and will not be sent again
+    if !matches!(outcome, Outcome::ArrivedBefore) {
+        metrics::outbox_given_up(kind);
+    }
     outcome
 }
 
@@ -322,7 +355,12 @@ pub(crate) async fn arrived(
 /// the link's retry policy says. Each try gets a new token, which also
 /// grants `scopes`: a token is good for one request only. Returns the
 /// counter-party's answer.
-async fn send(link: &Link, msg: &Message<'_>, scopes: &[String]) -> Result<Value, SendFailure> {
+async fn send(
+    link: &Link,
+    kind: metrics::Outbox,
+    msg: &Message<'_>,
+    scopes: &[String],
+) -> Result<Value, SendFailure> {
     let (url, body) = (msg.url, msg.body);
     let message_type = body
         .get("@type")
@@ -337,6 +375,7 @@ async fn send(link: &Link, msg: &Message<'_>, scopes: &[String]) -> Result<Value
         if attempt > 0 {
             tokio::time::sleep(delay).await;
             delay = delay.saturating_mul(2);
+            metrics::outbox_resent(kind);
         }
         let authorization = match link.prover.authorization(msg.audience, scopes).await {
             Ok(authorization) => authorization,
@@ -455,7 +494,8 @@ mod tests {
             .build()
             .unwrap();
         let outcome = tracing::subscriber::with_default(subscriber, || {
-            runtime.block_on(attempt(&link, &msg, &[], |_| false))
+            let kind = metrics::Outbox::Negotiation(metrics::Role::Consumer);
+            runtime.block_on(attempt(&link, kind, &msg, &[], |_| false))
         });
         let name = match outcome {
             Outcome::Acknowledged(_) => "acknowledged",

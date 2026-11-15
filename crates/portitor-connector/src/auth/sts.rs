@@ -72,14 +72,17 @@ impl std::fmt::Debug for StsClient {
 impl StsClient {
     /// A client for the STS in `settings`. Its HTTP client is used for
     /// the STS URL only, so `PORTITOR_STS_ALLOW_HTTP` allows plain HTTP
-    /// there and nowhere else.
+    /// there and nowhere else. The STS is our participant's own identity
+    /// component, so the requests carry our trace context (ADR 0023,
+    /// section 4).
     ///
     /// # Errors
     ///
     /// The HTTP client cannot be built.
     pub fn new(settings: &AuthSettings) -> Result<Self, String> {
+        let http = HttpSender::new(settings.allow_http || settings.sts_allow_http)?;
         Ok(Self {
-            http: HttpSender::new(settings.allow_http || settings.sts_allow_http)?,
+            http: http.sending_trace_context(),
             url: settings.sts_url.clone(),
             client_id: settings.sts_client_id.clone(),
             client_secret: settings.sts_client_secret.clone(),
