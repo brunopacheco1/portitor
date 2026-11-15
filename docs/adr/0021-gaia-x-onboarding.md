@@ -14,6 +14,10 @@ SPDX-License-Identifier: Apache-2.0
   renew the certificate on the same key, key rotation stays in 0.10; talk
   to the clearing house with its REST API, not OpenID4VC; no test against
   the real Gaia-X Lab in 0.8.
+- Update (2026-11-15): "key rotation stays in 0.10" was written before
+  the hardening release was split into 0.10 to 0.13 (maintainer,
+  2026-11-15). Key custody and key rotation are now investigated in
+  0.11 (ROADMAP, [TD-05](../RISKS_AND_TECHNICAL_DEBTS.md#td-05)).
 
 ## Context
 
@@ -143,7 +147,8 @@ protocol, "Scopes"). So:
 - The certificate expires before the key; renewing it on the same key
   causes no gap. Changing the key still breaks every signature it made,
   now including the self-signed Gaia-X credentials, so a key change also
-  means a new compliance run (key rotation stays in 0.10).
+  means a new compliance run (key rotation stays in 0.10; now
+  investigated in 0.11, see the update above).
 - The identity now calls an outside service on its own. It goes through
   the shared HTTP client (HTTPS only, limits, no redirects).
 - Not in this ADR: Gaia-X service offering credentials, label levels 1
