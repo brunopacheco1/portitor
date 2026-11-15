@@ -153,3 +153,18 @@ async fn the_checks_are_open_and_the_api_keeps_its_key() {
     );
     std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
 }
+
+/// `portitor-identity health x` and `portitor-identity x` are usage errors: exit code 2, before
+/// anything starts.
+#[test]
+fn unknown_arguments_exit_with_2() {
+    for args in [&["health", "x"][..], &["x"][..]] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_portitor-identity"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("takes no arguments"), "{stderr}");
+    }
+}

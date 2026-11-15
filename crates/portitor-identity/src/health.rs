@@ -35,21 +35,102 @@ pub fn readiness_checks(identity: &Arc<Identity>, db_file: PathBuf) -> HealthChe
     checks
 }
 
-/// The DID document `GET /.well-known/did.json` serves (the same value
-/// the handler sends) names the participant and lists the key it signs
-/// with.
+/// Check: the DID document of `identity` names the participant and lists
+/// its loaded key for `capabilityInvocation` ([`document_lists`]). The
+/// document is built from the key at start and the key never changes, so
+/// this (and the `key` check) cannot fail while the component serves;
+/// they guard against a change in how the document is built.
 fn document_lists_the_key(identity: &Identity) -> Result<(), String> {
-    let document: DidDocument = serde_json::from_value(identity.document.clone())
+    document_lists(
+        &identity.document,
+        &identity.participant_id,
+        &identity.kid,
+        &identity.key.public_jwk(),
+    )
+}
+
+/// `document` is a DID document for `did` that lists the key `public`
+/// as `kid` for `capabilityInvocation`.
+fn document_lists(
+    document: &serde_json::Value,
+    did: &str,
+    kid: &str,
+    public: &portitor_dcp::Jwk,
+) -> Result<(), String> {
+    let document: DidDocument = serde_json::from_value(document.clone())
         .map_err(|e| format!("the DID document is not valid: {e}"))?;
-    if document.id != identity.participant_id {
+    if document.id != did {
         return Err("the DID document names another DID".to_owned());
     }
     let listed = document
-        .key_for(Some(&identity.kid), Purpose::CapabilityInvocation)
+        .key_for(Some(kid), Purpose::CapabilityInvocation)
         .map_err(|e| format!("the DID document does not list the key: {e}"))?;
-    if listed.public_key_jwk == identity.key.public_jwk() {
+    if listed.public_key_jwk == *public {
         Ok(())
     } else {
         Err("the DID document lists another key than the one loaded".to_owned())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use portitor_dcp::SigningKey;
+    use serde_json::json;
+    use tower::ServiceExt as _;
+
+    const DID: &str = "did:web:holder.example";
+    const KID: &str = "did:web:holder.example#key-1";
+
+    fn document(did: &str, key: &SigningKey) -> serde_json::Value {
+        json!({
+            "@context": ["https://www.w3.org/ns/did/v1"],
+            "id": did,
+            "verificationMethod": [{"id": KID, "type": "JsonWebKey2020",
+                                    "controller": did, "publicKeyJwk": key.public_jwk()}],
+            "capabilityInvocation": [KID]
+        })
+    }
+
+    #[tokio::test]
+    async fn the_document_must_name_us_and_list_the_loaded_key() {
+        let key = SigningKey::generate().unwrap();
+        let other = SigningKey::generate().unwrap();
+        let public = key.public_jwk();
+        assert_eq!(
+            document_lists(&document(DID, &key), DID, KID, &public),
+            Ok(())
+        );
+        let err = document_lists(&document("did:web:other.example", &key), DID, KID, &public);
+        assert_eq!(err.unwrap_err(), "the DID document names another DID");
+        let err = document_lists(&document(DID, &other), DID, KID, &public).unwrap_err();
+        assert!(err.contains("another key"), "{err}");
+        let err = document_lists(
+            &document(DID, &key),
+            DID,
+            "did:web:holder.example#nope",
+            &public,
+        )
+        .unwrap_err();
+        assert!(err.contains("does not list the key"), "{err}");
+        let err = document_lists(&json!({"id": 1}), DID, KID, &public).unwrap_err();
+        assert!(err.contains("not valid"), "{err}");
+        // as a readiness check: 503
+        let mut checks = HealthChecks::new();
+        let bad = document(DID, &other);
+        checks.add(
+            "did-document",
+            blocking(move || document_lists(&bad, DID, KID, &public)),
+        );
+        let app = portitor_runtime::health::router(Arc::new(checks));
+        let request = axum::http::Request::get(portitor_runtime::health::READINESS_PATH)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 }

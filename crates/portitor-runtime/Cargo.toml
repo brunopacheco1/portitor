@@ -48,5 +48,11 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 # (axum, and the connector's and identity's tests)
 tower = { version = "0.5", features = ["util"] }
 
+[features]
+# telemetry::testing: in-memory traces and a traceparent recorder for the
+# tests of this crate and the binaries; switched on only by their
+# [dev-dependencies]
+test-support = []
+
 [lints]
 workspace = true

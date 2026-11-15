@@ -1335,3 +1335,18 @@ async fn health_checks_its_own_dependencies_without_the_key() {
     assert_eq!(body["componentResults"][0]["isHealthy"], false);
     assert_eq!(body["componentResults"][2]["isHealthy"], true);
 }
+
+/// `portitor-issuer health x` and `portitor-issuer x` are usage errors: exit code 2, before
+/// anything starts.
+#[test]
+fn unknown_arguments_exit_with_2() {
+    for args in [&["health", "x"][..], &["x"][..]] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_portitor-issuer"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("takes no arguments"), "{stderr}");
+    }
+}

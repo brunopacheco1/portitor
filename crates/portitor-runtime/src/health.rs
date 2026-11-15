@@ -782,4 +782,24 @@ mod tests {
             .unwrap();
         assert_eq!(probe(&closed.to_string()), ExitCode::FAILURE);
     }
+
+    /// A server that takes the connection and never answers: the probe
+    /// gives up after its timeout and fails.
+    #[test]
+    fn the_probe_fails_in_time_when_nothing_answers() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let mut open = Vec::new();
+            // keep each connection open, unread and unanswered
+            for socket in listener.incoming().flatten() {
+                open.push(socket);
+            }
+        });
+        let started = std::time::Instant::now();
+        assert_eq!(probe(&address.to_string()), ExitCode::FAILURE);
+        let took = started.elapsed();
+        assert!(took >= PROBE_TIMEOUT, "{took:?}");
+        assert!(took < PROBE_TIMEOUT + Duration::from_secs(2), "{took:?}");
+    }
 }

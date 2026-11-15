@@ -684,4 +684,26 @@ mod tests {
         assert_ne!(a, b);
         assert_eq!(p.authorize("f2", &a, now_secs()), Err(Denied::Unauthorized));
     }
+
+    /// The data source is our own: the fetch carries our trace context
+    /// (ADR 0023, section 4).
+    #[tokio::test]
+    async fn the_fetch_from_our_data_source_carries_trace_context() {
+        use portitor_runtime::telemetry::testing::{
+            recorded, trace_on_this_thread, traceparent_recorder,
+        };
+        let traced = trace_on_this_thread();
+        let (base, recorder) = traceparent_recorder().await;
+        let (client, _) = https_client(true).unwrap();
+        let span = tracing::info_span!(target: "portitor_test", "request");
+        let response = fetch(&client, &format!("{base}/d1")).instrument(span).await;
+        assert!(response.is_ok());
+        let got = recorded(&recorder);
+        assert_eq!(got.len(), 1);
+        assert!(
+            got[0].as_deref().is_some_and(|t| t.starts_with("00-")),
+            "{got:?}"
+        );
+        assert!(traced.spans().iter().any(|span| span.name == "GET"));
+    }
 }

@@ -48,7 +48,7 @@ async fn serve_connector() -> ExitCode {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = portitor_connector::Config::from_env()?;
-    let sender = portitor_connector::HttpSender::new(config.allow_http_callbacks)?;
+    let sender = portitor_connector::dsp_sender(config.allow_http_callbacks)?;
     if config.allow_http_callbacks {
         tracing::warn!("http callback addresses allowed (PORTITOR_ALLOW_HTTP_CALLBACKS)");
     }

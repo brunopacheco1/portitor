@@ -53,6 +53,8 @@ use tracing_subscriber::util::SubscriberInitExt as _;
 
 pub mod http;
 pub mod metrics;
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing;
 
 /// The target of the events that are copied into the exported span as
 /// span events: the state changes of negotiations and transfers. Write
