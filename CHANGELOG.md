@@ -12,6 +12,18 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Documentation
+
+- C1 and C2 diagrams redrawn with more context: C1 shows the dataspace
+  as a boundary (the authority, which sets the rules, and its members),
+  the people and applications inside the organisations, the whole
+  optional Gaia-X side (compliance service, GXDCH notary, certificate
+  authority) and a legend. C2 has fewer crossings and is split in two:
+  `c2-containers` (one participant: trust settings, public and internal
+  ports, who pulls from the data plane, the Gaia-X files) and the new
+  `c2-dataspace-authority-containers` (the issuer, and the bundle built
+  offline with `portitor-issuer bundle build`).
+
 ## [0.8.0] - 2026-11-15
 
 ### Documentation
@@ -22,15 +34,6 @@ versions may change behaviour and configuration.
   moved there; the roadmap keeps their titles with links. README,
   ARCHITECTURE, DEPLOYING ("Known limits"), RELEASING (the release
   review checks the file), ADR 0005, AGENTS and the website link to it.
-- C1 and C2 diagrams redrawn with more context: C1 shows the dataspace
-  as a boundary (the authority, which sets the rules, and its members),
-  the people and applications inside the organisations, the whole
-  optional Gaia-X side (compliance service, GXDCH notary, certificate
-  authority) and a legend. C2 has fewer crossings and is split in two:
-  `c2-containers` (one participant: trust settings, public and internal
-  ports, who pulls from the data plane, the Gaia-X files) and the new
-  `c2-dataspace-authority-containers` (the issuer, and the bundle built
-  offline with `portitor-issuer bundle build`).
 
 ### Added
 

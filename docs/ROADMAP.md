@@ -317,7 +317,7 @@ Plan approved by the maintainer on 2026-11-14.
   stays the DSP context alone; datasets use full IRIs (maintainer,
   2026-11-14).
 
-## 0.8 Gaia-X Trust Framework (Danube)
+## 0.8 Gaia-X Trust Framework (Danube) (released 2026-11-15 as v0.8.0)
 
 Plan approved by the maintainer on 2026-11-15. Gaia-X does not use DCP,
 and EDC 1.0.0-RC7 refuses a credential that is not about the holder's
