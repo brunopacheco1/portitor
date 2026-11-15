@@ -23,6 +23,7 @@ versions may change behaviour and configuration.
   ports, who pulls from the data plane, the Gaia-X files) and the new
   `c2-dataspace-authority-containers` (the issuer, and the bundle built
   offline with `portitor-issuer bundle build`).
+- C4 code diagrams brought up to date with 0.8: caller authentication shows the Gaia-X compliance checks (ADR 0022), presentations the `gx:` scope type rule (ADR 0021), and Gaia-X onboarding the steps of a run and its schedule.
 
 ## [0.8.0] - 2026-11-15
 
