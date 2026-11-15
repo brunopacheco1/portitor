@@ -25,7 +25,7 @@ use portitor_dcp::scope::merge_scopes;
 use portitor_runtime::http::HttpSender;
 use serde_json::Value;
 
-use super::{AuthSettings, Prover};
+use super::{AuthSettings, Prover, with_linked_scopes};
 use portitor_runtime::BoxFuture;
 
 /// What to ask the STS for.
@@ -177,7 +177,9 @@ impl Prover for StsProver {
         scopes: &'a [String],
     ) -> BoxFuture<'a, Result<String, String>> {
         Box::pin(async move {
-            let granted = merge_scopes(&self.scopes, scopes);
+            // a Gaia-X compliance scope brings its legal person scope, as
+            // on the verifier's side (ADR 0022)
+            let granted = with_linked_scopes(&merge_scopes(&self.scopes, scopes));
             let request = TokenRequest {
                 audience,
                 scopes: &granted,
@@ -202,6 +204,7 @@ mod tests {
             sts_client_id: "me client".into(),
             sts_client_secret: "s&cret=1".into(),
             trusted_issuers: vec!["did:web:issuer.example".into()],
+            gaiax_compliance_issuers: Vec::new(),
             scopes: vec!["org.eclipse.dspace.dcp.vc.type:MembershipCredential".into()],
             allow_http: true,
         }

@@ -12,6 +12,23 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Added
+
+- Gaia-X compliance in policies (ADR 0022). An offer can require a
+  Gaia-X compliance credential, for example
+  `ParticipantComplianceCredential.gx:labelLevel` `eq` `SC`. New
+  connector setting `PORTITOR_GAIAX_COMPLIANCE_ISSUERS`: the compliance
+  services trusted, separate from `PORTITOR_TRUSTED_ISSUERS`. The
+  verifier accepts a `gx:ParticipantComplianceCredential` from such a
+  service (PS256 or ES256, validity from `validFrom` and `validUntil`
+  only) with the `gx:LegalPerson` credential it names by `digestSRI`,
+  issued and signed by the caller; the holder binding is skipped for
+  these two only. A compliance scope brings the `LegalPerson` scope on
+  both sides. A credential claim path may now hold a prefixed name such
+  as `gx:labelLevel`. A provider that lists
+  `ParticipantComplianceCredential` in `PORTITOR_POLICY_CREDENTIALS`
+  without a compliance service does not start.
+
 ### Changed
 
 - ADR 0005 (schema and vocabulary registry, with the bundle format) and

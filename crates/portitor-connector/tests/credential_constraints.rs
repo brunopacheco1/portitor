@@ -815,6 +815,7 @@ fn verified_connectors(network: &Arc<Network>, dataspace: &LocalDataspace) -> Ne
         sts_client_id: String::new(),
         sts_client_secret: String::new(),
         trusted_issuers: vec![dataspace.issuer.did.clone()],
+        gaiax_compliance_issuers: Vec::new(),
         scopes: vec![MEMBERSHIP_SCOPE.to_owned()],
         allow_http: true,
     };

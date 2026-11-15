@@ -226,4 +226,42 @@ mod tests {
         assert!(did_web_url("did:web:").is_err());
         assert!(did_web_url("did:web:a.com::x").is_err());
     }
+
+    /// The DID document of the Gaia-X Lab compliance service, as served
+    /// at <https://compliance.lab.gaia-x.eu/v2/did.json> on 2026-11-15
+    /// (modulus shortened): a `JsonWebKey` method with an RSA key and
+    /// `kid`, `alg` and `x5u` members, and no `capabilityInvocation`.
+    #[test]
+    fn reads_the_gaiax_compliance_service_document() {
+        let did = "did:web:compliance.lab.gaia-x.eu:v2";
+        assert_eq!(
+            did_web_url(did).unwrap(),
+            "https://compliance.lab.gaia-x.eu/v2/did.json"
+        );
+        let doc: DidDocument = serde_json::from_value(serde_json::json!({
+            "@context": ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/jwk/v1"],
+            "id": did,
+            "verificationMethod": [{
+                "id": "did:web:compliance.lab.gaia-x.eu:v2#X509-JWK",
+                "type": "JsonWebKey",
+                "controller": did,
+                "publicKeyJwk": {"kty": "RSA", "n": "wCsJ0D9iTSwdZpvpieaIgzQqVWO3OtXvJ2lpGgtifcw",
+                    "e": "AQAB", "kid": "X509-JWK", "alg": "PS256",
+                    "x5u": "https://compliance.lab.gaia-x.eu/v2/.well-known/x509CertificateChain.pem"}
+            }],
+            "assertionMethod": ["did:web:compliance.lab.gaia-x.eu:v2#X509-JWK"]
+        }))
+        .unwrap();
+        let key = doc
+            .key_for(
+                Some("did:web:compliance.lab.gaia-x.eu:v2#X509-JWK"),
+                Purpose::AssertionMethod,
+            )
+            .unwrap();
+        assert!(matches!(key.public_key_jwk, Jwk::RSA { .. }));
+        assert!(
+            doc.key_for(Some("#X509-JWK"), Purpose::CapabilityInvocation)
+                .is_err()
+        );
+    }
 }

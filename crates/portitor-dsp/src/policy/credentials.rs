@@ -128,14 +128,17 @@ pub(super) enum Comparison<'a> {
 }
 
 /// Splits a left operand `<Type>.<path>` into the type and the claim
-/// path. `None` when it is not of that form: no dot, an empty part, or a
-/// `:` or `/` (an IRI or a prefixed name, such as an ODRL term).
+/// path. `None` when it is not of that form: no dot, an empty part, a `/`
+/// anywhere, or a `:` in the type (an IRI or a prefixed name, such as an
+/// ODRL term). A claim name may hold a `:`: Gaia-X claims are prefixed
+/// names, for example `ParticipantComplianceCredential.gx:labelLevel`
+/// (ADR 0022).
 pub(super) fn split_left_operand(left_operand: &str) -> Option<(&str, Vec<&str>)> {
-    if left_operand.contains([':', '/']) {
+    if left_operand.contains('/') {
         return None;
     }
     let (credential_type, path) = left_operand.split_once('.')?;
-    if credential_type.is_empty() {
+    if credential_type.is_empty() || credential_type.contains(':') {
         return None;
     }
     let mut segments = Vec::new();

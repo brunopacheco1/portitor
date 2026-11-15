@@ -121,6 +121,7 @@ All configuration is by environment variable. The full table is in the
 | `PORTITOR_TRUSTED_ISSUERS` | **required**: comma-separated DIDs trusted to issue credentials (`MembershipCredential` and those of credential constraints) |
 | `PORTITOR_DCP_SCOPES` | leave the default, `org.eclipse.dspace.dcp.vc.type:MembershipCredential` (comma-separated). Each must be a DCP scope (`org.eclipse.dspace.dcp.vc.type:<Type>[:access]` or `org.eclipse.dspace.dcp.vc.id:<id>`); the type `VerifiableCredential` is refused, as it would let a partner read every credential. The connector does not start otherwise |
 | `PORTITOR_POLICY_CREDENTIALS` | unset, unless your offers constrain credential claims: the credential types they use, comma-separated, each `Type` or `Type=<scope>` (see [Credential constraints](#credential-constraints)) |
+| `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` | unset, unless your offers require Gaia-X compliance: comma-separated `did:web` DIDs of the compliance services you trust (see [Gaia-X compliance](#gaia-x-compliance)) |
 | `RUST_LOG` | `info` (default); `debug` only while diagnosing |
 
 ### Credential constraints
@@ -160,6 +161,55 @@ for example only data processors in the EU:
 
   (as in the Minimum Viable Dataspace, commit 17bb5b8,
   `k8s/provider/application/controlplane-config.yaml`).
+
+### Gaia-X compliance
+
+An offer may admit only participants that a Gaia-X compliance service
+has checked (ADR 0022). The service issues a
+`gx:ParticipantComplianceCredential`. Its claim `gx:labelLevel` holds
+the label, for example `SC`. A policy reads it like any credential
+claim:
+
+```json
+"permission": [{"action": "use", "constraint": [
+  {"leftOperand": "ParticipantComplianceCredential.gx:labelLevel", "operator": "eq", "rightOperand": "SC"}
+]}]
+```
+
+Set, on the provider **and** on consumers:
+
+```sh
+PORTITOR_POLICY_CREDENTIALS=ParticipantComplianceCredential
+PORTITOR_GAIAX_COMPLIANCE_ISSUERS=did:web:compliance.lab.gaia-x.eu:v2
+```
+
+- `ParticipantComplianceCredential` stands for the scope
+  `org.eclipse.dspace.dcp.vc.type:ParticipantComplianceCredential:read`.
+  Both sides add the `LegalPerson` scope with the same alias and access
+  part (here `org.eclipse.dspace.dcp.vc.type:LegalPerson:read`). The
+  consumer's identity then presents both credentials.
+- `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` lists the compliance services you
+  trust. It is separate from `PORTITOR_TRUSTED_ISSUERS`: a compliance
+  service is not a dataspace issuer. A provider whose
+  `PORTITOR_POLICY_CREDENTIALS` lists `ParticipantComplianceCredential`
+  does not start without it.
+- What the provider checks: the compliance credential comes from a
+  listed service and is signed with its `assertionMethod` key (PS256 or
+  ES256). It is valid now by `validFrom` and `validUntil` (the service
+  writes its JWT times in milliseconds, so those are ignored). The same
+  presentation holds a `gx:LegalPerson` credential whose digest
+  (`digestSRI`) the compliance credential lists. That credential is
+  issued and signed by the consumer.
+- These two credentials are about a credential, not about the
+  consumer's DID, so the subject check is skipped for them only. Every
+  other credential must still be about the consumer.
+- A compliance credential that fails a check makes its presentation
+  invalid: the consumer is refused, and the log says why (`credential
+  refused`). A `gx:LegalPerson` credential that no trusted compliance
+  credential names is ignored.
+- Only Portitor connectors meet these policies today. EDC applies the
+  subject check to every credential, so it refuses the compliance
+  credential (ADR 0022).
 
 ### Dataset harvest
 
