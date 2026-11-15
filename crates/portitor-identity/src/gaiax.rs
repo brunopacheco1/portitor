@@ -32,8 +32,11 @@
 //! failed run is tried again after 1, 2, 4 ... seconds, at most one hour
 //! apart: the issuer's outbox retry policy
 //! ([`portitor_runtime::retry::retry_delay`]), but never given up, since
-//! nothing else would renew the credential. The management API starts a
-//! run now ([`start_run`]) and lists the last runs. Runs never overlap.
+//! nothing else would renew the credential. After a successful run the
+//! next one waits at least a minute. The management API starts a run now
+//! ([`start_run`]) and lists the last runs. Runs never overlap, and a
+//! scheduled run that waited for the operator's does not follow it at
+//! once.
 //!
 //! The public base is where the participant's `did:web` DID document is,
 //! without `did.json` ([`public_base`]): `https://provider.example` for
@@ -430,6 +433,40 @@ pub fn start_run(identity: &Arc<Identity>) -> Result<GaiaxRun, StartError> {
 pub async fn run_now(identity: &Identity) -> Option<GaiaxRun> {
     let onboarding = identity.gaiax.as_ref()?;
     let guard = Arc::clone(&onboarding.running).lock_owned().await;
+    run_locked(identity, guard).await
+}
+
+/// Runs for [`run_schedule`], which saw `seen` as the last run when it
+/// decided a run is due. If another run ended while this one waited for
+/// the lock (one the operator started), that run counts as the
+/// schedule's and none starts, so two runs never follow each other at
+/// once. Returns the run that counts; `None` when Gaia-X is off or the
+/// store fails.
+async fn run_unless_overtaken(identity: &Identity, seen: Option<i64>) -> Option<GaiaxRun> {
+    let onboarding = identity.gaiax.as_ref()?;
+    let guard = Arc::clone(&onboarding.running).lock_owned().await;
+    // under the lock, the last run has ended
+    if let Some(latest) = latest_run(identity)
+        && Some(latest.id) != seen
+    {
+        return Some(latest);
+    }
+    run_locked(identity, guard).await
+}
+
+/// The last run recorded, if any.
+fn latest_run(identity: &Identity) -> Option<GaiaxRun> {
+    match identity.store.gaiax_runs(1) {
+        Ok(runs) => runs.into_iter().next(),
+        Err(error) => {
+            tracing::error!(%error, "identity store failed");
+            None
+        }
+    }
+}
+
+/// Records a run's start and runs it; `running` is the held lock.
+async fn run_locked(identity: &Identity, running: OwnedMutexGuard<()>) -> Option<GaiaxRun> {
     let id = match identity.store.start_gaiax_run(now_secs()) {
         Ok(id) => id,
         Err(error) => {
@@ -437,7 +474,7 @@ pub async fn run_now(identity: &Identity) -> Option<GaiaxRun> {
             return None;
         }
     };
-    finish_run(identity, id, guard).await
+    finish_run(identity, id, running).await
 }
 
 /// Runs, records how it ended, and lets the next run start.
@@ -600,6 +637,12 @@ fn renewal_time(from: Option<i64>, until: Option<i64>, now: u64) -> u64 {
     u64::try_from(due).unwrap_or(0)
 }
 
+/// The shortest time, in seconds, from the end of a successful run to the
+/// next scheduled one. Without it, a credential that is due for renewal
+/// at once (a service that gives a very short validity) or a store that
+/// cannot be read back would make the schedule run again and again.
+const MIN_RUN_INTERVAL: u64 = 60;
+
 /// Keeps the compliance credential valid, until the process stops: runs
 /// when [`renewal_due`] says so, and after a failed run again as the
 /// retry policy says (see the module documentation).
@@ -612,35 +655,62 @@ pub async fn run_schedule(identity: Arc<Identity>) {
         Ok(count) => tracing::warn!(count, "Gaia-X runs stopped by a restart marked failed"),
         Err(error) => tracing::error!(%error, "identity store failed"),
     }
-    let mut failed: u32 = 0;
-    let mut last_failure: u64 = 0;
+    let mut schedule = Schedule::default();
     loop {
         let now = now_secs();
-        let renewal = renewal_due(&identity, now);
-        // a valid credential (from any run, also one the operator started)
-        // ends the retries
-        if renewal > now {
-            failed = 0;
-        }
-        let due = if failed == 0 {
-            renewal
-        } else {
-            last_failure.saturating_add(retry_delay(failed))
-        };
+        let seen = latest_run(&identity).map(|run| run.id);
+        let due = schedule.next_run(renewal_due(&identity, now), now);
         if due <= now {
-            let run = run_now(&identity).await;
-            if run.is_some_and(|run| run.outcome == RunOutcome::Succeeded) {
-                failed = 0;
-            } else {
-                failed = failed.saturating_add(1);
-                last_failure = now_secs();
-            }
+            let run = run_unless_overtaken(&identity, seen).await;
+            schedule.record(run.as_ref(), now_secs());
             continue;
         }
         let wait = Duration::from_secs(due - now).min(IDLE);
         tokio::select! {
             () = onboarding.ran.notified() => {}
             () = tokio::time::sleep(wait) => {}
+        }
+    }
+}
+
+/// What [`run_schedule`] remembers between runs.
+#[derive(Debug, Default)]
+struct Schedule {
+    /// Failed runs in a row. While there is no valid credential, the
+    /// renewal time is "now"; so after a failure the next run follows the
+    /// retry policy instead, or a failing service would be asked again at
+    /// once, in a loop.
+    failed: u32,
+    /// When the last failed run ended: the retry delay counts from there.
+    last_failure: u64,
+    /// When the last successful run ended (see [`MIN_RUN_INTERVAL`]).
+    last_success: u64,
+}
+
+impl Schedule {
+    /// When the next run is due, given the `renewal` time of the stored
+    /// credential ([`renewal_due`]).
+    fn next_run(&mut self, renewal: u64, now: u64) -> u64 {
+        // a valid credential (from any run, also one the operator started)
+        // ends the retries
+        if renewal > now {
+            self.failed = 0;
+        }
+        if self.failed > 0 {
+            return self.last_failure.saturating_add(retry_delay(self.failed));
+        }
+        renewal.max(self.last_success.saturating_add(MIN_RUN_INTERVAL))
+    }
+
+    /// Counts a run that ended at `ended`; `None` (the store failed)
+    /// counts as a failure.
+    fn record(&mut self, run: Option<&GaiaxRun>, ended: u64) {
+        if run.is_some_and(|run| run.outcome == RunOutcome::Succeeded) {
+            self.failed = 0;
+            self.last_success = ended;
+        } else {
+            self.failed = self.failed.saturating_add(1);
+            self.last_failure = ended;
         }
     }
 }
@@ -706,6 +776,34 @@ mod tests {
             query_encode("https://p.example/credentials/gaiax/compliance"),
             "https%3A%2F%2Fp.example%2Fcredentials%2Fgaiax%2Fcompliance"
         );
+    }
+
+    fn run(outcome: RunOutcome) -> GaiaxRun {
+        GaiaxRun {
+            id: 1,
+            started_at: 0,
+            finished_at: Some(0),
+            outcome,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn the_schedule_waits_between_runs() {
+        let mut schedule = Schedule::default();
+        assert_eq!(schedule.next_run(0, 1_000), 60, "no run yet: due now");
+        // a success whose credential is due again at once: a minute later
+        schedule.record(Some(&run(RunOutcome::Succeeded)), 1_000);
+        assert_eq!(schedule.next_run(0, 1_000), 1_060);
+        assert_eq!(schedule.next_run(5_000, 1_000), 5_000);
+        // failures follow the retry policy: 1, 2, 4 ... seconds
+        schedule.record(Some(&run(RunOutcome::Failed)), 2_000);
+        assert_eq!(schedule.next_run(0, 2_000), 2_001);
+        schedule.record(None, 2_001);
+        assert_eq!(schedule.next_run(0, 2_001), 2_003);
+        // a valid credential, from any run, ends the retries
+        assert_eq!(schedule.next_run(9_000, 2_001), 9_000);
+        assert_eq!(schedule.failed, 0);
     }
 
     #[test]
