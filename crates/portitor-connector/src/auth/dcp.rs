@@ -442,8 +442,9 @@ impl DcpVerifier {
     /// each `gx:ParticipantComplianceCredential` must come from a trusted
     /// compliance service and name, by digest, a `gx:LegalPerson`
     /// credential of the same presentation that the caller issued and
-    /// signed. Returns both kinds, checked. Legal person credentials that
-    /// no compliance credential names are skipped, without a fetch.
+    /// signed. Returns both kinds, checked: the compliance credentials
+    /// first. Legal person credentials that no compliance credential
+    /// names are skipped, without a fetch.
     async fn check_gaiax(
         &self,
         caller: &str,
@@ -451,9 +452,41 @@ impl DcpVerifier {
         credentials: &[Credential],
         now: u64,
     ) -> Result<Vec<HeldCredential>, String> {
+        let mut compliance = self
+            .check_compliance_credentials(caller, credentials, now)
+            .await?;
         let mut verified = Vec::new();
-        // each checked compliance credential, with the digests it lists
-        let mut compliance: Vec<(&Credential, Vec<String>)> = Vec::new();
+        for checked in &compliance {
+            verified.push(held_credential(checked.credential));
+        }
+        let persons = self
+            .check_named_legal_persons(caller, holder, credentials, &mut compliance, now)
+            .await?;
+        verified.extend(persons);
+        // a compliance credential vouches for a legal person credential;
+        // without it in the same presentation it says nothing about the
+        // caller (ADR 0022, step 4)
+        for checked in &compliance {
+            if !checked.linked {
+                let reason = format!(
+                    "it names no {LEGAL_PERSON_TYPE} credential of its presentation (digestSRI)"
+                );
+                return Err(refused(caller, checked.credential, &reason));
+            }
+        }
+        Ok(verified)
+    }
+
+    /// The compliance credentials of one presentation, each checked
+    /// ([`DcpVerifier::check_compliance_credential`]), with the digests
+    /// they name. None is linked yet.
+    async fn check_compliance_credentials<'a>(
+        &self,
+        caller: &str,
+        credentials: &'a [Credential],
+        now: u64,
+    ) -> Result<Vec<ComplianceCheck<'a>>, String> {
+        let mut checked = Vec::new();
         for credential in credentials {
             if !is_gaiax_compliance(credential) {
                 continue;
@@ -461,29 +494,30 @@ impl DcpVerifier {
             if let Err(reason) = self.check_compliance_credential(credential, now).await {
                 return Err(refused(caller, credential, &reason));
             }
-            let mut digests = Vec::new();
-            for entry in compliant_credentials(credential) {
-                digests.push(entry.digest_sri);
-            }
-            compliance.push((credential, digests));
-            verified.push(held_credential(credential));
+            checked.push(ComplianceCheck::new(credential));
         }
-        // whether each compliance credential names a legal person
-        // credential of this presentation (all of them checked)
-        let mut linked = vec![false; compliance.len()];
+        Ok(checked)
+    }
+
+    /// The legal person credentials of one presentation that a checked
+    /// compliance credential names, each checked
+    /// ([`DcpVerifier::check_legal_person`]). Marks the compliance
+    /// credentials that name one as linked. The others are skipped.
+    async fn check_named_legal_persons(
+        &self,
+        caller: &str,
+        holder: &DidDocument,
+        credentials: &[Credential],
+        compliance: &mut [ComplianceCheck<'_>],
+        now: u64,
+    ) -> Result<Vec<HeldCredential>, String> {
+        let mut verified = Vec::new();
         for credential in credentials {
             if !is_legal_person(credential) {
                 continue;
             }
             let digest = digest_sri_of(credential).map_err(|e| format!("credential: {e}"))?;
-            let mut named = false;
-            for (index, (_, digests)) in compliance.iter().enumerate() {
-                if digests.contains(&digest) {
-                    named = true;
-                    linked[index] = true;
-                }
-            }
-            if !named {
+            if !link(compliance, &digest) {
                 // like a credential from an untrusted issuer
                 tracing::debug!(issuer = %credential.issuer, "gx:LegalPerson credential that no trusted compliance credential names skipped");
                 continue;
@@ -495,14 +529,6 @@ impl DcpVerifier {
                 return Err(refused(caller, credential, &reason));
             }
             verified.push(held_credential(credential));
-        }
-        for (index, (credential, _)) in compliance.iter().enumerate() {
-            if !linked[index] {
-                let reason = format!(
-                    "it names no {LEGAL_PERSON_TYPE} credential of its presentation (digestSRI)"
-                );
-                return Err(refused(caller, credential, &reason));
-            }
         }
         Ok(verified)
     }
@@ -612,6 +638,44 @@ impl DcpVerifier {
             )),
         }
     }
+}
+
+/// A checked Gaia-X compliance credential of a presentation.
+struct ComplianceCheck<'a> {
+    credential: &'a Credential,
+    /// The `digestSRI` of each credential it names
+    /// (`gx:compliantCredentials`).
+    digests: Vec<String>,
+    /// Whether the presentation holds a legal person credential with one
+    /// of these digests.
+    linked: bool,
+}
+
+impl<'a> ComplianceCheck<'a> {
+    fn new(credential: &'a Credential) -> Self {
+        let mut digests = Vec::new();
+        for entry in compliant_credentials(credential) {
+            digests.push(entry.digest_sri);
+        }
+        Self {
+            credential,
+            digests,
+            linked: false,
+        }
+    }
+}
+
+/// Marks each compliance credential that names `digest` as linked.
+/// Returns whether any does.
+fn link(compliance: &mut [ComplianceCheck<'_>], digest: &str) -> bool {
+    let mut named = false;
+    for checked in compliance.iter_mut() {
+        if checked.digests.iter().any(|listed| listed == digest) {
+            checked.linked = true;
+            named = true;
+        }
+    }
+    named
 }
 
 impl CallerVerifier for DcpVerifier {
