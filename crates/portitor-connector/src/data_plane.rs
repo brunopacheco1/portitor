@@ -45,7 +45,7 @@ use portitor_dsp::transfer::{DataAddress, DataAddressType, EndpointProperty};
 use crate::http_client::{HttpsClient, bearer_token_in, https_client};
 use crate::ports::AnyFlowStore;
 use crate::system::{new_uuid, now_secs};
-use portitor_runtime::telemetry::http::{ClientCall, TraceContext};
+use portitor_runtime::telemetry::http::{ClientCall, Peer};
 use tracing::Instrument as _;
 
 /// The `endpointType` of the data address sent over DSP. It is the value
@@ -500,8 +500,11 @@ async fn fetch(client: &HttpsClient, url: &str) -> Result<Response, String> {
     let mut request = hyper::Request::get(url)
         .body(Full::new(Bytes::new()))
         .map_err(|e| e.to_string())?;
-    let mut call = ClientCall::start(&mut request, TraceContext::Send);
+    let mut call = ClientCall::start(&mut request, Peer::Own);
     let sent = client.request(request).instrument(call.span().clone());
+    // two results in one: the outer `Ok`/`Err` is the timeout's (did the
+    // answer come in time?), the inner one the request's own (did it
+    // work?)
     let answer = match tokio::time::timeout(UPSTREAM_TIMEOUT, sent).await {
         Ok(Ok(answer)) => {
             call.answered(answer.status().as_u16());

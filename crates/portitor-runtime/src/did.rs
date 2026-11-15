@@ -63,6 +63,16 @@ impl DidWebResolver {
         })
     }
 
+    /// This resolver without spans or measures for its fetches
+    /// ([`HttpSender::unobserved`]): for a readiness check.
+    #[must_use]
+    pub fn unobserved(self) -> Self {
+        Self {
+            http: self.http.unobserved(),
+            ..self
+        }
+    }
+
     /// The DID document of `did`, from the cache or fetched.
     ///
     /// # Errors

@@ -42,6 +42,11 @@ use utoipa::ToSchema;
 
 use crate::BoxFuture;
 
+/// The start of every check path below (EDC's Observability API). The
+/// request spans and measures leave these paths out
+/// (`telemetry::http`).
+pub const CHECK_PREFIX: &str = "/api/check/";
+
 /// `GET` path of the liveness check.
 pub const LIVENESS_PATH: &str = "/api/check/liveness";
 /// `GET` path of the readiness check.
@@ -334,7 +339,9 @@ pub fn sqlite_file_answers(path: &Path) -> Result<(), String> {
     // the store's writes do not block a reader (WAL); wait a little anyway
     conn.busy_timeout(Duration::from_millis(200))
         .map_err(|e| format!("the SQLite file does not answer: {e}"))?;
-    let _tables: i64 = conn
+    // the number itself does not matter: reading it proves the file is
+    // a database that answers
+    let _table_count: i64 = conn
         .query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get(0))
         .map_err(|e| format!("the SQLite file does not answer: {e}"))?;
     Ok(())
@@ -636,6 +643,13 @@ mod tests {
         let err = signed_by(&jws, &key.public_jwk()).unwrap_err();
         assert!(err.contains("not signed by"), "{err}");
         assert!(signed_by("", &key.public_jwk()).is_err());
+    }
+
+    #[test]
+    fn every_check_path_has_the_prefix() {
+        for path in [LIVENESS_PATH, READINESS_PATH, STARTUP_PATH, HEALTH_PATH] {
+            assert!(path.starts_with(CHECK_PREFIX), "{path}");
+        }
     }
 
     #[test]
