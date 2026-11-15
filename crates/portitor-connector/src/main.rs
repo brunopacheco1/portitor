@@ -76,7 +76,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     // readiness (ADR 0023): the start check of our identity, run again
     let identity_check = match &settings {
-        Some(settings) => Some(Arc::new(OwnIdentityCheck::new(settings)?)),
+        Some(settings) => {
+            let check = Arc::new(OwnIdentityCheck::new(settings)?);
+            // runs until the process stops; the probes read its results
+            check.spawn_refresh();
+            Some(check)
+        }
         None => None,
     };
     (ports.verifier, ports.prover) = auth_adapters(settings).await?;
