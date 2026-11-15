@@ -32,14 +32,14 @@ decided in ADR 0003 (`portitor-connector`, `portitor-identity`, `portitor-issuer
 Today's crates:
 
 - `crates/portitor-dsp`: DSP message types (plain JSON, schema-checked).
-- `crates/portitor-dcp`: DCP v1.0.1: self-issued tokens, did:web, JWS (ES256, PS256 only), credentials and presentations (VC 1.1 and 2.0 JWT), messages, scopes, status lists.
+- `crates/portitor-dcp`: DCP v1.0.1: self-issued tokens, did:web, JWS (ES256, PS256 only), credentials and presentations (VC 1.1 and 2.0 JWT), messages, scopes, status lists; `x509` (P-256 key of a PEM chain), `gaiax` and `gaiax_sign` (Gaia-X credentials, JCS digests, compliance answer check; ADRs 0021, 0022).
 - `crates/portitor-time`: `xsd:date` and `xsd:dateTime` parsing, shared by ODRL policies and credentials.
 - `crates/portitor-dps`: Data Plane Signaling v1.0-RC4: data flow messages, state machine, and the two ports between control plane and data plane.
 - `crates/portitor-shacl`: our own SHACL Core subset (ADR 0005) on Oxigraph's RDF crates: loads shapes and code lists, turns JSON-LD into RDF with local contexts only, validates. Pure, no I/O; refuses SHACL terms it does not implement.
 - `crates/portitor-runtime`: adapters shared by the binaries: outbound HTTP, did:web resolution with a cache, the management API key, SQLite files and migrations, logging and shutdown, the system clock.
 - `crates/portitor-connector`: the connector binary (HTTP adapter and routes), one image (ADR 0003). Harvests datasets into a read copy (ADR 0020) and pulls the authority's signed bundle the same way (`bundle_harvest.rs`: `BundleHarvester`, `BundleCopy`, no rollback).
 - `crates/portitor-bundle`: adapter crate for the authority's signed bundle on a participant's side, reusable by any service: `source.rs` (`BundleSource` port, `UrlSource`, `FolderSource`, `PORTITOR_BUNDLE_*` settings) and `store.rs` (`BundleStore` port, `CacheFolder`: disk cache and version in use). How schemas are collected and stored is technical debt (ROADMAP).
-- `crates/portitor-identity`: the identity component binary (ADR 0015): DID document, STS, credential service (presentation, Storage and offer APIs), management API, SQLite store; its own image.
+- `crates/portitor-identity`: the identity component binary (ADR 0015): DID document, STS, credential service (presentation, Storage and offer APIs), management API, SQLite store, X.509 certificate chain and Gaia-X onboarding (ADR 0021); its own image.
 - `crates/portitor-issuer`: the issuer component binary (ADR 0018), run once per dataspace by its authority: DID document, DCP issuer service (metadata, credential requests and status), delivery outbox, status lists, management API, SQLite store; its own image. Also `portitor-issuer bundle build`, which signs a schema and vocabulary bundle offline, and the read-only bundle route.
 - `examples/`: the demos' datasets, data and Compose file, and the sources of the HealthDCAT-AP demo bundle (`examples/bundle/`).
 - `docs/`: architecture, ADRs, roadmap, security assurance, releasing.
