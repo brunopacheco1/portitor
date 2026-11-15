@@ -1317,12 +1317,17 @@ async fn a_compliance_credential_that_fails_refuses_the_caller() {
     );
     let past = json!({"validUntil": xsd_date_time(now_secs() - 3_600)});
     let expired = ds.compliance_credential(&[&digest], &past);
+    // a compliance credential without an end never expires
+    let mut endless = compliance_payload(&ds.compliance.did, &[&digest], &json!({}));
+    endless.as_object_mut().unwrap().remove("validUntil");
+    let endless = ds.compliance.sign(&endless);
     let cases = [
         (vec![tampered, named.clone()], "names no gx:LegalPerson"),
         (vec![named.clone()], "names no gx:LegalPerson"),
         (vec![by_third, names_third], "is not the caller"),
         (vec![person.clone(), forged.unwrap()], "credential from"),
-        (vec![person, expired], "expired"),
+        (vec![person.clone(), expired], "expired"),
+        (vec![person, endless], "no validUntil"),
     ];
     for (gaiax, reason) in cases {
         let mut credentials = vec![ds.member20()];

@@ -548,7 +548,8 @@ impl DcpVerifier {
     /// One Gaia-X compliance credential from a trusted compliance service
     /// (ADR 0022, steps 1 to 3): signed with that service's
     /// `assertionMethod` key; valid now by `validFrom` and `validUntil`
-    /// only (the service writes its JWT times in milliseconds); its
+    /// only (the service writes its JWT times in milliseconds), and
+    /// `validUntil` is required; its
     /// status, if it has one, as for any credential. The caller is not its
     /// subject, so there is no holder binding.
     async fn check_compliance_credential(
@@ -556,6 +557,12 @@ impl DcpVerifier {
         credential: &Credential,
         now: u64,
     ) -> Result<(), String> {
+        // The JWT's `exp` is not read (milliseconds), so `validUntil` is
+        // the only end. Without one the credential would never expire,
+        // which a compliance service must not issue (ADR 0022, step 2).
+        if credential.stated_validity().until.is_none() {
+            return Err("it has no validUntil (expirationDate in VC 1.1)".to_owned());
+        }
         check_status_count(credential)?;
         let issuer = self.resolver.resolve(&credential.issuer).await?;
         credential

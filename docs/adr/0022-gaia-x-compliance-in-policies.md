@@ -65,6 +65,10 @@ type `ParticipantComplianceCredential`, ADR 0021):
    ES256; the JWS rules of ADR 0015 stay).
 2. Now is within `validFrom` and `validUntil`. The header's `iat` and
    `exp` are ignored: the service writes them in milliseconds.
+   `validUntil` (`expirationDate` in VC 1.1) is required: without it the
+   credential would never expire. A credential from a trusted service
+   without it breaks this rule, so it fails this step and its
+   presentation is invalid; it is not skipped.
 3. No status list is expected; a `credentialStatus`, if present, is
    checked as for any other credential.
 4. The same presentation holds a `gx:LegalPerson` credential whose
