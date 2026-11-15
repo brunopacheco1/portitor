@@ -1184,12 +1184,20 @@ fn legal_person(issuer: &Party, name: &str) -> (String, String) {
 
 /// [`legal_person`] with `extra` fields.
 fn legal_person_with(issuer: &Party, name: &str, extra: &Value) -> (String, String) {
+    let vc = legal_person_payload(&issuer.did, name, extra);
+    let digest = portitor_dcp::gaiax::digest_sri(vc.as_object().unwrap());
+    let jwt = issuer.key.sign_json(&issuer.kid(), "vc+jwt", &vc).unwrap();
+    (jwt, digest)
+}
+
+/// The payload of a [`legal_person`] credential by `issuer`.
+fn legal_person_payload(issuer: &str, name: &str, extra: &Value) -> Value {
     let mut vc = json!({
         "@context": [VC2_CONTEXT, GAIAX_CONTEXT,
             {"vcard": "http://www.w3.org/2006/vcard/ns#", "schema": "https://schema.org/"}],
         "id": "https://participant.test/credentials/legal-person.json",
         "type": ["VerifiableCredential", "gx:LegalPerson"],
-        "issuer": issuer.did,
+        "issuer": issuer,
         "validFrom": xsd_date_time(now_secs() - 86_400),
         "validUntil": xsd_date_time(now_secs() + 90 * 86_400),
         "credentialSubject": {
@@ -1201,9 +1209,7 @@ fn legal_person_with(issuer: &Party, name: &str, extra: &Value) -> (String, Stri
     for (key, value) in extra.as_object().into_iter().flatten() {
         vc[key] = value.clone();
     }
-    let digest = portitor_dcp::gaiax::digest_sri(vc.as_object().unwrap());
-    let jwt = issuer.key.sign_json(&issuer.kid(), "vc+jwt", &vc).unwrap();
-    (jwt, digest)
+    vc
 }
 
 /// The payload of a `gx:ParticipantComplianceCredential` by `issuer`
@@ -1347,6 +1353,58 @@ async fn a_compliance_credential_that_fails_refuses_the_caller() {
             err.contains("gx:ParticipantComplianceCredential") || err.contains("gx:LegalPerson"),
             "{reason}: {err}"
         );
+        assert!(err.contains(reason), "{reason}: {err}");
+    }
+}
+
+/// More ADR 0022 refusals, each naming the credential that fails: the
+/// compliance credential not yet valid, the legal person credential
+/// expired or signed by a key that is not the caller's, and a second
+/// compliance credential that names no credential of the presentation.
+#[tokio::test]
+async fn gaiax_refusals_name_the_failing_credential() {
+    const COMPLIANCE: &str = "a gx:ParticipantComplianceCredential credential fails";
+    const PERSON: &str = "a gx:LegalPerson credential fails";
+    let ds = dataspace().await;
+    let (person, digest) = legal_person(&ds.holder, "Portitor Test S.A.");
+    let named = ds.compliance_credential(&[&digest], &json!({}));
+    let future = json!({"validFrom": xsd_date_time(now_secs() + 3_600)});
+    let not_yet_valid = ds.compliance_credential(&[&digest], &future);
+    let past = json!({"validUntil": xsd_date_time(now_secs() - 3_600)});
+    let (expired_person, expired_digest) =
+        legal_person_with(&ds.holder, "Portitor Test S.A.", &past);
+    let names_expired = ds.compliance_credential(&[&expired_digest], &json!({}));
+    // issued as the caller, signed with the third party's key, which is
+    // not in the caller's DID document
+    let payload = legal_person_payload(&ds.holder.did, "Portitor Test S.A.", &json!({}));
+    let foreign_digest = portitor_dcp::gaiax::digest_sri(payload.as_object().unwrap());
+    let foreign_key = ds
+        .third
+        .key
+        .sign_json(&ds.third.kid(), "vc+jwt", &payload)
+        .unwrap();
+    let names_foreign = ds.compliance_credential(&[&foreign_digest], &json!({}));
+    let names_other = ds.compliance_credential(&["sha256-00"], &json!({}));
+    let cases = [
+        (
+            vec![person.clone(), not_yet_valid],
+            COMPLIANCE,
+            "not yet valid",
+        ),
+        (vec![expired_person, names_expired], PERSON, "expired"),
+        (vec![foreign_key, names_foreign], PERSON, "kid not found"),
+        (
+            vec![person, named, names_other],
+            COMPLIANCE,
+            "names no gx:LegalPerson",
+        ),
+    ];
+    for (gaiax, failing, reason) in cases {
+        let mut credentials = vec![ds.member20()];
+        credentials.extend(gaiax);
+        ds.answer20(&credentials);
+        let err = ds.refusal().await;
+        assert!(err.contains(failing), "{reason}: {err}");
         assert!(err.contains(reason), "{reason}: {err}");
     }
 }
