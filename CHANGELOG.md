@@ -23,6 +23,10 @@ versions may change behaviour and configuration.
   SECURITY-ASSURANCE describe the bundle that follows the newest version
   instead of a pinned one, and the 0.6 to 0.7 upgrade names database
   schema version 8. The 0.7.0 entry carries its tag date.
+- CI: the DCP TCK jar is cached between runs (`actions/cache`, keyed on
+  its SHA-256, checked after every restore or download), and the DSP TCK
+  build's Gradle dependencies too (`setup-java` cache), since Maven
+  Central answered HTTP 429; downloads are retried.
 
 ## [0.7.0] - 2026-11-15
 
