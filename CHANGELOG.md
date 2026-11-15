@@ -28,6 +28,11 @@ versions may change behaviour and configuration.
   three C4 dynamic diagrams in sequence style (`dynamic-join`,
   `dynamic-negotiate-transfer`, `dynamic-gaiax-onboarding`), shown in
   ARCHITECTURE.md under "Deployment and flows".
+- Documentation review after 0.8: the Compose demo defaults to the 0.8.0
+  images; the README links the website at its own address; AGENTS.md
+  names DCP v1.0.1 and Gaia-X as shipped; the security assurance case
+  names the compliance issuer pin (`PORTITOR_GAIAX_COMPLIANCE_DID`) and
+  that compliance credentials from unlisted services are skipped.
 
 ## [0.8.0] - 2026-11-15
 

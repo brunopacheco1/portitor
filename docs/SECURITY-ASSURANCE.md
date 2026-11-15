@@ -56,10 +56,12 @@ dataspace participants over HTTPS.
   compliance service in `PORTITOR_GAIAX_COMPLIANCE_ISSUERS`, signed with
   its `assertionMethod` key, valid now, and only with the
   `gx:LegalPerson` credential it names by `digestSRI`, issued and signed
-  by the caller; one that fails refuses the caller
+  by the caller; one from a listed service that fails refuses the
+  caller, one from any other service is skipped
   ([ADR 0022](adr/0022-gaia-x-compliance-in-policies.md)). The identity
-  stores a compliance service's answer only if it is signed by the
-  service's `did:web` key and lists exactly the digests of what it sent,
+  stores a compliance service's answer only if it is issued by
+  `PORTITOR_GAIAX_COMPLIANCE_DID` (checked before anything is resolved),
+  signed by that DID's key and lists exactly the digests of what it sent,
   and refuses a certificate chain for another key
   ([ADR 0021](adr/0021-gaia-x-onboarding.md)).
 - **Authentic releases:** from 0.1.0, images are signed with cosign
@@ -89,7 +91,7 @@ dataspace participants over HTTPS.
 | Datasets and transfers | A party that is not authorised reads data or starts a transfer | DCP verification of every request (ADR 0016); ODRL policy checks (ADR 0009); credential constraints, checked at negotiation and again at each transfer request (ADR 0019) |
 | Participant identity | Forged or replayed self-issued tokens | Algorithm allow-list, key relationship check, audience check, expiry with bounded leeway, `jti` replay cache |
 | Credentials | A revoked, forged or someone else's credential admits a party | Only trusted issuers' credentials count, signed with an `assertionMethod` key; status lists fetched and checked, fail closed; a presentation with any failing credential is refused (DCP v1.0.1, 5.4.3); the issuer issues only to registered participants (ADR 0018) |
-| Gaia-X compliance | A forged compliance credential, or someone else's, admits a party | Only the compliance services the operator lists, separate from the dataspace's issuers; the service's signature; the `digestSRI` link to a legal person credential issued and signed by the caller; the holder binding is skipped for these two credentials only (ADR 0022) |
+| Gaia-X compliance | A forged compliance credential, or someone else's, admits a party | Only the compliance services the operator lists, separate from the dataspace's issuers; the service's signature; the `digestSRI` link to a legal person credential issued and signed by the caller; the holder binding is skipped for these two credentials only (ADR 0022); the identity takes an answer only from `PORTITOR_GAIAX_COMPLIANCE_DID` (ADR 0021) |
 | Private keys | Keys leak from the internet-facing connector | Keys live only in `portitor-identity` and `portitor-issuer`, not in the connector (ADR 0003) |
 | Schema and vocabulary bundle | A forged or changed bundle makes connectors accept bad datasets or refuse good ones | A separate bundle key, kept offline: the issuer holds only its public part and refuses to start if it is the credential key; signature checked against the authority's DID document; the version (never older than the one in use) and authority; SHA-256 of every file; size limits (manifest 1 MiB, 64 MiB per file, 256 MiB in all) and a 120 s timeout per download; a published version is never written again |
 | Validation code | Crafted shapes or JSON-LD make the connector fetch remote content, or exploit an XML parser | JSON-LD contexts come only from a map the caller fills (the bundle's and the DSP contexts), never from the network; no Portitor binary parses RDF/XML (`bundle build` refuses it, code lists travel as N-Triples); fuzz targets `shacl_load`, `shacl_jsonld` and `bundle_manifest` |

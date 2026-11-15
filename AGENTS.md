@@ -13,8 +13,8 @@ agent needs to work safely and in line with the project.
 ## What this project is
 
 A small connector that implements the Eclipse Dataspace Protocol (DSP
-2025-1), the Decentralized Claims Protocol (DCP 1.0), and later the Gaia-X
-Trust Framework (Danube). It must interoperate with Eclipse EDC and
+2025-1), the Decentralized Claims Protocol (DCP v1.0.1) and, from 0.8, the
+Gaia-X Trust Framework (Danube). It must interoperate with Eclipse EDC and
 Simpl-Open. Read these first:
 
 - `docs/ARCHITECTURE.md`: components, deployment order, **architecture
