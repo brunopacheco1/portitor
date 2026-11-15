@@ -65,6 +65,10 @@ pub enum Peer {
 ///
 /// Apply it to the whole router, after its routes are added (axum's
 /// `Router::layer`), so the route template is known.
+///
+/// `&'static [&'static str]`: a list of texts that is fixed in the
+/// program (written as `&["/sts/token"]`), so every request can read it
+/// without copying it, for as long as the server runs.
 pub fn observe_requests(router: Router, trusted_routes: &'static [&'static str]) -> Router {
     router.layer(axum::middleware::from_fn_with_state(
         trusted_routes,

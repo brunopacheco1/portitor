@@ -157,7 +157,8 @@ pub async fn serve(
 /// Like [`serve`], and the public routes in `trusted_routes` (route
 /// templates such as `/sts/token`) take the caller's W3C trace context:
 /// routes called only from inside our own participant (ADR 0023, section
-/// 4).
+/// 4). `trusted_routes` is `&'static`, a list fixed in the program, as
+/// [`observe_requests`] needs it.
 ///
 /// # Errors
 /// A server fails, or the management server's task panicked.

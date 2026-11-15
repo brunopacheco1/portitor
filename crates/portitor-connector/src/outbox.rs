@@ -188,23 +188,29 @@ pub(crate) fn resume<O: Outbox>(outbox: &Arc<O>, pending: Vec<O::Out>) -> usize 
 /// span (the request that saved the message, if any), so its outbound
 /// calls and state changes join that request's trace even though the
 /// task runs later, on its own (`tokio::spawn`).
+///
+/// Why a plain `fn` that returns `impl Future`, not an `async fn`: the
+/// body of an `async fn` runs only when the task is first polled, after
+/// `tokio::spawn`, when the request's span is no longer the current one.
+/// This body runs at the call, so the span is made in the request; only
+/// the task it returns runs later.
 pub(crate) fn deliver<O: Outbox>(outbox: Arc<O>, out: O::Out) -> impl Future<Output = ()> {
-    let (process, role) = match outbox.kind() {
-        metrics::Outbox::Negotiation(role) => ("negotiation", role.name()),
-        metrics::Outbox::Transfer(role) => ("transfer", role.name()),
-        metrics::Outbox::CredentialDelivery => ("credential_delivery", ""),
-    };
+    let kind = outbox.kind();
+    // `role_name()` is `None` for an outbox without a DSP role: the span
+    // then has no `portitor.dsp.role` field
     let span = tracing::info_span!(
         "dsp.outbox.deliver",
-        portitor.dsp.process = process,
-        portitor.dsp.role = role,
+        portitor.dsp.process = kind.process_name(),
+        portitor.dsp.role = kind.role_name(),
         portitor.dsp.pid = O::message(&out).pid,
     );
-    deliver_in_turn(outbox, out).instrument(span)
+    send_until_counter_party_acts(outbox, out).instrument(span)
 }
 
-/// The work of [`deliver`].
-async fn deliver_in_turn<O: Outbox>(outbox: Arc<O>, mut out: O::Out) {
+/// The work of [`deliver`]: sends `out`, then each message that follows
+/// from the answer, until it is the counter-party's turn or the process
+/// ends.
+async fn send_until_counter_party_acts<O: Outbox>(outbox: Arc<O>, mut out: O::Out) {
     loop {
         let msg = O::message(&out);
         let (pid, first) = (msg.pid.to_owned(), msg.first);

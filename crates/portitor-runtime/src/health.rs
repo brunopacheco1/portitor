@@ -150,6 +150,9 @@ pub trait Check: Send + Sync {
 /// server's own threads.
 pub fn blocking<F>(work: F) -> Arc<dyn Check>
 where
+    // `Send + Sync`: other threads run it; `'static`: it borrows nothing
+    // that could end before it (it owns what it needs, often through
+    // `move`), since the check is kept for as long as the server runs
     F: Fn() -> Result<(), String> + Send + Sync + 'static,
 {
     Arc::new(Blocking(Arc::new(work)))

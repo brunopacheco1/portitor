@@ -519,14 +519,14 @@ impl DatasetHarvester {
     pub fn record_bundle_run(&self, job: JobRecord) -> Result<u64, StoreError> {
         let _running = self.busy.lock().unwrap_or_else(PoisonError::into_inner);
         let status = self.store.status()?;
-        let (kind, outcome) = (job.kind.name(), job.outcome.name());
-        let id = self.store.commit(&Commit {
+        let commit = Commit {
             job,
             errors: Vec::new(),
             writes: Vec::new(),
             status,
-        })?;
-        metrics::harvest_run_ended(kind, outcome);
+        };
+        let id = self.store.commit(&commit)?;
+        measure_run(&commit);
         Ok(id)
     }
 
