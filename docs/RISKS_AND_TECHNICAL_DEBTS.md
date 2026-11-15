@@ -105,7 +105,7 @@ checks this file:
 | [TD-15](#td-15) | Agreements are not revised when the data's scope changes | Technical debt | 0.7 (maintainer, 2026-11-14) | Open | Later |
 | [TD-16](#td-16) | One harvest source; no data space registry; other catalogs not checked; no bundle expiry or bundle key rotation | Technical debt | 0.7 (ADR 0005, ADR 0020, 2026-11-14) | Open | Later |
 | [TD-17](#td-17) | The data plane runs inside the connector process | Technical debt | 0.0 (maintainer, 2026-11-11) | Accepted | when Signaling 1.0 is released |
-| [TD-18](#td-18) | Operations: no metrics, traces or readiness check | Technical debt | 0.1 (ARCHITECTURE principle 11) | Open | 0.9 |
+| [TD-18](#td-18) | Operations: no metrics, traces or readiness check | Technical debt | 0.1 (ARCHITECTURE principle 11) | Addressed | done in 0.9 |
 | [TD-19](#td-19) | No TLS inside the services | Technical debt | 0.1 (SECURITY-ASSURANCE) | Open | — |
 | [TD-20](#td-20) | A holder must delete a revoked credential by hand after a reissue | Technical debt | 0.6 (DEPLOYING, 2026-11-14) | Open | — |
 | [TD-21](#td-21) | Gaia-X beyond 0.8 | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | Later |
@@ -117,7 +117,7 @@ checks this file:
 | [TD-27](#td-27) | The domain crates' I/O check named too few crates | Technical debt | 0.5 review (ADR 0004, 2026-11-14) | Addressed | done 2026-11-14 |
 
 Totals: 35 risks (Open 11, Mitigated 14, Accepted 4, Addressed 6);
-27 technical debts (Open 19, Accepted 4, Addressed 4).
+27 technical debts (Open 18, Accepted 4, Addressed 5).
 
 ## Risks
 
@@ -948,11 +948,14 @@ whether the change itself lands in 0.11 or later.
   check the database or partners; there is no metrics endpoint,
   OpenTelemetry or readiness endpoint (checked in the code). ARCHITECTURE
   principle 11 asks for them.
-- **Current state: Open.** Structured JSON logs exist. Since 0.9 each
-  component has liveness and readiness checks on its management port
-  (ADR 0023, DEPLOYING "Health and logs"); metrics and traces are still
-  missing.
-- **Next.** ROADMAP 0.9 (Operations).
+- **Current state: Addressed** in 0.9 ([ADR 0023](adr/0023-observability.md)).
+  Each component has liveness and readiness checks on its management
+  port (DEPLOYING "Health and logs"), a `health` subcommand for Docker,
+  and OpenTelemetry traces and metrics over OTLP/HTTP when
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is set (DEPLOYING "Traces and metrics").
+  JSON log lines carry the `trace_id`, and every negotiation and transfer
+  state change is logged.
+- **Next.** None.
 
 <a id="td-19"></a>
 ### TD-19 No TLS inside the services

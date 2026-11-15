@@ -19,21 +19,34 @@
 # gone with `docker compose ... down -v`. See docs/TESTING.md,
 # "Observability stack (by hand)".
 
-# Portitor exports only when this is set (OpenTelemetry's own variable)
+# Portitor exports only when OTEL_EXPORTER_OTLP_ENDPOINT is set
+# (OpenTelemetry's own variable). service.name is the component
+# (portitor-connector, portitor-identity, portitor-issuer);
+# service.instance.id tells the two participants apart.
 x-otel: &otel
   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
 
 services:
   issuer:
-    environment: *otel
+    environment:
+      <<: *otel
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=authority
   provider-identity:
-    environment: *otel
+    environment:
+      <<: *otel
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=provider
   provider:
-    environment: *otel
+    environment:
+      <<: *otel
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=provider
   consumer-identity:
-    environment: *otel
+    environment:
+      <<: *otel
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=consumer
   consumer:
-    environment: *otel
+    environment:
+      <<: *otel
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=consumer
 
   # OpenTelemetry Collector, core distribution 0.165.0:
   # OTLP receiver and OTLP/HTTP exporter, about half the size of the

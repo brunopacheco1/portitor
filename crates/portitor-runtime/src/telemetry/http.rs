@@ -69,6 +69,15 @@ async fn observe(
     request: Request,
     next: Next,
 ) -> Response {
+    // health probes (Docker, Kubernetes) call these every few seconds:
+    // a span and a measure for each would fill the traces with noise
+    if request
+        .extensions()
+        .get::<MatchedPath>()
+        .is_some_and(|path| is_health_probe(path.as_str()))
+    {
+        return next.run(request).await;
+    }
     let started = Instant::now();
     let method = method_name(request.method());
     let version = version_name(request.version());
@@ -116,6 +125,12 @@ async fn observe(
     let seconds = started.elapsed().as_secs_f64();
     metrics::server_request(seconds, method, route.as_deref(), status, version);
     response
+}
+
+/// Whether `route` is a health check (ADR 0023), which is not traced or
+/// measured.
+fn is_health_probe(route: &str) -> bool {
+    route == "/health" || route.starts_with("/api/check/")
 }
 
 /// One request we send: its span, and its `http.client.request.duration`
@@ -267,6 +282,14 @@ fn version_name(version: hyper::Version) -> &'static str {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn health_probes_are_not_traced() {
+        assert!(is_health_probe("/health"));
+        assert!(is_health_probe("/api/check/readiness"));
+        assert!(!is_health_probe("/dsp/2025-1/catalog/request"));
+        assert!(!is_health_probe("/v1/negotiations"));
+    }
 
     #[test]
     fn unknown_methods_are_other() {
