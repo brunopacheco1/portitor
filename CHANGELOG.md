@@ -16,6 +16,10 @@ versions may change behaviour and configuration.
 
 - Close-out of 0.9: the roadmap and the website mark 0.9 released and
   0.10 as the current release.
+- Roadmap "Later": a health data space demo with four participants and
+  an authority (HDAB, ICUdata4EU), which must answer how the same data is
+  reached through a provider and an intermediary with a secure
+  processing environment.
 
 ## [0.9.0] - 2026-11-15
 

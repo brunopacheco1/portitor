@@ -480,6 +480,37 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
 
 ## Later (not planned for a release yet)
 
+- A health data space demo with four participants and an authority
+  (maintainer, 2026-11-15), modelled on a health data access body
+  (HDAB) and the ICUdata4EU ICU data space. The authority governs the
+  data space and runs the issuer. Alice, a data provider, holds patient
+  records. Cooper is an intermediary: he gives access to Alice's
+  records inside his secure processing environment (SPE), and runs a
+  cohort building service on them. Bob, a data user, asks Alice
+  directly (peer to peer, which the EHDS does not exclude); they agree
+  to push the data to object storage (RustFS) in Bob's own
+  infrastructure. Marley, another data user, asks Cooper and processes
+  the data inside Cooper's SPE. The demo must answer, by running it:
+  - can the same data be reached through several channels (Alice's
+    offer and Cooper's)?
+  - does Cooper negotiate with Alice for every new cohort query, or does
+    one agreement cover them?
+  - does Cooper negotiate with Alice for every new access through his
+    SPE, or for every new data user?
+  - do Alice's and Cooper's policies differ, and can Cooper's be less
+    strict because the SPE is safer? What can never be wider than what
+    Alice allowed Cooper (purpose, users, duration)?
+
+  Checked against the EHDS (Regulation (EU) 2025/327, 2026-11-15): for
+  secondary use a data user applies to the HDAB, which issues a data
+  permit (Art. 67, 68); pseudonymised data is processed only in an SPE,
+  and only non-personal data can be downloaded (Art. 73); most of it
+  applies from March 2029. Whether Marley's path also needs a permit
+  from the authority (for example as a credential that Cooper's and
+  Alice's policies require) is to be decided. Needs first: push to
+  object storage (below), an SPE or compute-to-data data plane, a
+  `purpose` constraint ([ADR 0009](adr/0009-minimal-odrl-policies.md) supports only a few), and
+  agreements that depend on an upstream agreement (Cooper's on Alice's).
 - Push transfers to object storage (S3-compatible): the consumer gives a
   bucket address and short-lived credentials in its transfer request
   (`dataAddress`, DSP 2025-1), and the provider's data plane writes the
