@@ -80,7 +80,7 @@ checks this file:
 | [R-25](#r-25) | Name not checked for trademarks and domains | Delivery, legal | 0.3 (ADR 0008, 2026-11-12) | Open | before 1.0 |
 | [R-26](#r-26) | ODRL `dateTime` definition read from memory | Interoperability | 0.3 (ADR 0009, 2026-11-12) | Open | before 1.0 |
 | [R-27](#r-27) | CI downloads from Maven Central and GitHub | Delivery | 0.8 (2026-11-15) | Mitigated | — |
-| [R-28](#r-28) | 0.8 Gaia-X code has no fuzz target | Security | 0.8 (sweep for this file, 2026-11-15) | Open | 0.10 |
+| [R-28](#r-28) | 0.8 Gaia-X code had no fuzz target | Security | 0.8 (sweep for this file, 2026-11-15) | Addressed | 0.8 |
 | [R-29](#r-29) | DCP costs about 2 ms per request and 13 times fewer requests under load | Performance | 0.5 (ADR 0002 section 7, 2026-11-13) | Open | 0.10 (with TD-06) |
 | [R-30](#r-30) | DSP callers were not authenticated | Security | 0.3 (ADR 0007, 2026-11-12) | Addressed | done in 0.5 |
 | [R-31](#r-31) | RSA timing advisory in the pure-Rust `rsa` crate | Security, dependency | 0.0 (ADR 0002, 2026-11-11) | Addressed | done in 0.0 |
@@ -541,7 +541,7 @@ Totals: 35 risks (Open 11, Mitigated 14, Accepted 4, Addressed 6);
 - **Next.** None.
 
 <a id="r-28"></a>
-### R-28 0.8 Gaia-X code has no fuzz target
+### R-28 0.8 Gaia-X code had no fuzz target
 
 - **What.** TESTING says "a new parser of untrusted input gets a target".
   The 0.8 code that reads caller data (the Gaia-X checks and the RFC 8785
@@ -549,9 +549,16 @@ Totals: 35 risks (Open 11, Mitigated 14, Accepted 4, Addressed 6);
   has none: no target in `fuzz/fuzz_targets` names Gaia-X or JCS
   (checked). The X.509 reader reads only the operator's own file.
 - **Why it matters.** A crash or wrong digest on crafted input.
-- **Current state: Open.** Unit tests cover the RFC 8785 examples and the
+- **Current state: Addressed in 0.8** (maintainer, 2026-11-15: "fuzz it
+  if possible"). Fuzz target `gaiax_compliance`: any JSON in JCS form
+  must be JSON and stay the same when put in JCS form again, every
+  `digestSRI` is `sha256-` and 64 hex digits, and the compliance answer
+  check and `gx:compliantCredentials` reader see any JSON object as a
+  credential. 3.9 million runs found nothing (2026-11-15); ClusterFuzzLite
+  runs it on every PR. Unit tests cover the RFC 8785 examples and the
   spike's digests.
-- **Next.** ROADMAP 0.10, "fuzzing on every parser".
+- **Next.** None for these checks; the X.509 reader reads only the
+  operator's file.
 
 <a id="r-29"></a>
 ### R-29 DCP costs about 2 ms per request and 13 times fewer requests under load

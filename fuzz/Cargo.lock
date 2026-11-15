@@ -219,6 +219,7 @@ dependencies = [
 name = "portitor-fuzz"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "libfuzzer-sys",
  "portitor-dcp",
  "portitor-dsp",

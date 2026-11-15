@@ -536,8 +536,10 @@ Targets (`fuzz/fuzz_targets`): `dsp_messages`, `dsp_negotiation`, `dsp_transfer`
 `odrl_policy`, `dcp_token_parse`, `dcp_token_validate`, `dcp_messages`,
 `dcp_status_list`, `dcp_credentials`, `dcp_access_token`, `dcp_did_document`,
 `bundle_manifest` (the bundle manifest and its signature), `shacl_load`
-(Turtle shapes loaded by `portitor-shacl`) and `shacl_jsonld` (JSON-LD to
-RDF with local contexts). A new parser of untrusted input
+(Turtle shapes loaded by `portitor-shacl`), `shacl_jsonld` (JSON-LD to
+RDF with local contexts) and `gaiax_compliance` (the RFC 8785 JCS form and
+`digestSRI` of any JSON, the Gaia-X compliance credential's list and the
+answer check; the JCS form must not change when applied again). A new parser of untrusted input
 gets a target. In CI, ClusterFuzzLite fuzzes every pull request briefly
 (`cflite_pr.yml`) and runs longer each week (`cflite_batch.yml`). A crash
 is a bug: add the input that caused it as a regression test.
