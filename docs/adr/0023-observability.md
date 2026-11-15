@@ -170,10 +170,12 @@ OTLP receiver.
 
 ## Consequences
 
-- Binary size about +7% per component and idle memory about +3% with
-  export off, +19% with it on (spike, connector). With every request
-  traced, about 20% fewer requests per second at saturation; sampling
-  (`OTEL_TRACES_SAMPLER`) is the operator's lever.
+- Release build against 0.8.0 (with the health checks): binaries +14%
+  (connector), +20% (identity, issuer); idle memory +1.2 MB per process
+  with export off, +2.8 MB with it on. At saturation 8% fewer requests
+  per second with export off, 12% with every request traced, 18% with
+  one trace in ten; runs vary by up to 15%. Sampling lowers the data
+  sent, not the cost in the process (DEPLOYING, R-37).
 - The management port is now always bound (default `127.0.0.1`); in a
   container, operators who want orchestrator probes set
   `PORTITOR_MANAGEMENT_BIND` to an internal address, as for the

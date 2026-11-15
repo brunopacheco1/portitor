@@ -395,6 +395,20 @@ run Portitor and what a new user needs to try it
   user runs the demo from the website in under 15 minutes (timed by the
   maintainer on a clean machine). The DSP TCK, the DCP TCK, the EDC
   interop test and the Gaia-X test stay green.
+- Result (2026-11-15): met, except the timed quickstart, which waits for
+  the maintainer's run on a clean machine. Spike: go. Readiness fails
+  when a component's own dependency is down (unit and integration
+  tests), and the Compose demo starts each component once the ones it
+  needs are healthy. With the observability stack, Jaeger shows traces
+  of all three components with the negotiation and transfer state
+  changes, and Prometheus the metrics; without an endpoint nothing is
+  exported (in-process OTLP receiver test). Footprint against 0.8.0:
+  binaries +14% (connector), +20% (identity, issuer); idle memory +1.2
+  MB per process with export off. At saturation the connector serves
+  8% fewer requests with export off and 12% to 18% fewer with export on
+  (R-37). The DSP TCK (65 of 65), the DCP TCK (issuer 41, credential
+  service 54, verifier 22), the EDC interop test (RC7) and the Gaia-X
+  test pass.
 
 The hardening release planned as 0.10 is split into four smaller
 releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows

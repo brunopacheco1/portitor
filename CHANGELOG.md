@@ -12,6 +12,8 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-15
+
 ### Documentation
 
 - C1 and C2 diagrams redrawn with more context: C1 shows the dataspace
@@ -57,9 +59,11 @@ versions may change behaviour and configuration.
   numbers; RISKS_AND_TECHNICAL_DEBTS and SECURITY-ASSURANCE follow
   them.
 - RISKS_AND_TECHNICAL_DEBTS: R-36 (the OpenTelemetry crates are 0.x),
-  R-37 (full tracing costs about 20% throughput), TD-28 (no trace across
-  participants, by design) and TD-29 (no OTLP logs, gRPC or
-  compression); TD-18 (operations) addressed. SECURITY-ASSURANCE:
+  R-37 (telemetry costs some throughput at saturation: 8% with export
+  off, 12% to 18% with it on; sampling does not win it back), TD-28 (no
+  trace across participants, by design), TD-29 (no OTLP logs, gRPC or
+  compression) and TD-30 (the outbox resends a message the counter-party
+  refused with a 4xx); TD-18 (operations) addressed. SECURITY-ASSURANCE:
   telemetry off by default, operational data in the threat model, the
   operator's monitoring as a trust boundary.
 - DEPLOYING: "Health and logs" with the health checks and probes,

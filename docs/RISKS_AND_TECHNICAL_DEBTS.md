@@ -89,7 +89,7 @@ checks this file:
 | [R-34](#r-34) | Scorecard Branch-Protection and Fuzzing at 0 | Security | 0.1 (2026-11-12) | Addressed | done in 0.2 |
 | [R-35](#r-35) | The DCP TCK uses VCDM 1.1, Gaia-X needs VCDM 2.0 | Interoperability | 0.5 (ADR 0015, 2026-11-13) | Addressed | done in 0.5 |
 | [R-36](#r-36) | The OpenTelemetry Rust crates are 0.x and change their API often | Dependency, upstream churn | 0.9 (ADR 0023, 2026-11-15) | Mitigated | — |
-| [R-37](#r-37) | Tracing every request costs about 20% throughput at saturation | Performance | 0.9 spike (ADR 0023, 2026-11-15) | Mitigated | — |
+| [R-37](#r-37) | Telemetry costs some throughput at saturation | Performance | 0.9 spike (ADR 0023, 2026-11-15) | Mitigated | — |
 | [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | 0.7 (maintainer, 2026-11-14) | Open | — |
 | [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | — |
 | [TD-03](#td-03) | A provider in several data spaces, each with its own rules | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | — |
@@ -119,9 +119,10 @@ checks this file:
 | [TD-27](#td-27) | The domain crates' I/O check named too few crates | Technical debt | 0.5 review (ADR 0004, 2026-11-14) | Addressed | done 2026-11-14 |
 | [TD-28](#td-28) | No trace across participants | Technical debt | 0.9 (ADR 0023, 2026-11-15) | Accepted | — |
 | [TD-29](#td-29) | No OTLP logs export, no gRPC, no compression | Technical debt | 0.9 (ADR 0023, DEPLOYING, 2026-11-15) | Open | Later |
+| [TD-30](#td-30) | The outbox resends a message the counter-party refused | Technical debt | 0.9 (outbox metrics, 2026-11-15) | Open | — |
 
 Totals: 37 risks (Open 8, Mitigated 17, Accepted 4, Addressed 8);
-29 technical debts (Open 18, Accepted 5, Addressed 6).
+30 technical debts (Open 19, Accepted 5, Addressed 6).
 
 ## Risks
 
@@ -658,18 +659,20 @@ Totals: 37 risks (Open 8, Mitigated 17, Accepted 4, Addressed 8);
 - **Next.** None.
 
 <a id="r-37"></a>
-### R-37 Tracing every request costs about 20% throughput at saturation
+### R-37 Telemetry costs some throughput at saturation
 
-- **What.** In the 0.9 spike a connector that traced every request
-  served about 20% fewer DSP requests per second at saturation; the idle
-  cost is small ([spike](spikes/0.9-opentelemetry.md), ADR 0023).
+- **What.** In the 0.9 release measurements a connector at saturation
+  served 8% fewer DSP requests per second than 0.8.0 with export off,
+  12% fewer with every request traced and 18% fewer with one trace in
+  ten (DEPLOYING, "Traces and metrics"); runs vary by up to 15%. The
+  spike had measured 20% with every request traced. Sampling lowers the
+  data sent, not the cost in the process.
 - **Why it matters.** A busy connector with full tracing reaches its
   limit sooner.
-- **Current state: Mitigated.** Export is off by default. Operators keep
-  a share of the traces with `OTEL_TRACES_SAMPLER` and
-  `OTEL_TRACES_SAMPLER_ARG` (DEPLOYING, "Traces and metrics"); metrics
-  are not sampled.
-- **Next.** None.
+- **Current state: Mitigated.** Export is off by default; the
+  differences measured are close to the noise of one machine.
+- **Next.** Measure again with the published benchmarks (ROADMAP 0.12);
+  if the cost is real, look at what the spans cost when export is off.
 
 ## Technical debt
 
@@ -1120,3 +1123,20 @@ whether the change itself lands in 0.11 or later.
 - **Current state: Open.** Kept out to save binary size and
   dependencies (spike, ADR 0023).
 - **Next.** Later; no release named.
+
+<a id="td-30"></a>
+### TD-30 The outbox resends a message the counter-party refused
+
+- **What.** The connector's outbox retries a DSP message on any error,
+  also when the counter-party answered with a 4xx status (for example
+  400, a message it will never take). With the default settings it
+  sends the message three more times, then gives up
+  (`crates/portitor-connector/src/outbox.rs`, `send`). Seen in 0.9 with
+  the new `portitor.outbox.message.resent` metric during the Compose demo.
+- **Why it matters.** Wasted calls and a later failure: the process
+  ends only after the last retry instead of at once, and the partner
+  sees the same bad request several times.
+- **Current state: Open.** Behaviour since the outbox
+  ([ADR 0007](adr/0007-outbox-and-proof-of-delivery.md)); not changed in 0.9.
+- **Next.** No release named yet: retry only on network errors, 408,
+  429 and 5xx; give up at once on other 4xx.

@@ -1107,10 +1107,15 @@ endpoint variables), `OTEL_EXPORTER_OTLP_PROTOCOL` (always
 the SDK's experimental async processors read them), and `OTEL_LOGS_*`
 (logs stay on stdout).
 
-**Sampling.** With every request traced, a connector served about 20%
-fewer DSP requests per second at saturation in the 0.9 measurements
-([spike](spikes/0.9-opentelemetry.md)); idle cost is small. On a busy
-connector keep a share of the traces, for example one in ten:
+**Cost and sampling.** In the 0.9 release measurements (one 4-core
+machine, 50 clients, `scripts/measure.sh`, mean of three runs) a
+connector served 2,074 DSP requests per second with 0.8.0, 1,909 with
+0.9 and export off, 1,820 with every request traced and 1,701 with one
+trace in ten kept. Runs vary by up to 15%, so these differences are
+close to the noise. Sampling did **not** raise throughput: the spans
+are made in the process either way. It lowers what is sent (about ten
+times fewer trace exports) and the load on your backend. To keep one
+trace in ten:
 
 ```sh
 OTEL_TRACES_SAMPLER=parentbased_traceidratio
