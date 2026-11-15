@@ -40,6 +40,8 @@ const COMPLIANCE: &str = "did:web:compliance.example";
 const NOTARY: &str = "did:web:notary.example";
 const GX: &str = "https://w3id.org/gaia-x/development#";
 const BASE: &str = "https://holder.example/credentials/gaiax";
+/// Why the fake service refuses, when told to.
+const REFUSAL: &str = "{\"message\":\"the registration number credential is not trusted\"}";
 
 /// The fake compliance service.
 struct FakeService {
@@ -48,6 +50,8 @@ struct FakeService {
     holder: Mutex<Option<DidDocument>>,
     /// Answer with a wrong digest.
     wrong_digest: AtomicBool,
+    /// Refuse with HTTP 409 and [`REFUSAL`].
+    refuse: AtomicBool,
     /// The `vcid` of each request.
     asked: Mutex<Vec<String>>,
 }
@@ -81,6 +85,9 @@ async fn standard_compliance(
     body: String,
 ) -> (StatusCode, String) {
     service.asked.lock().unwrap().push(asked.vcid.clone());
+    if service.refuse.load(Ordering::SeqCst) {
+        return (StatusCode::CONFLICT, REFUSAL.to_owned());
+    }
     if headers.get(header::CONTENT_TYPE).unwrap() != "application/vp+jwt" {
         return (StatusCode::UNSUPPORTED_MEDIA_TYPE, String::new());
     }
@@ -225,6 +232,7 @@ async fn setup() -> Setup {
         party: Party::new(COMPLIANCE),
         holder: Mutex::new(None),
         wrong_digest: AtomicBool::new(false),
+        refuse: AtomicBool::new(false),
         asked: Mutex::new(Vec::new()),
     });
     let app = Router::new()
@@ -420,6 +428,29 @@ async fn a_wrong_digest_is_refused_and_nothing_is_stored() {
     assert_eq!(held_gaiax(world).len(), 4);
 }
 
+/// The service's reason for a refusal is in the run's error, as the
+/// management API lists it.
+#[tokio::test]
+async fn a_refusal_keeps_the_services_reason() {
+    let setup = setup().await;
+    let world = &setup.world;
+    setup.service.refuse.store(true, Ordering::SeqCst);
+    let run = run_now(&world.identity).await.unwrap();
+    assert_eq!(run.outcome, RunOutcome::Failed);
+    let expected = format!("compliance service: HTTP 409 Conflict: {REFUSAL}");
+    assert_eq!(run.error.as_deref(), Some(expected.as_str()));
+    let (status, runs) = call(
+        &world.management,
+        Request::get("/v1/gaiax/compliance")
+            .header(header::AUTHORIZATION, format!("Bearer {API_KEY}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(runs[0]["error"], expected);
+}
+
 #[tokio::test]
 async fn the_management_api_starts_and_lists_runs() {
     let setup = setup().await;
@@ -438,21 +469,25 @@ async fn the_management_api_starts_and_lists_runs() {
     assert_eq!(status, StatusCode::ACCEPTED, "{started}");
     assert_eq!(started["outcome"], "RUNNING");
     let id = started["id"].clone();
-    // wait for the run in the background
-    let mut runs = Value::Null;
-    for _ in 0..200 {
-        let (status, listed) = call(
-            &world.management,
-            authed(Request::get("/v1/gaiax/compliance")),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        runs = listed;
-        if runs[0]["outcome"] != "RUNNING" {
-            break;
+    // wait until the run in the background has ended; a busy test machine
+    // may take a while, so only a run that hangs reaches the 30 s limit
+    let ended = async {
+        loop {
+            let (status, listed) = call(
+                &world.management,
+                authed(Request::get("/v1/gaiax/compliance")),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            if listed[0]["outcome"] != "RUNNING" {
+                return listed;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
+    };
+    let Ok(runs) = tokio::time::timeout(std::time::Duration::from_secs(30), ended).await else {
+        panic!("the run did not end within 30 s");
+    };
     assert_eq!(runs[0]["id"], id);
     assert_eq!(runs[0]["outcome"], "SUCCEEDED", "{runs}");
     assert!(runs[0]["finished"].is_string());
@@ -485,6 +520,44 @@ async fn gaiax_off_has_no_runs() {
     let jwk = &document["verificationMethod"][0]["publicKeyJwk"];
     assert_eq!(jwk["alg"], "ES256");
     assert!(jwk.get("x5u").is_none());
+    let (status, _, _) = get(&world.app, "/.well-known/x509CertificateChain.pem").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// A DID with a path: the chain, `x5u` and the Gaia-X credential routes
+/// are below that path, so participants on one host do not collide.
+#[tokio::test]
+async fn a_did_with_a_path_keeps_its_path() {
+    let notary = Party::new(NOTARY);
+    let files = Files::new(&notary);
+    let adapter = HttpGaiaxCompliance::new("http://127.0.0.1:1", true).unwrap();
+    let config = Config {
+        participant_id: "did:web:holder.example:participants:a".to_owned(),
+        ..files.config("http://127.0.0.1:1")
+    };
+    let world = World::try_with(
+        &config,
+        Arc::new(SqliteStore::in_memory().unwrap()),
+        SigningKey::from_pem(KEY).unwrap(),
+        Some(Arc::new(adapter)),
+    )
+    .unwrap();
+    let (status, _, text) = get(&world.app, "/participants/a/did.json").await;
+    assert_eq!(status, StatusCode::OK);
+    let document: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        document["verificationMethod"][0]["publicKeyJwk"]["x5u"],
+        "https://holder.example/participants/a/.well-known/x509CertificateChain.pem"
+    );
+    let chain_path = "/participants/a/.well-known/x509CertificateChain.pem";
+    let (status, _, chain) = get(&world.app, chain_path).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(chain, CHAIN);
+    // the route is there; no run has stored the credential yet
+    let (status, headers, _) =
+        get(&world.app, "/participants/a/credentials/gaiax/legal-person").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(headers[header::CONTENT_TYPE], "application/problem+json");
     let (status, _, _) = get(&world.app, "/.well-known/x509CertificateChain.pem").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }

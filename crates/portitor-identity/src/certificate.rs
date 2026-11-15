@@ -7,9 +7,10 @@
 //!
 //! - at start, the first certificate must be for the identity key, or the
 //!   identity does not start;
-//! - the chain is served at `GET /.well-known/x509CertificateChain.pem`,
-//!   and the DID document's JWK points to it with `x5u` (RFC 7517,
-//!   section 4.6);
+//! - the chain is served at `GET /.well-known/x509CertificateChain.pem`
+//!   below the DID's path (`/participants/a/.well-known/...` for
+//!   `did:web:host:participants:a`), and the DID document's JWK points to
+//!   it with `x5u` (RFC 7517, section 4.6);
 //! - the file is read again every [`RELOAD_INTERVAL`]: a renewed
 //!   certificate for the same key replaces the chain without a restart; a
 //!   file for another key, or one that cannot be read, is refused and
@@ -131,7 +132,7 @@ pub async fn watch(chain: Arc<CertificateChain>) {
     }
 }
 
-/// `GET /.well-known/x509CertificateChain.pem`.
+/// `GET /.well-known/x509CertificateChain.pem`, below the DID's path.
 pub(crate) async fn serve(State(identity): State<Arc<Identity>>) -> Response {
     match &identity.certificate {
         Some(chain) => ([(header::CONTENT_TYPE, CHAIN_MEDIA_TYPE)], chain.pem()).into_response(),

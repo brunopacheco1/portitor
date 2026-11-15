@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use http_body_util::Full;
-use hyper::body::Bytes;
+use hyper::body::{Bytes, Incoming};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
@@ -23,6 +23,11 @@ use crate::BoxFuture;
 pub enum HttpError {
     /// The counter-party answered with this status, which is not 2xx.
     Status(u16),
+    /// Like [`HttpError::Status`], with the start of the answer's body
+    /// (at most [`ERROR_BODY_BYTES`]), which often says why. Only
+    /// [`HttpSender::post_text`] reads it: a Gaia-X compliance service
+    /// explains there why it refused a participant.
+    StatusWithBody(u16, String),
     /// No usable answer: the URL is not allowed, the connection failed,
     /// no answer came in time, or the answer could not be read.
     NoAnswer(String),
@@ -33,16 +38,31 @@ pub enum HttpError {
 impl std::fmt::Display for HttpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Status(code) => match hyper::StatusCode::from_u16(*code) {
-                Ok(status) => write!(f, "HTTP {status}"),
-                Err(_) => write!(f, "HTTP {code}"),
-            },
+            Self::Status(code) => write_status(f, *code),
+            Self::StatusWithBody(code, body) if body.is_empty() => write_status(f, *code),
+            Self::StatusWithBody(code, body) => {
+                write_status(f, *code)?;
+                write!(f, ": {body}")
+            }
             Self::NoAnswer(reason) => f.write_str(reason),
         }
     }
 }
 
+/// `HTTP 404 Not Found`, or `HTTP 499` for a code without a name.
+fn write_status(f: &mut std::fmt::Formatter<'_>, code: u16) -> std::fmt::Result {
+    match hyper::StatusCode::from_u16(code) {
+        Ok(status) => write!(f, "HTTP {status}"),
+        Err(_) => write!(f, "HTTP {code}"),
+    }
+}
+
 impl std::error::Error for HttpError {}
+
+/// The most bytes of a refusal's body kept in a
+/// [`HttpError::StatusWithBody`]: enough for a reason, small enough for a
+/// log line and a database row.
+pub const ERROR_BODY_BYTES: usize = 2 * 1024;
 
 /// Port: sends a message to a counter-party and waits for its HTTP 2xx.
 /// Each method returns, later ([`BoxFuture`]), the counter-party's JSON
@@ -314,8 +334,8 @@ impl HttpSender {
     ///
     /// The URL is not allowed or the request failed
     /// ([`HttpError::NoAnswer`]), or the answer is not HTTP 2xx
-    /// ([`HttpError::Status`]). Redirects are not followed: a `3xx` is a
-    /// status error.
+    /// ([`HttpError::StatusWithBody`], with the start of the answer).
+    /// Redirects are not followed: a `3xx` is a status error.
     pub async fn post_text(
         &self,
         url: &str,
@@ -328,7 +348,12 @@ impl HttpSender {
             .header(hyper::header::CONTENT_TYPE, content_type)
             .body(Full::new(Bytes::from(body)))
             .map_err(|e| HttpError::NoAnswer(e.to_string()))?;
-        let (_headers, bytes) = self.call_within(url, request, max_bytes, timeout).await?;
+        let limits = Limits {
+            max_bytes,
+            timeout,
+            error_body_bytes: ERROR_BODY_BYTES,
+        };
+        let (_headers, bytes) = self.call_within(url, request, limits).await?;
         String::from_utf8(bytes.to_vec())
             .map_err(|_| HttpError::NoAnswer("the answer is not UTF-8 text".to_owned()))
     }
@@ -361,18 +386,22 @@ impl HttpSender {
         request: hyper::Request<Full<Bytes>>,
         max_bytes: usize,
     ) -> Result<(hyper::HeaderMap, Bytes), HttpError> {
-        self.call_within(url, request, max_bytes, SEND_TIMEOUT)
-            .await
+        let limits = Limits {
+            max_bytes,
+            timeout: SEND_TIMEOUT,
+            error_body_bytes: 0,
+        };
+        self.call_within(url, request, limits).await
     }
 
-    /// Like [`HttpSender::call_with_headers`], waiting at most `timeout`.
+    /// Like [`HttpSender::call_with_headers`], within `limits`.
     async fn call_within(
         &self,
         url: &str,
         request: hyper::Request<Full<Bytes>>,
-        max_bytes: usize,
-        timeout: Duration,
+        limits: Limits,
     ) -> Result<(hyper::HeaderMap, Bytes), HttpError> {
+        let Limits { timeout, .. } = limits;
         // the text names callbacks, the first use of this rule; it now
         // covers every outbound URL, and tests look for this text
         if !outbound_url_allowed(url, self.allow_http) {
@@ -384,7 +413,7 @@ impl HttpSender {
                     .to_owned(),
             ));
         }
-        let exchange = self.exchange(request, max_bytes);
+        let exchange = self.exchange(request, limits);
         // `timeout` gives an error only when the time is up; when the
         // exchange finished in time, `answer` is its own result, which may
         // be an error too, and is returned as it is
@@ -400,7 +429,7 @@ impl HttpSender {
     async fn exchange(
         &self,
         request: hyper::Request<Full<Bytes>>,
-        max_bytes: usize,
+        limits: Limits,
     ) -> Result<(hyper::HeaderMap, Bytes), HttpError> {
         use http_body_util::BodyExt as _;
         let response = self
@@ -410,17 +439,67 @@ impl HttpSender {
             .map_err(|e| HttpError::NoAnswer(e.to_string()))?;
         let status = response.status();
         if !status.is_success() {
-            return Err(HttpError::Status(status.as_u16()));
+            return Err(refusal(response, limits.error_body_bytes).await);
         }
         // read at most max_bytes: the counter-party controls the size
         let (parts, body) = response.into_parts();
-        let body = http_body_util::Limited::new(body, max_bytes)
+        let body = http_body_util::Limited::new(body, limits.max_bytes)
             .collect()
             .await
             .map_err(|e| HttpError::NoAnswer(format!("answer not read: {e}")))?
             .to_bytes();
         Ok((parts.headers, body))
     }
+}
+
+/// How much one exchange may read and how long it may take.
+#[derive(Debug, Clone, Copy)]
+struct Limits {
+    /// The largest successful answer read.
+    max_bytes: usize,
+    /// How long to wait for the whole answer.
+    timeout: Duration,
+    /// How much of a refusal's body to keep; 0 reads none of it.
+    error_body_bytes: usize,
+}
+
+/// The error for a non-2xx `response`: its status, and with
+/// `keep_bytes` above 0 the start of its body as text.
+async fn refusal(response: hyper::Response<Incoming>, keep_bytes: usize) -> HttpError {
+    use http_body_util::BodyExt as _;
+    let code = response.status().as_u16();
+    if keep_bytes == 0 {
+        return HttpError::Status(code);
+    }
+    // read frame by frame and stop once enough is there: the counter-party
+    // chooses the size, and the rest is not needed
+    let mut body = response.into_body();
+    let mut start = Vec::new();
+    while start.len() < keep_bytes {
+        match body.frame().await {
+            Some(Ok(frame)) => {
+                if let Ok(data) = frame.into_data() {
+                    start.extend_from_slice(&data);
+                }
+            }
+            // a body that breaks off keeps what came
+            Some(Err(_)) | None => break,
+        }
+    }
+    HttpError::StatusWithBody(code, text_start(&start, keep_bytes))
+}
+
+/// At most `max_bytes` of `bytes` as text, without a character cut in
+/// two at the end; bytes that are not UTF-8 become U+FFFD.
+fn text_start(bytes: &[u8], max_bytes: usize) -> String {
+    let mut end = bytes.len().min(max_bytes);
+    if let Err(error) = std::str::from_utf8(&bytes[..end])
+        && error.error_len().is_none()
+    {
+        // only the last character is incomplete: leave it out
+        end = error.valid_up_to();
+    }
+    String::from_utf8_lossy(&bytes[..end]).trim().to_owned()
 }
 
 /// The HTTP status code in the text of an [`HttpError::Status`]
@@ -723,7 +802,7 @@ mod tests {
                 assert_eq!(
                     answered_status(&error.to_string()),
                     match error {
-                        HttpError::Status(code) => Some(code),
+                        HttpError::Status(code) | HttpError::StatusWithBody(code, _) => Some(code),
                         HttpError::NoAnswer(_) => None,
                     }
                 );
@@ -748,6 +827,58 @@ mod tests {
             matches!(unreachable, HttpError::NoAnswer(_)),
             "{unreachable}"
         );
+    }
+
+    /// `post_text` keeps the start of a refusal's body, so a compliance
+    /// service's reason reaches the run's error.
+    #[tokio::test]
+    async fn post_text_keeps_the_start_of_a_refusal() {
+        use axum::http::StatusCode;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // "é" is two bytes; with one "x" first, byte 2,048 is in the
+        // middle of one
+        let long = format!("x{}", "é".repeat(ERROR_BODY_BYTES));
+        let app = axum::Router::new()
+            .route(
+                "/reason",
+                axum::routing::post(|| async { (StatusCode::CONFLICT, "  bad digestSRI\n") }),
+            )
+            .route(
+                "/long",
+                axum::routing::post(move || async move { (StatusCode::BAD_REQUEST, long) }),
+            )
+            .route(
+                "/empty",
+                axum::routing::post(|| async { StatusCode::BAD_GATEWAY }),
+            );
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let sender = HttpSender::new(true).unwrap();
+        let refusal = |path: &'static str| {
+            let sender = &sender;
+            async move {
+                let url = format!("http://{addr}{path}");
+                let timeout = Duration::from_secs(5);
+                let answer = sender.post_text(&url, "text/plain", String::new(), 64, timeout);
+                answer.await.unwrap_err()
+            }
+        };
+        let error = refusal("/reason").await;
+        assert_eq!(error.to_string(), "HTTP 409 Conflict: bad digestSRI");
+        assert_eq!(answered_status(&error.to_string()), Some(409));
+        let HttpError::StatusWithBody(400, start) = refusal("/long").await else {
+            panic!("not a refusal with a body");
+        };
+        assert_eq!(start.len(), ERROR_BODY_BYTES - 1);
+        assert!(start.starts_with("xé"));
+        assert_eq!(refusal("/empty").await.to_string(), "HTTP 502 Bad Gateway");
+    }
+
+    #[test]
+    fn text_start_cuts_at_a_character() {
+        assert_eq!(text_start("aé".as_bytes(), 2), "a");
+        assert_eq!(text_start("aé".as_bytes(), 3), "aé");
+        assert_eq!(text_start(b"a\xffb", 3), "a\u{fffd}b");
     }
 
     /// A sender with only the required methods: the authorized variants

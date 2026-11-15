@@ -21,18 +21,26 @@ versions may change behaviour and configuration.
   services trusted, separate from `PORTITOR_TRUSTED_ISSUERS`. The
   verifier accepts a `gx:ParticipantComplianceCredential` from such a
   service (PS256 or ES256, validity from `validFrom` and `validUntil`
-  only) with the `gx:LegalPerson` credential it names by `digestSRI`,
-  issued and signed by the caller; the holder binding is skipped for
-  these two only. A compliance scope brings the `LegalPerson` scope on
-  both sides. A credential claim path may now hold a prefixed name such
+  only, `validUntil` required) with the `gx:LegalPerson` credential it
+  names by `digestSRI`, issued and signed by the caller; the holder
+  binding is skipped for these two only, and the legal person
+  credential's status is not fetched (the caller controls it). Policies
+  see these two only as their Gaia-X type. A compliance credential from
+  a service not trusted is skipped, so its holder can still use offers
+  that need only a membership. A `gx:LegalPerson` from an issuer in
+  `PORTITOR_TRUSTED_ISSUERS` is checked like any data space credential.
+  The `digestSRI` (RFC 8785 JCS) writes numbers exactly as JavaScript
+  does (serde_json `float_roundtrip`). A compliance scope brings the
+  `LegalPerson` scope on both sides. A credential claim path may now hold a prefixed name such
   as `gx:labelLevel`. The start log warns when
   `PORTITOR_POLICY_CREDENTIALS` lists `ParticipantComplianceCredential`
   without a compliance service.
 - Identity: the X.509 chain of its key (`PORTITOR_IDENTITY_CERTIFICATE_CHAIN`,
   ADR 0021). The first certificate must be for the identity key, or the
   identity does not start. Served at
-  `GET /.well-known/x509CertificateChain.pem` and named by `x5u` in the DID
-  document. The file is read again every minute; a new file for another
+  `GET /.well-known/x509CertificateChain.pem` below the DID's path
+  (`/participants/a/.well-known/...` for `did:web:host:participants:a`)
+  and named by `x5u` in the DID document. The file is read again every minute; a new file for another
   key is refused and logged, and the old chain stays.
 - Identity: Gaia-X onboarding (ADR 0021), on with
   `PORTITOR_GAIAX_COMPLIANCE_URL` and `PORTITOR_GAIAX_PARTICIPANT_FILE`.
@@ -42,11 +50,16 @@ versions may change behaviour and configuration.
   `application/vp+jwt`), checks the `gx:ParticipantComplianceCredential`
   it answers (signature by the service's `did:web` key, type, id, every
   `digestSRI`) and stores the four credentials. Runs at start without a
-  valid compliance credential, then at two thirds of its validity;
-  failed runs are retried with the outbox's delays. Management API:
+  valid compliance credential, then at two thirds of its validity, at
+  least a minute after the last good run; failed runs are retried with
+  the outbox's delays. A run the service refuses keeps the start of its
+  answer (up to 2 KiB) in the run's error and log. Management API:
   `POST /v1/gaiax/compliance` (run now) and `GET /v1/gaiax/compliance`
   (last runs). Public: `GET /credentials/gaiax/{name}` for the three
-  credentials sent.
+  credentials sent, below the DID's path like the chain; credential ids
+  keep that path, so participants on one host do not collide. A
+  credential request's `holderPid` must not start with `gaiax:` (400):
+  the identity keeps its Gaia-X credentials under those ids.
 - `portitor-dcp`: `x509` (the P-256 key of a PEM chain's first
   certificate, our own small DER reader), `gaiax_sign` (the Gaia-X
   credentials, presentation and answer check), and

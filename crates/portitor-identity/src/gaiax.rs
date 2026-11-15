@@ -32,12 +32,17 @@
 //! failed run is tried again after 1, 2, 4 ... seconds, at most one hour
 //! apart: the issuer's outbox retry policy
 //! ([`portitor_runtime::retry::retry_delay`]), but never given up, since
-//! nothing else would renew the credential. The management API starts a
-//! run now ([`start_run`]) and lists the last runs. Runs never overlap.
+//! nothing else would renew the credential. After a successful run the
+//! next one waits at least a minute. The management API starts a run now
+//! ([`start_run`]) and lists the last runs. Runs never overlap, and a
+//! scheduled run that waited for the operator's does not follow it at
+//! once.
 //!
-//! The public base is the origin of the participant's `did:web` URL (for
-//! `did:web:provider.example` it is `https://provider.example`), where
-//! the identity also serves its DID document and certificate chain.
+//! The public base is where the participant's `did:web` DID document is,
+//! without `did.json` ([`public_base`]): `https://provider.example` for
+//! `did:web:provider.example`, `https://host.example/participants/a` for
+//! `did:web:host.example:participants:a`. The identity serves its
+//! certificate chain and these credentials below it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -340,9 +345,13 @@ fn read_registration(file: &Path) -> Result<Credential, String> {
     Ok(credential)
 }
 
-/// The public base URL of a `did:web` DID: the origin of its document's
-/// URL, for example `https://provider.example` for
-/// `did:web:provider.example`.
+/// The public base URL of a `did:web` DID: the URL of its DID document
+/// without `did.json`, and without `/.well-known` for a DID without a
+/// path. `https://provider.example` for `did:web:provider.example`,
+/// `https://host.example/participants/a` for
+/// `did:web:host.example:participants:a`. The path stays so that two
+/// participants on one host get different credential ids, `vcid` and
+/// `x5u` (`did:web`, "Read (Resolve)").
 ///
 /// # Errors
 /// `did` is not a valid `did:web` DID.
@@ -350,7 +359,23 @@ pub fn public_base(did: &str) -> Result<String, String> {
     let url = portitor_dcp::did_web_url(did).map_err(|e| e.to_string())?;
     let after_scheme = url.trim_start_matches("https://");
     let host = after_scheme.split('/').next().unwrap_or_default();
-    Ok(format!("https://{host}"))
+    Ok(format!("https://{host}{}", public_path(did)?))
+}
+
+/// The path of [`public_base`] on the identity's own server: empty for a
+/// DID without a path, `/participants/a` for
+/// `did:web:host.example:participants:a`. The identity serves its DID
+/// document below the same path ([`portitor_runtime::did_document::path`]).
+///
+/// # Errors
+/// `did` is not a valid `did:web` DID.
+pub fn public_path(did: &str) -> Result<String, String> {
+    let document_path = portitor_runtime::did_document::path(did)?;
+    let folder = document_path
+        .strip_suffix("/did.json")
+        .unwrap_or(&document_path);
+    let folder = folder.strip_suffix("/.well-known").unwrap_or(folder);
+    Ok(folder.to_owned())
 }
 
 /// The URL (and id) of the Gaia-X credential `name`.
@@ -408,6 +433,40 @@ pub fn start_run(identity: &Arc<Identity>) -> Result<GaiaxRun, StartError> {
 pub async fn run_now(identity: &Identity) -> Option<GaiaxRun> {
     let onboarding = identity.gaiax.as_ref()?;
     let guard = Arc::clone(&onboarding.running).lock_owned().await;
+    run_locked(identity, guard).await
+}
+
+/// Runs for [`run_schedule`], which saw `seen` as the last run when it
+/// decided a run is due. If another run ended while this one waited for
+/// the lock (one the operator started), that run counts as the
+/// schedule's and none starts, so two runs never follow each other at
+/// once. Returns the run that counts; `None` when Gaia-X is off or the
+/// store fails.
+async fn run_unless_overtaken(identity: &Identity, seen: Option<i64>) -> Option<GaiaxRun> {
+    let onboarding = identity.gaiax.as_ref()?;
+    let guard = Arc::clone(&onboarding.running).lock_owned().await;
+    // under the lock, the last run has ended
+    if let Some(latest) = latest_run(identity)
+        && Some(latest.id) != seen
+    {
+        return Some(latest);
+    }
+    run_locked(identity, guard).await
+}
+
+/// The last run recorded, if any.
+fn latest_run(identity: &Identity) -> Option<GaiaxRun> {
+    match identity.store.gaiax_runs(1) {
+        Ok(runs) => runs.into_iter().next(),
+        Err(error) => {
+            tracing::error!(%error, "identity store failed");
+            None
+        }
+    }
+}
+
+/// Records a run's start and runs it; `running` is the held lock.
+async fn run_locked(identity: &Identity, running: OwnedMutexGuard<()>) -> Option<GaiaxRun> {
     let id = match identity.store.start_gaiax_run(now_secs()) {
         Ok(id) => id,
         Err(error) => {
@@ -415,7 +474,7 @@ pub async fn run_now(identity: &Identity) -> Option<GaiaxRun> {
             return None;
         }
     };
-    finish_run(identity, id, guard).await
+    finish_run(identity, id, running).await
 }
 
 /// Runs, records how it ended, and lets the next run start.
@@ -448,15 +507,43 @@ async fn finish_run(
     }
 }
 
-/// One run at `now`. Returns when the compliance credential expires.
+/// One run at `now` (module doc, steps 1 to 5). Returns when the
+/// compliance credential expires.
 async fn onboard(identity: &Identity, now: u64) -> Result<Option<i64>, String> {
     let onboarding = identity.gaiax.as_ref().ok_or("Gaia-X is off")?;
     let participant = read_participant(&onboarding.participant_file)?;
+    let signed = build_and_sign(identity, participant, Period::starting(now))?;
+    let answer = send_and_check(identity, onboarding, &signed, now).await?;
+    store_credentials(identity, &signed, &answer)?;
+    Ok(answer.validity.until)
+}
+
+/// What one run signs and sends.
+struct SignedCredentials {
+    /// The `gx:LegalPerson` credential, as read back from its JWT.
+    legal_person: Credential,
+    /// The `gx:Issuer` (terms and conditions) credential, read back.
+    terms: Credential,
+    /// The notary's registration number credential, as in the file.
+    registration: Credential,
+    /// The presentation of the three, signed.
+    presentation: String,
+    /// The id and `digestSRI` of each of the three: what the answer must
+    /// list.
+    sent: Vec<(String, String)>,
+}
+
+/// Step 2: builds the legal person and terms and conditions credentials
+/// for `period`, signs them and the presentation of the three, and notes
+/// the digest of each.
+fn build_and_sign(
+    identity: &Identity,
+    participant: Participant,
+    period: Period,
+) -> Result<SignedCredentials, String> {
     let did = identity.participant_id.as_str();
     let base = identity.public_base.as_str();
-    let period = Period::starting(now);
     let signer = identity.signer();
-
     let legal_id = credential_url(base, LEGAL_PERSON);
     let legal = legal_person(
         &legal_id,
@@ -476,31 +563,45 @@ async fn onboard(identity: &Identity, now: u64) -> Result<Option<i64>, String> {
     );
     let legal_jwt = sign_credential(signer, &legal).map_err(|e| e.to_string())?;
     let terms_jwt = sign_credential(signer, &terms).map_err(|e| e.to_string())?;
-    let registration_jwt = participant.registration.jwt();
-    let vp = presentation(did, &[&legal_jwt, &terms_jwt, registration_jwt], period);
-    let vp_jwt = sign_presentation(signer, &vp).map_err(|e| e.to_string())?;
-
-    // what the answer must list: each credential's id and digest
-    let registration_payload = participant
-        .registration
-        .payload()
-        .map_err(|e| e.to_string())?;
-    let registration_id = participant.registration.id.clone().unwrap_or_default();
+    let registration = participant.registration;
+    let vp = presentation(did, &[&legal_jwt, &terms_jwt, registration.jwt()], period);
+    let presentation = sign_presentation(signer, &vp).map_err(|e| e.to_string())?;
+    // the digest of what is sent, not of what is read back: the service
+    // hashes the payload it receives
+    let registration_payload = registration.payload().map_err(|e| e.to_string())?;
+    let registration_id = registration.id.clone().unwrap_or_default();
     let sent = vec![
-        (legal_id.clone(), digest_sri(&legal)),
-        (terms_id.clone(), digest_sri(&terms)),
+        (legal_id, digest_sri(&legal)),
+        (terms_id, digest_sri(&terms)),
         (registration_id, digest_sri(&registration_payload)),
     ];
+    Ok(SignedCredentials {
+        legal_person: Credential::parse(&legal_jwt).map_err(|e| e.to_string())?,
+        terms: Credential::parse(&terms_jwt).map_err(|e| e.to_string())?,
+        registration,
+        presentation,
+        sent,
+    })
+}
 
-    let vcid = credential_url(base, COMPLIANCE);
+/// Steps 3 and 4: sends the presentation, asking for the compliance
+/// credential's id, and checks the answer: its type, id and digests, and
+/// its signature by a key of the service's `did:web` document.
+async fn send_and_check(
+    identity: &Identity,
+    onboarding: &Onboarding,
+    signed: &SignedCredentials,
+    now: u64,
+) -> Result<Credential, String> {
+    let vcid = credential_url(&identity.public_base, COMPLIANCE);
     let answer_text = onboarding
         .compliance
-        .request_compliance(&vcid, &vp_jwt)
+        .request_compliance(&vcid, &signed.presentation)
         .await
         .map_err(|e| format!("compliance service: {e}"))?;
     let answer = Credential::parse(answer_text.trim())
         .map_err(|e| format!("compliance service answer: {e}"))?;
-    check_answer(&answer, &vcid, &sent).map_err(|e| e.to_string())?;
+    check_answer(&answer, &vcid, &signed.sent).map_err(|e| e.to_string())?;
     let service = identity
         .directory
         .did_document(&answer.issuer)
@@ -509,20 +610,25 @@ async fn onboard(identity: &Identity, now: u64) -> Result<Option<i64>, String> {
     answer
         .verify(&service, now, LEEWAY)
         .map_err(|e| format!("compliance service answer: {e}"))?;
+    Ok(answer)
+}
 
-    let legal_read = Credential::parse(&legal_jwt).map_err(|e| e.to_string())?;
-    let terms_read = Credential::parse(&terms_jwt).map_err(|e| e.to_string())?;
+/// Step 5: stores the four credentials, replacing those of the last run.
+fn store_credentials(
+    identity: &Identity,
+    signed: &SignedCredentials,
+    answer: &Credential,
+) -> Result<(), String> {
     let stored = [
-        stored(&legal_read, LEGAL_PERSON),
-        stored(&terms_read, TERMS_AND_CONDITIONS),
-        stored(&participant.registration, REGISTRATION_NUMBER),
-        stored(&answer, COMPLIANCE),
+        stored(&signed.legal_person, LEGAL_PERSON),
+        stored(&signed.terms, TERMS_AND_CONDITIONS),
+        stored(&signed.registration, REGISTRATION_NUMBER),
+        stored(answer, COMPLIANCE),
     ];
     identity
         .store
         .replace_gaiax_credentials(&stored)
-        .map_err(|e| e.to_string())?;
-    Ok(answer.validity.until)
+        .map_err(|e| e.to_string())
 }
 
 /// A Gaia-X credential as the store keeps it; its `holder_pid` says which
@@ -578,6 +684,12 @@ fn renewal_time(from: Option<i64>, until: Option<i64>, now: u64) -> u64 {
     u64::try_from(due).unwrap_or(0)
 }
 
+/// The shortest time, in seconds, from the end of a successful run to the
+/// next scheduled one. Without it, a credential that is due for renewal
+/// at once (a service that gives a very short validity) or a store that
+/// cannot be read back would make the schedule run again and again.
+const MIN_RUN_INTERVAL: u64 = 60;
+
 /// Keeps the compliance credential valid, until the process stops: runs
 /// when [`renewal_due`] says so, and after a failed run again as the
 /// retry policy says (see the module documentation).
@@ -590,35 +702,62 @@ pub async fn run_schedule(identity: Arc<Identity>) {
         Ok(count) => tracing::warn!(count, "Gaia-X runs stopped by a restart marked failed"),
         Err(error) => tracing::error!(%error, "identity store failed"),
     }
-    let mut failed: u32 = 0;
-    let mut last_failure: u64 = 0;
+    let mut schedule = Schedule::default();
     loop {
         let now = now_secs();
-        let renewal = renewal_due(&identity, now);
-        // a valid credential (from any run, also one the operator started)
-        // ends the retries
-        if renewal > now {
-            failed = 0;
-        }
-        let due = if failed == 0 {
-            renewal
-        } else {
-            last_failure.saturating_add(retry_delay(failed))
-        };
+        let seen = latest_run(&identity).map(|run| run.id);
+        let due = schedule.next_run(renewal_due(&identity, now), now);
         if due <= now {
-            let run = run_now(&identity).await;
-            if run.is_some_and(|run| run.outcome == RunOutcome::Succeeded) {
-                failed = 0;
-            } else {
-                failed = failed.saturating_add(1);
-                last_failure = now_secs();
-            }
+            let run = run_unless_overtaken(&identity, seen).await;
+            schedule.record(run.as_ref(), now_secs());
             continue;
         }
         let wait = Duration::from_secs(due - now).min(IDLE);
         tokio::select! {
             () = onboarding.ran.notified() => {}
             () = tokio::time::sleep(wait) => {}
+        }
+    }
+}
+
+/// What [`run_schedule`] remembers between runs.
+#[derive(Debug, Default)]
+struct Schedule {
+    /// Failed runs in a row. While there is no valid credential, the
+    /// renewal time is "now"; so after a failure the next run follows the
+    /// retry policy instead, or a failing service would be asked again at
+    /// once, in a loop.
+    failed: u32,
+    /// When the last failed run ended: the retry delay counts from there.
+    last_failure: u64,
+    /// When the last successful run ended (see [`MIN_RUN_INTERVAL`]).
+    last_success: u64,
+}
+
+impl Schedule {
+    /// When the next run is due, given the `renewal` time of the stored
+    /// credential ([`renewal_due`]).
+    fn next_run(&mut self, renewal: u64, now: u64) -> u64 {
+        // a valid credential (from any run, also one the operator started)
+        // ends the retries
+        if renewal > now {
+            self.failed = 0;
+        }
+        if self.failed > 0 {
+            return self.last_failure.saturating_add(retry_delay(self.failed));
+        }
+        renewal.max(self.last_success.saturating_add(MIN_RUN_INTERVAL))
+    }
+
+    /// Counts a run that ended at `ended`; `None` (the store failed)
+    /// counts as a failure.
+    fn record(&mut self, run: Option<&GaiaxRun>, ended: u64) {
+        if run.is_some_and(|run| run.outcome == RunOutcome::Succeeded) {
+            self.failed = 0;
+            self.last_success = ended;
+        } else {
+            self.failed = self.failed.saturating_add(1);
+            self.last_failure = ended;
         }
     }
 }
@@ -652,14 +791,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn public_base_is_the_origin_of_the_did() {
+    fn public_base_is_where_the_did_document_is() {
         assert_eq!(
             public_base("did:web:provider.example").unwrap(),
             "https://provider.example"
         );
+        assert_eq!(public_path("did:web:provider.example").unwrap(), "");
+        // two participants on one host do not share credential ids
         assert_eq!(
             public_base("did:web:localhost%3A8090:participants:a").unwrap(),
-            "https://localhost:8090"
+            "https://localhost:8090/participants/a"
+        );
+        assert_eq!(
+            public_base("did:web:localhost%3A8090:participants:b").unwrap(),
+            "https://localhost:8090/participants/b"
+        );
+        assert_eq!(
+            public_path("did:web:localhost%3A8090:participants:a").unwrap(),
+            "/participants/a"
         );
         assert!(public_base("did:key:z6Mk").is_err());
         assert_eq!(
@@ -674,6 +823,34 @@ mod tests {
             query_encode("https://p.example/credentials/gaiax/compliance"),
             "https%3A%2F%2Fp.example%2Fcredentials%2Fgaiax%2Fcompliance"
         );
+    }
+
+    fn run(outcome: RunOutcome) -> GaiaxRun {
+        GaiaxRun {
+            id: 1,
+            started_at: 0,
+            finished_at: Some(0),
+            outcome,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn the_schedule_waits_between_runs() {
+        let mut schedule = Schedule::default();
+        assert_eq!(schedule.next_run(0, 1_000), 60, "no run yet: due now");
+        // a success whose credential is due again at once: a minute later
+        schedule.record(Some(&run(RunOutcome::Succeeded)), 1_000);
+        assert_eq!(schedule.next_run(0, 1_000), 1_060);
+        assert_eq!(schedule.next_run(5_000, 1_000), 5_000);
+        // failures follow the retry policy: 1, 2, 4 ... seconds
+        schedule.record(Some(&run(RunOutcome::Failed)), 2_000);
+        assert_eq!(schedule.next_run(0, 2_000), 2_001);
+        schedule.record(None, 2_001);
+        assert_eq!(schedule.next_run(0, 2_001), 2_003);
+        // a valid credential, from any run, ends the retries
+        assert_eq!(schedule.next_run(9_000, 2_001), 9_000);
+        assert_eq!(schedule.failed, 0);
     }
 
     #[test]

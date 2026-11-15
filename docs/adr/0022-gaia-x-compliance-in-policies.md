@@ -57,33 +57,58 @@ What the specifications and peers say (checked 2026-11-15):
 
 ### Checking a compliance credential
 
+These checks are for credentials of type
+`gx:ParticipantComplianceCredential` or `gx:LegalPerson` whose issuer is
+not in `PORTITOR_TRUSTED_ISSUERS`. A data space issuer's credential of
+these types is about the caller and is checked like any other (ADR
+0016), holder binding included.
+
 For a credential of type `gx:ParticipantComplianceCredential` (scope
 type `ParticipantComplianceCredential`, ADR 0021):
 
-1. Its issuer is in `PORTITOR_GAIAX_COMPLIANCE_ISSUERS`, and its
-   signature is valid with that issuer's `assertionMethod` key (PS256 or
+1. Its issuer is in `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` (otherwise it
+   is skipped, see below), and its signature is valid with that issuer's `assertionMethod` key (PS256 or
    ES256; the JWS rules of ADR 0015 stay).
 2. Now is within `validFrom` and `validUntil`. The header's `iat` and
    `exp` are ignored: the service writes them in milliseconds.
+   `validUntil` (`expirationDate` in VC 1.1) is required: without it the
+   credential would never expire. A credential from a trusted service
+   without it breaks this rule, so it fails this step and its
+   presentation is invalid; it is not skipped.
 3. No status list is expected; a `credentialStatus`, if present, is
    checked as for any other credential.
 4. The same presentation holds a `gx:LegalPerson` credential whose
    `digestSRI` (computed as above, on its decoded payload) is listed in
    `gx:compliantCredentials`, whose `issuer` is the caller's DID, and
-   whose signature is valid with the caller's `assertionMethod` key.
+   whose signature is valid with the caller's `assertionMethod` key. Its
+   `credentialStatus`, if any, is not fetched: the caller issued it and
+   controls its status lists, so a status proves nothing, and fetching
+   would only let the caller pick URLs the verifier fetches. The
+   compliance credential's validity bounds it.
 5. The holder binding of ADR 0016 is not applied to these two
    credentials; it stays for every other credential.
 
-A compliance credential that fails any step makes its presentation
-invalid and the caller is refused (DCP step 8, as in 0.6). A
-`gx:LegalPerson` credential that no trusted compliance credential names
-is skipped, like a credential from an untrusted issuer.
+A compliance credential whose issuer is not in
+`PORTITOR_GAIAX_COMPLIANCE_ISSUERS` is skipped, before anything is
+fetched for it, like a credential from an untrusted issuer: a
+participant of another clearing house can still use offers that need
+only a membership. A compliance credential from a trusted service that
+fails any other step makes its presentation invalid and the caller is
+refused (DCP step 8, as in 0.6). A `gx:LegalPerson` credential that no
+trusted compliance credential names is skipped too.
 
 ### Policies and scopes
 
 - The left operand is ADR 0019's: `ParticipantComplianceCredential.<path>`,
   for example `ParticipantComplianceCredential.gx:labelLevel` `eq` `SC`.
   No new ODRL vocabulary.
+- Policies see a checked compliance credential only as
+  `gx:ParticipantComplianceCredential` (and
+  `ParticipantComplianceCredential`), and the linked legal person
+  credential only as `gx:LegalPerson` (and `LegalPerson`), whatever
+  other types they list: their signers vouch for that type only. So a
+  compliance credential also typed `MembershipCredential` neither lets
+  the caller in nor meets a membership constraint.
 - `PORTITOR_POLICY_CREDENTIALS` must list
   `ParticipantComplianceCredential` with its scope, as for any type.
 - When a policy needs `ParticipantComplianceCredential`, both sides add

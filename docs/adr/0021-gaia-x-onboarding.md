@@ -57,8 +57,8 @@ Facts this ADR relies on (checked 2026-11-15; details in
   certificate for the identity key first, then its chain. When set:
   - at start the identity refuses to run if the first certificate's
     public key is not the identity key;
-  - it serves the file at `GET /.well-known/x509CertificateChain.pem`,
-    next to its DID document (the path Gaia-X's own services use);
+  - it serves the file at `GET /.well-known/x509CertificateChain.pem`
+    below its public base (the path Gaia-X's own services use);
   - the DID document's JWK gets `x5u` (RFC 7517 section 4.6) with that
     URL, and `alg: ES256` (RFC 7517 section 4.4; Gaia-X needs it).
 - A renewed certificate is picked up without a restart: the identity
@@ -91,6 +91,11 @@ Facts this ADR relies on (checked 2026-11-15; details in
   with its key: VC 2.0, `typ: vc+jwt`, `cty: vc`, headers `iss` (its
   DID) and `kid`, `validFrom` now, `validUntil` 90 days later, ids under
   `{public base}/credentials/gaiax/` (`legal-person`, `terms-and-conditions`).
+  The public base is the URL of the DID document without `did.json`
+  (and without `/.well-known` for a DID without a path):
+  `https://host.example/participants/a` for
+  `did:web:host.example:participants:a`, so participants on one host
+  get different ids.
   It serves these two and the registration number credential, as VC-JWT,
   at their ids, so anyone can recompute their digests.
 - It wraps the three in a `vp+jwt` signed with the same key and sends it

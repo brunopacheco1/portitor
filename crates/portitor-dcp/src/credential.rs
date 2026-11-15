@@ -281,6 +281,14 @@ impl Credential {
         payload_of(&self.jwt)
     }
 
+    /// The validity the credential itself states: `validFrom` and
+    /// `validUntil` (VC 2.0), or `issuanceDate` and `expirationDate` (VC
+    /// 1.1). The JWT's `nbf` and `exp` are not in it.
+    #[must_use]
+    pub fn stated_validity(&self) -> Validity {
+        self.stated_validity
+    }
+
     /// Whether `kind` is one of its types.
     #[must_use]
     pub fn has_type(&self, kind: &str) -> bool {

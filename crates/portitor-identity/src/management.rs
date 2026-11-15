@@ -32,7 +32,7 @@ use utoipa::{OpenApi, ToSchema};
 
 use crate::Identity;
 use crate::gaiax::{RUNS_LISTED, StartError, start_run};
-use crate::issuance::{AskError, ask_issuer, issuer_status};
+use crate::issuance::{AskError, ask_issuer, check_holder_pid, issuer_status};
 use crate::store::{CredentialRequest, GaiaxRun, StoredCredential, StoredOffer};
 
 /// A new credential request.
@@ -276,6 +276,9 @@ async fn create_request(
             StatusCode::BAD_REQUEST,
             "issuerDid is not in PORTITOR_TRUSTED_ISSUERS",
         );
+    }
+    if let Err(reason) = check_holder_pid(request.holder_pid.as_deref()) {
+        return problem(StatusCode::BAD_REQUEST, &reason);
     }
     let holder_pid = request
         .holder_pid

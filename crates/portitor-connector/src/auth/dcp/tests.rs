@@ -1179,12 +1179,25 @@ async fn more_credentials_are_asked_for_with_the_callers_access_token() {
 /// spike, with `name` as its legal name. Returns the JWT and its
 /// `digestSRI`.
 fn legal_person(issuer: &Party, name: &str) -> (String, String) {
-    let vc = json!({
+    legal_person_with(issuer, name, &json!({}))
+}
+
+/// [`legal_person`] with `extra` fields.
+fn legal_person_with(issuer: &Party, name: &str, extra: &Value) -> (String, String) {
+    let vc = legal_person_payload(&issuer.did, name, extra);
+    let digest = portitor_dcp::gaiax::digest_sri(vc.as_object().unwrap());
+    let jwt = issuer.key.sign_json(&issuer.kid(), "vc+jwt", &vc).unwrap();
+    (jwt, digest)
+}
+
+/// The payload of a [`legal_person`] credential by `issuer`.
+fn legal_person_payload(issuer: &str, name: &str, extra: &Value) -> Value {
+    let mut vc = json!({
         "@context": [VC2_CONTEXT, GAIAX_CONTEXT,
             {"vcard": "http://www.w3.org/2006/vcard/ns#", "schema": "https://schema.org/"}],
         "id": "https://participant.test/credentials/legal-person.json",
         "type": ["VerifiableCredential", "gx:LegalPerson"],
-        "issuer": issuer.did,
+        "issuer": issuer,
         "validFrom": xsd_date_time(now_secs() - 86_400),
         "validUntil": xsd_date_time(now_secs() + 90 * 86_400),
         "credentialSubject": {
@@ -1193,9 +1206,10 @@ fn legal_person(issuer: &Party, name: &str) -> (String, String) {
             "gx:legalAddress": {"type": "gx:Address", "gx:countryCode": "LU"}
         }
     });
-    let digest = portitor_dcp::gaiax::digest_sri(vc.as_object().unwrap());
-    let jwt = issuer.key.sign_json(&issuer.kid(), "vc+jwt", &vc).unwrap();
-    (jwt, digest)
+    for (key, value) in extra.as_object().into_iter().flatten() {
+        vc[key] = value.clone();
+    }
+    vc
 }
 
 /// The payload of a `gx:ParticipantComplianceCredential` by `issuer`
@@ -1309,12 +1323,6 @@ async fn a_compliance_credential_that_fails_refuses_the_caller() {
     // someone else than the caller
     let (by_third, third_digest) = legal_person(&ds.third, "Portitor Test S.A.");
     let names_third = ds.compliance_credential(&[&third_digest], &json!({}));
-    // from a compliance service we do not trust
-    let untrusted = ds.third.key.sign_json(
-        &ds.third.kid(),
-        "vc+jwt",
-        &compliance_payload(&ds.third.did, &[&digest], &json!({})),
-    );
     // signed by someone else than the service it names as issuer
     let forged = ds.holder.key.sign_json(
         &ds.compliance.kid(),
@@ -1323,16 +1331,17 @@ async fn a_compliance_credential_that_fails_refuses_the_caller() {
     );
     let past = json!({"validUntil": xsd_date_time(now_secs() - 3_600)});
     let expired = ds.compliance_credential(&[&digest], &past);
+    // a compliance credential without an end never expires
+    let mut endless = compliance_payload(&ds.compliance.did, &[&digest], &json!({}));
+    endless.as_object_mut().unwrap().remove("validUntil");
+    let endless = ds.compliance.sign(&endless);
     let cases = [
         (vec![tampered, named.clone()], "names no gx:LegalPerson"),
         (vec![named.clone()], "names no gx:LegalPerson"),
         (vec![by_third, names_third], "is not the caller"),
-        (
-            vec![person.clone(), untrusted.unwrap()],
-            "not a trusted Gaia-X compliance service",
-        ),
         (vec![person.clone(), forged.unwrap()], "credential from"),
-        (vec![person, expired], "expired"),
+        (vec![person.clone(), expired], "expired"),
+        (vec![person, endless], "no validUntil"),
     ];
     for (gaiax, reason) in cases {
         let mut credentials = vec![ds.member20()];
@@ -1345,9 +1354,85 @@ async fn a_compliance_credential_that_fails_refuses_the_caller() {
             "{reason}: {err}"
         );
         assert!(err.contains(reason), "{reason}: {err}");
-        // nothing is fetched for an untrusted compliance service
-        assert!(!ds.fetched().contains(&"/third/did.json".to_owned()));
     }
+}
+
+/// More ADR 0022 refusals, each naming the credential that fails: the
+/// compliance credential not yet valid, the legal person credential
+/// expired or signed by a key that is not the caller's, and a second
+/// compliance credential that names no credential of the presentation.
+#[tokio::test]
+async fn gaiax_refusals_name_the_failing_credential() {
+    const COMPLIANCE: &str = "a gx:ParticipantComplianceCredential credential fails";
+    const PERSON: &str = "a gx:LegalPerson credential fails";
+    let ds = dataspace().await;
+    let (person, digest) = legal_person(&ds.holder, "Portitor Test S.A.");
+    let named = ds.compliance_credential(&[&digest], &json!({}));
+    let future = json!({"validFrom": xsd_date_time(now_secs() + 3_600)});
+    let not_yet_valid = ds.compliance_credential(&[&digest], &future);
+    let past = json!({"validUntil": xsd_date_time(now_secs() - 3_600)});
+    let (expired_person, expired_digest) =
+        legal_person_with(&ds.holder, "Portitor Test S.A.", &past);
+    let names_expired = ds.compliance_credential(&[&expired_digest], &json!({}));
+    // issued as the caller, signed with the third party's key, which is
+    // not in the caller's DID document
+    let payload = legal_person_payload(&ds.holder.did, "Portitor Test S.A.", &json!({}));
+    let foreign_digest = portitor_dcp::gaiax::digest_sri(payload.as_object().unwrap());
+    let foreign_key = ds
+        .third
+        .key
+        .sign_json(&ds.third.kid(), "vc+jwt", &payload)
+        .unwrap();
+    let names_foreign = ds.compliance_credential(&[&foreign_digest], &json!({}));
+    let names_other = ds.compliance_credential(&["sha256-00"], &json!({}));
+    let cases = [
+        (
+            vec![person.clone(), not_yet_valid],
+            COMPLIANCE,
+            "not yet valid",
+        ),
+        (vec![expired_person, names_expired], PERSON, "expired"),
+        (vec![foreign_key, names_foreign], PERSON, "kid not found"),
+        (
+            vec![person, named, names_other],
+            COMPLIANCE,
+            "names no gx:LegalPerson",
+        ),
+    ];
+    for (gaiax, failing, reason) in cases {
+        let mut credentials = vec![ds.member20()];
+        credentials.extend(gaiax);
+        ds.answer20(&credentials);
+        let err = ds.refusal().await;
+        assert!(err.contains(failing), "{reason}: {err}");
+        assert!(err.contains(reason), "{reason}: {err}");
+    }
+}
+
+/// ADR 0022: a compliance credential from a service we do not trust is
+/// skipped, like a credential from an untrusted issuer, and the legal
+/// person credential it names with it. A member of another clearing house
+/// is still let in for offers that need only a membership.
+#[tokio::test]
+async fn a_compliance_credential_from_an_untrusted_service_is_skipped() {
+    let ds = dataspace().await;
+    let (person, digest) = legal_person(&ds.holder, "Portitor Test S.A.");
+    let untrusted = ds
+        .third
+        .key
+        .sign_json(
+            &ds.third.kid(),
+            "vc+jwt",
+            &compliance_payload(&ds.third.did, &[&digest], &json!({})),
+        )
+        .unwrap();
+    ds.answer20(&[ds.member20(), person, untrusted]);
+    ds.forget_fetches();
+    let caller = ds.verify(&ds.header()).await.unwrap();
+    assert_eq!(caller.credentials.len(), 1);
+    assert!(caller.credentials[0].has_type(MEMBERSHIP));
+    // nothing is fetched for an untrusted compliance service
+    assert!(!ds.fetched().contains(&"/third/did.json".to_owned()));
 }
 
 /// A legal person credential that no trusted compliance credential names
@@ -1364,6 +1449,87 @@ async fn other_credentials_keep_the_holder_binding() {
     let compliance = ds.compliance_credential(&[&digest], &json!({}));
     let not_ours = Dataspace::credential20(&ds.issuer, MEMBERSHIP, &ds.third.did, &json!({}));
     ds.answer20(&[ds.member20(), not_ours, person, compliance]);
+    let err = ds.refusal().await;
+    assert!(err.contains("not about the caller"), "{err}");
+}
+
+/// ADR 0022: the status of the caller's own legal person credential is
+/// not fetched; the caller controls it.
+#[tokio::test]
+async fn the_status_of_the_callers_legal_person_is_not_fetched() {
+    let ds = dataspace().await;
+    ds.publish_status_list(&ds.holder, &[7]);
+    let revoked = ds.status_entry("7");
+    let (person, digest) = legal_person_with(&ds.holder, "Portitor Test S.A.", &revoked);
+    let compliance = ds.compliance_credential(&[&digest], &json!({}));
+    ds.answer20(&[ds.member20(), person, compliance]);
+    ds.forget_fetches();
+    let caller = ds.verify(&ds.header()).await.unwrap();
+    assert_eq!(caller.credentials.len(), 3);
+    assert!(!ds.fetched().iter().any(|path| path.starts_with("/status/")));
+}
+
+/// ADR 0022: a compliance credential counts only as a compliance
+/// credential. Typed `MembershipCredential` too, it neither lets the
+/// caller in nor meets a membership constraint.
+#[tokio::test]
+async fn a_compliance_credential_is_held_only_as_one() {
+    let ds = dataspace().await;
+    let (person, digest) = legal_person(&ds.holder, "Portitor Test S.A.");
+    let mut payload = compliance_payload(&ds.compliance.did, &[&digest], &json!({}));
+    payload["type"] = json!([
+        "VerifiableCredential",
+        "gx:ParticipantComplianceCredential",
+        MEMBERSHIP
+    ]);
+    payload["credentialSubject"]["role"] = json!("provider");
+    let also_member = ds.compliance.sign(&payload);
+    // without a real membership, the caller is not let in
+    ds.answer20(&[person.clone(), also_member.clone()]);
+    let err = ds.refusal().await;
+    assert!(err.contains("no MembershipCredential"), "{err}");
+    // with one, the compliance credential's role is not read as a member's
+    ds.answer20(&[ds.member20(), person, also_member]);
+    let caller = ds.verify(&ds.header()).await.unwrap();
+    assert_eq!(
+        caller.credentials[0].types,
+        [
+            "gx:ParticipantComplianceCredential",
+            "ParticipantComplianceCredential"
+        ]
+    );
+    assert_eq!(
+        caller.credentials[1].types,
+        ["gx:LegalPerson", "LegalPerson"]
+    );
+    let offer: portitor_dsp::Offer = serde_json::from_value(json!({"@id": "o", "@type": "Offer",
+        "permission": [{"action": "use", "constraint": [{
+            "leftOperand": "MembershipCredential.role", "operator": "eq",
+            "rightOperand": "provider"}]}]}))
+    .unwrap();
+    let held = portitor_dsp::policy::CallerCredentials {
+        understood: compliance_types(),
+        held: caller.credentials.clone(),
+    };
+    let now = xsd_date_time(now_secs());
+    assert!(portitor_dsp::policy::permissions_hold(&offer, &now, &held).is_err());
+}
+
+/// A `gx:LegalPerson` from a trusted dataspace issuer is a dataspace
+/// credential, checked as before 0.8: accepted when it is about the
+/// caller, with no compliance credential, and refused when it is not.
+#[tokio::test]
+async fn a_trusted_issuers_legal_person_is_a_dataspace_credential() {
+    let ds = dataspace().await;
+    let about_caller =
+        Dataspace::credential20(&ds.issuer, "gx:LegalPerson", &ds.holder.did, &json!({}));
+    ds.answer20(&[ds.member20(), about_caller]);
+    let caller = ds.verify(&ds.header()).await.unwrap();
+    assert_eq!(caller.credentials.len(), 2);
+    assert!(caller.credentials[1].has_type("gx:LegalPerson"));
+    let about_third =
+        Dataspace::credential20(&ds.issuer, "gx:LegalPerson", &ds.third.did, &json!({}));
+    ds.answer20(&[ds.member20(), about_third]);
     let err = ds.refusal().await;
     assert!(err.contains("not about the caller"), "{err}");
 }

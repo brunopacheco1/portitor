@@ -86,6 +86,22 @@ async fn credential_requests() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
+/// `gaiax:` holder ids are the identity's own (its Gaia-X credentials),
+/// whether the request is only recorded or sent to the issuer.
+#[tokio::test]
+async fn gaiax_holder_pids_are_reserved() {
+    let world = World::new();
+    for body in [
+        json!({"issuerDid": ISSUER, "holderPid": "gaiax:compliance"}),
+        json!({"issuerDid": ISSUER, "holderPid": "gaiax:x", "credentialIds": ["membership"]}),
+    ] {
+        let (status, problem) = call(&world.management, new_request(&body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
+        let detail = problem["detail"].as_str().unwrap_or_default();
+        assert!(detail.contains("must not start with gaiax:"), "{problem}");
+    }
+}
+
 #[tokio::test]
 async fn list_and_delete_credentials() {
     let world = World::new();
