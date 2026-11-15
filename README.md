@@ -93,7 +93,7 @@ Configuration (environment variables):
 | `PORTITOR_BUNDLE_CACHE_DIR` | `bundle-cache` next to `PORTITOR_DB_FILE` (`/data/bundle-cache` in the image) | Where the verified bundle and the version in use are kept; the bundle is used only when the authority's host or DID document cannot be reached |
 | `PORTITOR_DB_FILE` | `portitor.db` (`/data/portitor.db` in the image) | SQLite file that keeps negotiations; one connector per file |
 | `PORTITOR_MANAGEMENT_API_KEY_FILE` | none (management API off) | File with the management API key (at least 32 characters, for example `openssl rand -hex 32`) |
-| `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8081` | Address of the management API |
+| `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8081` | Address of the management port: always the health checks (`/api/check/...`, no key, [DEPLOYING](docs/DEPLOYING.md#health-and-logs)), and the management API with its key |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | `false` | `true` allows plain `http://` for consumers' callbacks, providers, partners' `did:web` DIDs and credential services, status lists and the STS; development and tests only |
 | `PORTITOR_DATA_TOKEN_SECONDS` | `3600` | How long a data access token is valid after the transfer starts; `1` to `31536000` (one year) |
 | `PORTITOR_STS_URL` | none (**required**) | Token endpoint of the participant's STS (`portitor-identity`: `<base URL>/sts/token`); every DSP request is authenticated with DCP (ADR 0016) |

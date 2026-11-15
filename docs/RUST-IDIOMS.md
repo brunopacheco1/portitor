@@ -397,6 +397,11 @@ on the heap", one type that holds either (`portitor-shacl/src/graph.rs`).
   `portitor-connector/src/harvest.rs`): a timer tick that comes during a
   long run is dropped, not queued.
 
+- `AtomicBool` is a `bool` that threads can share without a lock:
+  `store(true, Ordering::SeqCst)` sets it, `load(Ordering::SeqCst)` reads
+  it. `SeqCst` is the simplest and strictest ordering; Portitor uses no
+  other (`started` in `DatasetHarvester`, `portitor-connector/src/harvest.rs`).
+
 ### A snapshot swapped as a whole: `RwLock<Arc<View>>`
 
 ```rust
@@ -567,6 +572,35 @@ tokio::select! {
 it, `notified()` waits for a ring. The issuer's outbox sleeps until the
 next delivery is due, or until a newly issued request rings
 (`portitor-issuer/src/delivery.rs`, `issue.rs`).
+
+```rust
+let mut last = self.last.lock().await;
+if let Some(checked) = last.as_ref() && checked.at.elapsed() < self.recheck {
+    return checked.outcome.clone();
+}
+let outcome = /* ... ask the STS, with .await ... */;
+*last = Some(Checked { at: Instant::now(), outcome: outcome.clone() });
+```
+
+`tokio::sync::Mutex` is a lock that may be held across an `.await`; the
+`std::sync::Mutex` of the section above must not be. Holding it while
+the check runs makes probes that arrive together wait for one run and
+reuse its result, instead of each calling the STS
+(`OwnIdentityCheck` in `portitor-connector/src/health.rs`).
+
+```rust
+let mut running = Vec::new();
+for (name, check) in &self.checks {
+    running.push((name, tokio::spawn(/* the check, with a timeout */)));
+}
+for (name, task) in running {
+    let outcome = task.await; /* ... */
+}
+```
+
+Start every task first, then await them one by one: they run at the
+same time, so the whole takes as long as the slowest, not the sum
+(`HealthChecks::run` in `portitor-runtime/src/health.rs`).
 
 ## Lifetimes: `'a`
 

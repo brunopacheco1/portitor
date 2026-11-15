@@ -47,6 +47,30 @@ versions may change behaviour and configuration.
   scope type rule (ADR 0021), and Gaia-X onboarding the steps of a run
   and its schedule.
 
+### Added
+
+- Health checks in Eclipse EDC's Observability API shape on the
+  management port of the connector, the identity component and the
+  issuer, without the API key (ADR 0023): `GET /api/check/liveness`,
+  `/readiness`, `/startup`, `/health`, HTTP 200 or 503 with a
+  `HealthStatus` body. Readiness checks only the component's own
+  dependencies (its SQLite file, its key, its DID document or status
+  lists; for the connector the start harvest, the bundle and its own
+  DID document and STS), never other participants.
+- A `health` subcommand in each binary (`portitor-connector health`):
+  calls its own readiness check and exits 0 or 1. Each image has a
+  Docker `HEALTHCHECK` with it, and the Compose demo starts each
+  component once those it needs are healthy.
+
+### Changed
+
+- The management port is always bound now (default `127.0.0.1`).
+  Without `PORTITOR_MANAGEMENT_API_KEY_FILE` it serves only the health
+  checks; with it, also the management API, as before. Two processes on
+  one host need different `PORTITOR_MANAGEMENT_BIND` ports.
+- The Compose demo's default images are 0.9.0: older images have no
+  `health` subcommand.
+
 ## [0.8.0] - 2026-11-15
 
 ### Documentation

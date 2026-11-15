@@ -11,6 +11,7 @@ auth:bearer {
 }
 
 docs {
-  Management API (not DSP). Off unless PORTITOR_MANAGEMENT_API_KEY_FILE is set.
+  Management API (not DSP). Off unless PORTITOR_MANAGEMENT_API_KEY_FILE is set; the
+  health checks (liveness, readiness) on the same port are always on and need no key.
   Put the key file's content in the environment's secret apiKey.
 }

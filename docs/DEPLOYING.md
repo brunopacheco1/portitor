@@ -110,8 +110,8 @@ All configuration is by environment variable. The full table is in the
 | `PORTITOR_BUNDLE_CACHE_DIR` | leave the default, `bundle-cache` next to `PORTITOR_DB_FILE` (`/data/bundle-cache` in the image) |
 | `PORTITOR_DB_FILE` | leave the image default, `/data/portitor.db` |
 | `PORTITOR_BIND` | leave the default, `0.0.0.0:8080` |
-| `PORTITOR_MANAGEMENT_API_KEY_FILE` | path of the mounted key file, or unset (management API off) |
-| `PORTITOR_MANAGEMENT_BIND` | `0.0.0.0:8081` in a container (publish it only on an internal interface); the default `127.0.0.1:8081` is unreachable from outside a container |
+| `PORTITOR_MANAGEMENT_API_KEY_FILE` | path of the mounted key file, or unset (management API off; the management port then serves only the [health checks](#health-and-logs)) |
+| `PORTITOR_MANAGEMENT_BIND` | `0.0.0.0:8081` in a container (publish it only on an internal interface); the default `127.0.0.1:8081` is unreachable from outside a container. The port is always bound: it serves the [health checks](#health-and-logs), with or without the key |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | **unset** (never `true` in production) |
 | `PORTITOR_DATA_TOKEN_SECONDS` | leave the default, `3600`, unless consumers need longer to fetch; at most `31536000` (one year) |
 | `PORTITOR_STS_URL` | **required**: your identity's STS token endpoint, `<identity base URL>/sts/token` |
@@ -420,9 +420,11 @@ Rules:
 - `docker stop` (SIGTERM) stops it cleanly; it stops taking requests and
   exits.
 - Kubernetes: one replica (`Deployment` with `strategy: Recreate`, or a
-  `StatefulSet`), a `PersistentVolumeClaim` on `/data`, and `/health` as
-  liveness probe. Mount the management key from a `Secret`, and do not put
-  the management port in an `Ingress`. There is no Helm chart yet.
+  `StatefulSet`), a `PersistentVolumeClaim` on `/data`, and the
+  [health checks](#health-and-logs) as probes (set
+  `PORTITOR_MANAGEMENT_BIND=0.0.0.0:8081` so the kubelet can reach them).
+  Mount the management key from a `Secret`, and do not put the management
+  port in an `Ingress`. There is no Helm chart yet.
 
 Check after start:
 
@@ -434,9 +436,10 @@ curl -s  https://connector.example.com/.well-known/dspace-version
 The log line `portitor-connector listening` shows the bind address, the number
 of datasets in the catalog after the start harvest, and the database file.
 `catalog ready` comes just before it.
-`management API listening` shows its address; `management API off` means
-no key file is set. A missing, unreadable or too short key file stops the
-start with an error.
+`management API listening` shows the management port's address; it is
+always bound, for the health checks. `management API off` means no key
+file is set: the port then serves only the health checks. A missing,
+unreadable or too short key file stops the start with an error.
 
 ## 4. Run the identity next to the connector
 
@@ -490,8 +493,8 @@ participant.
 | `PORTITOR_TRUSTED_ISSUERS` | required | comma-separated issuer DIDs |
 | `PORTITOR_BIND` | `0.0.0.0:8090` | leave the default |
 | `PORTITOR_DB_FILE` | `/data/portitor-identity.db` | leave the default |
-| `PORTITOR_MANAGEMENT_API_KEY_FILE` | unset (management API off) | path of the mounted key file |
-| `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8091` | `0.0.0.0:8091` in a container, published only on an internal interface |
+| `PORTITOR_MANAGEMENT_API_KEY_FILE` | unset (management API off; the port serves only the health checks) | path of the mounted key file |
+| `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8091` | `0.0.0.0:8091` in a container, published only on an internal interface. Always bound, for the health checks |
 | `PORTITOR_SCOPE_TYPE_ALIASES` | `org.eclipse.edc.vc.type` | comma-separated scope aliases that mean "credentials of this type", besides DCP's `org.eclipse.dspace.dcp.vc.type` |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | unset | **unset** (`true` allows plain-HTTP DIDs and URLs, tests only) |
 | `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` | unset | Gaia-X only: path of the PEM chain of the identity key, the key's certificate first ([Gaia-X onboarding](#gaia-x-onboarding-optional)) |
@@ -511,6 +514,7 @@ participant.
 | public | `GET {base}/.well-known/x509CertificateChain.pem` | anyone, with a chain set (Gaia-X services read it through `x5u`). `{base}` is empty for a DID without a path, else the DID path (`/participants/a` for `did:web:host:participants:a`) |
 | public | `GET {base}/credentials/gaiax/{legal-person,terms-and-conditions,registration-number}` | anyone, with Gaia-X on; `{base}` as above |
 | management | `POST`, `GET /v1/credential-requests`, `GET /v1/credential-requests/{holderPid}`, `GET /v1/credentials`, `DELETE /v1/credentials/{id}`, `GET /v1/offers`, `POST /v1/offers/request`, `POST`, `GET /v1/gaiax/compliance`, `GET /v1/openapi.json` | operators ([OpenAPI](api/identity-management-openapi.json)) |
+| management | `GET /api/check/liveness`, `/readiness`, `/startup`, `/health` | probes, no API key, also without the management API ([Health and logs](#health-and-logs)). Readiness checks `database`, `key` and `did-document` |
 
 The public endpoints are described in
 [api/identity-openapi.json](api/identity-openapi.json).
@@ -533,7 +537,7 @@ and to check partners' credentials:
 | Port | Serves | Reached by | Expose |
 |---|---|---|---|
 | 8090 | DID document, credential service (presentation and Storage API), STS; with Gaia-X, the certificate chain and the Gaia-X credentials | partners and issuers (DID document, credential service); Gaia-X services (DID document, certificate chain); your connector (STS) | through your HTTPS reverse proxy, except `/sts/token`: your connector reaches it on the internal network |
-| 8091 | management API | your operators only | **never publicly**: host loopback or an internal network, never the public proxy |
+| 8091 | health checks; management API with its key | your operators and probes | **never publicly**: host loopback or an internal network, never the public proxy |
 
 ### Run
 
@@ -566,7 +570,8 @@ The same rules as for the connector apply: one container per database
 file, user `65532`, only `/data` writable, `docker stop` stops it cleanly.
 Kubernetes: one replica with a `PersistentVolumeClaim` on `/data`; the key
 and both secrets from `Secret`s mounted as files; only port 8090 in the
-`Ingress`.
+`Ingress`; probes on port 8091 as for the connector
+([Health and logs](#health-and-logs)).
 
 Check after start:
 
@@ -895,8 +900,65 @@ DID, so usually not).
 
 ### Health and logs
 
-- `GET /health` answers `ok` while the process runs. It does not check
-  the database or partners.
+- `GET /health` on the public port (and on the management port, with the
+  management API on) answers `ok` while the process runs. It checks
+  nothing.
+- **Health checks** (ADR 0023), the same in all three components, on the
+  **management port**, without the API key, also when the management API
+  is off. The answer is Eclipse EDC's `HealthStatus`: HTTP 200 when every
+  check passes, 503 otherwise
+  ([OpenAPI](api/management-openapi.json), tag `Health`):
+
+  ```json
+  {"isSystemHealthy": false, "componentResults": [
+    {"component": "database", "isHealthy": true, "failure": null},
+    {"component": "identity", "isHealthy": false,
+     "failure": {"messages": ["STS: HTTP 401 Unauthorized"], "failureDetail": "STS: HTTP 401 Unauthorized"}}]}
+  ```
+
+  | Path | Checks |
+  |---|---|
+  | `GET /api/check/liveness` | nothing but the process (component `process`) |
+  | `GET /api/check/readiness` | the component's own dependencies, never a partner (below) |
+  | `GET /api/check/startup`, `GET /api/check/health` | the same as readiness |
+
+  Readiness of the connector: `database` (the SQLite file answers),
+  `harvest` (the start harvest ran), `bundle` (a version is in force; only
+  with a bundle), `identity` (its DID document resolves and its STS signs;
+  checked at most every 30 s). Identity: `database`, `key` (loaded, signs),
+  `did-document` (served, with that key). Issuer: `database`, `key`,
+  `status-lists` (both served and signed). Each check gets 0.5 s. A
+  failure names the check and why, never a key or token. A failed check
+  is logged (`readiness check failed`, WARN).
+- **`health` subcommand**: `portitor-connector health` (and
+  `portitor-identity health`, `portitor-issuer health`) calls its own
+  `GET /api/check/readiness` on `PORTITOR_MANAGEMENT_BIND` (`0.0.0.0` is
+  called as `127.0.0.1`), prints the answer, and exits 0 on HTTP 200, 1
+  otherwise or after 3 s. It needs the same `PORTITOR_MANAGEMENT_BIND` as
+  the running process.
+- **Docker**: each image has a `HEALTHCHECK` with that subcommand
+  (every 30 s, 5 s timeout, 3 retries; every 2 s during a 60 s start
+  period). `docker ps` shows `healthy` or `unhealthy`; Docker Compose can
+  start a service once another is healthy (`depends_on: condition:
+  service_healthy`, as in `examples/compose/compose.yaml`).
+- **Kubernetes**: set `PORTITOR_MANAGEMENT_BIND=0.0.0.0:<port>` and probe
+  the management port (8081 connector, 8091 identity, 8071 issuer); keep
+  that port out of any `Service` that the public reaches:
+
+  ```yaml
+  startupProbe:
+    httpGet: {path: /api/check/startup, port: 8081}
+    periodSeconds: 2
+    failureThreshold: 60   # the start check of the identity may take ~30 s
+  livenessProbe:
+    httpGet: {path: /api/check/liveness, port: 8081}
+  readinessProbe:
+    httpGet: {path: /api/check/readiness, port: 8081}
+    periodSeconds: 10
+  ```
+
+  A failing readiness takes the pod out of its `Service`; it does not
+  restart it. Only liveness restarts, and it checks only the process.
 - Logs are JSON lines on stdout, one event per line. Collect them with
   your platform's log driver.
 
@@ -1129,8 +1191,8 @@ DID.
 | `PORTITOR_ISSUER_CREDENTIALS_FILE` | required | path of the mounted credential definitions file |
 | `PORTITOR_BIND` | `0.0.0.0:8070` | keep |
 | `PORTITOR_DB_FILE` | `/data/portitor-issuer.db` | keep the image default |
-| `PORTITOR_MANAGEMENT_API_KEY_FILE` | unset (management API off) | path of the mounted key file |
-| `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8071` | `0.0.0.0:8071` in a container, published only on an internal interface |
+| `PORTITOR_MANAGEMENT_API_KEY_FILE` | unset (management API off; the port serves only the health checks) | path of the mounted key file |
+| `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8071` | `0.0.0.0:8071` in a container, published only on an internal interface. Always bound, for the health checks |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | unset | **unset**; `true` only for local tests with plain-HTTP DIDs |
 | `PORTITOR_ISSUER_BUNDLE_KEY_FILE` | unset | with a bundle: the **public** bundle key as a JWK (as `bundle build` prints it), so the private key stays offline; a PKCS#8 PEM is accepted too. Listed in the DID document as `<did>#bundle-key` under `assertionMethod`. The start fails if it is the credential key |
 | `PORTITOR_ISSUER_BUNDLE_DIR` | unset | with a bundle: the folder of built bundles, served read only at `GET /bundles/{version}/{path}` on the public port, and its `latest.json` at `GET /bundles/latest.json` |
@@ -1236,7 +1298,7 @@ version's manifest lists; anything else is 404.
 | Port | Serves | Reached by | Expose |
 |---|---|---|---|
 | 8070 | DID document, issuer metadata, credential requests and their status, status lists, bundles | participants' identities, verifiers, connectors | through your HTTPS reverse proxy |
-| 8071 | management API (participants, offers, revocation) | the authority's operators only | **never publicly** |
+| 8071 | health checks (`GET /api/check/...`, no key; readiness checks `database`, `key` and `status-lists`); management API (participants, offers, revocation) with its key | the authority's operators and probes | **never publicly** |
 
 The public endpoints are described in
 [api/issuer-openapi.json](api/issuer-openapi.json).
