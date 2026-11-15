@@ -70,7 +70,10 @@ impl BundleCopy {
         let mut in_use = self.0.write().unwrap_or_else(PoisonError::into_inner);
         let old_version = in_use.version().to_owned();
         *in_use = Arc::new(rules);
-        // free the lock before measuring
+        // `drop` ends the write lock here, before the measures below,
+        // instead of at the end of the function: other threads waiting to
+        // read the rules go on at once, and recording a measure never
+        // runs while the lock is held
         drop(in_use);
         if old_version != new_version {
             metrics::bundle_in_use(&old_version, false);

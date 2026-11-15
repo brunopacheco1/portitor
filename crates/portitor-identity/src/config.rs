@@ -77,50 +77,10 @@ pub struct GaiaxConfig {
     pub participant_file: PathBuf,
 }
 
-/// Where the management port listens, and the API key.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ManagementConfig {
-    /// Address to listen on (`PORTITOR_MANAGEMENT_BIND`). The port always
-    /// serves the health checks (ADR 0023).
-    pub bind: String,
-    /// The file that holds the API key; without it, the management API is
-    /// off and the port serves the health checks only.
-    pub api_key_file: Option<PathBuf>,
-}
-
-/// The default bind address, and no management API.
-impl Default for ManagementConfig {
-    fn default() -> Self {
-        Self {
-            bind: DEFAULT_MANAGEMENT_BIND.to_owned(),
-            api_key_file: None,
-        }
-    }
-}
-
-impl ManagementConfig {
-    /// Reads `PORTITOR_MANAGEMENT_BIND` and
-    /// `PORTITOR_MANAGEMENT_API_KEY_FILE` with `var` (the environment, or a
-    /// map in tests). Never fails: the `health` subcommand reads only this.
-    pub fn from_vars(var: impl Fn(&str) -> Option<OsString>) -> Self {
-        let text = |name: &str| {
-            var(name)
-                .map(|v| v.to_string_lossy().trim().to_owned())
-                .filter(|v| !v.is_empty())
-        };
-        Self {
-            bind: text("PORTITOR_MANAGEMENT_BIND")
-                .unwrap_or_else(|| DEFAULT_MANAGEMENT_BIND.to_owned()),
-            api_key_file: text("PORTITOR_MANAGEMENT_API_KEY_FILE").map(PathBuf::from),
-        }
-    }
-
-    /// Like [`ManagementConfig::from_vars`], from the environment.
-    #[must_use]
-    pub fn from_env() -> Self {
-        Self::from_vars(|name| std::env::var_os(name))
-    }
-}
+/// Where the management port listens, and the API key: the settings
+/// shared by the three components, read with
+/// `ManagementConfig::from_env(DEFAULT_MANAGEMENT_BIND)`.
+pub use portitor_runtime::management::ManagementConfig;
 
 /// A setting is missing or wrong.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -170,7 +130,7 @@ impl Config {
             portitor_dcp::did_web_url(issuer)
                 .map_err(|e| invalid("PORTITOR_TRUSTED_ISSUERS", &format!("{issuer}: {e}")))?;
         }
-        let management = ManagementConfig::from_vars(&var);
+        let management = ManagementConfig::from_vars(DEFAULT_MANAGEMENT_BIND, &var);
         let key_file = PathBuf::from(required("PORTITOR_IDENTITY_KEY_FILE")?);
         // the one STS client is the participant's own connector, so it is
         // named by the participant's DID unless set
@@ -309,7 +269,10 @@ mod tests {
             ["did:web:issuer.example", "did:web:other.example"]
         );
         assert_eq!(config.scope_type_aliases, [DEFAULT_TYPE_ALIASES]);
-        assert_eq!(config.management, ManagementConfig::default());
+        assert_eq!(
+            config.management,
+            ManagementConfig::health_only(DEFAULT_MANAGEMENT_BIND)
+        );
         assert_eq!(config.management.bind, "127.0.0.1:8091");
         assert!(!config.allow_http);
         assert_eq!(config.certificate_chain_file, None);

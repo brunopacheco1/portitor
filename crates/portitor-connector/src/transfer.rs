@@ -11,11 +11,9 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use axum::Json;
-use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use portitor_dsp::guard::{Direction, MessageGuard};
 use portitor_dsp::negotiation::Agreement;
 use portitor_dsp::policy::{CallerCredentials, credential_scopes};
 use portitor_dsp::transfer::provider::{
@@ -27,7 +25,7 @@ use portitor_dsp::transfer::{
     TransferStartMessage, TransferState, TransferSuspensionMessage, TransferTerminationMessage,
     Transition,
 };
-use portitor_runtime::telemetry::metrics::{self, Refusal};
+use portitor_runtime::telemetry::metrics;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -184,7 +182,7 @@ impl TransferProvider {
         message_type: &str,
         provider_pid: &str,
     ) -> Result<T, Box<TransferError>> {
-        read_message(
+        crate::inbound::read_message(
             &*self.link.guard,
             body,
             message_type,
@@ -257,38 +255,6 @@ pub(crate) fn reached_state(state: Value, to: TransferState) -> bool {
     serde_json::from_value::<TransferProcess>(state).is_ok_and(|transfer| transfer.state == to)
 }
 
-/// Checks a message's shape with `guard`, then reads it. A refusal is
-/// built by `refuse` from the other party's process id (the message's
-/// `other_pid_key` field, if any) and the reason.
-pub(crate) fn read_message<T: DeserializeOwned>(
-    guard: &(dyn MessageGuard + Send + Sync),
-    body: Body,
-    message_type: &str,
-    other_pid_key: &str,
-    refuse: impl Fn(&str, &str) -> TransferError,
-) -> Result<T, Box<TransferError>> {
-    let refuse = |other_pid: &str, reason: &str| Box::new(refuse(other_pid, reason));
-    let Json(value) = body.map_err(|e| {
-        metrics::dsp_request_refused(Refusal::InvalidMessage);
-        refuse("", &e.body_text())
-    })?;
-    let other_pid = value
-        .get(other_pid_key)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-    guard
-        .check(Direction::Inbound, message_type, &value)
-        .map_err(|r| {
-            metrics::dsp_request_refused(Refusal::MessageRules);
-            refuse(&other_pid, &r.to_string())
-        })?;
-    serde_json::from_value(value).map_err(|e| {
-        metrics::dsp_request_refused(Refusal::InvalidMessage);
-        refuse(&other_pid, &e.to_string())
-    })
-}
-
 pub(crate) fn bad_request(e: TransferError) -> Response {
     (StatusCode::BAD_REQUEST, Json(e)).into_response()
 }
@@ -308,7 +274,7 @@ pub(crate) fn failed(failure: Failure) -> Response {
 }
 
 type Provider = State<Arc<TransferProvider>>;
-pub(crate) type Body = Result<Json<Value>, JsonRejection>;
+pub(crate) use crate::inbound::Body;
 
 /// `GET /transfers/{providerPid}`.
 pub(crate) async fn get(

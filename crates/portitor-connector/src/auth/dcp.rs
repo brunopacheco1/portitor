@@ -202,16 +202,8 @@ impl DcpVerifier {
     ///
     /// As [`DcpVerifier::check_own_identity`].
     pub async fn check_own_identity_once(&self) -> Result<(), String> {
-        let doc = self
-            .resolver
-            .resolve(&self.participant_id)
-            .await
-            .map_err(|e| {
-                format!(
-                    "cannot read the DID document of {}: {e}",
-                    self.participant_id
-                )
-            })?;
+        // a verifier made with `for_readiness` tries once, without waiting
+        let doc = self.resolve_own_document().await?;
         self.own_identity_agrees(&doc).await
     }
 
@@ -240,7 +232,10 @@ impl DcpVerifier {
 
     /// A verifier for the readiness check only: it reads our DID document
     /// afresh each time (no cache), so a document that is no longer
-    /// served is noticed.
+    /// served is noticed; tries once, without waiting; and its fetches
+    /// make no spans or measures (the check runs every few seconds, on
+    /// its own). `sts` should be unobserved too
+    /// ([`super::sts::StsClient::unobserved`]).
     ///
     /// # Errors
     ///
@@ -250,7 +245,8 @@ impl DcpVerifier {
         sts: Arc<dyn SecureTokenService>,
     ) -> Result<Self, String> {
         let mut verifier = Self::new(settings, sts)?;
-        verifier.resolver = DidWebResolver::new(settings.allow_http, Duration::ZERO)?;
+        verifier.resolver = DidWebResolver::new(settings.allow_http, Duration::ZERO)?.unobserved();
+        verifier.http = verifier.http.unobserved();
         verifier.start_tries = 1;
         Ok(verifier)
     }

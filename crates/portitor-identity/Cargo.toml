@@ -25,6 +25,8 @@ tracing.workspace = true
 utoipa.workspace = true
 
 [dev-dependencies]
+# in-memory traces for the trace context tests (ADR 0023)
+portitor-runtime = { path = "../portitor-runtime", features = ["test-support"] }
 base64.workspace = true
 tower = { version = "0.5", features = ["util"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -9,7 +9,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use portitor_dcp::SigningKey;
-use portitor_identity::config::{Config, ManagementConfig};
+use portitor_identity::config::{Config, DEFAULT_MANAGEMENT_BIND, ManagementConfig};
 use portitor_identity::gaiax::{GaiaxCompliance, HttpGaiaxCompliance};
 use portitor_identity::issuance::HttpIssuerClient;
 use portitor_identity::store::SqliteStore;
@@ -17,9 +17,9 @@ use portitor_identity::{Identity, Ports};
 use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::health;
+use portitor_runtime::management::management_port;
 use portitor_runtime::serve::{
-    MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, bind_management, serve_with_trusted_routes,
-    with_limits,
+    MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, run_component, serve_with_trusted_routes, with_limits,
 };
 
 /// Without arguments, runs the identity component. `portitor-identity
@@ -29,7 +29,9 @@ fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match args.as_slice() {
         [] => serve_identity(),
-        [command] if command == "health" => health::probe(&ManagementConfig::from_env().bind),
+        [command] if command == "health" => {
+            health::probe(&ManagementConfig::from_env(DEFAULT_MANAGEMENT_BIND).bind)
+        }
         _ => {
             eprintln!("portitor-identity takes no arguments, except for: health");
             ExitCode::from(2)
@@ -39,18 +41,7 @@ fn main() -> ExitCode {
 
 #[tokio::main]
 async fn serve_identity() -> ExitCode {
-    let telemetry = portitor_runtime::telemetry::init("portitor-identity");
-    let result = run().await;
-    // after the servers stopped (SIGTERM, Ctrl-C) or failed: send the
-    // last spans and metrics
-    telemetry.shutdown().await;
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            tracing::error!(%error, "portitor-identity stopped");
-            ExitCode::FAILURE
-        }
-    }
+    run_component("portitor-identity", run()).await
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -94,21 +85,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         &identity,
         config.db_file.clone(),
     ));
-    let api = if let Some(key_file) = &config.management.api_key_file {
-        let key =
-            ApiKey::read(key_file).map_err(|e| format!("PORTITOR_MANAGEMENT_API_KEY_FILE: {e}"))?;
-        Some(portitor_identity::management::router(
-            Arc::clone(&identity),
-            key,
-        ))
-    } else {
-        tracing::info!(
-            "management API off (PORTITOR_MANAGEMENT_API_KEY_FILE not set); the management port serves the health checks only"
-        );
-        None
-    };
-    let management_listener = bind_management(&config.management.bind).await?;
-    let management = Some((management_listener, health::management_app(checks, api)));
+    let management = management_port(&config.management, checks, |key| {
+        portitor_identity::management::router(Arc::clone(&identity), key)
+    })
+    .await?;
     tracing::info!(
         bind = %config.bind,
         did = %identity.participant_id(),
@@ -124,7 +104,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     // only the STS is called from inside the participant (by its own
     // connector), so only its caller's trace context is taken
-    serve_with_trusted_routes((listener, app), management, &[portitor_identity::STS_ROUTE]).await?;
+    serve_with_trusted_routes(
+        (listener, app),
+        Some(management),
+        &[portitor_identity::STS_ROUTE],
+    )
+    .await?;
     Ok(())
 }
 

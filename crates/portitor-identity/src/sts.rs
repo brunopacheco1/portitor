@@ -25,6 +25,7 @@
 
 use std::sync::Arc;
 
+use axum::Extension;
 use axum::extract::State;
 use axum::extract::rejection::FormRejection;
 use axum::http::StatusCode;
@@ -34,6 +35,7 @@ use portitor_dcp::Claims;
 use portitor_dcp::holder::{AccessToken, TokenFrame};
 use portitor_dcp::scope::Scope;
 use portitor_runtime::system::{new_uuid, now_secs};
+use portitor_runtime::telemetry::http::CallerTrace;
 use serde::{Deserialize, Serialize};
 
 use crate::{Identity, TOKEN_SECONDS};
@@ -69,14 +71,22 @@ struct TokenError {
 }
 
 /// `POST /sts/token`.
+///
+/// `caller_trace` is the connector's W3C trace context, present when the
+/// server takes it on this route (`serve_with_trusted_routes`). It is
+/// joined only once the client is authenticated (ADR 0023, section 4):
+/// before that, the caller is anyone on the public port.
 pub(crate) async fn token(
     State(identity): State<Arc<Identity>>,
+    caller_trace: Option<Extension<CallerTrace>>,
     form: Result<Form<TokenRequest>, FormRejection>,
 ) -> Response {
     let Ok(Form(request)) = form else {
         return Refusal::bad_request("invalid_request", "not a form").into_response();
     };
-    match issue(&identity, request) {
+    // `Extension(trace)` takes the value out of axum's wrapper
+    let caller_trace = caller_trace.map(|Extension(trace)| trace);
+    match issue(&identity, request, caller_trace.as_ref()) {
         Ok(response) => Json(response).into_response(),
         Err(refusal) => refusal.into_response(),
     }
@@ -123,8 +133,13 @@ impl IntoResponse for Refusal {
     }
 }
 
-/// Checks the request and signs an ID token for its audience.
-fn issue(identity: &Identity, request: TokenRequest) -> Result<TokenResponse, Refusal> {
+/// Checks the request and signs an ID token for its audience. Joins
+/// `caller_trace` once the client is known.
+fn issue(
+    identity: &Identity,
+    request: TokenRequest,
+    caller_trace: Option<&CallerTrace>,
+) -> Result<TokenResponse, Refusal> {
     if request.grant_type.as_deref() != Some("client_credentials") {
         return Err(Refusal::bad_request(
             "unsupported_grant_type",
@@ -132,6 +147,10 @@ fn issue(identity: &Identity, request: TokenRequest) -> Result<TokenResponse, Re
         ));
     }
     check_client(identity, &request)?;
+    // the client is authenticated: from here on, this request belongs to
+    // the connector's trace (the guard leaves the span when `issue`
+    // returns; nothing below waits with `.await`)
+    let _in_caller_trace = caller_trace.map(CallerTrace::join);
     let Some(audience) = request.audience.filter(|a| !a.is_empty()) else {
         return Err(Refusal::bad_request(
             "invalid_request",

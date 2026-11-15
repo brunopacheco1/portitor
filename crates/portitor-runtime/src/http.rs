@@ -16,8 +16,10 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use serde_json::Value;
 
+use tracing::Instrument as _;
+
 use crate::BoxFuture;
-use crate::telemetry::http::{ClientCall, TraceContext};
+use crate::telemetry::http::{ClientCall, Peer};
 
 /// Why an exchange of [`HttpSender`] got no 2xx answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,7 +128,11 @@ pub struct HttpSender {
     client: HttpsClient,
     allow_http: bool,
     has_ca_certificates: bool,
-    trace_context: TraceContext,
+    /// Who the requests go to (what is recorded, and whether our trace
+    /// context is sent).
+    peer: Peer,
+    /// Whether each request gets a span and a duration measure.
+    observed: bool,
 }
 
 impl std::fmt::Debug for HttpSender {
@@ -134,7 +140,8 @@ impl std::fmt::Debug for HttpSender {
         f.debug_struct("HttpSender")
             .field("allow_http", &self.allow_http)
             .field("has_ca_certificates", &self.has_ca_certificates)
-            .field("trace_context", &self.trace_context)
+            .field("peer", &self.peer)
+            .field("observed", &self.observed)
             .finish_non_exhaustive()
     }
 }
@@ -158,19 +165,32 @@ impl HttpSender {
             client,
             allow_http,
             has_ca_certificates,
-            trace_context: TraceContext::Withhold,
+            peer: Peer::Other,
+            observed: true,
         })
     }
 
-    /// This sender with our W3C trace context (`traceparent`) on every
-    /// request, so the other side's spans join our trace. Only for a
-    /// sender whose calls stay inside our participant, such as the
-    /// connector's client of its own STS (ADR 0023, section 4); never for
-    /// one that calls other participants.
+    /// This sender for a service inside our participant ([`Peer::Own`]):
+    /// our W3C trace context (`traceparent`) goes with every request, so
+    /// the other side's spans join our trace, and the measures name the
+    /// server. Only for a sender whose calls stay inside our participant,
+    /// such as the connector's client of its own STS (ADR 0023, section
+    /// 4); never for one that calls other participants.
     #[must_use]
-    pub fn sending_trace_context(self) -> Self {
+    pub fn for_own_service(self) -> Self {
         Self {
-            trace_context: TraceContext::Send,
+            peer: Peer::Own,
+            ..self
+        }
+    }
+
+    /// This sender without spans, measures or trace context
+    /// ([`ClientCall::unobserved`]): for readiness checks, which run
+    /// every few seconds and are not part of any request.
+    #[must_use]
+    pub fn unobserved(self) -> Self {
+        Self {
+            observed: false,
             ..self
         }
     }
@@ -431,10 +451,16 @@ impl HttpSender {
                     .to_owned(),
             ));
         }
-        let mut call = ClientCall::start(&mut request, self.trace_context);
+        let mut call = if self.observed {
+            ClientCall::start(&mut request, self.peer)
+        } else {
+            ClientCall::unobserved()
+        };
         let span = call.span().clone();
-        let exchange =
-            tracing::Instrument::instrument(self.exchange(request, limits, &mut call), span);
+        // `exchange` borrows `call` (`&mut call`) until it is done or
+        // dropped; `timeout` drops it when the time is up, so `call` can
+        // be ended in both branches below
+        let exchange = self.exchange(request, limits, &mut call).instrument(span);
         // `timeout` gives an error only when the time is up; when the
         // exchange finished in time, `answer` is its own result, which may
         // be an error too, and is returned as it is
@@ -470,11 +496,17 @@ impl HttpSender {
         }
         // read at most max_bytes: the counter-party controls the size
         let (parts, body) = response.into_parts();
-        let body = http_body_util::Limited::new(body, limits.max_bytes)
+        let body = match http_body_util::Limited::new(body, limits.max_bytes)
             .collect()
             .await
-            .map_err(|e| HttpError::NoAnswer(format!("answer not read: {e}")))?
-            .to_bytes();
+        {
+            Ok(collected) => collected.to_bytes(),
+            Err(e) => {
+                // a 2xx status without its body is a failed call
+                call.body_not_read();
+                return Err(HttpError::NoAnswer(format!("answer not read: {e}")));
+            }
+        };
         Ok((parts.headers, body))
     }
 }

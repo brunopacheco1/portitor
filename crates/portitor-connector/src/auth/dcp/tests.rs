@@ -1607,7 +1607,7 @@ impl SecureTokenService for CountingSts {
 }
 
 #[tokio::test]
-async fn readiness_checks_our_identity_and_reuses_the_result() {
+async fn readiness_checks_our_identity_in_the_background() {
     use crate::health::OwnIdentityCheck;
     use portitor_runtime::health::Check as _;
     use std::sync::atomic::Ordering;
@@ -1637,16 +1637,20 @@ async fn readiness_checks_our_identity_and_reuses_the_result() {
         down: std::sync::atomic::AtomicBool::new(false),
     });
     let check = OwnIdentityCheck::with_sts(&settings, Arc::clone(&sts) as _).unwrap();
+    // not ready before the first run
+    assert!(check.check().await.is_err());
+    check.refresh().await;
     assert_eq!(check.check().await, Ok(()));
-    // probes in quick succession reuse the result: one token in all
+    // probes only read the result: one token in all
     assert_eq!(check.check().await, Ok(()));
     assert_eq!(check.check().await, Ok(()));
     assert_eq!(sts.tokens.load(Ordering::SeqCst), 1);
 
-    // our STS is down: a check that has no recent result fails, and says
-    // what failed without any secret
+    // our STS is down: a check that never passed fails, and says what
+    // failed without any secret
     sts.down.store(true, Ordering::SeqCst);
     let fresh = OwnIdentityCheck::with_sts(&settings, Arc::clone(&sts) as _).unwrap();
+    fresh.refresh().await;
     let err = fresh.check().await.unwrap_err();
     assert!(err.contains("STS"), "{err}");
     // and so does the next probe, without asking again
@@ -1656,6 +1660,7 @@ async fn readiness_checks_our_identity_and_reuses_the_result() {
     sts.down.store(false, Ordering::SeqCst);
     ds.world.lock().unwrap().documents.remove("mine");
     let fresh = OwnIdentityCheck::with_sts(&settings, Arc::clone(&sts) as _).unwrap();
+    fresh.refresh().await;
     let err = fresh.check().await.unwrap_err();
     assert!(err.contains("cannot read the DID document"), "{err}");
 }

@@ -38,9 +38,14 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use utoipa::{OpenApi, ToSchema};
 
 use crate::BoxFuture;
+
+/// The start of every check path below (EDC's Observability API). The
+/// request spans and measures leave these paths out
+/// (`telemetry::http`).
+pub const CHECK_PREFIX: &str = "/api/check/";
 
 /// `GET` path of the liveness check.
 pub const LIVENESS_PATH: &str = "/api/check/liveness";
@@ -145,6 +150,9 @@ pub trait Check: Send + Sync {
 /// server's own threads.
 pub fn blocking<F>(work: F) -> Arc<dyn Check>
 where
+    // `Send + Sync`: other threads run it; `'static`: it borrows nothing
+    // that could end before it (it owns what it needs, often through
+    // `move`), since the check is kept for as long as the server runs
     F: Fn() -> Result<(), String> + Send + Sync + 'static,
 {
     Arc::new(Blocking(Arc::new(work)))
@@ -171,12 +179,26 @@ impl Check for Blocking {
 /// order they are shown.
 #[derive(Default)]
 pub struct HealthChecks {
-    checks: Vec<(String, Arc<dyn Check>)>,
+    checks: Vec<Named>,
+}
+
+/// One check of [`HealthChecks`].
+struct Named {
+    name: String,
+    check: Arc<dyn Check>,
+    /// Whether the check passed the last time it ran; `None` before the
+    /// first run. Only a change is logged (see [`change_to_log`]), not every
+    /// probe: orchestrators probe every few seconds.
+    last_healthy: std::sync::Mutex<Option<bool>>,
 }
 
 impl std::fmt::Debug for HealthChecks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let names: Vec<&str> = self.checks.iter().map(|(name, _)| name.as_str()).collect();
+        let names: Vec<&str> = self
+            .checks
+            .iter()
+            .map(|named| named.name.as_str())
+            .collect();
         f.debug_struct("HealthChecks")
             .field("checks", &names)
             .finish()
@@ -193,7 +215,11 @@ impl HealthChecks {
 
     /// Adds the check `name`.
     pub fn add(&mut self, name: &str, check: Arc<dyn Check>) {
-        self.checks.push((name.to_owned(), check));
+        self.checks.push(Named {
+            name: name.to_owned(),
+            check,
+            last_healthy: std::sync::Mutex::new(None),
+        });
     }
 
     /// Runs every check at the same time, each cut off after `timeout`,
@@ -201,29 +227,70 @@ impl HealthChecks {
     pub async fn run(&self, timeout: Duration) -> HealthStatus {
         // start every check on its own task first ...
         let mut running = Vec::new();
-        for (name, check) in &self.checks {
-            let check = Arc::clone(check);
+        for named in &self.checks {
+            let check = Arc::clone(&named.check);
             let task = tokio::spawn(async move {
                 match tokio::time::timeout(timeout, check.check()).await {
                     Ok(outcome) => outcome,
                     Err(_) => Err(format!("no answer within {} ms", timeout.as_millis())),
                 }
             });
-            running.push((name, task));
+            running.push((named, task));
         }
         // ... then wait for each in turn: the slowest sets the time
         let mut results = Vec::new();
-        for (name, task) in running {
+        for (named, task) in running {
             let outcome = match task.await {
                 Ok(outcome) => outcome,
                 Err(_) => Err("the check stopped unexpectedly".to_owned()),
             };
-            if let Err(reason) = &outcome {
-                tracing::warn!(component = %name, %reason, "readiness check failed");
-            }
-            results.push(ComponentResult::new(name, outcome));
+            named.log_change(&outcome);
+            results.push(ComponentResult::new(&named.name, outcome));
         }
         HealthStatus::of(results)
+    }
+}
+
+impl Named {
+    /// Logs `outcome` when it differs from the check's last one: a WARN
+    /// when the check starts failing, an INFO when it passes again.
+    fn log_change(&self, outcome: &Result<(), String>) {
+        let healthy = outcome.is_ok();
+        // a poisoned lock only means a panic while it was held; the
+        // `Option<bool>` in it is still valid
+        let mut last = self
+            .last_healthy
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = last.replace(healthy);
+        match (change_to_log(previous, healthy), outcome) {
+            (Some(Change::Failed), Err(reason)) => {
+                tracing::warn!(component = %self.name, %reason, "readiness check failed");
+            }
+            (Some(Change::Recovered), _) => {
+                tracing::info!(component = %self.name, "readiness check passes again");
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A change of a check's result worth a log line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Change {
+    /// It fails now, and did not before (or never ran).
+    Failed,
+    /// It passes now, and failed before.
+    Recovered,
+}
+
+/// The change from `previous` (`None`: the check never ran) to `healthy`,
+/// if it is one to log. A first run that passes is not logged.
+fn change_to_log(previous: Option<bool>, healthy: bool) -> Option<Change> {
+    match (previous, healthy) {
+        (Some(false), true) => Some(Change::Recovered),
+        (None | Some(true), false) => Some(Change::Failed),
+        _ => None,
     }
 }
 
@@ -299,6 +366,27 @@ pub async fn health(state: State<Arc<HealthChecks>>) -> Response {
     readiness(state).await
 }
 
+/// The `OpenAPI` description of the four check routes, the same in each
+/// component: merged into each management API's description
+/// ([`with_health_api`]).
+#[derive(OpenApi)]
+#[openapi(
+    paths(liveness, readiness, startup, health),
+    components(schemas(HealthStatus, ComponentResult, Failure)),
+    tags(
+        (name = "Health", description = "Health checks in Eclipse EDC's Observability API shape (ADR 0023). They need no API key, and neither does GET /health (plain `ok`). Served even when the management API is off.")
+    )
+)]
+pub struct HealthApi;
+
+/// `doc` with the check routes, their schemas and the `Health` tag of
+/// [`HealthApi`] added.
+#[must_use]
+pub fn with_health_api(mut doc: utoipa::openapi::OpenApi) -> utoipa::openapi::OpenApi {
+    doc.merge(HealthApi::openapi());
+    doc
+}
+
 /// The four check routes, open (no API key).
 pub fn router(checks: Arc<HealthChecks>) -> Router {
     Router::new()
@@ -334,7 +422,9 @@ pub fn sqlite_file_answers(path: &Path) -> Result<(), String> {
     // the store's writes do not block a reader (WAL); wait a little anyway
     conn.busy_timeout(Duration::from_millis(200))
         .map_err(|e| format!("the SQLite file does not answer: {e}"))?;
-    let _tables: i64 = conn
+    // the number itself does not matter: reading it proves the file is
+    // a database that answers
+    let _table_count: i64 = conn
         .query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get(0))
         .map_err(|e| format!("the SQLite file does not answer: {e}"))?;
     Ok(())
@@ -639,6 +729,23 @@ mod tests {
     }
 
     #[test]
+    fn only_changes_are_logged() {
+        assert_eq!(change_to_log(None, true), None);
+        assert_eq!(change_to_log(None, false), Some(Change::Failed));
+        assert_eq!(change_to_log(Some(true), false), Some(Change::Failed));
+        assert_eq!(change_to_log(Some(false), false), None);
+        assert_eq!(change_to_log(Some(false), true), Some(Change::Recovered));
+        assert_eq!(change_to_log(Some(true), true), None);
+    }
+
+    #[test]
+    fn every_check_path_has_the_prefix() {
+        for path in [LIVENESS_PATH, READINESS_PATH, STARTUP_PATH, HEALTH_PATH] {
+            assert!(path.starts_with(CHECK_PREFIX), "{path}");
+        }
+    }
+
+    #[test]
     fn every_address_is_called_on_this_machine() {
         assert_eq!(local_address("0.0.0.0:8081"), "127.0.0.1:8081");
         assert_eq!(local_address("[::]:8081"), "[::1]:8081");
@@ -674,5 +781,25 @@ mod tests {
             .local_addr()
             .unwrap();
         assert_eq!(probe(&closed.to_string()), ExitCode::FAILURE);
+    }
+
+    /// A server that takes the connection and never answers: the probe
+    /// gives up after its timeout and fails.
+    #[test]
+    fn the_probe_fails_in_time_when_nothing_answers() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let mut open = Vec::new();
+            // keep each connection open, unread and unanswered
+            for socket in listener.incoming().flatten() {
+                open.push(socket);
+            }
+        });
+        let started = std::time::Instant::now();
+        assert_eq!(probe(&address.to_string()), ExitCode::FAILURE);
+        let took = started.elapsed();
+        assert!(took >= PROBE_TIMEOUT, "{took:?}");
+        assert!(took < PROBE_TIMEOUT + Duration::from_secs(2), "{took:?}");
     }
 }

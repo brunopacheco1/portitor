@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Portitor identity management API",
-    "description": "Credential requests, credentials and offers of the participant this identity component holds, and its Gaia-X compliance runs. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description and the health checks needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only.",
+    "description": "Credential requests, credentials and offers of the participant this identity component holds, and its Gaia-X compliance runs. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
@@ -1048,7 +1048,7 @@
     },
     {
       "name": "Health",
-      "description": "Health checks in Eclipse EDC's Observability API shape (ADR 0023): no API key. Served even when the management API is off."
+      "description": "Health checks in Eclipse EDC's Observability API shape (ADR 0023). They need no API key, and neither does GET /health (plain `ok`). Served even when the management API is off."
     }
   ]
 }

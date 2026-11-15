@@ -268,7 +268,9 @@ impl World {
             issuer_service_url: SERVICE.to_owned(),
             bind: "unused".to_owned(),
             db_file: "unused".into(),
-            management: portitor_issuer::config::ManagementConfig::default(),
+            management: portitor_issuer::config::ManagementConfig::health_only(
+                portitor_issuer::config::DEFAULT_MANAGEMENT_BIND,
+            ),
             allow_http: false,
             max_active_per_holder: setup.max_active_per_holder,
             bundle_key_file: None,
@@ -1332,4 +1334,19 @@ async fn health_checks_its_own_dependencies_without_the_key() {
     assert_eq!(body["componentResults"][0]["component"], "database");
     assert_eq!(body["componentResults"][0]["isHealthy"], false);
     assert_eq!(body["componentResults"][2]["isHealthy"], true);
+}
+
+/// `portitor-issuer health x` and `portitor-issuer x` are usage errors: exit code 2, before
+/// anything starts.
+#[test]
+fn unknown_arguments_exit_with_2() {
+    for args in [&["health", "x"][..], &["x"][..]] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_portitor-issuer"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("takes no arguments"), "{stderr}");
+    }
 }

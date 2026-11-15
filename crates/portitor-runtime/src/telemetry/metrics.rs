@@ -12,14 +12,22 @@
 //! the stable `jvm.class.loaded`; counts have a `{thing}` unit and no
 //! `_total`. The HTTP measures are the semantic conventions' own
 //! (<https://opentelemetry.io/docs/specs/semconv/http/http-metrics/>).
-//! Attribute values come from short fixed lists (enums below), never from
-//! free text, ids or URLs, so their number stays small. The list is
-//! repeated in `docs/DEPLOYING.md`; keep both the same.
+//! Attribute values come from short fixed lists, never from free text,
+//! ids or URLs, so their number stays small: the enums below ([`Role`],
+//! [`Refusal`], [`Outbox`]), and `&'static str` values that the callers
+//! pass from fixed names in their code (a DSP state such as `FINALIZED`,
+//! a harvest kind, outcome or check name; `&'static` means a text fixed
+//! in the program, so it cannot come from a request). Two exceptions,
+//! each with a small, operator-controlled set of values: the bundle
+//! version, chosen by the dataspace's authority, and the HTTP measures'
+//! route templates, status codes and, for our own services only, server
+//! addresses. The list is repeated in `docs/DEPLOYING.md`; keep both the
+//! same.
 //!
 //! When export is off, the instruments come from OpenTelemetry's global
 //! no-op meter: recording is an empty function call.
 
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::{Counter, Gauge, Histogram, Meter};
@@ -47,13 +55,16 @@ struct Instruments {
 
 /// The instruments, made the first time a measure is recorded.
 ///
-/// `OnceLock` holds a value made once and then shared by every thread.
-/// An instrument stays bound to the meter provider it was made from, so
-/// [`super::init`] must set the provider before the first measure; it is
-/// the first thing each `main` does.
+/// `LazyLock` holds a value made the first time it is used and then
+/// shared by every thread. An instrument stays bound to the meter provider
+/// it was made from, so [`super::init`] must set the provider before the
+/// first measure; it is the first thing each `main` does.
+static INSTRUMENTS: LazyLock<Instruments> =
+    LazyLock::new(|| Instruments::new(&opentelemetry::global::meter("portitor")));
+
+/// The instruments ([`INSTRUMENTS`]).
 fn instruments() -> &'static Instruments {
-    static INSTRUMENTS: OnceLock<Instruments> = OnceLock::new();
-    INSTRUMENTS.get_or_init(|| Instruments::new(&opentelemetry::global::meter("portitor")))
+    &INSTRUMENTS
 }
 
 impl Instruments {
@@ -174,21 +185,38 @@ pub enum Outbox {
 }
 
 impl Outbox {
-    fn attributes(self) -> Vec<KeyValue> {
+    /// What the outbox delivers: `negotiation`, `transfer` or
+    /// `credential_delivery`.
+    #[must_use]
+    pub fn process_name(self) -> &'static str {
         match self {
-            Self::Negotiation(role) => vec![
+            Self::Negotiation(_) => "negotiation",
+            Self::Transfer(_) => "transfer",
+            Self::CredentialDelivery => "credential_delivery",
+        }
+    }
+
+    /// Our side of the DSP process (`provider` or `consumer`); `None` for
+    /// the issuer's credential deliveries, which are not DSP.
+    #[must_use]
+    pub fn role_name(self) -> Option<&'static str> {
+        match self {
+            Self::Negotiation(role) | Self::Transfer(role) => Some(role.name()),
+            Self::CredentialDelivery => None,
+        }
+    }
+
+    /// The attributes of the outbox measures: `portitor.outbox.name`
+    /// (`dsp` or `credential_delivery`), and for DSP the process and our
+    /// role.
+    fn attributes(self) -> Vec<KeyValue> {
+        match self.role_name() {
+            Some(role) => vec![
                 KeyValue::new("portitor.outbox.name", "dsp"),
-                KeyValue::new("portitor.dsp.process", "negotiation"),
-                KeyValue::new("portitor.dsp.role", role.name()),
+                KeyValue::new("portitor.dsp.process", self.process_name()),
+                KeyValue::new("portitor.dsp.role", role),
             ],
-            Self::Transfer(role) => vec![
-                KeyValue::new("portitor.outbox.name", "dsp"),
-                KeyValue::new("portitor.dsp.process", "transfer"),
-                KeyValue::new("portitor.dsp.role", role.name()),
-            ],
-            Self::CredentialDelivery => {
-                vec![KeyValue::new("portitor.outbox.name", "credential_delivery")]
-            }
+            None => vec![KeyValue::new("portitor.outbox.name", self.process_name())],
         }
     }
 }
@@ -298,6 +326,33 @@ mod tests {
 
     /// Without `init`, every measure goes to the no-op meter: nothing
     /// fails, nothing is kept.
+    #[test]
+    fn outbox_names() {
+        let negotiation = Outbox::Negotiation(Role::Consumer);
+        assert_eq!(negotiation.process_name(), "negotiation");
+        assert_eq!(negotiation.role_name(), Some("consumer"));
+        assert_eq!(
+            format!("{:?}", negotiation.attributes()),
+            format!(
+                "{:?}",
+                [
+                    KeyValue::new("portitor.outbox.name", "dsp"),
+                    KeyValue::new("portitor.dsp.process", "negotiation"),
+                    KeyValue::new("portitor.dsp.role", "consumer"),
+                ]
+            )
+        );
+        let delivery = Outbox::CredentialDelivery;
+        assert_eq!(delivery.role_name(), None);
+        assert_eq!(
+            format!("{:?}", delivery.attributes()),
+            format!(
+                "{:?}",
+                [KeyValue::new("portitor.outbox.name", "credential_delivery")]
+            )
+        );
+    }
+
     #[test]
     fn recording_without_export_does_nothing() {
         negotiation_ended(Role::Provider, "FINALIZED");

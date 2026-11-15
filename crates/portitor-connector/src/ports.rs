@@ -307,10 +307,12 @@ pub type AnyConsumerStore = Shared<dyn ConsumerStore + Send + Sync>;
 pub type AnyConsumerDecider = Shared<dyn ConsumerDecider + Send + Sync>;
 
 // The four process stores below also report each state change
-// (`state_events`): `insert` is a new process; `replace_if` reads the
-// state before the write, and reports only when the write happened on
-// exactly that version (compare-and-update, ADR 0007), so the state read
-// is the one replaced.
+// (`state_events`): `insert` is a new process. `replace_if` first reads
+// the record as it is (`previous`), because the state change event names
+// the state before the write and the write does not return it. It
+// reports only when the write happened and `previous` is the version the
+// write replaced (compare-and-update, ADR 0007): then the state read is
+// exactly the one replaced, even with other writers.
 
 impl NegotiationStore for AnyStore {
     fn get(&self, provider_pid: &str) -> Result<Option<Negotiation>, StoreError> {
@@ -322,10 +324,14 @@ impl NegotiationStore for AnyStore {
         Ok(())
     }
     fn replace_if(&self, negotiation: &Negotiation, expected: u64) -> Result<bool, StoreError> {
-        let before = self.0.get(&negotiation.provider_pid)?;
+        // read first: see the comment above `impl NegotiationStore`
+        let previous = self.0.get(&negotiation.provider_pid)?;
         let replaced = self.0.replace_if(negotiation, expected)?;
-        if replaced && let Some(before) = before.filter(|before| before.version == expected) {
-            saved_as_provider(negotiation, Some(before.state));
+        if replaced
+            && let Some(previous) = previous
+            && previous.version == expected
+        {
+            saved_as_provider(negotiation, Some(previous.state));
         }
         Ok(replaced)
     }
@@ -364,10 +370,14 @@ impl ConsumerStore for AnyConsumerStore {
         negotiation: &ConsumerNegotiation,
         expected: u64,
     ) -> Result<bool, StoreError> {
-        let before = self.0.get(&negotiation.consumer_pid)?;
+        // read first: see the comment above `impl NegotiationStore`
+        let previous = self.0.get(&negotiation.consumer_pid)?;
         let replaced = self.0.replace_if(negotiation, expected)?;
-        if replaced && let Some(before) = before.filter(|before| before.version == expected) {
-            saved_as_consumer(negotiation, Some(before.state));
+        if replaced
+            && let Some(previous) = previous
+            && previous.version == expected
+        {
+            saved_as_consumer(negotiation, Some(previous.state));
         }
         Ok(replaced)
     }
@@ -421,10 +431,14 @@ impl TransferStore for AnyTransferStore {
         Ok(())
     }
     fn replace_if(&self, transfer: &Transfer, expected: u64) -> Result<bool, StoreError> {
-        let before = self.0.get(&transfer.provider_pid)?;
+        // read first: see the comment above `impl NegotiationStore`
+        let previous = self.0.get(&transfer.provider_pid)?;
         let replaced = self.0.replace_if(transfer, expected)?;
-        if replaced && let Some(before) = before.filter(|before| before.version == expected) {
-            transfer_saved_as_provider(transfer, Some(before.state));
+        if replaced
+            && let Some(previous) = previous
+            && previous.version == expected
+        {
+            transfer_saved_as_provider(transfer, Some(previous.state));
         }
         Ok(replaced)
     }
@@ -498,10 +512,14 @@ impl ConsumerTransferStore for AnyConsumerTransferStore {
         Ok(())
     }
     fn replace_if(&self, transfer: &ConsumerTransfer, expected: u64) -> Result<bool, StoreError> {
-        let before = self.0.get(&transfer.consumer_pid)?;
+        // read first: see the comment above `impl NegotiationStore`
+        let previous = self.0.get(&transfer.consumer_pid)?;
         let replaced = self.0.replace_if(transfer, expected)?;
-        if replaced && let Some(before) = before.filter(|before| before.version == expected) {
-            transfer_saved_as_consumer(transfer, Some(before.state));
+        if replaced
+            && let Some(previous) = previous
+            && previous.version == expected
+        {
+            transfer_saved_as_consumer(transfer, Some(previous.state));
         }
         Ok(replaced)
     }

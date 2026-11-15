@@ -13,11 +13,12 @@ use portitor_bundle::store::CacheFolder;
 use portitor_connector::auth::{AuthSettings, CallerVerifier, Prover, dcp_adapters};
 use portitor_connector::bundle_harvest::BundleHarvester;
 use portitor_connector::health::{Dependencies, OwnIdentityCheck, readiness_checks};
-use portitor_connector::management::ManagementConfig;
+use portitor_connector::management::{DEFAULT_MANAGEMENT_BIND, ManagementConfig};
 use portitor_runtime::directory::{Directory, WebDirectory};
 use portitor_runtime::health;
+use portitor_runtime::management::management_port;
 use portitor_runtime::serve::{
-    MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, bind_management, serve, with_limits,
+    MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, run_component, serve, with_limits,
 };
 
 /// The verifier and the prover (ADR 0016).
@@ -30,7 +31,9 @@ fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match args.as_slice() {
         [] => serve_connector(),
-        [command] if command == "health" => health::probe(&ManagementConfig::from_env().bind),
+        [command] if command == "health" => {
+            health::probe(&ManagementConfig::from_env(DEFAULT_MANAGEMENT_BIND).bind)
+        }
         _ => {
             eprintln!("portitor-connector takes no arguments, except for: health");
             ExitCode::from(2)
@@ -40,23 +43,12 @@ fn main() -> ExitCode {
 
 #[tokio::main]
 async fn serve_connector() -> ExitCode {
-    let telemetry = portitor_runtime::telemetry::init("portitor-connector");
-    let result = run().await;
-    // after the servers stopped (SIGTERM, Ctrl-C) or failed: send the
-    // last spans and metrics
-    telemetry.shutdown().await;
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            tracing::error!(%error, "portitor-connector stopped");
-            ExitCode::FAILURE
-        }
-    }
+    run_component("portitor-connector", run()).await
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = portitor_connector::Config::from_env()?;
-    let sender = portitor_connector::HttpSender::new(config.allow_http_callbacks)?;
+    let sender = portitor_connector::dsp_sender(config.allow_http_callbacks)?;
     if config.allow_http_callbacks {
         tracing::warn!("http callback addresses allowed (PORTITOR_ALLOW_HTTP_CALLBACKS)");
     }
@@ -76,7 +68,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     // readiness (ADR 0023): the start check of our identity, run again
     let identity_check = match &settings {
-        Some(settings) => Some(Arc::new(OwnIdentityCheck::new(settings)?)),
+        Some(settings) => {
+            let check = Arc::new(OwnIdentityCheck::new(settings)?);
+            // runs until the process stops; the probes read its results
+            check.spawn_refresh();
+            Some(check)
+        }
         None => None,
     };
     (ports.verifier, ports.prover) = auth_adapters(settings).await?;
@@ -121,21 +118,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         bundle: bundle_harvester,
         identity: identity_check,
     }));
-    let settings = ManagementConfig::from_env();
-    let api = if let Some(key_file) = &settings.api_key_file {
-        let key = portitor_connector::management::ApiKey::read(key_file)?;
-        Some(portitor_connector::management::router(
-            negotiator.clone(),
-            key,
-        ))
-    } else {
-        tracing::info!(
-            "management API off (PORTITOR_MANAGEMENT_API_KEY_FILE not set); the management port serves the health checks only"
-        );
-        None
-    };
-    let management_listener = bind_management(&settings.bind).await?;
-    let management = Some((management_listener, health::management_app(checks, api)));
+    let settings = ManagementConfig::from_env(DEFAULT_MANAGEMENT_BIND);
+    let management = management_port(&settings, checks, |key| {
+        portitor_connector::management::router(negotiator.clone(), key)
+    })
+    .await?;
     tracing::info!(
         %bind,
         datasets = negotiator.catalog_size(),
@@ -144,7 +131,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     // the public routes: anyone can call them
     let app = with_limits(app, REQUEST_TIMEOUT, MAX_CONCURRENT_REQUESTS);
-    serve((listener, app), management).await?;
+    serve((listener, app), Some(management)).await?;
     Ok(())
 }
 

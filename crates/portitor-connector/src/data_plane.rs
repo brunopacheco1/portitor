@@ -45,7 +45,7 @@ use portitor_dsp::transfer::{DataAddress, DataAddressType, EndpointProperty};
 use crate::http_client::{HttpsClient, bearer_token_in, https_client};
 use crate::ports::AnyFlowStore;
 use crate::system::{new_uuid, now_secs};
-use portitor_runtime::telemetry::http::{ClientCall, TraceContext};
+use portitor_runtime::telemetry::http::{ClientCall, Peer};
 use tracing::Instrument as _;
 
 /// The `endpointType` of the data address sent over DSP. It is the value
@@ -500,8 +500,11 @@ async fn fetch(client: &HttpsClient, url: &str) -> Result<Response, String> {
     let mut request = hyper::Request::get(url)
         .body(Full::new(Bytes::new()))
         .map_err(|e| e.to_string())?;
-    let mut call = ClientCall::start(&mut request, TraceContext::Send);
+    let mut call = ClientCall::start(&mut request, Peer::Own);
     let sent = client.request(request).instrument(call.span().clone());
+    // two results in one: the outer `Ok`/`Err` is the timeout's (did the
+    // answer come in time?), the inner one the request's own (did it
+    // work?)
     let answer = match tokio::time::timeout(UPSTREAM_TIMEOUT, sent).await {
         Ok(Ok(answer)) => {
             call.answered(answer.status().as_u16());
@@ -680,5 +683,27 @@ mod tests {
         let b = token_of(&p.start(&second).unwrap());
         assert_ne!(a, b);
         assert_eq!(p.authorize("f2", &a, now_secs()), Err(Denied::Unauthorized));
+    }
+
+    /// The data source is our own: the fetch carries our trace context
+    /// (ADR 0023, section 4).
+    #[tokio::test]
+    async fn the_fetch_from_our_data_source_carries_trace_context() {
+        use portitor_runtime::telemetry::testing::{
+            recorded, trace_on_this_thread, traceparent_recorder,
+        };
+        let traced = trace_on_this_thread();
+        let (base, recorder) = traceparent_recorder().await;
+        let (client, _) = https_client(true).unwrap();
+        let span = tracing::info_span!(target: "portitor_test", "request");
+        let response = fetch(&client, &format!("{base}/d1")).instrument(span).await;
+        assert!(response.is_ok());
+        let got = recorded(&recorder);
+        assert_eq!(got.len(), 1);
+        assert!(
+            got[0].as_deref().is_some_and(|t| t.starts_with("00-")),
+            "{got:?}"
+        );
+        assert!(traced.spans().iter().any(|span| span.name == "GET"));
     }
 }
