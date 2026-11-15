@@ -268,7 +268,9 @@ impl World {
             issuer_service_url: SERVICE.to_owned(),
             bind: "unused".to_owned(),
             db_file: "unused".into(),
-            management: portitor_issuer::config::ManagementConfig::default(),
+            management: portitor_issuer::config::ManagementConfig::health_only(
+                portitor_issuer::config::DEFAULT_MANAGEMENT_BIND,
+            ),
             allow_http: false,
             max_active_per_holder: setup.max_active_per_holder,
             bundle_key_file: None,

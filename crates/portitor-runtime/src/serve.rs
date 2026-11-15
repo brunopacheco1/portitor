@@ -8,6 +8,7 @@
 //! stopping on Ctrl-C or SIGTERM. Logs, traces and metrics are started by
 //! [`crate::telemetry::init`].
 
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -70,6 +71,33 @@ async fn limit(State(limits): State<Limits>, request: Request, next: Next) -> Re
     }
     tracing::warn!(%path, timeout_secs = limits.timeout.as_secs(), "request took too long or waited too long");
     problem(StatusCode::SERVICE_UNAVAILABLE, "the request took too long")
+}
+
+/// Runs a component: starts logs and telemetry ([`crate::telemetry::init`]),
+/// runs `work` until it ends (the servers stopped on SIGTERM or Ctrl-C, or
+/// failed), sends the last spans and metrics, and gives the exit code: 0,
+/// or 1 after logging `<name> stopped` with the error.
+///
+/// `work` is the component's `async fn run()`, called but not started:
+/// an `async fn`'s body only runs when awaited, here after telemetry is
+/// up. `name` is `'static` (a literal such as `"portitor-connector"`)
+/// because telemetry keeps it as the service name.
+pub async fn run_component<F>(name: &'static str, work: F) -> ExitCode
+where
+    F: Future<Output = Result<(), Box<dyn std::error::Error>>>,
+{
+    let telemetry = crate::telemetry::init(name);
+    let result = work.await;
+    // after the servers stopped (SIGTERM, Ctrl-C) or failed: send the
+    // last spans and metrics
+    telemetry.shutdown().await;
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            tracing::error!(%error, "{name} stopped");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Resolves once the stop signal was sent.

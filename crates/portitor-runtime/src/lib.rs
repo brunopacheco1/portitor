@@ -5,7 +5,8 @@
 //! Adapters shared by the Portitor binaries (the connector, the identity
 //! component and the issuer): outbound HTTP, `did:web` resolution and the
 //! directory of other parties' documents, the check of a DCP caller's
-//! token, the management API key, health checks, logging and shutdown,
+//! token, the management API key and port, health checks, logging and
+//! shutdown,
 //! `SQLite` files, settings, the retry delay, and the system clock.
 //!
 //! The protocol crates (`portitor-dsp`, `portitor-dcp`) do no I/O; this
@@ -20,6 +21,7 @@ pub mod did_document;
 pub mod directory;
 pub mod health;
 pub mod http;
+pub mod management;
 pub mod retry;
 pub mod serve;
 pub mod settings;

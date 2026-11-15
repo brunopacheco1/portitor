@@ -12,9 +12,6 @@
 //! and served at `GET /v1/openapi.json`; `docs/api/management-openapi.json`
 //! is a copy that a test keeps in step.
 
-use std::ffi::OsString;
-use std::path::PathBuf;
-
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
@@ -42,37 +39,10 @@ use portitor_runtime::health::{self, ComponentResult, Failure as HealthFailure, 
 /// says otherwise: on this machine only.
 pub const DEFAULT_MANAGEMENT_BIND: &str = "127.0.0.1:8081";
 
-/// Where the management port listens, and the API key.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ManagementConfig {
-    /// Address to listen on. The port always serves the health checks
-    /// (ADR 0023).
-    pub bind: String,
-    /// The file that holds the API key; without it, the management API is
-    /// off and the port serves the health checks only.
-    pub api_key_file: Option<PathBuf>,
-}
-
-impl ManagementConfig {
-    /// Reads `PORTITOR_MANAGEMENT_API_KEY_FILE` and `PORTITOR_MANAGEMENT_BIND`
-    /// (default [`DEFAULT_MANAGEMENT_BIND`]) with `var`.
-    pub fn from_vars(var: impl Fn(&str) -> Option<OsString>) -> Self {
-        let api_key_file = var("PORTITOR_MANAGEMENT_API_KEY_FILE")
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from);
-        let bind = var("PORTITOR_MANAGEMENT_BIND").map_or_else(
-            || DEFAULT_MANAGEMENT_BIND.to_owned(),
-            |v| v.to_string_lossy().into_owned(),
-        );
-        Self { bind, api_key_file }
-    }
-
-    /// Like [`ManagementConfig::from_vars`], from the environment.
-    #[must_use]
-    pub fn from_env() -> Self {
-        Self::from_vars(|k| std::env::var_os(k))
-    }
-}
+/// Where the management port listens, and the API key: the settings
+/// shared by the three components, read with
+/// `ManagementConfig::from_env(DEFAULT_MANAGEMENT_BIND)`.
+pub use portitor_runtime::management::ManagementConfig;
 
 /// 400 with the DSP error's reasons as the detail.
 fn refused(reason: &[Value]) -> Response {
