@@ -180,7 +180,6 @@ type Point = (String, Vec<KeyValue>);
 /// way that each is Protocol Buffers, from our service, and holds no
 /// secret.
 fn decode(received: &[(String, String, Vec<u8>)]) -> (Vec<Span>, Vec<Point>) {
-    use opentelemetry_proto::tonic::metrics::v1::metric::Data;
     let mut spans: Vec<Span> = Vec::new();
     let mut points: Vec<Point> = Vec::new();
     for (path, content_type, body) in received {
@@ -193,44 +192,52 @@ fn decode(received: &[(String, String, Vec<u8>)]) -> (Vec<Span>, Vec<Point>) {
             "{path} holds an Authorization value"
         );
         match path.as_str() {
-            "/v1/traces" => {
-                let export = ExportTraceServiceRequest::decode(body.as_slice()).unwrap();
-                for resource in export.resource_spans {
-                    let attributes = resource.resource.unwrap().attributes;
-                    assert_eq!(
-                        text(&attributes, "service.name").as_deref(),
-                        Some("portitor-telemetry-test")
-                    );
-                    for scope in resource.scope_spans {
-                        spans.extend(scope.spans);
-                    }
-                }
-            }
-            "/v1/metrics" => {
-                let export = ExportMetricsServiceRequest::decode(body.as_slice()).unwrap();
-                for resource in export.resource_metrics {
-                    for scope in resource.scope_metrics {
-                        for metric in scope.metrics {
-                            let attribute_sets: Vec<Vec<KeyValue>> = match metric.data {
-                                Some(Data::Histogram(h)) => {
-                                    h.data_points.into_iter().map(|p| p.attributes).collect()
-                                }
-                                Some(Data::Sum(s)) => {
-                                    s.data_points.into_iter().map(|p| p.attributes).collect()
-                                }
-                                _ => vec![Vec::new()],
-                            };
-                            for attributes in attribute_sets {
-                                points.push((metric.name.clone(), attributes));
-                            }
-                        }
-                    }
-                }
-            }
+            "/v1/traces" => spans.extend(decode_spans(body)),
+            "/v1/metrics" => points.extend(decode_points(body)),
             other => panic!("unexpected export to {other}"),
         }
     }
     (spans, points)
+}
+
+/// The spans of one trace export; checks that they come from our service.
+fn decode_spans(body: &[u8]) -> Vec<Span> {
+    let export = ExportTraceServiceRequest::decode(body).unwrap();
+    let mut spans = Vec::new();
+    for resource in export.resource_spans {
+        let attributes = resource.resource.unwrap().attributes;
+        assert_eq!(
+            text(&attributes, "service.name").as_deref(),
+            Some("portitor-telemetry-test")
+        );
+        for scope in resource.scope_spans {
+            spans.extend(scope.spans);
+        }
+    }
+    spans
+}
+
+/// The data points of one metric export, each with its metric's name.
+fn decode_points(body: &[u8]) -> Vec<Point> {
+    use opentelemetry_proto::tonic::metrics::v1::metric::Data;
+    let export = ExportMetricsServiceRequest::decode(body).unwrap();
+    let metrics = export
+        .resource_metrics
+        .into_iter()
+        .flat_map(|resource| resource.scope_metrics)
+        .flat_map(|scope| scope.metrics);
+    let mut points = Vec::new();
+    for metric in metrics {
+        let attribute_sets: Vec<Vec<KeyValue>> = match metric.data {
+            Some(Data::Histogram(h)) => h.data_points.into_iter().map(|p| p.attributes).collect(),
+            Some(Data::Sum(s)) => s.data_points.into_iter().map(|p| p.attributes).collect(),
+            _ => vec![Vec::new()],
+        };
+        for attributes in attribute_sets {
+            points.push((metric.name.clone(), attributes));
+        }
+    }
+    points
 }
 
 #[tokio::test(flavor = "multi_thread")]
