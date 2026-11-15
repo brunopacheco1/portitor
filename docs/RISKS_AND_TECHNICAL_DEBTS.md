@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 # Risks and technical debts
 
 This file collects every risk and technical debt raised so far, from
-release 0.0 to 0.8, in one place: the ADRs, the spikes, the roadmap, the
+release 0.0 on, in one place: the ADRs, the spikes, the roadmap, the
 security case, DEPLOYING, TESTING, the changelog, the commit messages,
 and what the maintainer said in the project chat. For each item it says
 whether it is still open, and what is in place today.
@@ -54,7 +54,7 @@ checks this file:
 | ID | Title | Kind | Raised in | Status | Target |
 |---|---|---|---|---|---|
 | [R-01](#r-01) | Rust is hard to read for the maintainer and slower to build | Delivery | 0.0 (ADR 0002, 2026-11-11); 0.4 (maintainer, 2026-11-13) | Mitigated | every release |
-| [R-02](#r-02) | One maintainer: no two-person review | Delivery, security | 0.1 (ADR 0012, maintainer, 2026-11-11) | Accepted | until a second maintainer |
+| [R-02](#r-02) | One maintainer: no two-person review | Delivery, security | 0.1 (ADR 0012, maintainer, 2026-11-11) | Accepted | until a second maintainer (not a 1.0 blocker) |
 | [R-03](#r-03) | Pre-1.0 JSON-LD and VC crates | Dependency | 0.0 (ADR 0002, 2026-11-11) | Mitigated | — |
 | [R-04](#r-04) | Dependencies are not audited crate by crate (cargo-vet) | Dependency, security | 0.1 (maintainer, 2026-11-11 and 2026-11-12) | Open | 0.10 |
 | [R-05](#r-05) | No written OpenSSF Baseline level 1 self-assessment | Security | 0.1 (ADR 0012, maintainer, 2026-11-12) | Open | 0.13 |
@@ -77,8 +77,8 @@ checks this file:
 | [R-22](#r-22) | Bundle: unsigned `latest.json`, and a revoked bundle key not seen while offline | Security | 0.7 (ADR 0005, SECURITY-ASSURANCE) | Mitigated | — |
 | [R-23](#r-23) | A wrong host clock gives wrong policy and token decisions | Security | 0.3 (ADR 0009, 2026-11-12) | Mitigated | — |
 | [R-24](#r-24) | Simpl-Open: parked, facts not verified, and it changes fast | Interoperability, upstream churn | 0.5 (ADR 0017, maintainer, 2026-11-13) | Accepted | Later |
-| [R-25](#r-25) | Name not checked for trademarks and domains | Delivery, legal | 0.3 (ADR 0008, 2026-11-12) | Open | before 1.0 |
-| [R-26](#r-26) | ODRL `dateTime` definition read from memory | Interoperability | 0.3 (ADR 0009, 2026-11-12) | Open | before 1.0 |
+| [R-25](#r-25) | Name not checked for trademarks and domains | Delivery, legal | 0.3 (ADR 0008, 2026-11-12) | Open | 0.13 (blocks 1.0) |
+| [R-26](#r-26) | ODRL `dateTime` definition read from memory | Interoperability | 0.3 (ADR 0009, 2026-11-12) | Open | 0.13 |
 | [R-27](#r-27) | CI downloads from Maven Central and GitHub | Delivery | 0.8 (2026-11-15) | Mitigated | — |
 | [R-28](#r-28) | 0.8 Gaia-X code had no fuzz target | Security | 0.8 (sweep for this file, 2026-11-15) | Addressed | 0.8 |
 | [R-29](#r-29) | DCP costs about 2 ms per request and 13 times fewer requests under load | Performance | 0.5 (ADR 0002 section 7, 2026-11-13) | Open | 0.11 (with TD-06) |
@@ -90,26 +90,29 @@ checks this file:
 | [R-35](#r-35) | The DCP TCK uses VCDM 1.1, Gaia-X needs VCDM 2.0 | Interoperability | 0.5 (ADR 0015, 2026-11-13) | Addressed | done in 0.5 |
 | [R-36](#r-36) | The OpenTelemetry Rust crates are 0.x and change their API often | Dependency, upstream churn | 0.9 (ADR 0023, 2026-11-15) | Mitigated | — |
 | [R-37](#r-37) | Telemetry costs some throughput at saturation | Performance | 0.9 spike (ADR 0023, 2026-11-15) | Mitigated | — |
-| [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | 0.7 (maintainer, 2026-11-14) | Open | — |
-| [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | — |
-| [TD-03](#td-03) | A provider in several data spaces, each with its own rules | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | — |
-| [TD-04](#td-04) | User to system authentication and authorisation, governed per data space | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | — |
-| [TD-05](#td-05) | Key custody and key rotation | Technical debt | 0.5 (ADR 0015); 0.7 close-out (maintainer, 2026-11-15) | Open | 0.11 (to investigate) |
+| [R-38](#r-38) | No specification names an S3 data address | Interoperability | plan after 0.13 (maintainer, 2026-11-15) | Open | 1.1 |
+| [R-39](#r-39) | No specification defines agreements that depend on an upstream agreement | Interoperability | plan after 0.13 (maintainer, 2026-11-15) | Open | 1.3 |
+| [R-40](#r-40) | No shared list of EHDS purposes | Interoperability | plan after 0.13 (maintainer, 2026-11-15) | Open | 1.2 |
+| [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | 0.7 (maintainer, 2026-11-14) | Open | research, with TD-03 |
+| [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | research; code 1.5 |
+| [TD-03](#td-03) | A provider in several data spaces, each with its own rules | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | research, before the 0.13 freeze |
+| [TD-04](#td-04) | User to system authentication and authorisation, governed per data space | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | research before the 0.13 freeze; code 1.5 |
+| [TD-05](#td-05) | Key custody and key rotation | Technical debt | 0.5 (ADR 0015); 0.7 close-out (maintainer, 2026-11-15) | Open | 0.11 (two keys listed); 1.4 (OpenBao) |
 | [TD-06](#td-06) | Status lists are not cached in the connector's DCP verifier | Technical debt | 0.6 (maintainer, 2026-11-14) | Open | 0.11 |
-| [TD-07](#td-07) | STS tokens and presentations are not cached | Technical debt | 0.5 (ADR 0016) | Open | — |
+| [TD-07](#td-07) | STS tokens and presentations are not cached | Technical debt | 0.5 (ADR 0016) | Open | 1.4, if 0.11 measurements need it |
 | [TD-08](#td-08) | One replica per SQLite file; no PostgreSQL adapter | Technical debt | 0.3 (ADR 0006, maintainer, 2026-11-12) | Accepted | Later |
 | [TD-09](#td-09) | Used token ids are kept in memory only | Technical debt | 0.5 (ADR 0015, ADR 0016, 2026-11-13) | Accepted | with TD-08 |
-| [TD-10](#td-10) | Transfers: pull only, no token renewal, no push to object storage | Technical debt | 0.4 (ADR 0013, maintainer, 2026-11-12 and 2026-11-13) | Open | Later |
-| [TD-11](#td-11) | Management API: no suspend or start again; consumer refuses offers with credential constraints | Technical debt | 0.4 (ADR 0014); 0.6 (DEPLOYING) | Open | — |
-| [TD-12](#td-12) | ODRL: few constraints, prohibitions and duties not enforced | Technical debt | 0.3 (ADR 0009, 2026-11-12) | Open | — |
-| [TD-13](#td-13) | The catalog shows every offer to every member | Technical debt | 0.6 (ADR 0019, 2026-11-14) | Open | — |
-| [TD-14](#td-14) | Credential schemas, presentation definitions and issuance policies are not supported | Technical debt | 0.5, 0.6 (ADR 0015, ADR 0018) | Open | — |
-| [TD-15](#td-15) | Agreements are not revised when the data's scope changes | Technical debt | 0.7 (maintainer, 2026-11-14) | Open | Later |
+| [TD-10](#td-10) | Transfers: pull only, no token renewal, no push to object storage | Technical debt | 0.4 (ADR 0013, maintainer, 2026-11-12 and 2026-11-13) | Open | 1.1 |
+| [TD-11](#td-11) | Management API: no suspend or start again; consumer refuses offers with credential constraints | Technical debt | 0.4 (ADR 0014); 0.6 (DEPLOYING) | Open | 1.1 and 1.2 |
+| [TD-12](#td-12) | ODRL: few constraints, prohibitions and duties not enforced | Technical debt | 0.3 (ADR 0009, 2026-11-12) | Open | 1.2 (purpose) |
+| [TD-13](#td-13) | The catalog shows every offer to every member | Technical debt | 0.6 (ADR 0019, 2026-11-14) | Open | 1.2 |
+| [TD-14](#td-14) | Credential schemas, presentation definitions and issuance policies are not supported | Technical debt | 0.5, 0.6 (ADR 0015, ADR 0018) | Open | 1.4, if a target data space needs it |
+| [TD-15](#td-15) | Agreements are not revised when the data's scope changes | Technical debt | 0.7 (maintainer, 2026-11-14) | Open | 1.5 |
 | [TD-16](#td-16) | One harvest source; no data space registry; other catalogs not checked; no bundle expiry or bundle key rotation | Technical debt | 0.7 (ADR 0005, ADR 0020, 2026-11-14) | Open | Later |
 | [TD-17](#td-17) | The data plane runs inside the connector process | Technical debt | 0.0 (maintainer, 2026-11-11) | Accepted | when Signaling 1.0 is released |
 | [TD-18](#td-18) | Operations: no metrics, traces or readiness check | Technical debt | 0.1 (ARCHITECTURE principle 11) | Addressed | done in 0.9 |
-| [TD-19](#td-19) | No TLS inside the services | Technical debt | 0.1 (SECURITY-ASSURANCE) | Open | — |
-| [TD-20](#td-20) | A holder must delete a revoked credential by hand after a reissue | Technical debt | 0.6 (DEPLOYING, 2026-11-14) | Open | — |
+| [TD-19](#td-19) | No TLS inside the services | Technical debt | 0.1 (SECURITY-ASSURANCE) | Open | 0.13 (decision) |
+| [TD-20](#td-20) | A holder must delete a revoked credential by hand after a reissue | Technical debt | 0.6 (DEPLOYING, 2026-11-14) | Open | 1.4 |
 | [TD-21](#td-21) | Gaia-X beyond 0.8 | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | Later |
 | [TD-22](#td-22) | Migrations run forward only; a rollback needs the backup | Technical debt | 0.3 (DEPLOYING) | Accepted | — |
 | [TD-23](#td-23) | ADRs 0021 and 0022 were built but still Proposed | Technical debt | 0.8 (sweep for this file, 2026-11-15) | Addressed | 0.8 |
@@ -119,9 +122,9 @@ checks this file:
 | [TD-27](#td-27) | The domain crates' I/O check named too few crates | Technical debt | 0.5 review (ADR 0004, 2026-11-14) | Addressed | done 2026-11-14 |
 | [TD-28](#td-28) | No trace across participants | Technical debt | 0.9 (ADR 0023, 2026-11-15) | Accepted | — |
 | [TD-29](#td-29) | No OTLP logs export, no gRPC, no compression | Technical debt | 0.9 (ADR 0023, DEPLOYING, 2026-11-15) | Open | Later |
-| [TD-30](#td-30) | The outbox resends a message the counter-party refused | Technical debt | 0.9 (outbox metrics, 2026-11-15) | Open | — |
+| [TD-30](#td-30) | The outbox resends a message the counter-party refused | Technical debt | 0.9 (outbox metrics, 2026-11-15) | Open | 0.11 |
 
-Totals: 37 risks (Open 8, Mitigated 17, Accepted 4, Addressed 8);
+Totals: 40 risks (Open 11, Mitigated 17, Accepted 4, Addressed 8);
 30 technical debts (Open 19, Accepted 5, Addressed 6).
 
 ## Risks
@@ -156,7 +159,8 @@ Totals: 37 risks (Open 8, Mitigated 17, Accepted 4, Addressed 8);
 - **Current state: Accepted** (maintainer, ADR 0012, 2026-11-11;
   ROADMAP 0.1). Signed commits, required CI checks, CodeQL and Sonar
   gate every merge. A repository successor is set (ROADMAP 0.1).
-- **Next.** Find a second maintainer before 1.0.
+- **Next.** Find a second maintainer; not a 1.0 blocker (maintainer,
+  2026-11-15).
 
 <a id="r-03"></a>
 ### R-03 Pre-1.0 JSON-LD and VC crates
@@ -526,7 +530,7 @@ Totals: 37 risks (Open 8, Mitigated 17, Accepted 4, Addressed 8);
   ([ADR 0008](adr/0008-project-name.md)).
 - **Why it matters.** A rename after 1.0 is expensive.
 - **Current state: Open.**
-- **Next.** Before 1.0.
+- **Next.** ROADMAP 0.13; it blocks 1.0 (maintainer, 2026-11-15).
 
 <a id="r-26"></a>
 ### R-26 ODRL `dateTime` definition read from memory
@@ -535,7 +539,7 @@ Totals: 37 risks (Open 8, Mitigated 17, Accepted 4, Addressed 8);
   and used it from memory: "check before 1.0".
 - **Why it matters.** Another connector may read it differently.
 - **Current state: Open.**
-- **Next.** Before 1.0.
+- **Next.** ROADMAP 0.13, before 1.0.
 
 <a id="r-27"></a>
 ### R-27 CI downloads from Maven Central and GitHub
@@ -674,13 +678,52 @@ Totals: 37 risks (Open 8, Mitigated 17, Accepted 4, Addressed 8);
 - **Next.** Measure again with the published benchmarks (ROADMAP 0.12);
   if the cost is real, look at what the spans cost when export is off.
 
+
+<a id="r-38"></a>
+### R-38 No specification names an S3 data address
+
+- **What.** DSP 2025-1 lets the consumer give a `dataAddress` in its
+  transfer request (`endpointType`, `endpoint`, `endpointProperties`),
+  and Data Plane Signaling v1.0-RC4 covers provider push, but neither
+  names an endpoint type or the properties for S3-compatible storage
+  (checked in their schemas and OpenAPI files, 2026-11-15).
+- **Why it matters.** Push to object storage (ROADMAP 1.1) only works
+  with another connector if both read the address the same way.
+- **Current state: Open.**
+- **Next.** ROADMAP 1.1: the ADR reuses the address EDC or Simpl-Open
+  uses; Portitor does not invent one.
+
+<a id="r-39"></a>
+### R-39 No specification defines agreements that depend on an upstream agreement
+
+- **What.** In the health data space demo, Cooper's offer to Marley
+  rests on Cooper's agreement with Alice and must not be wider than it.
+  DSP and ODRL have no link between two agreements.
+- **Why it matters.** Portitor's design may differ from what EDC or
+  Simpl-Open choose later.
+- **Current state: Open.**
+- **Next.** ROADMAP 1.3: research and an ADR before code.
+
+<a id="r-40"></a>
+### R-40 No shared list of EHDS purposes
+
+- **What.** The EHDS lists the purposes of secondary use (Article 53),
+  but no list with identifiers exists to reuse; the maintainer knows of
+  none in ICUdata4EU or LNDS (2026-11-15). HealthDCAT-AP release 8 names
+  purposes with `dpv:hasPurpose` (range `dpv:Purpose`).
+- **Why it matters.** A `purpose` constraint is only useful if both
+  sides name purposes the same way.
+- **Current state: Open.**
+- **Next.** ROADMAP 1.2: purposes as Data Privacy Vocabulary (DPV) IRIs,
+  as HealthDCAT-AP does; check how they map to Article 53.
+
 ## Technical debt
 
 <a id="td-01"></a>
 ### TD-01 How schemas and vocabularies are collected and stored
 
 Raised by the maintainer, 2026-11-14 (to be investigated further).
-Status: **Open**, no target.
+Status: **Open**; research with TD-03 (ROADMAP "Research before code").
 
 In 0.7 the authority publishes a signed bundle in a format Portitor
 defines (`manifest.json`, `manifest.jws`, `latest.json`;
@@ -704,7 +747,7 @@ Mitigation today: the source and the store are their own crate,
 ### TD-02 Who calls the data plane, and with which credentials
 
 Raised by the maintainer, 2026-11-15 (to be investigated, for a future
-release). Status: **Open**, no target.
+release). Status: **Open**; research, code in ROADMAP 1.5.
 
 Today every credential is system to system (see "Who holds the
 credentials" in [ARCHITECTURE](ARCHITECTURE.md#who-holds-the-credentials)).
@@ -730,7 +773,7 @@ Standards check and an ADR before any code.
 ### TD-03 A provider in several data spaces, each with its own rules
 
 Raised by the maintainer, 2026-11-15 (to be investigated). Status:
-**Open**, no target.
+**Open**; research ADR before the 0.13 freeze (ROADMAP 0.11).
 
 A data provider may belong to several data spaces at once: long-lived
 ones that may or may not interoperate with each other (for example EHDS
@@ -762,7 +805,8 @@ check and an ADR before any code.
 ### TD-04 User to system authentication and authorisation, governed per data space
 
 Raised by the maintainer, 2026-11-15 (to be investigated). Status:
-**Open**, no target.
+**Open**; research ADR before the 0.13 freeze (ROADMAP 0.11), code in
+1.5.
 
 Today every credential is system to system: held by a participant (an
 organisation with one DID) and checked between connectors (see "Who
@@ -820,7 +864,9 @@ port with a key custody adapter (OpenBao transit engine: P-256 signing,
 versioned keys, the private key never leaves it), listing retired public
 keys next to the current one in the DID document (DID Core allows
 several verification methods), how EDC IdentityHub rotates keys, and
-whether the change itself lands in 0.11 or later.
+whether the change itself lands in 0.11 or later. Plan after 0.13
+(maintainer, 2026-11-15): two keys listed in each DID document in 0.11;
+a signer port with an OpenBao adapter in ROADMAP 1.4.
 
 <a id="td-06"></a>
 ### TD-06 Status lists are not cached in the connector's DCP verifier
@@ -847,7 +893,8 @@ whether the change itself lands in 0.11 or later.
 - **Why it matters.** Cost per request (R-29).
 - **Current state: Open.** ADR 0016 chose "measure before adding more
   caching" so a revocation takes effect at once.
-- **Next.** Decide after TD-06 is measured.
+- **Next.** Decide after TD-06 is measured (0.11); code in ROADMAP 1.4
+  if needed.
 
 <a id="td-08"></a>
 ### TD-08 One replica per SQLite file; no PostgreSQL adapter
@@ -885,8 +932,8 @@ whether the change itself lands in 0.11 or later.
 - **Why it matters.** Long or large transfers, and data spaces that use
   push (Simpl-Open documents S3 push and Kafka).
 - **Current state: Open.**
-- **Next.** Later: push as a second data plane behind the Signaling
-  port.
+- **Next.** ROADMAP 1.1: push as a second data plane behind the
+  Signaling port.
 
 <a id="td-11"></a>
 ### TD-11 Management API: no suspend or start again; consumer refuses offers with credential constraints
@@ -899,7 +946,8 @@ whether the change itself lands in 0.11 or later.
 - **Why it matters.** The domain supports these steps, but operators
   cannot use them.
 - **Current state: Open.**
-- **Next.** No release named.
+- **Next.** ROADMAP 1.1 (suspend and start again) and 1.2 (offers with
+  credential constraints).
 
 <a id="td-12"></a>
 ### TD-12 ODRL: few constraints, prohibitions and duties not enforced
@@ -914,7 +962,8 @@ whether the change itself lands in 0.11 or later.
   cannot be published; usage control stops at the agreement.
 - **Current state: Open.** Fail closed: nothing not understood is
   granted.
-- **Next.** No release named; see also TD-03 (processing location).
+- **Next.** ROADMAP 1.2: `purpose`; others when needed; see also TD-03
+  (processing location).
 
 <a id="td-13"></a>
 ### TD-13 The catalog shows every offer to every member
@@ -924,7 +973,7 @@ whether the change itself lands in 0.11 or later.
   later work ([ADR 0019](adr/0019-credential-constraints.md)).
 - **Why it matters.** Members see offers they cannot meet.
 - **Current state: Open.**
-- **Next.** No release named.
+- **Next.** ROADMAP 1.2.
 
 <a id="td-14"></a>
 ### TD-14 Credential schemas, presentation definitions and issuance policies are not supported
@@ -937,8 +986,8 @@ whether the change itself lands in 0.11 or later.
 - **Why it matters.** Data spaces that use them cannot use Portitor as
   is.
 - **Current state: Open.**
-- **Next.** No release named; the issuer's decision port allows it
-  later.
+- **Next.** ROADMAP 1.4, if a target data space needs it; the issuer's
+  decision port allows it.
 
 <a id="td-15"></a>
 ### TD-15 Agreements are not revised when the data's scope changes
@@ -949,7 +998,8 @@ whether the change itself lands in 0.11 or later.
   [ADR 0020](adr/0020-dataset-harvest.md)).
 - **Why it matters.** Consent withdrawal and scope changes.
 - **Current state: Open.**
-- **Next.** ROADMAP "Later".
+- **Next.** ROADMAP 1.5, with consent, if the consent ADR finds a
+  standard.
 
 <a id="td-16"></a>
 ### TD-16 One harvest source; no data space registry; other catalogs not checked; no bundle expiry or bundle key rotation
@@ -1003,7 +1053,8 @@ whether the change itself lands in 0.11 or later.
   network (SECURITY-ASSURANCE, DEPLOYING).
 - **Current state: Open.** "Not on the roadmap yet"
   (SECURITY-ASSURANCE).
-- **Next.** Decide before 1.0 whether it stays the operator's job.
+- **Next.** ROADMAP 0.13: an ADR decides whether it stays the
+  operator's job.
 
 <a id="td-20"></a>
 ### TD-20 A holder must delete a revoked credential by hand after a reissue
@@ -1015,7 +1066,7 @@ whether the change itself lands in 0.11 or later.
 - **Why it matters.** A participant is refused until its operator
   deletes the revoked credential.
 - **Current state: Open.** Documented in DEPLOYING.
-- **Next.** No release named.
+- **Next.** ROADMAP 1.4.
 
 <a id="td-21"></a>
 ### TD-21 Gaia-X beyond 0.8
@@ -1138,5 +1189,5 @@ whether the change itself lands in 0.11 or later.
   sees the same bad request several times.
 - **Current state: Open.** Behaviour since the outbox
   ([ADR 0007](adr/0007-outbox-and-proof-of-delivery.md)); not changed in 0.9.
-- **Next.** No release named yet: retry only on network errors, 408,
+- **Next.** ROADMAP 0.11 (maintainer, 2026-11-15): retry only on network errors, 408,
   429 and 5xx; give up at once on other 4xx.
