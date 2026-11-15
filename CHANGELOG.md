@@ -12,6 +12,8 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-15
+
 ### Documentation
 
 - New `docs/RISKS_AND_TECHNICAL_DEBTS.md`: every risk and technical debt
@@ -20,8 +22,6 @@ versions may change behaviour and configuration.
   moved there; the roadmap keeps their titles with links. README,
   ARCHITECTURE, DEPLOYING ("Known limits"), RELEASING (the release
   review checks the file), ADR 0005, AGENTS and the website link to it.
-
-## [0.8.0] - 2026-11-15
 
 ### Added
 
