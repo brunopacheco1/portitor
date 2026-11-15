@@ -70,9 +70,12 @@ pub struct Identity {
     directory: Arc<dyn Directory>,
     issuers: Arc<dyn IssuerClient>,
     used_token_ids: Mutex<JtiCache>,
-    /// Where the participant's public documents are: the origin of its
-    /// `did:web` URL.
+    /// Where the participant's public documents are: its `did:web` URL
+    /// without `did.json` ([`gaiax::public_base`]).
     public_base: String,
+    /// The path of `public_base`, where the routes for those documents
+    /// are: empty for a DID without a path.
+    public_path: String,
     /// The X.509 chain of the key, if configured (ADR 0021).
     certificate: Option<Arc<CertificateChain>>,
     /// Gaia-X onboarding, if configured (ADR 0021).
@@ -130,6 +133,7 @@ impl Identity {
         );
         let did_path = did_document::path(&config.participant_id)?;
         let public_base = gaiax::public_base(&config.participant_id)?;
+        let public_path = gaiax::public_path(&config.participant_id)?;
         let certificate = match &config.certificate_chain_file {
             Some(file) => {
                 let chain = CertificateChain::load(file, &key.public_jwk())
@@ -166,6 +170,7 @@ impl Identity {
             issuers: ports.issuers,
             used_token_ids: Mutex::new(JtiCache::default()),
             public_base,
+            public_path,
             certificate,
             gaiax,
         })
@@ -223,9 +228,12 @@ impl Identity {
 
 /// The public HTTP routes: the DID document, the STS, the credential
 /// service (under the path of `PORTITOR_CREDENTIAL_SERVICE_URL`), the
-/// certificate chain and the public Gaia-X credentials.
+/// certificate chain and the public Gaia-X credentials (under the DID's
+/// path, see [`gaiax::public_path`]).
 pub fn router(identity: Arc<Identity>) -> Router {
     let service = identity.service_path.clone();
+    // below the DID's path, where the x5u and credential ids point
+    let public = identity.public_path.clone();
     Router::new()
         .route(&identity.did_path, get(did_document::serve))
         .route("/sts/token", post(sts::token))
@@ -238,9 +246,12 @@ pub fn router(identity: Arc<Identity>) -> Router {
             post(storage::credentials),
         )
         .route(&format!("{service}/offers"), post(storage::offers))
-        .route(certificate::CHAIN_PATH, get(certificate::serve))
         .route(
-            &format!("{}/{{name}}", gaiax::CREDENTIALS_PATH),
+            &format!("{public}{}", certificate::CHAIN_PATH),
+            get(certificate::serve),
+        )
+        .route(
+            &format!("{public}{}/{{name}}", gaiax::CREDENTIALS_PATH),
             get(gaiax::serve_credential),
         )
         .route("/health", get(|| async { "ok" }))

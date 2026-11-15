@@ -35,9 +35,11 @@
 //! nothing else would renew the credential. The management API starts a
 //! run now ([`start_run`]) and lists the last runs. Runs never overlap.
 //!
-//! The public base is the origin of the participant's `did:web` URL (for
-//! `did:web:provider.example` it is `https://provider.example`), where
-//! the identity also serves its DID document and certificate chain.
+//! The public base is where the participant's `did:web` DID document is,
+//! without `did.json` ([`public_base`]): `https://provider.example` for
+//! `did:web:provider.example`, `https://host.example/participants/a` for
+//! `did:web:host.example:participants:a`. The identity serves its
+//! certificate chain and these credentials below it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -340,9 +342,13 @@ fn read_registration(file: &Path) -> Result<Credential, String> {
     Ok(credential)
 }
 
-/// The public base URL of a `did:web` DID: the origin of its document's
-/// URL, for example `https://provider.example` for
-/// `did:web:provider.example`.
+/// The public base URL of a `did:web` DID: the URL of its DID document
+/// without `did.json`, and without `/.well-known` for a DID without a
+/// path. `https://provider.example` for `did:web:provider.example`,
+/// `https://host.example/participants/a` for
+/// `did:web:host.example:participants:a`. The path stays so that two
+/// participants on one host get different credential ids, `vcid` and
+/// `x5u` (`did:web`, "Read (Resolve)").
 ///
 /// # Errors
 /// `did` is not a valid `did:web` DID.
@@ -350,7 +356,23 @@ pub fn public_base(did: &str) -> Result<String, String> {
     let url = portitor_dcp::did_web_url(did).map_err(|e| e.to_string())?;
     let after_scheme = url.trim_start_matches("https://");
     let host = after_scheme.split('/').next().unwrap_or_default();
-    Ok(format!("https://{host}"))
+    Ok(format!("https://{host}{}", public_path(did)?))
+}
+
+/// The path of [`public_base`] on the identity's own server: empty for a
+/// DID without a path, `/participants/a` for
+/// `did:web:host.example:participants:a`. The identity serves its DID
+/// document below the same path ([`portitor_runtime::did_document::path`]).
+///
+/// # Errors
+/// `did` is not a valid `did:web` DID.
+pub fn public_path(did: &str) -> Result<String, String> {
+    let document_path = portitor_runtime::did_document::path(did)?;
+    let folder = document_path
+        .strip_suffix("/did.json")
+        .unwrap_or(&document_path);
+    let folder = folder.strip_suffix("/.well-known").unwrap_or(folder);
+    Ok(folder.to_owned())
 }
 
 /// The URL (and id) of the Gaia-X credential `name`.
@@ -652,14 +674,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn public_base_is_the_origin_of_the_did() {
+    fn public_base_is_where_the_did_document_is() {
         assert_eq!(
             public_base("did:web:provider.example").unwrap(),
             "https://provider.example"
         );
+        assert_eq!(public_path("did:web:provider.example").unwrap(), "");
+        // two participants on one host do not share credential ids
         assert_eq!(
             public_base("did:web:localhost%3A8090:participants:a").unwrap(),
-            "https://localhost:8090"
+            "https://localhost:8090/participants/a"
+        );
+        assert_eq!(
+            public_base("did:web:localhost%3A8090:participants:b").unwrap(),
+            "https://localhost:8090/participants/b"
+        );
+        assert_eq!(
+            public_path("did:web:localhost%3A8090:participants:a").unwrap(),
+            "/participants/a"
         );
         assert!(public_base("did:key:z6Mk").is_err());
         assert_eq!(

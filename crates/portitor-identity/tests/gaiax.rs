@@ -489,6 +489,44 @@ async fn gaiax_off_has_no_runs() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+/// A DID with a path: the chain, `x5u` and the Gaia-X credential routes
+/// are below that path, so participants on one host do not collide.
+#[tokio::test]
+async fn a_did_with_a_path_keeps_its_path() {
+    let notary = Party::new(NOTARY);
+    let files = Files::new(&notary);
+    let adapter = HttpGaiaxCompliance::new("http://127.0.0.1:1", true).unwrap();
+    let config = Config {
+        participant_id: "did:web:holder.example:participants:a".to_owned(),
+        ..files.config("http://127.0.0.1:1")
+    };
+    let world = World::try_with(
+        &config,
+        Arc::new(SqliteStore::in_memory().unwrap()),
+        SigningKey::from_pem(KEY).unwrap(),
+        Some(Arc::new(adapter)),
+    )
+    .unwrap();
+    let (status, _, text) = get(&world.app, "/participants/a/did.json").await;
+    assert_eq!(status, StatusCode::OK);
+    let document: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        document["verificationMethod"][0]["publicKeyJwk"]["x5u"],
+        "https://holder.example/participants/a/.well-known/x509CertificateChain.pem"
+    );
+    let chain_path = "/participants/a/.well-known/x509CertificateChain.pem";
+    let (status, _, chain) = get(&world.app, chain_path).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(chain, CHAIN);
+    // the route is there; no run has stored the credential yet
+    let (status, headers, _) =
+        get(&world.app, "/participants/a/credentials/gaiax/legal-person").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(headers[header::CONTENT_TYPE], "application/problem+json");
+    let (status, _, _) = get(&world.app, "/.well-known/x509CertificateChain.pem").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
 #[tokio::test]
 async fn a_chain_for_another_key_stops_the_start() {
     let notary = Party::new(NOTARY);
