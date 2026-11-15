@@ -261,7 +261,7 @@ registry moved to 0.7, so each release has one main risk (maintainer,
   deletes the revoked one (DEPLOYING). The SHACL spike is done; the
   maintainer chose an own SHACL Core subset for 0.7 (ADR 0005).
 
-## 0.7 Schema and vocabulary registry, dataset harvest
+## 0.7 Schema and vocabulary registry, dataset harvest (released 2026-11-15 as v0.7.0)
 
 Plan approved by the maintainer on 2026-11-14.
 
@@ -435,3 +435,21 @@ decided. Each names what is in place now.
   and HealthData@EU authorities publish schemas, whether a DCAT catalogue
   of schema distributions can replace `latest.json`, and where the
   connector should keep them.
+- **Key custody and key rotation** (maintainer, 2026-11-15: a key
+  custody service such as OpenBao is probably better). Today each
+  component (identity, issuer, bundle signing) reads one P-256 private
+  key from a PEM file and lists one key in its `did:web` document, with
+  the key's thumbprint as its id. Rotation is manual and leaves a gap:
+  the old key leaves the DID document at once, so anything it signed
+  stops verifying. For the identity that is tokens and presentations
+  until verifiers reload the document (Portitor caches it 5 minutes);
+  for the issuer it is every credential and status list it ever signed,
+  so every participant needs new credentials. [ADR 0015](adr/0015-dcp-identity-component.md)
+  describes "add the new key, switch, remove the old key", but the code
+  cannot list two keys, so that overlap is not possible yet. To
+  investigate: a signer port with a key custody adapter (OpenBao transit
+  engine: P-256 signing, versioned keys, the private key never leaves
+  it), listing retired public keys next to the current one in the DID
+  document (DID Core allows several verification methods), how EDC
+  IdentityHub rotates keys, and whether this lands with the 0.10
+  hardening work.
