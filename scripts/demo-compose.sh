@@ -62,6 +62,9 @@ wait_for() { # url
 # --- 1. keys and secrets -----------------------------------------------------
 
 step "Write the keys and the secrets into $RUN"
+# containers and volumes left by an earlier run with KEEP=1 still use the
+# old keys: remove them first, so this run starts clean
+"${COMPOSE[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
 rm -rf "$RUN"
 mkdir -p "$RUN/issuer"
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$RUN/issuer/issuer-key.pem" 2>/dev/null
