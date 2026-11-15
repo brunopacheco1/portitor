@@ -82,6 +82,9 @@ pull request, or record why it stays.
   listed route is served) and describe what changed.
 - The website (`site/index.html`, published with the API pages by
   `pages.yml`) shows the release's features and the roadmap state.
+- The quickstart ("Try it" on the website, and `scripts/demo-compose.sh`
+  in TESTING) works with the release's images: its prerequisites, the
+  `git clone --branch` tag, the commands and the ports it names.
 - [ROADMAP.md](ROADMAP.md) and the [CHANGELOG](../CHANGELOG.md) say what
   shipped.
 - [RISKS_AND_TECHNICAL_DEBTS.md](RISKS_AND_TECHNICAL_DEBTS.md): each open
@@ -102,6 +105,8 @@ pull request, or record why it stays.
    and the same with `-p portitor-identity`) and
    `docs/api/issuer-management-openapi.json`
    (`cargo test -p portitor-issuer --test issuer -- --ignored write_management_description`),
+   set the default image tags in `examples/compose/compose.yaml` and the
+   `git clone --branch` tag in `site/index.html` to `X.Y.Z` (`vX.Y.Z`),
    and merge.
 2. Tag the merge commit with your personal key and push the tag:
    ```sh
@@ -111,6 +116,10 @@ pull request, or record why it stays.
    ```
 3. Watch **Actions → Release**. When it is green, the images and the GitHub
    release are published.
+4. Run the website's quickstart ("Try it" in `site/index.html`) on a
+   clean machine, with no Portitor images or clone on it, so that it
+   pulls the new images. Time it, and fix the website if a command or
+   the time it gives is wrong.
 
 ## Checking a release
 
