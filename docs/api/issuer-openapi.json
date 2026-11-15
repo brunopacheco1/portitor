@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.7.0"
+    "version": "0.8.0"
   },
   "externalDocs": {
     "description": "Decentralized Claims Protocol v1.0.1",
@@ -23,7 +23,7 @@
     "/.well-known/did.json": {
       "get": {
         "summary": "The issuer's DID document (did:web)",
-        "description": "Served at the path the did:web method gives for PORTITOR_PARTICIPANT_ID: /.well-known/did.json for a DID without a path, /<path>/did.json otherwise. One P-256 verification method (assertionMethod, capabilityInvocation) and the IssuerService entry (PORTITOR_ISSUER_SERVICE_URL).",
+        "description": "Served at the path the did:web method gives for PORTITOR_PARTICIPANT_ID: /.well-known/did.json for a DID without a path, /<path>/did.json otherwise. One P-256 verification method (assertionMethod, capabilityInvocation), whose publicKeyJwk has alg ES256 (RFC 7517 section 4.4); with PORTITOR_ISSUER_BUNDLE_KEY_FILE, a second one, <did>#bundle-key, under assertionMethod only (ADR 0005); and the IssuerService entry (PORTITOR_ISSUER_SERVICE_URL).",
         "operationId": "didDocument",
         "responses": {
           "200": {
