@@ -390,6 +390,21 @@ Plan approved by the maintainer on 2026-11-14.
   search (SPARQL), with its own ADR.
 - Check other participants' catalogs against the bundle (warnings only,
   ADR 0005); bundle expiry and bundle key rotation.
+- Explore Simpl-Open features that are not part of DSP, DCP, Data Plane
+  Signaling or EDC, but add security or complete what a data space
+  participant can do (maintainer, 2026-11-15). First candidates:
+  - mutual TLS between participants: Simpl-Open's Tier 2 gateway asks
+    every caller for an x509 client certificate from the governance
+    authority's CA and binds the caller's identity attributes to it
+    ([ADR 0017](adr/0017-simpl-open.md));
+  - consent enforcement: honouring a data subject's consent (and its
+    withdrawal) when data is shared;
+  - a configurable API gateway in front of the participant's services,
+    like Simpl-Open's Tier 1 and Tier 2 gateways (attribute-based access).
+
+  For each: what it does in Simpl-Open, whether a standard defines it,
+  and whether Portitor should offer it as its own component, an adapter
+  or a deployment guide. The result is an ADR before any code.
 
 ## Technical debt
 
