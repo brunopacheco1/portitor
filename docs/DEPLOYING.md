@@ -1077,7 +1077,10 @@ runs on with logs only. A value the SDK does not know for compression or
 temporality only gets an SDK warning; the default is used. A failed
 export is logged by the SDK (target `opentelemetry_sdk`); its data is
 dropped, and the next batch is sent as usual. At shutdown, the last
-spans and metrics get about 3 s each; what is not sent by then is lost.
+spans and metrics get about 3 s together; what is not sent by then is
+lost, logged as `telemetry: shutdown took too long; the last data is
+lost` (WARN; also `telemetry: the last data was not sent` or
+`telemetry: shutdown failed` when the receiver refused it).
 
 **Variables.** Only OpenTelemetry's own variables; there is no
 `PORTITOR_*` setting. Read by the Rust SDK 0.33 that Portitor uses:
