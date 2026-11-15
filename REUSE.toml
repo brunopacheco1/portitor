@@ -20,6 +20,8 @@ path = [
     # the EDC interop test's datasets (JSON) and made-up data (CSV)
     "interop/edc/config/*.json",
     "interop/edc/data/*",
+    # the Gaia-X end-to-end test's datasets (JSON)
+    "interop/gaiax/config/*.json",
     # Gradle dependency verification of the EDC runtimes, written by
     # Gradle (--write-verification-metadata), so no header
     "interop/edc/runtimes/gradle/verification-metadata.xml",
