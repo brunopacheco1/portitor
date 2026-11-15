@@ -40,9 +40,11 @@
 //! credential that it names by digest (`gx:compliantCredentials`,
 //! `digestSRI`), issued and signed by the caller. The holder binding is
 //! not applied to these two credentials; it stays for every other one. A
-//! compliance credential that fails makes its presentation invalid (step
-//! 8 above). A legal person credential that no trusted compliance
-//! credential names is skipped, before anything is fetched for it.
+//! compliance credential from a trusted service that fails makes its
+//! presentation invalid (step 8 above). A compliance credential from
+//! another service, and a legal person credential that no trusted
+//! compliance credential names, are skipped before anything is fetched
+//! for them, like credentials from untrusted issuers.
 //!
 //! The verified credentials go with the caller to the handler. When an
 //! offer or agreement has credential constraints (ADR 0019), the handler
@@ -477,9 +479,11 @@ impl DcpVerifier {
         Ok(verified)
     }
 
-    /// The compliance credentials of one presentation, each checked
+    /// The compliance credentials of one presentation from trusted
+    /// compliance services, each checked
     /// ([`DcpVerifier::check_compliance_credential`]), with the digests
-    /// they name. None is linked yet.
+    /// they name. None is linked yet. Those from other issuers are
+    /// skipped.
     async fn check_compliance_credentials<'a>(
         &self,
         caller: &str,
@@ -489,6 +493,14 @@ impl DcpVerifier {
         let mut checked = Vec::new();
         for credential in credentials {
             if !is_gaiax_compliance(credential) {
+                continue;
+            }
+            // Skipped, not refused, like any credential from an untrusted
+            // issuer, and before its issuer's DID document is fetched. A
+            // participant of another clearing house can still use offers
+            // that need only a membership.
+            if !self.gaiax_compliance_issuers.contains(&credential.issuer) {
+                tracing::debug!(issuer = %credential.issuer, "gx:ParticipantComplianceCredential from an untrusted compliance service skipped");
                 continue;
             }
             if let Err(reason) = self.check_compliance_credential(credential, now).await {
@@ -533,24 +545,17 @@ impl DcpVerifier {
         Ok(verified)
     }
 
-    /// One Gaia-X compliance credential (ADR 0022, steps 1 to 3): its
-    /// issuer is a trusted compliance service, checked before anything is
-    /// fetched; signed with that service's `assertionMethod` key; valid
-    /// now by `validFrom` and `validUntil` only (the service writes its
-    /// JWT times in milliseconds); its status, if it has one, as for any
-    /// credential. The caller is not its subject, so there is no holder
-    /// binding.
+    /// One Gaia-X compliance credential from a trusted compliance service
+    /// (ADR 0022, steps 1 to 3): signed with that service's
+    /// `assertionMethod` key; valid now by `validFrom` and `validUntil`
+    /// only (the service writes its JWT times in milliseconds); its
+    /// status, if it has one, as for any credential. The caller is not its
+    /// subject, so there is no holder binding.
     async fn check_compliance_credential(
         &self,
         credential: &Credential,
         now: u64,
     ) -> Result<(), String> {
-        if !self.gaiax_compliance_issuers.contains(&credential.issuer) {
-            return Err(format!(
-                "{} is not a trusted Gaia-X compliance service (PORTITOR_GAIAX_COMPLIANCE_ISSUERS)",
-                credential.issuer
-            ));
-        }
         check_status_count(credential)?;
         let issuer = self.resolver.resolve(&credential.issuer).await?;
         credential

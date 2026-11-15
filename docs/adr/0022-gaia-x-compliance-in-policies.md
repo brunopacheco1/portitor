@@ -60,8 +60,8 @@ What the specifications and peers say (checked 2026-11-15):
 For a credential of type `gx:ParticipantComplianceCredential` (scope
 type `ParticipantComplianceCredential`, ADR 0021):
 
-1. Its issuer is in `PORTITOR_GAIAX_COMPLIANCE_ISSUERS`, and its
-   signature is valid with that issuer's `assertionMethod` key (PS256 or
+1. Its issuer is in `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` (otherwise it
+   is skipped, see below), and its signature is valid with that issuer's `assertionMethod` key (PS256 or
    ES256; the JWS rules of ADR 0015 stay).
 2. Now is within `validFrom` and `validUntil`. The header's `iat` and
    `exp` are ignored: the service writes them in milliseconds.
@@ -74,10 +74,14 @@ type `ParticipantComplianceCredential`, ADR 0021):
 5. The holder binding of ADR 0016 is not applied to these two
    credentials; it stays for every other credential.
 
-A compliance credential that fails any step makes its presentation
-invalid and the caller is refused (DCP step 8, as in 0.6). A
-`gx:LegalPerson` credential that no trusted compliance credential names
-is skipped, like a credential from an untrusted issuer.
+A compliance credential whose issuer is not in
+`PORTITOR_GAIAX_COMPLIANCE_ISSUERS` is skipped, before anything is
+fetched for it, like a credential from an untrusted issuer: a
+participant of another clearing house can still use offers that need
+only a membership. A compliance credential from a trusted service that
+fails any other step makes its presentation invalid and the caller is
+refused (DCP step 8, as in 0.6). A `gx:LegalPerson` credential that no
+trusted compliance credential names is skipped too.
 
 ### Policies and scopes
 

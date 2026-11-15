@@ -1309,12 +1309,6 @@ async fn a_compliance_credential_that_fails_refuses_the_caller() {
     // someone else than the caller
     let (by_third, third_digest) = legal_person(&ds.third, "Portitor Test S.A.");
     let names_third = ds.compliance_credential(&[&third_digest], &json!({}));
-    // from a compliance service we do not trust
-    let untrusted = ds.third.key.sign_json(
-        &ds.third.kid(),
-        "vc+jwt",
-        &compliance_payload(&ds.third.did, &[&digest], &json!({})),
-    );
     // signed by someone else than the service it names as issuer
     let forged = ds.holder.key.sign_json(
         &ds.compliance.kid(),
@@ -1327,10 +1321,6 @@ async fn a_compliance_credential_that_fails_refuses_the_caller() {
         (vec![tampered, named.clone()], "names no gx:LegalPerson"),
         (vec![named.clone()], "names no gx:LegalPerson"),
         (vec![by_third, names_third], "is not the caller"),
-        (
-            vec![person.clone(), untrusted.unwrap()],
-            "not a trusted Gaia-X compliance service",
-        ),
         (vec![person.clone(), forged.unwrap()], "credential from"),
         (vec![person, expired], "expired"),
     ];
@@ -1345,9 +1335,33 @@ async fn a_compliance_credential_that_fails_refuses_the_caller() {
             "{reason}: {err}"
         );
         assert!(err.contains(reason), "{reason}: {err}");
-        // nothing is fetched for an untrusted compliance service
-        assert!(!ds.fetched().contains(&"/third/did.json".to_owned()));
     }
+}
+
+/// ADR 0022: a compliance credential from a service we do not trust is
+/// skipped, like a credential from an untrusted issuer, and the legal
+/// person credential it names with it. A member of another clearing house
+/// is still let in for offers that need only a membership.
+#[tokio::test]
+async fn a_compliance_credential_from_an_untrusted_service_is_skipped() {
+    let ds = dataspace().await;
+    let (person, digest) = legal_person(&ds.holder, "Portitor Test S.A.");
+    let untrusted = ds
+        .third
+        .key
+        .sign_json(
+            &ds.third.kid(),
+            "vc+jwt",
+            &compliance_payload(&ds.third.did, &[&digest], &json!({})),
+        )
+        .unwrap();
+    ds.answer20(&[ds.member20(), person, untrusted]);
+    ds.forget_fetches();
+    let caller = ds.verify(&ds.header()).await.unwrap();
+    assert_eq!(caller.credentials.len(), 1);
+    assert!(caller.credentials[0].has_type(MEMBERSHIP));
+    // nothing is fetched for an untrusted compliance service
+    assert!(!ds.fetched().contains(&"/third/did.json".to_owned()));
 }
 
 /// A legal person credential that no trusted compliance credential names
