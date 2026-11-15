@@ -92,7 +92,7 @@ so visitors' browsers never contact third-party services.
         <ol class="steps">
           <li><strong>Publish a catalog</strong> of datasets with usage policies (ODRL offers), harvested from where you keep them and checked against the dataspace's shapes (for example HealthDCAT-AP), and browse other participants' catalogs.</li>
           <li><strong>Negotiate a contract</strong> for a dataset, with the policy checked on both sides.</li>
-          <li><strong>Transfer the data</strong> over HTTP, push or pull, through the built-in data plane.</li>
+          <li><strong>Transfer the data</strong> over HTTP through the built-in data plane (the consumer pulls it; push to object storage comes in 1.1).</li>
           <li><strong>Prove who you are</strong> with a <code>did:web</code> identity and verifiable credentials (DCP), and check the credentials of others.</li>
           <li><strong>Issue credentials</strong>, such as dataspace membership, when you run the dataspace.</li>
           <li><strong>Meet Gaia-X rules</strong>: hold and present Gaia-X compliance credentials.</li>
@@ -173,6 +173,12 @@ rm -rf examples/compose/run</code></pre>
           <li><span>0.11</span> Security hardening: threat model, fuzzing every parser, request limits, status list cache</li>
           <li><span>0.12</span> Interoperability with EDC and published benchmarks</li>
           <li><span>0.13</span> Release candidate for 1.0: freeze, OpenSSF silver, Baseline level 1 self-assessment</li>
+          <li><span>1.0</span> Stable: the 0.13 release candidate, with no new features</li>
+          <li><span>1.1</span> Push to S3-compatible object storage; health data space demo, step 1</li>
+          <li><span>1.2</span> Purpose and data permit in policies; demo, step 2</li>
+          <li><span>1.3</span> Data user and health data access body; the demo answers its four questions</li>
+          <li><span>1.4</span> Keys in OpenBao; revoked credentials leave presentations by themselves</li>
+          <li><span>1.5</span> Users and applications in the data plane; consent</li>
         </ol>
       </div>
     </section>
