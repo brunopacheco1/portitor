@@ -61,6 +61,7 @@ pub mod data_plane;
 pub mod harvest;
 pub mod health;
 pub mod http_client;
+mod inbound;
 pub mod management;
 pub mod negotiation;
 mod outbox;

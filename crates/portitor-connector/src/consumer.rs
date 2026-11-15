@@ -19,7 +19,6 @@ use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Path, State};
 use axum::response::{IntoResponse, Response};
 use portitor_dsp::Offer;
-use portitor_dsp::guard::Direction;
 use portitor_dsp::negotiation::consumer::{
     ConsumerNegotiation, ConsumerService, ConsumerStore, Outgoing,
 };
@@ -30,12 +29,13 @@ use portitor_dsp::negotiation::{
     Transition,
 };
 use portitor_dsp::policy::credential_scopes;
-use portitor_runtime::telemetry::metrics::{self, Refusal};
+use portitor_runtime::telemetry::metrics;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::auth::Caller;
 use crate::http_client::outbound_url_allowed;
+use crate::inbound::read_message;
 use crate::negotiation::{bad_request, failed};
 use crate::outbox::{self, Link, Message, Outbox};
 use crate::ports::{AnyConsumerDecider, AnyConsumerStore, Ports};
@@ -219,34 +219,15 @@ impl Consumer {
         message_type: &str,
         consumer_pid: &str,
     ) -> Result<T, Box<ContractNegotiationError>> {
-        let invalid = |provider_pid: &str, reason: &str| {
-            Box::new(ContractNegotiationError::new(
-                provider_pid,
-                consumer_pid,
-                "400",
-                reason,
-            ))
-        };
-        let Json(value) = body.map_err(|e| {
-            metrics::dsp_request_refused(Refusal::InvalidMessage);
-            invalid("", &e.body_text())
-        })?;
-        let provider_pid = value
-            .get("providerPid")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        self.link
-            .guard
-            .check(Direction::Inbound, message_type, &value)
-            .map_err(|r| {
-                metrics::dsp_request_refused(Refusal::MessageRules);
-                invalid(&provider_pid, &r.to_string())
-            })?;
-        serde_json::from_value(value).map_err(|e| {
-            metrics::dsp_request_refused(Refusal::InvalidMessage);
-            invalid(&provider_pid, &e.to_string())
-        })
+        read_message(
+            &*self.link.guard,
+            body,
+            message_type,
+            "providerPid",
+            |provider_pid, reason| {
+                ContractNegotiationError::new(provider_pid, consumer_pid, "400", reason)
+            },
+        )
     }
 
     /// Answers the provider and starts sending our next message, if any.
