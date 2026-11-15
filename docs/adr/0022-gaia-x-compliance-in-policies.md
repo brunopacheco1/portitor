@@ -80,7 +80,11 @@ type `ParticipantComplianceCredential`, ADR 0021):
 4. The same presentation holds a `gx:LegalPerson` credential whose
    `digestSRI` (computed as above, on its decoded payload) is listed in
    `gx:compliantCredentials`, whose `issuer` is the caller's DID, and
-   whose signature is valid with the caller's `assertionMethod` key.
+   whose signature is valid with the caller's `assertionMethod` key. Its
+   `credentialStatus`, if any, is not fetched: the caller issued it and
+   controls its status lists, so a status proves nothing, and fetching
+   would only let the caller pick URLs the verifier fetches. The
+   compliance credential's validity bounds it.
 5. The holder binding of ADR 0016 is not applied to these two
    credentials; it stays for every other credential.
 

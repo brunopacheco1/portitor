@@ -1179,7 +1179,12 @@ async fn more_credentials_are_asked_for_with_the_callers_access_token() {
 /// spike, with `name` as its legal name. Returns the JWT and its
 /// `digestSRI`.
 fn legal_person(issuer: &Party, name: &str) -> (String, String) {
-    let vc = json!({
+    legal_person_with(issuer, name, &json!({}))
+}
+
+/// [`legal_person`] with `extra` fields.
+fn legal_person_with(issuer: &Party, name: &str, extra: &Value) -> (String, String) {
+    let mut vc = json!({
         "@context": [VC2_CONTEXT, GAIAX_CONTEXT,
             {"vcard": "http://www.w3.org/2006/vcard/ns#", "schema": "https://schema.org/"}],
         "id": "https://participant.test/credentials/legal-person.json",
@@ -1193,6 +1198,9 @@ fn legal_person(issuer: &Party, name: &str) -> (String, String) {
             "gx:legalAddress": {"type": "gx:Address", "gx:countryCode": "LU"}
         }
     });
+    for (key, value) in extra.as_object().into_iter().flatten() {
+        vc[key] = value.clone();
+    }
     let digest = portitor_dcp::gaiax::digest_sri(vc.as_object().unwrap());
     let jwt = issuer.key.sign_json(&issuer.kid(), "vc+jwt", &vc).unwrap();
     (jwt, digest)
@@ -1385,6 +1393,22 @@ async fn other_credentials_keep_the_holder_binding() {
     ds.answer20(&[ds.member20(), not_ours, person, compliance]);
     let err = ds.refusal().await;
     assert!(err.contains("not about the caller"), "{err}");
+}
+
+/// ADR 0022: the status of the caller's own legal person credential is
+/// not fetched; the caller controls it.
+#[tokio::test]
+async fn the_status_of_the_callers_legal_person_is_not_fetched() {
+    let ds = dataspace().await;
+    ds.publish_status_list(&ds.holder, &[7]);
+    let revoked = ds.status_entry("7");
+    let (person, digest) = legal_person_with(&ds.holder, "Portitor Test S.A.", &revoked);
+    let compliance = ds.compliance_credential(&[&digest], &json!({}));
+    ds.answer20(&[ds.member20(), person, compliance]);
+    ds.forget_fetches();
+    let caller = ds.verify(&ds.header()).await.unwrap();
+    assert_eq!(caller.credentials.len(), 3);
+    assert!(!ds.fetched().iter().any(|path| path.starts_with("/status/")));
 }
 
 /// ADR 0022: a compliance credential counts only as a compliance

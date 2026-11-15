@@ -472,9 +472,8 @@ impl DcpVerifier {
         for checked in &compliance {
             verified.push(held_as(checked.credential, COMPLIANCE_TYPE));
         }
-        let persons = self
-            .check_named_legal_persons(caller, holder, credentials, &mut compliance, now)
-            .await?;
+        let persons =
+            self.check_named_legal_persons(caller, holder, credentials, &mut compliance, now)?;
         verified.extend(persons);
         // a compliance credential vouches for a legal person credential;
         // without it in the same presentation it says nothing about the
@@ -524,9 +523,9 @@ impl DcpVerifier {
 
     /// The legal person credentials of one presentation that a checked
     /// compliance credential names, each checked
-    /// ([`DcpVerifier::check_legal_person`]). Marks the compliance
+    /// ([`check_legal_person`]), without a fetch. Marks the compliance
     /// credentials that name one as linked. The others are skipped.
-    async fn check_named_legal_persons(
+    fn check_named_legal_persons(
         &self,
         caller: &str,
         holder: &DidDocument,
@@ -545,10 +544,7 @@ impl DcpVerifier {
                 tracing::debug!(issuer = %credential.issuer, "gx:LegalPerson credential that no trusted compliance credential names skipped");
                 continue;
             }
-            if let Err(reason) = self
-                .check_legal_person(caller, holder, credential, now)
-                .await
-            {
+            if let Err(reason) = check_legal_person(caller, holder, credential, now) {
                 return Err(refused(caller, credential, &reason));
             }
             verified.push(held_as(credential, LEGAL_PERSON_TYPE));
@@ -581,34 +577,6 @@ impl DcpVerifier {
             .map_err(|e| format!("credential from {}: {e}", credential.issuer))?;
         for entry in &credential.status {
             self.check_status(credential, &issuer, entry, now).await?;
-        }
-        Ok(())
-    }
-
-    /// One `gx:LegalPerson` credential that a trusted compliance credential
-    /// names (ADR 0022, step 4): issued by the caller and signed with the
-    /// caller's `assertionMethod` key (`holder` is the caller's DID
-    /// document), valid now, its status checked if it has one. Its subject
-    /// is not the caller's DID, so there is no holder binding.
-    async fn check_legal_person(
-        &self,
-        caller: &str,
-        holder: &DidDocument,
-        credential: &Credential,
-        now: u64,
-    ) -> Result<(), String> {
-        if credential.issuer != caller {
-            return Err(format!(
-                "its issuer {} is not the caller",
-                credential.issuer
-            ));
-        }
-        check_status_count(credential)?;
-        credential
-            .verify(holder, now, LEEWAY)
-            .map_err(|e| format!("credential from {}: {e}", credential.issuer))?;
-        for entry in &credential.status {
-            self.check_status(credential, holder, entry, now).await?;
         }
         Ok(())
     }
@@ -738,6 +706,33 @@ fn is_gaiax_compliance(credential: &Credential) -> bool {
 /// (`gx:LegalPerson`).
 fn is_legal_person(credential: &Credential) -> bool {
     credential.has_type(LEGAL_PERSON_TYPE)
+}
+
+/// One `gx:LegalPerson` credential that a trusted compliance credential
+/// names (ADR 0022, step 4): issued by the caller and signed with the
+/// caller's `assertionMethod` key (`holder` is the caller's DID
+/// document), valid now. Its subject is not the caller's DID, so there is
+/// no holder binding.
+///
+/// Its `credentialStatus` is not fetched. The caller issued it and
+/// controls its status lists, so a status says nothing the caller could
+/// not change, and fetching would only let the caller choose URLs that we
+/// fetch. The compliance credential's own validity bounds it.
+fn check_legal_person(
+    caller: &str,
+    holder: &DidDocument,
+    credential: &Credential,
+    now: u64,
+) -> Result<(), String> {
+    if credential.issuer != caller {
+        return Err(format!(
+            "its issuer {} is not the caller",
+            credential.issuer
+        ));
+    }
+    credential
+        .verify(holder, now, LEEWAY)
+        .map_err(|e| format!("credential from {}: {e}", credential.issuer))
 }
 
 /// The fetch limit on status entries: at most [`MAX_STATUS_ENTRIES`].
