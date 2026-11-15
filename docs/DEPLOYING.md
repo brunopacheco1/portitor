@@ -176,7 +176,8 @@ claim:
 ]}]
 ```
 
-Set, on the provider **and** on consumers:
+Set `PORTITOR_POLICY_CREDENTIALS` on the provider **and** on consumers,
+and `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` on the provider:
 
 ```sh
 PORTITOR_POLICY_CREDENTIALS=ParticipantComplianceCredential
@@ -190,9 +191,9 @@ PORTITOR_GAIAX_COMPLIANCE_ISSUERS=did:web:compliance.lab.gaia-x.eu:v2
   consumer's identity then presents both credentials.
 - `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` lists the compliance services you
   trust. It is separate from `PORTITOR_TRUSTED_ISSUERS`: a compliance
-  service is not a dataspace issuer. A provider whose
-  `PORTITOR_POLICY_CREDENTIALS` lists `ParticipantComplianceCredential`
-  does not start without it.
+  service is not a dataspace issuer. A consumer does not need it. A
+  provider without it admits no one to these offers; the start log
+  warns.
 - What the provider checks: the compliance credential comes from a
   listed service and is signed with its `assertionMethod` key (PS256 or
   ES256). It is valid now by `validFrom` and `validUntil` (the service

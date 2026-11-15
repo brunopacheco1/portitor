@@ -25,9 +25,9 @@ versions may change behaviour and configuration.
   issued and signed by the caller; the holder binding is skipped for
   these two only. A compliance scope brings the `LegalPerson` scope on
   both sides. A credential claim path may now hold a prefixed name such
-  as `gx:labelLevel`. A provider that lists
-  `ParticipantComplianceCredential` in `PORTITOR_POLICY_CREDENTIALS`
-  without a compliance service does not start.
+  as `gx:labelLevel`. The start log warns when
+  `PORTITOR_POLICY_CREDENTIALS` lists `ParticipantComplianceCredential`
+  without a compliance service.
 - Identity: the X.509 chain of its key (`PORTITOR_IDENTITY_CERTIFICATE_CHAIN`,
   ADR 0021). The first certificate must be for the identity key, or the
   identity does not start. Served at

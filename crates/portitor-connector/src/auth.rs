@@ -543,22 +543,21 @@ impl AuthSettings {
         }))
     }
 
-    /// Checks at start that the policy types fit these settings: a policy
-    /// on `ParticipantComplianceCredential` needs a trusted Gaia-X
-    /// compliance service, or it could never hold (ADR 0022).
-    ///
-    /// # Errors
-    ///
-    /// `PORTITOR_POLICY_CREDENTIALS` lists `ParticipantComplianceCredential`
-    /// and `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` is empty.
-    pub fn check_policy_types(&self, types: &CredentialTypes) -> Result<(), String> {
+    /// A warning for the start log when the policy types and these
+    /// settings do not fit: as provider, a policy on
+    /// `ParticipantComplianceCredential` never holds without a trusted
+    /// Gaia-X compliance service (ADR 0022). Only a warning: a consumer
+    /// lists the type too, to grant the scopes, and needs no compliance
+    /// service.
+    #[must_use]
+    pub fn policy_types_warning(&self, types: &CredentialTypes) -> Option<String> {
         if types.scope(COMPLIANCE_SCOPE_TYPE).is_some() && self.gaiax_compliance_issuers.is_empty()
         {
-            return Err(format!(
-                "PORTITOR_POLICY_CREDENTIALS lists {COMPLIANCE_SCOPE_TYPE}: set PORTITOR_GAIAX_COMPLIANCE_ISSUERS to the compliance services you trust"
+            return Some(format!(
+                "PORTITOR_POLICY_CREDENTIALS lists {COMPLIANCE_SCOPE_TYPE} but PORTITOR_GAIAX_COMPLIANCE_ISSUERS is empty: as provider, offers that require Gaia-X compliance admit no one"
             ));
         }
-        Ok(())
+        None
     }
 }
 
@@ -826,17 +825,17 @@ mod tests {
             ["did:web:compliance.lab.gaia-x.eu:v2", "did:web:gx.example"]
         );
         let mut types = CredentialTypes::default();
-        assert_eq!(s.check_policy_types(&types), Ok(()));
+        assert_eq!(s.policy_types_warning(&types), None);
         types.add(
             COMPLIANCE_SCOPE_TYPE,
             "org.eclipse.dspace.dcp.vc.type:ParticipantComplianceCredential:read",
         );
-        assert_eq!(s.check_policy_types(&types), Ok(()));
+        assert_eq!(s.policy_types_warning(&types), None);
         // a compliance policy without a trusted compliance service
         let without = AuthSettings::from_vars(me, false, vars(&base))
             .unwrap()
             .unwrap();
-        let err = without.check_policy_types(&types).unwrap_err();
+        let err = without.policy_types_warning(&types).unwrap();
         assert!(err.contains("PORTITOR_GAIAX_COMPLIANCE_ISSUERS"), "{err}");
         // not a did:web DID
         let mut bad = base.to_vec();
