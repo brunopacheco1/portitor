@@ -81,6 +81,20 @@ versions may change behaviour and configuration.
   agrees a contract only with a holder of one (ADR 0022). No real Gaia-X
   trust anchor: a test CA and a test-only notary
   (`scripts/gaiax_test_notary.py`). See docs/TESTING.md.
+- Version 0.8.0 in `Cargo.toml` and every OpenAPI file in `docs/api/`
+  (the documentation check needs both). The DID document descriptions
+  in `identity-openapi.json` and `issuer-openapi.json` name `alg`, `x5u`
+  and the issuer's bundle key.
+- Docs, release review: the C4 diagrams show the Gaia-X compliance
+  service (C1, C2), the certificate chain and the onboarding in the
+  identity (C2, C3) and the trusted compliance services of the connector
+  (C3); a new C4 diagram of the Gaia-X onboarding flow
+  (`c4-gaiax-onboarding-code.drawio.svg`). ARCHITECTURE has a Gaia-X
+  section; DEPLOYING has the 0.7 to 0.8 upgrade (identity database
+  schema version 3, no way back without the backup) and the Gaia-X
+  limits, and no longer says a new bundle version needs a restart;
+  TESTING lists the Gaia-X unit and integration tests;
+  SECURITY-ASSURANCE covers Gaia-X; the website shows 0.8 as done.
 
 ## [0.7.0] - 2026-11-15
 

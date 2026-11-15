@@ -81,6 +81,11 @@ Where the tests are:
   revoked one is still refused (DCP 5.4.3, step 8), and once the revoked
   one is deleted the consumer is admitted again. The
   SQLite store is tested on an in-memory database and on a real file.
+  Gaia-X compliance (ADR 0022): `src/auth/dcp/tests.rs` admits a caller
+  with a compliance credential and its linked `gx:LegalPerson`, reads the
+  label for a policy, and refuses a tampered or someone else's legal
+  person credential, an untrusted or forged compliance service and an
+  expired compliance credential.
 - **Dataset harvest** (connector, ADR 0020): `src/harvest/tests.rs`
   runs harvests with fixed sources and the in-memory store: add, update,
   unchanged snapshot, a rejected entry that keeps the previous good
@@ -146,12 +151,20 @@ Where the tests are:
 - **DCP crate** (`crates/portitor-dcp`): `tests/spec.rs` parses the DCP
   v1.0.1 examples into the Portitor types and checks what Portitor writes
   back against the official JSON Schemas; `tests/gaia_x_ps256.rs` checks
-  PS256 signatures as Gaia-X uses them.
+  PS256 signatures as Gaia-X uses them. Unit tests next to the code cover
+  the Gaia-X credentials and the check of the compliance service's answer
+  (`gaiax_sign.rs`), the digests (`gaiax.rs`, RFC 8785 examples) and the
+  certificate reader (`x509.rs`, with `test-only-*` certificates in
+  `tests/fixtures/`).
 - **Identity** (`crates/portitor-identity`), the same in-memory router
   tests: `tests/credential_service.rs` (DID document, STS, presentation
   API, Storage API and offers; every path in
   [docs/api/identity-openapi.json](api/identity-openapi.json) is served),
   `tests/issuance.rs` (the holder side of issuance against a fake issuer),
+  `tests/gaiax.rs` (Gaia-X onboarding against a fake compliance service
+  over HTTP: the presentation it gets, the stored and served credentials,
+  a wrong digest refused, the runs in the management API, a certificate
+  chain for another key or a bad participant file stopping the start),
   and `tests/management_api.rs` (API key, credential requests and
   credentials; also checks
   [identity-management-openapi.json](api/identity-management-openapi.json),

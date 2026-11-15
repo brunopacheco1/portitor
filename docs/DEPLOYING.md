@@ -460,6 +460,9 @@ participant.
 - [ ] **Management API key.** As for the connector, if you ask issuers
   for credentials or manage credentials.
 - [ ] **Storage.** A persistent volume for `/data` (credentials, SQLite).
+- [ ] **Gaia-X** (optional, from 0.8): a certificate for the identity
+  key, the notary's registration number credential and a participant
+  file ([Gaia-X onboarding](#gaia-x-onboarding-optional)).
 - [ ] **Network.** Inbound from other participants, through your proxy:
   the DID document and the credential service. Inbound from your own
   connector only: the STS (`/sts/token`). Outbound: other participants'
@@ -519,7 +522,7 @@ and to check partners' credentials:
 
 | Port | Serves | Reached by | Expose |
 |---|---|---|---|
-| 8090 | DID document, credential service (presentation and Storage API), STS | partners and issuers (DID document, credential service); your connector (STS) | through your HTTPS reverse proxy, except `/sts/token`: your connector reaches it on the internal network |
+| 8090 | DID document, credential service (presentation and Storage API), STS; with Gaia-X, the certificate chain and the Gaia-X credentials | partners and issuers (DID document, credential service); Gaia-X services (DID document, certificate chain); your connector (STS) | through your HTTPS reverse proxy, except `/sts/token`: your connector reaches it on the internal network |
 | 8091 | management API | your operators only | **never publicly**: host loopback or an internal network, never the public proxy |
 
 ### Run
@@ -1027,6 +1030,41 @@ against the authority's signed bundle (ADR 0005).
    (`PORTITOR_ISSUER_BUNDLE_DIR`, `PORTITOR_ISSUER_BUNDLE_KEY_FILE`, both
    optional; [section 7](#7-run-the-issuer-dataspace-authority-only)).
 
+#### From 0.7 to 0.8
+
+0.8 adds Gaia-X: the identity can get a Gaia-X compliance credential
+(ADR 0021) and the connector can require one in a policy (ADR 0022).
+Both are optional; without the new settings Portitor works as in 0.7.
+
+1. Back up `/data/portitor-identity.db*`. On its first start, the 0.8
+   identity migrates its database forward to schema version 3 (new
+   table `gaiax_run`, the Gaia-X compliance runs). This happens with or
+   without Gaia-X on. The connector's and the issuer's databases are
+   unchanged.
+2. Downgrade: a 0.7 identity refuses the migrated file (`database schema
+   version 3 is newer than this Portitor (2)`) and does not start. To go
+   back to 0.7, stop the identity, restore the backup from step 1 and
+   start the 0.7 image. Credentials received after the backup are lost;
+   ask the issuer again. Migrations only run forward; there is no way
+   down without the backup. The connector and the issuer can go back to
+   0.7 as they are.
+3. **Behaviour change:** the DID documents of the identity and the issuer
+   give their key `alg: ES256` (RFC 7517 section 4.4). DCP ignores it;
+   nothing to do.
+4. **Behaviour change:** in the presentation API a scope type `T` also
+   matches a credential of type `gx:T` whose `@context` names a Gaia-X
+   context. Plain types match as before.
+5. New identity settings, all optional:
+   `PORTITOR_IDENTITY_CERTIFICATE_CHAIN`, `PORTITOR_GAIAX_COMPLIANCE_URL`,
+   `PORTITOR_GAIAX_PARTICIPANT_FILE`
+   ([Gaia-X onboarding](#gaia-x-onboarding-optional)). New connector
+   setting, optional: `PORTITOR_GAIAX_COMPLIANCE_ISSUERS`
+   ([Gaia-X compliance](#gaia-x-compliance)). Set it on the provider
+   before you publish an offer that requires Gaia-X compliance; without
+   it the provider refuses every compliance credential (the start log
+   warns when `PORTITOR_POLICY_CREDENTIALS` lists
+   `ParticipantComplianceCredential` and no service is set).
+
 ## 7. Run the issuer (dataspace authority only)
 
 The issuer issues and revokes the dataspace's credentials with the
@@ -1236,12 +1274,17 @@ In this version (see also [SECURITY-ASSURANCE.md](SECURITY-ASSURANCE.md)):
   offer (DSP `OFFERED`) that has credential constraints; requests it
   sends itself are not affected.
 - No metrics endpoint yet.
+- Gaia-X: tested against a local Gaia-X compliance service in test mode
+  (gx-compliance v2.16.0), not the Gaia-X Lab or a production clearing
+  house. You get the registration number credential from a notary
+  yourself; label levels 1 to 3, service offering credentials and
+  OpenID4VC are not supported. A Gaia-X compliance credential is checked
+  between Portitor connectors only; EDC does not accept it (ADR 0022).
 - Datasets come only from the datasets file; no other harvest source yet.
   No API writes datasets or policies.
 - SHACL: the subset `portitor-shacl` implements (ADR 0005). Shapes that
   use anything else are refused when the bundle is loaded; `sh:extends`
-  and `sh:shape` are ignored with a warning. A new bundle version needs a
-  restart.
+  and `sh:shape` are ignored with a warning.
 - Transfers: pull only. A data access token ends `PORTITOR_DATA_TOKEN_SECONDS`
   after the transfer starts and is not renewed; the consumer then asks for
   a new transfer. Only `GET` of the whole source; no credentials are sent

@@ -8,6 +8,8 @@ SPDX-License-Identifier: Apache-2.0
 
 A small and fast connector that implements the
 Eclipse Dataspace Protocol (DSP) and the Decentralized Claims Protocol (DCP).
+From 0.8 it can also get a participant's Gaia-X compliance credential and
+require one in a policy (Gaia-X Trust Framework).
 
 The name: in Latin a *portitor* is both the customs officer at a port, who
 checks goods against the rules, and the ferryman who carries them across.
