@@ -451,10 +451,25 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
   and the TCK runs use 0. Amends ADR 0016 ("Presentations are not
   cached") ([TD-06](RISKS_AND_TECHNICAL_DEBTS.md#td-06)).
 - Investigate key custody and key rotation
-  ([TD-05](RISKS_AND_TECHNICAL_DEBTS.md#td-05)).
+  ([TD-05](RISKS_AND_TECHNICAL_DEBTS.md#td-05)), and list a retired key
+  next to the current one in each DID document, so a key change leaves
+  no gap: what the old key signed keeps verifying until it expires.
+  EDC IdentityHub rotates this way (maintainer, 2026-11-15, plan after
+  0.13). Key custody in OpenBao comes in 1.4.
+- The outbox retries a DSP message only on network errors, 408, 429 and
+  5xx, and gives up at once on other 4xx
+  ([TD-30](RISKS_AND_TECHNICAL_DEBTS.md#td-30); maintainer, 2026-11-15).
+- Research, docs only, in 0.11 and 0.12: an ADR on a provider in several
+  data spaces ([TD-03](RISKS_AND_TECHNICAL_DEBTS.md#td-03)) and one on
+  user to system authentication and authorisation
+  ([TD-04](RISKS_AND_TECHNICAL_DEBTS.md#td-04)). Their answers may change
+  the API and the configuration, so they must be known before the 0.13
+  freeze (maintainer, 2026-11-15).
 - Exit: every parser has a fuzz target; the request limits per port and
   route are tested; the status list cache is tested at 0 and 300 s; the
-  threat model review is recorded in SECURITY-ASSURANCE.
+  threat model review is recorded in SECURITY-ASSURANCE; a key change
+  with two keys listed leaves no verification gap (tested); the outbox
+  stops at the first 4xx it may not retry (tested).
 - Main risk: a finding that needs a design change.
 
 ## 0.12 Interoperability and performance
@@ -475,49 +490,184 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
   `docs/SECURITY-ASSURANCE.md` (moved from 0.1, maintainer, 2026-11-12),
   done last so it assesses the final state; decide whether 1.0 aims at a
   higher level ([R-05](RISKS_AND_TECHNICAL_DEBTS.md#r-05)).
-- Exit: Scorecard at least 8/10; no open high findings in Sonar or CodeQL.
+- The TD-03 and TD-04 ADRs decided; any API or configuration change
+  they need is made before the freeze.
+- Before 1.0 (maintainer, 2026-11-15): read the ODRL 2.2 `dateTime`
+  definition and compare it with ADR 0009
+  ([R-26](RISKS_AND_TECHNICAL_DEBTS.md#r-26)); decide in an ADR whether
+  TLS stays the operator's job
+  ([TD-19](RISKS_AND_TECHNICAL_DEBTS.md#td-19)); confirm forward-only
+  migrations in the upgrade notes
+  ([TD-22](RISKS_AND_TECHNICAL_DEBTS.md#td-22)); the formal trademark and
+  domain check of the name ([R-25](RISKS_AND_TECHNICAL_DEBTS.md#r-25)),
+  which blocks 1.0. A second maintainer
+  ([R-02](RISKS_AND_TECHNICAL_DEBTS.md#r-02)) does not block 1.0.
+- Usable as it is (maintainer, 2026-11-15: 1.0 ships the release
+  candidate only if what is built until 0.13 can be shown and used): a
+  new user runs the website quickstart on a clean machine, and the docs
+  say what 1.0 does and does not do (for example pull transfers only).
+- Exit: Scorecard at least 8/10; no open high findings in Sonar or
+  CodeQL; the quickstart runs on a clean machine; R-25 done.
 - Main risk: freezing too early or too late.
+
+## After 0.13 (plan approved by the maintainer, 2026-11-15)
+
+1.0 is the 0.13 release candidate, with no new features. After it, the
+1.x releases add features without breaking the 1.0 API or configuration
+(semantic versioning: a breaking change waits for 2.0). As now, each
+minor release is one pull request. Each feature gets an ADR before code,
+and each format is taken from a specification, EDC or Simpl-Open, never
+invented. Each 1.x release ships when its exit criteria pass, not on a
+date.
+
+The health data space demo (see below) grows one step per release, from
+1.1 to 1.3. It is a manual test, run with Compose and a runbook, not a
+CI job (maintainer, 2026-11-15).
+
+### 1.0 Stable
+
+- The 0.13 release candidate and the "before 1.0" items of 0.13.
+- Exit: upgrade notes from 0.9 to 1.0; the website says which APIs and
+  settings 1.0 keeps stable.
+- Main risk: a breaking change found after the freeze.
+
+### 1.1 Push to object storage
+
+- Provider push to S3-compatible object storage, a second data plane
+  behind the Data Plane Signaling port
+  ([TD-10](RISKS_AND_TECHNICAL_DEBTS.md#td-10)). The consumer gives the
+  bucket and short-lived credentials in the `dataAddress` of its transfer
+  request (DSP 2025-1; Signaling v1.0-RC4 covers provider push). Neither
+  specification names an S3 endpoint type, so the ADR reuses EDC's or
+  Simpl-Open's ([R-38](RISKS_AND_TECHNICAL_DEBTS.md#r-38)). Each transfer
+  method is its own distribution and `format` in the catalog
+  (maintainer, 2026-11-13).
+- Management API: suspend and start a transfer again
+  ([TD-11](RISKS_AND_TECHNICAL_DEBTS.md#td-11)).
+- Demo step 1: the authority (issuer), Alice and Bob. Bob negotiates with
+  Alice, peer to peer, and Alice pushes the data to RustFS in Bob's
+  network.
+- Exit: a push transfer lands in RustFS; pull still passes the DSP TCK,
+  the DCP TCK and the EDC interop test.
+- Main risk: no S3 data address shared by EDC and Simpl-Open.
+
+### 1.2 Purpose and data permit in policies
+
+- An ODRL `purpose` constraint (a left operand of the ODRL 2.2
+  vocabulary), with purposes named by Data Privacy Vocabulary (DPV)
+  IRIs, the vocabulary HealthDCAT-AP uses for `dpv:hasPurpose`. Checked
+  at negotiation and transfer, fail closed
+  ([TD-12](RISKS_AND_TECHNICAL_DEBTS.md#td-12)). No ICUdata4EU or LNDS
+  list of purposes exists to reuse (maintainer, 2026-11-15;
+  [R-40](RISKS_AND_TECHNICAL_DEBTS.md#r-40)).
+- A data permit as a verifiable credential that policies can require.
+- As consumer, accept a provider's offer with credential constraints
+  ([TD-11](RISKS_AND_TECHNICAL_DEBTS.md#td-11)); the catalog hides offers
+  the caller cannot meet ([TD-13](RISKS_AND_TECHNICAL_DEBTS.md#td-13)).
+- Demo step 2: Bob's agreement with Alice needs a matching purpose; a
+  wrong purpose is refused.
+- Exit: purpose and permit tested granted and refused; the TCKs and the
+  EDC interop test stay green.
+- Main risk: DPV purposes may not map one to one to the purposes of the
+  EHDS (Article 53).
+
+### 1.3 Data user and HDAB: Cooper and Marley
+
+- Cooper plays the health data access body (HDAB) towards Marley, the
+  data user; Bob and Alice stay a peer to peer agreement (maintainer,
+  2026-11-15). Marley needs a data permit, issued by Cooper as the HDAB
+  (EHDS Art. 68), so Cooper runs his own issuer next to the authority's.
+- No secure processing environment is built: Cooper runs a fixed
+  pipeline on Alice's data that produces counts, and pushes that output
+  to RustFS in Marley's infrastructure (maintainer, 2026-11-15).
+- Agreements that depend on an upstream agreement: Cooper's offer to
+  Marley cannot be wider than Cooper's agreement with Alice (purpose,
+  users, duration). No specification defines this; research and ADR
+  first ([R-39](RISKS_AND_TECHNICAL_DEBTS.md#r-39)).
+- Demo step 3: the four questions (below) answered by running the demo,
+  each with its evidence, and a note of where Portitor fell short.
+- Exit: the four answers written in the docs.
+- Main risk: our design for dependent agreements may not match what EDC
+  or Simpl-Open do later.
+
+### 1.4 Keys and credentials
+
+- A signer port with an OpenBao transit adapter (P-256 signing, versioned
+  keys; the private key never leaves OpenBao), optional
+  ([TD-05](RISKS_AND_TECHNICAL_DEBTS.md#td-05)).
+- The identity reads status lists and stops presenting a revoked
+  credential ([TD-20](RISKS_AND_TECHNICAL_DEBTS.md#td-20)).
+- Credential schemas, presentation definitions and issuance policies, if
+  a target data space needs them
+  ([TD-14](RISKS_AND_TECHNICAL_DEBTS.md#td-14)); STS token and
+  presentation caching only if the 0.11 measurements show the need
+  ([TD-07](RISKS_AND_TECHNICAL_DEBTS.md#td-07)).
+- Exit: a key change in OpenBao with no verification gap (tested); a
+  revoked credential leaves the presentations by itself.
+- Main risk: OpenBao must stay optional.
+
+### 1.5 Users and the data plane
+
+- Code from the TD-02 and TD-04 ADRs: how a person or an application of
+  a participant proves who it is, and whether the data plane checks
+  identity or credentials on each request
+  ([TD-02](RISKS_AND_TECHNICAL_DEBTS.md#td-02),
+  [TD-04](RISKS_AND_TECHNICAL_DEBTS.md#td-04)).
+- Consent enforcement and agreement revision
+  ([TD-15](RISKS_AND_TECHNICAL_DEBTS.md#td-15)), if the consent ADR finds
+  a standard to follow (ISO/IEC TS 27560 and DPV to read first).
+- Exit: set by the ADRs.
+- Main risk: the largest unknown of the plan; the ADRs may split it.
+
+### Research before code
+
+Docs only: a standards check, then an ADR the maintainer accepts or
+rejects. It runs beside the releases.
+
+| Topic | Needed by |
+| --- | --- |
+| Several data spaces ([TD-03](RISKS_AND_TECHNICAL_DEBTS.md#td-03)) | 0.13 freeze |
+| Users and roles ([TD-04](RISKS_AND_TECHNICAL_DEBTS.md#td-04)) | 0.13 freeze; code in 1.5 |
+| Who calls the data plane ([TD-02](RISKS_AND_TECHNICAL_DEBTS.md#td-02)) | 1.5 |
+| S3 data address | 1.1 |
+| Agreements that depend on an upstream agreement | 1.3 |
+| Consent | 1.5 |
+| How schemas are published ([TD-01](RISKS_AND_TECHNICAL_DEBTS.md#td-01)) | with TD-03 |
+
+### The health data space demo
+
+Four participants and an authority (maintainer, 2026-11-15), modelled on
+a health data access body (HDAB) and the ICUdata4EU ICU data space. The
+authority governs the data space and runs the issuer; it plays the
+national contact point for secondary use (EHDS Art. 75, which the
+coordinator HDAB of Art. 55(1) may also be). Alice, a data
+provider, holds patient records. Bob, a data user, asks Alice directly,
+peer to peer (the EHDS does not exclude it); Alice pushes the data to
+object storage (RustFS) in Bob's own infrastructure. Cooper plays the
+HDAB towards Marley, another data user: Cooper issues Marley's data
+permit, runs a fixed pipeline on Alice's data that produces counts, and
+pushes that output to RustFS in Marley's infrastructure. No secure processing
+environment (SPE) is built; the pipeline stands in for one (maintainer,
+2026-11-15). The demo must answer, by running it:
+
+- can the same data be reached through several channels (Alice's offer
+  and Cooper's)?
+- does Cooper negotiate with Alice for every new cohort query, or does
+  one agreement cover them?
+- does Cooper negotiate with Alice for every new access through his
+  pipeline, or for every new data user?
+- do Alice's and Cooper's policies differ, and can Cooper's be less
+  strict because his environment is safer? What can never be wider than
+  what Alice allowed Cooper (purpose, users, duration)?
+
+Checked against the EHDS (Regulation (EU) 2025/327, 2026-11-15): for
+secondary use a data user applies to the HDAB, which issues a data
+permit (Art. 67, 68); pseudonymised data is processed only in an SPE,
+and only non-personal data can be downloaded (Art. 73); most of it
+applies from March 2029.
 
 ## Later (not planned for a release yet)
 
-- A health data space demo with four participants and an authority
-  (maintainer, 2026-11-15), modelled on a health data access body
-  (HDAB) and the ICUdata4EU ICU data space. The authority governs the
-  data space and runs the issuer. Alice, a data provider, holds patient
-  records. Cooper is an intermediary: he gives access to Alice's
-  records inside his secure processing environment (SPE), and runs a
-  cohort building service on them. Bob, a data user, asks Alice
-  directly (peer to peer, which the EHDS does not exclude); they agree
-  to push the data to object storage (RustFS) in Bob's own
-  infrastructure. Marley, another data user, asks Cooper and processes
-  the data inside Cooper's SPE. The demo must answer, by running it:
-  - can the same data be reached through several channels (Alice's
-    offer and Cooper's)?
-  - does Cooper negotiate with Alice for every new cohort query, or does
-    one agreement cover them?
-  - does Cooper negotiate with Alice for every new access through his
-    SPE, or for every new data user?
-  - do Alice's and Cooper's policies differ, and can Cooper's be less
-    strict because the SPE is safer? What can never be wider than what
-    Alice allowed Cooper (purpose, users, duration)?
-
-  Checked against the EHDS (Regulation (EU) 2025/327, 2026-11-15): for
-  secondary use a data user applies to the HDAB, which issues a data
-  permit (Art. 67, 68); pseudonymised data is processed only in an SPE,
-  and only non-personal data can be downloaded (Art. 73); most of it
-  applies from March 2029. Whether Marley's path also needs a permit
-  from the authority (for example as a credential that Cooper's and
-  Alice's policies require) is to be decided. Needs first: push to
-  object storage (below), an SPE or compute-to-data data plane, a
-  `purpose` constraint ([ADR 0009](adr/0009-minimal-odrl-policies.md) supports only a few), and
-  agreements that depend on an upstream agreement (Cooper's on Alice's).
-- Push transfers to object storage (S3-compatible): the consumer gives a
-  bucket address and short-lived credentials in its transfer request
-  (`dataAddress`, DSP 2025-1), and the provider's data plane writes the
-  data there. Each transfer method is its own distribution and `format`
-  in the catalog, with its own data address and authentication
-  (maintainer, 2026-11-13). It is a second data plane behind the Data
-  Plane Signaling port; the DSP code does not change.
 - Join a Simpl-Open data space behind the participant's Simpl Tier 2
   gateway, with a small login adapter ([ADR 0017](adr/0017-simpl-open.md)).
   Parked until the maintainer sets up a Simpl-Open sandbox to test
@@ -525,7 +675,8 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
 - Revise agreements when the scope of the data changes, for example a
   data subject objects to a use, or the consumer asks to change the
   scope of the first agreement (maintainer, 2026-11-14). Until then an
-  agreement keeps working after its dataset leaves the source.
+  agreement keeps working after its dataset leaves the source. Planned
+  with consent in 1.5, if the consent ADR finds a standard.
 - More harvest sources for datasets ([ADR 0020](adr/0020-dataset-harvest.md)),
   such as a DCAT-AP endpoint or CKAN; which catalogues to support is
   decided later (maintainer, 2026-11-14).
@@ -552,7 +703,7 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
     authority's CA and binds the caller's identity attributes to it
     ([ADR 0017](adr/0017-simpl-open.md));
   - consent enforcement: honouring a data subject's consent (and its
-    withdrawal) when data is shared;
+    withdrawal) when data is shared (researched for 1.5, above);
   - a configurable API gateway in front of the participant's services,
     like Simpl-Open's Tier 1 and Tier 2 gateways (attribute-based access).
 
