@@ -507,15 +507,43 @@ async fn finish_run(
     }
 }
 
-/// One run at `now`. Returns when the compliance credential expires.
+/// One run at `now` (module doc, steps 1 to 5). Returns when the
+/// compliance credential expires.
 async fn onboard(identity: &Identity, now: u64) -> Result<Option<i64>, String> {
     let onboarding = identity.gaiax.as_ref().ok_or("Gaia-X is off")?;
     let participant = read_participant(&onboarding.participant_file)?;
+    let signed = build_and_sign(identity, participant, Period::starting(now))?;
+    let answer = send_and_check(identity, onboarding, &signed, now).await?;
+    store_credentials(identity, &signed, &answer)?;
+    Ok(answer.validity.until)
+}
+
+/// What one run signs and sends.
+struct SignedCredentials {
+    /// The `gx:LegalPerson` credential, as read back from its JWT.
+    legal_person: Credential,
+    /// The `gx:Issuer` (terms and conditions) credential, read back.
+    terms: Credential,
+    /// The notary's registration number credential, as in the file.
+    registration: Credential,
+    /// The presentation of the three, signed.
+    presentation: String,
+    /// The id and `digestSRI` of each of the three: what the answer must
+    /// list.
+    sent: Vec<(String, String)>,
+}
+
+/// Step 2: builds the legal person and terms and conditions credentials
+/// for `period`, signs them and the presentation of the three, and notes
+/// the digest of each.
+fn build_and_sign(
+    identity: &Identity,
+    participant: Participant,
+    period: Period,
+) -> Result<SignedCredentials, String> {
     let did = identity.participant_id.as_str();
     let base = identity.public_base.as_str();
-    let period = Period::starting(now);
     let signer = identity.signer();
-
     let legal_id = credential_url(base, LEGAL_PERSON);
     let legal = legal_person(
         &legal_id,
@@ -535,31 +563,45 @@ async fn onboard(identity: &Identity, now: u64) -> Result<Option<i64>, String> {
     );
     let legal_jwt = sign_credential(signer, &legal).map_err(|e| e.to_string())?;
     let terms_jwt = sign_credential(signer, &terms).map_err(|e| e.to_string())?;
-    let registration_jwt = participant.registration.jwt();
-    let vp = presentation(did, &[&legal_jwt, &terms_jwt, registration_jwt], period);
-    let vp_jwt = sign_presentation(signer, &vp).map_err(|e| e.to_string())?;
-
-    // what the answer must list: each credential's id and digest
-    let registration_payload = participant
-        .registration
-        .payload()
-        .map_err(|e| e.to_string())?;
-    let registration_id = participant.registration.id.clone().unwrap_or_default();
+    let registration = participant.registration;
+    let vp = presentation(did, &[&legal_jwt, &terms_jwt, registration.jwt()], period);
+    let presentation = sign_presentation(signer, &vp).map_err(|e| e.to_string())?;
+    // the digest of what is sent, not of what is read back: the service
+    // hashes the payload it receives
+    let registration_payload = registration.payload().map_err(|e| e.to_string())?;
+    let registration_id = registration.id.clone().unwrap_or_default();
     let sent = vec![
-        (legal_id.clone(), digest_sri(&legal)),
-        (terms_id.clone(), digest_sri(&terms)),
+        (legal_id, digest_sri(&legal)),
+        (terms_id, digest_sri(&terms)),
         (registration_id, digest_sri(&registration_payload)),
     ];
+    Ok(SignedCredentials {
+        legal_person: Credential::parse(&legal_jwt).map_err(|e| e.to_string())?,
+        terms: Credential::parse(&terms_jwt).map_err(|e| e.to_string())?,
+        registration,
+        presentation,
+        sent,
+    })
+}
 
-    let vcid = credential_url(base, COMPLIANCE);
+/// Steps 3 and 4: sends the presentation, asking for the compliance
+/// credential's id, and checks the answer: its type, id and digests, and
+/// its signature by a key of the service's `did:web` document.
+async fn send_and_check(
+    identity: &Identity,
+    onboarding: &Onboarding,
+    signed: &SignedCredentials,
+    now: u64,
+) -> Result<Credential, String> {
+    let vcid = credential_url(&identity.public_base, COMPLIANCE);
     let answer_text = onboarding
         .compliance
-        .request_compliance(&vcid, &vp_jwt)
+        .request_compliance(&vcid, &signed.presentation)
         .await
         .map_err(|e| format!("compliance service: {e}"))?;
     let answer = Credential::parse(answer_text.trim())
         .map_err(|e| format!("compliance service answer: {e}"))?;
-    check_answer(&answer, &vcid, &sent).map_err(|e| e.to_string())?;
+    check_answer(&answer, &vcid, &signed.sent).map_err(|e| e.to_string())?;
     let service = identity
         .directory
         .did_document(&answer.issuer)
@@ -568,20 +610,25 @@ async fn onboard(identity: &Identity, now: u64) -> Result<Option<i64>, String> {
     answer
         .verify(&service, now, LEEWAY)
         .map_err(|e| format!("compliance service answer: {e}"))?;
+    Ok(answer)
+}
 
-    let legal_read = Credential::parse(&legal_jwt).map_err(|e| e.to_string())?;
-    let terms_read = Credential::parse(&terms_jwt).map_err(|e| e.to_string())?;
+/// Step 5: stores the four credentials, replacing those of the last run.
+fn store_credentials(
+    identity: &Identity,
+    signed: &SignedCredentials,
+    answer: &Credential,
+) -> Result<(), String> {
     let stored = [
-        stored(&legal_read, LEGAL_PERSON),
-        stored(&terms_read, TERMS_AND_CONDITIONS),
-        stored(&participant.registration, REGISTRATION_NUMBER),
-        stored(&answer, COMPLIANCE),
+        stored(&signed.legal_person, LEGAL_PERSON),
+        stored(&signed.terms, TERMS_AND_CONDITIONS),
+        stored(&signed.registration, REGISTRATION_NUMBER),
+        stored(answer, COMPLIANCE),
     ];
     identity
         .store
         .replace_gaiax_credentials(&stored)
-        .map_err(|e| e.to_string())?;
-    Ok(answer.validity.until)
+        .map_err(|e| e.to_string())
 }
 
 /// A Gaia-X credential as the store keeps it; its `holder_pid` says which
