@@ -575,10 +575,11 @@ CI job (maintainer, 2026-11-15).
 
 - Cooper plays the health data access body (HDAB) towards Marley, the
   data user; Bob and Alice stay a peer to peer agreement (maintainer,
-  2026-11-15). Marley needs a data permit.
+  2026-11-15). Marley needs a data permit, issued by Cooper as the HDAB
+  (EHDS Art. 68), so Cooper runs his own issuer next to the authority's.
 - No secure processing environment is built: Cooper runs a fixed
-  pipeline on Alice's data that produces counts, and transfers that
-  output to Marley (maintainer, 2026-11-15).
+  pipeline on Alice's data that produces counts, and pushes that output
+  to RustFS in Marley's infrastructure (maintainer, 2026-11-15).
 - Agreements that depend on an upstream agreement: Cooper's offer to
   Marley cannot be wider than Cooper's agreement with Alice (purpose,
   users, duration). No specification defines this; research and ADR
@@ -637,13 +638,15 @@ rejects. It runs beside the releases.
 
 Four participants and an authority (maintainer, 2026-11-15), modelled on
 a health data access body (HDAB) and the ICUdata4EU ICU data space. The
-authority governs the data space and runs the issuer. Alice, a data
+authority governs the data space and runs the issuer; it plays the
+national contact point for secondary use (EHDS Art. 75, which the
+coordinator HDAB of Art. 55(1) may also be). Alice, a data
 provider, holds patient records. Bob, a data user, asks Alice directly,
 peer to peer (the EHDS does not exclude it); Alice pushes the data to
 object storage (RustFS) in Bob's own infrastructure. Cooper plays the
-HDAB towards Marley, another data user: Marley needs a data permit, and
-Cooper runs a fixed pipeline on Alice's data that produces counts and
-transfers that output to the data user. No secure processing
+HDAB towards Marley, another data user: Cooper issues Marley's data
+permit, runs a fixed pipeline on Alice's data that produces counts, and
+pushes that output to RustFS in Marley's infrastructure. No secure processing
 environment (SPE) is built; the pipeline stands in for one (maintainer,
 2026-11-15). The demo must answer, by running it:
 
