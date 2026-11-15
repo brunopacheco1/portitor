@@ -355,7 +355,7 @@ running without Gaia-X (maintainer, 2026-11-15).
   offering credentials, OpenID4VC, label levels 1 to 3, calling the
   notary, Gaia-X with EDC.
 
-## 0.9 Operations
+## 0.9 Operations (released 2026-11-15 as v0.9.0)
 
 Plan approved by the maintainer on 2026-11-15. The two-participant demo
 in Docker Compose exists since 0.4; 0.9 adds what an operator needs to
