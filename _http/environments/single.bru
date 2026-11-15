@@ -9,8 +9,13 @@ vars {
   stsUrl: http://127.0.0.1:9203/sts/token
   dcpScope: org.eclipse.dspace.dcp.vc.type:MembershipCredential
   mgmtUrl: http://127.0.0.1:8081
+  identityMgmtUrl: http://127.0.0.1:9103
+  issuerMgmtUrl: http://127.0.0.1:9104
+  issuerDid: did:web:127.0.0.1%3A9100
 }
 vars:secret [
   apiKey,
-  stsSecret
+  stsSecret,
+  identityApiKey,
+  issuerApiKey
 ]

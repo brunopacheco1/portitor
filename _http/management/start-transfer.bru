@@ -1,0 +1,39 @@
+meta {
+  name: Start transfer (as consumer)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{mgmtUrl}}/v1/transfers
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "agreementId": "{{mgmtAgreementId}}",
+    "format": "HttpData-PULL"
+  }
+}
+
+script:post-response {
+  if (res.body && res.body.consumerPid) {
+    bru.setVar("mgmtTransferPid", res.body.consumerPid);
+  }
+}
+
+assert {
+  res.status: eq 201
+}
+
+docs {
+  Use the "two-connectors" environment. Negotiate first ("Start negotiation"), then
+  "Get negotiation" saves mgmtAgreementId. The weather-stations data is served by
+  scripts/dev-identities.sh (portitor:source in examples/datasets.json).
+  Saves mgmtTransferPid. Debug: management.rs and transfer.rs (crates/portitor-connector/src).
+}

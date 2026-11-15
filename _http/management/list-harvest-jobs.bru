@@ -1,0 +1,31 @@
+meta {
+  name: List harvest jobs
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{mgmtUrl}}/v1/harvest-jobs?limit=20
+  body: none
+  auth: inherit
+}
+
+params:query {
+  limit: 20
+}
+
+script:post-response {
+  if (res.body && res.body.jobs && res.body.jobs.length > 0) {
+    bru.setVar("harvestJobId", res.body.jobs[0].id);
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  The connector's harvest runs (ADR 0020): datasets and, with a bundle, bundle runs,
+  newest first. Saves the newest id as harvestJobId. Use the "single" environment to see
+  the provider's runs; in "two-connectors" this is the consumer, which has no datasets.
+}

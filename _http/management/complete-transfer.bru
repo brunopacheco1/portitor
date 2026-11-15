@@ -1,0 +1,20 @@
+meta {
+  name: Complete transfer
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{mgmtUrl}}/v1/transfers/{{mgmtTransferPid}}/completion
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 202
+}
+
+docs {
+  Tells the provider the transfer is done (TransferCompletionMessage); the data
+  address stops working.
+}

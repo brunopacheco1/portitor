@@ -317,7 +317,7 @@ Plan approved by the maintainer on 2026-11-14.
   stays the DSP context alone; datasets use full IRIs (maintainer,
   2026-11-14).
 
-## 0.8 Gaia-X Trust Framework (Danube)
+## 0.8 Gaia-X Trust Framework (Danube) (released 2026-11-15 as v0.8.0)
 
 Plan approved by the maintainer on 2026-11-15. Gaia-X does not use DCP,
 and EDC 1.0.0-RC7 refuses a credential that is not about the holder's
@@ -391,6 +391,12 @@ running without Gaia-X (maintainer, 2026-11-15).
   (`edc.iam.credential.revocation.cache.validity`). Demos, the EDC test
   and the TCK runs use 0. Amends ADR 0016 ("Presentations are not
   cached").
+- Website trust values (maintainer, 2026-11-15): the site shows "not
+  available" for the SonarQube Cloud quality gate and for REUSE. Register
+  the repository with the REUSE API (open since 0.1), check that the
+  quality gate can be read without a token
+  (`api/qualitygates/project_status`), and check that the site shows
+  both after its next build.
 - API and config freeze, upgrade notes, documentation review.
 - Exit: Scorecard at least 8/10; no open high findings in Sonar or CodeQL.
 

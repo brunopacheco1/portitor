@@ -1,0 +1,26 @@
+meta {
+  name: Fetch data
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{dataEndpoint}}
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: {{dataAuthorization}}
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Run "management/Get transfer" first: it saves dataEndpoint and dataAuthorization.
+  The provider fetches the dataset's portitor:source and streams it back. After
+  "Complete transfer", or once the token expires, the answer is 401.
+  Debug: data_plane.rs (crates/portitor-connector/src).
+}

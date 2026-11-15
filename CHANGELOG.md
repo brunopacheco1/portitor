@@ -12,6 +12,41 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Documentation
+
+- C1 and C2 diagrams redrawn with more context: C1 shows the dataspace
+  as a boundary (the authority, which sets the rules, and its members),
+  the people and applications inside the organisations, the whole
+  optional Gaia-X side (compliance service, GXDCH notary, certificate
+  authority) and a legend. C2 has fewer crossings and is split in two:
+  `c2-containers` (one participant: trust settings, public and internal
+  ports, who pulls from the data plane, the Gaia-X files) and the new
+  `c2-dataspace-authority-containers` (the issuer, and the bundle built
+  offline with `portitor-issuer bundle build`).
+- New C4 deployment diagram (`deployment`: hosts, proxies, ports,
+  volumes and mounts of a participant and the dataspace authority) and
+  three C4 dynamic diagrams in sequence style (`dynamic-join`,
+  `dynamic-negotiate-transfer`, `dynamic-gaiax-onboarding`), shown in
+  ARCHITECTURE.md under "Deployment and flows".
+- Documentation review after 0.8: the Compose demo defaults to the 0.8.0
+  images; the README links the website at its own address; AGENTS.md
+  names DCP v1.0.1 and Gaia-X as shipped; the security assurance case
+  names the compliance issuer pin (`PORTITOR_GAIAX_COMPLIANCE_DID`) and
+  that compliance credentials from unlisted services are skipped.
+- The `_http/` Bruno collection covers what was built since 0.4:
+  transfers and their data, harvest jobs, the identity's credentials,
+  credential requests and Gaia-X runs, and the issuer's participants and
+  credentials. `scripts/dev-identities.sh` serves `examples/data`, and the
+  `weather-stations` dataset of `examples/datasets.json` has a
+  `portitor:source`, so a transfer runs in the VS Code set-up. The STS
+  token script no longer uses `URLSearchParams`, which the Bruno CLI's
+  script runtime lacks. Roadmap 0.10: get the website's SonarQube Cloud
+  and REUSE values shown.
+- C4 code diagrams brought up to date with 0.8: caller authentication
+  shows the Gaia-X compliance checks (ADR 0022), presentations the `gx:`
+  scope type rule (ADR 0021), and Gaia-X onboarding the steps of a run
+  and its schedule.
+
 ## [0.8.0] - 2026-11-15
 
 ### Documentation

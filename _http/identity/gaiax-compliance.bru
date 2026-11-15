@@ -1,0 +1,22 @@
+meta {
+  name: Gaia-X compliance runs
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{identityMgmtUrl}}/v1/gaiax/compliance
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  The identity's Gaia-X compliance runs (ADR 0021), newest first. Empty here: the
+  identities of scripts/dev-identities.sh have no Gaia-X settings, and POST to the same
+  path answers 404. To try Gaia-X, see docs/TESTING.md, "How to test Gaia-X compliance",
+  where POST starts a run.
+}

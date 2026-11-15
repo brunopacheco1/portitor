@@ -808,7 +808,8 @@ trusted issuer (DCP, ADR 0016). The task **portitor: identities**
 it starts a `portitor-issuer` on `127.0.0.1:9100` (management
 `127.0.0.1:9104`, key in `target/vscode-dcp/issuer/management.key`) and
 two `portitor-identity` processes, each with a `MembershipCredential` it
-asked the issuer for:
+asked the issuer for, and serves `examples/data` on `127.0.0.1:9105`, the
+upstream data of the `weather-stations` dataset:
 
 | Participant | DID | Identity (DID document, STS, credential service) | Identity management |
 |---|---|---|---|
@@ -836,8 +837,30 @@ key the first time. In the `_http/` collection, put that key in the
 `apiKey` secret and the consumer's STS client secret
 (`target/vscode-dcp/consumer/sts-client-secret`) in `stsSecret`; the
 collection then gets a fresh token from the consumer's STS before each
-DSP request (`auth/STS token` shows one). Delete the `.db` files to
-start from an empty store.
+DSP request (`auth/STS token` shows one). For the `identity` and
+`issuer` folders, put the identity's management key
+(`target/vscode-dcp/<provider or consumer>/identity-management.key`:
+the provider's with `single`, the consumer's with `two-connectors`) in
+`identityApiKey` and `target/vscode-dcp/issuer/management.key` in
+`issuerApiKey`. Delete the `.db` files to start from an empty store.
+
+The collection's folders:
+
+| Folder | Requests |
+|---|---|
+| `metadata`, `catalog`, `negotiation-provider` | DSP requests to the provider, each with a fresh DCP token |
+| `management` | the consumer's management API: start and read negotiations, start, read and complete transfers, harvest jobs, the OpenAPI description |
+| `data` | fetch the data of a started transfer from the provider's data plane, with the token of its data address |
+| `identity` | an identity's management API: credentials, credential requests to the issuer, Gaia-X compliance runs |
+| `issuer` | the issuer's management API: participants and issued credentials |
+
+A transfer in `two-connectors`: `Start negotiation`, `Get negotiation`
+(saves the agreement id), `Start transfer`, `Get transfer` (saves the
+data address), `data/Fetch data`, `Complete transfer`. The provider
+fetches the `weather-stations` data from the small web server that
+`scripts/dev-identities.sh` runs on `127.0.0.1:9105` (`examples/data`,
+the dataset's `portitor:source`). With the Bruno CLI, a step needs
+about a second after the one before (`bru run ... --delay 1000`).
 
 To debug one test, use the **Debug** link that rust-analyzer shows above
 each `#[test]`, or add the test name to `"args"` of a test configuration.

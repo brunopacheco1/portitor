@@ -1,0 +1,19 @@
+meta {
+  name: Get harvest job
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{mgmtUrl}}/v1/harvest-jobs/{{harvestJobId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  One run with its counts and the reasons a dataset was rejected.
+}
