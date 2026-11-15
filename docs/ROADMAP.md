@@ -435,6 +435,24 @@ decided. Each names what is in place now.
   and HealthData@EU authorities publish schemas, whether a DCAT catalogue
   of schema distributions can replace `latest.json`, and where the
   connector should keep them.
+- **Who calls the data plane, and with which credentials**
+  (maintainer, 2026-11-15: to be investigated, for a future release).
+  Today only participants are identified, and only in the control
+  plane: every DSP request carries a DCP token, and the connector checks
+  the caller's DID and credentials ([ADR 0016](adr/0016-dsp-caller-authentication.md),
+  [ADR 0019](adr/0019-credential-constraints.md)). The data plane checks
+  only the bearer token handed out when the transfer started
+  ([ADR 0013](adr/0013-transfer-and-data-plane.md)): whoever holds the
+  token gets the data until the transfer ends. No identity or credential
+  is checked on each data request, and the person or application behind
+  the consumer is never identified. To investigate: how a consumer's
+  users and applications prove who they are and which credentials they
+  hold when they call the data plane (for example a DCP token or a
+  verifiable presentation per request, OpenID4VP as Gaia-X Danube and
+  the EU Digital Identity Wallet use it, Simpl-Open's mTLS at its Tier 2
+  gateway, what the EDC data plane does); whether the policy is checked
+  again on each request; and how this fits the consent and API gateway
+  items under "Later". Standards check and an ADR before any code.
 - **Key custody and key rotation** (maintainer, 2026-11-15: a key
   custody service such as OpenBao is probably better). Today each
   component (identity, issuer, bundle signing) reads one P-256 private
