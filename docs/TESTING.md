@@ -797,7 +797,7 @@ removes the containers and volumes of the last run
 both on every pull request, with the binaries and images it has just
 built.
 
-Before the 0.9.0 images are released, or to try your own changes,
+To try your own changes,
 build local images as for the [EDC interop test](#edc-interop-test)
 and name them:
 
