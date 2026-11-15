@@ -282,7 +282,9 @@ it, and [examples/healthdcat-datasets.json](examples/healthdcat-datasets.json)
 has datasets written for it. See [DEPLOYING](docs/DEPLOYING.md#schema-and-vocabulary-bundle).
 
 To see two participants agree a contract and transfer a file, run the demo
-in Docker Compose (needs Docker, `curl`, `jq` and `openssl`):
+in Docker Compose (needs Docker with the Compose plugin, `curl`, `jq` and
+`openssl`). The [quickstart](https://bruno.pacheco.lu/portitor/#try) on the
+website walks through it: what to run, where to look, how to clean up.
 
 ```sh
 scripts/demo-compose.sh
@@ -307,7 +309,10 @@ restricted dataset to a member; last, once the issuer revokes the
 consumer's `DataProcessorCredential`, a new transfer that needs it is
 refused. It stops everything at the end;
 `KEEP=1` leaves it running. `scripts/demo.sh` does the same without Docker
-(needs Python 3 as well).
+(needs Python 3 as well). To see the components' traces and metrics, add
+the optional observability stack (OpenTelemetry Collector, Jaeger,
+Prometheus): `EXTRA_COMPOSE=examples/compose/observability.yaml`, see
+[TESTING](docs/TESTING.md#observability-stack-by-hand).
 
 A connector does not run alone: it needs its participant's identity
 component for DCP (`PORTITOR_STS_URL`, `PORTITOR_STS_CLIENT_SECRET_FILE`,

@@ -67,6 +67,9 @@ h3 { font-size: 1.1rem; margin: 1.5rem 0 .5rem; }
 .cards h3 { margin-top: 0; }
 .cards p { margin: 0; color: var(--muted); }
 
+pre { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: .75rem 1rem; overflow-x: auto; max-width: 48rem; }
+pre code { font-size: .88rem; }
+
 .steps { padding-left: 1.4rem; max-width: 48rem; }
 .steps li { margin: .35rem 0; }
 

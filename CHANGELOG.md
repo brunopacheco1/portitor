@@ -61,6 +61,15 @@ versions may change behaviour and configuration.
   calls its own readiness check and exits 0 or 1. Each image has a
   Docker `HEALTHCHECK` with it, and the Compose demo starts each
   component once those it needs are healthy.
+- An optional observability stack for the Compose demo
+  (`examples/compose/observability.yaml`, ADR 0023 section 6): an
+  OpenTelemetry Collector, Jaeger and Prometheus, pinned by digest,
+  started by hand. `scripts/demo-compose.sh` takes it with
+  `EXTRA_COMPOSE=examples/compose/observability.yaml`. See TESTING,
+  "Observability stack (by hand)".
+- A quickstart on the website ("Try it"): what to install, how to run
+  the Compose demo, where to look and how to clean up. The README links
+  to it.
 
 ### Changed
 

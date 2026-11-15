@@ -793,6 +793,41 @@ Then request a transfer under that agreement with
 the HealthDCAT-AP datasets have a data source, so it gets `STARTED` and a
 `dataAddress` to fetch from (on `127.0.0.1:18080`).
 
+### Observability stack (by hand)
+
+`examples/compose/observability.yaml` adds an OpenTelemetry Collector,
+Jaeger and Prometheus to the Compose demo
+([ADR 0023](adr/0023-observability.md), section 6). It sets
+`OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318` on the issuer,
+both identities and both connectors; the collector
+(`examples/compose/otel-collector.yaml`) sends the traces to Jaeger and
+the metrics to Prometheus's OTLP endpoint. Only images that export
+OpenTelemetry (0.9 or later) send anything. It is started by hand; CI
+does not run it.
+
+```sh
+EXTRA_COMPOSE=examples/compose/observability.yaml KEEP=1 scripts/demo-compose.sh
+```
+
+- Jaeger UI: <http://127.0.0.1:16686>, pick a Portitor service.
+- Prometheus UI: <http://127.0.0.1:9090>. Prometheus turns OpenTelemetry
+  names into its own: dots become underscores, the unit is added as a
+  suffix and a histogram is stored as `_bucket`, `_sum` and `_count`
+  series ([`translation_strategy`](https://github.com/prometheus/prometheus/blob/v3.16.0/docs/configuration/configuration.md),
+  default `UnderscoreEscapingWithSuffixes`). `service.name` becomes the
+  `job` label. So `http.server.request.duration` (seconds) is:
+
+```promql
+http_server_request_duration_seconds_count
+histogram_quantile(0.95, sum by (le, job) (rate(http_server_request_duration_seconds_bucket[5m])))
+```
+
+Stop and remove everything, volumes included:
+
+```sh
+docker compose -f examples/compose/compose.yaml -f examples/compose/observability.yaml down --volumes
+```
+
 ## Debugging in VS Code
 
 The repository ships shared VS Code files in `.vscode/`: debug
