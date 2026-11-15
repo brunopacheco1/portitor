@@ -12,29 +12,6 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
-### Added
-
-- Traces and metrics with OpenTelemetry in all three components
-  ([ADR 0023](docs/adr/0023-observability.md)), off unless
-  `OTEL_EXPORTER_OTLP_ENDPOINT` is set: OTLP over HTTP with Protocol
-  Buffers, sent with Portitor's own HTTPS client (no HTTP/2, no gRPC).
-  A span per request served (route templates only) and sent, a span per
-  DSP outbox delivery, and each negotiation and transfer state change as
-  a span event with its DSP process ids. Metrics:
-  `http.server.request.duration`, `http.client.request.duration` and
-  Portitor's own under `portitor.` (negotiations and transfers ended,
-  DSP requests refused, outbox resends and give-ups, harvest runs,
-  rejected datasets, bundle version in force); the list is in
-  DEPLOYING, section 6. The `traceparent` header crosses only calls
-  inside one participant (connector to its STS and to its data
-  sources); DSP calls carry none and ignore one received. With export
-  on, JSON log lines inside a span start with `trace_id`. New
-  dependencies: `opentelemetry`, `opentelemetry_sdk`,
-  `opentelemetry-otlp`, `opentelemetry-http` 0.33 and
-  `tracing-opentelemetry` 0.34, grouped in one Dependabot update.
-- Each negotiation and transfer state change is logged (INFO, target
-  `portitor::state`) with both process ids and the old and new state.
-
 ### Documentation
 
 - C1 and C2 diagrams redrawn with more context: C1 shows the dataspace
@@ -69,6 +46,59 @@ versions may change behaviour and configuration.
   shows the Gaia-X compliance checks (ADR 0022), presentations the `gx:`
   scope type rule (ADR 0021), and Gaia-X onboarding the steps of a run
   and its schedule.
+
+### Added
+
+- Health checks in Eclipse EDC's Observability API shape on the
+  management port of the connector, the identity component and the
+  issuer, without the API key (ADR 0023): `GET /api/check/liveness`,
+  `/readiness`, `/startup`, `/health`, HTTP 200 or 503 with a
+  `HealthStatus` body. Readiness checks only the component's own
+  dependencies (its SQLite file, its key, its DID document or status
+  lists; for the connector the start harvest, the bundle and its own
+  DID document and STS), never other participants.
+- A `health` subcommand in each binary (`portitor-connector health`):
+  calls its own readiness check and exits 0 or 1. Each image has a
+  Docker `HEALTHCHECK` with it, and the Compose demo starts each
+  component once those it needs are healthy.
+- An optional observability stack for the Compose demo
+  (`examples/compose/observability.yaml`, ADR 0023 section 6): an
+  OpenTelemetry Collector, Jaeger and Prometheus, pinned by digest,
+  started by hand. `scripts/demo-compose.sh` takes it with
+  `EXTRA_COMPOSE=examples/compose/observability.yaml`. See TESTING,
+  "Observability stack (by hand)".
+- A quickstart on the website ("Try it"): what to install, how to run
+  the Compose demo, where to look and how to clean up. The README links
+  to it.
+- Traces and metrics with OpenTelemetry in all three components
+  ([ADR 0023](docs/adr/0023-observability.md)), off unless
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is set: OTLP over HTTP with Protocol
+  Buffers, sent with Portitor's own HTTPS client (no HTTP/2, no gRPC).
+  A span per request served (route templates only) and sent, a span per
+  DSP outbox delivery, and each negotiation and transfer state change as
+  a span event with its DSP process ids. Metrics:
+  `http.server.request.duration`, `http.client.request.duration` and
+  Portitor's own under `portitor.` (negotiations and transfers ended,
+  DSP requests refused, outbox resends and give-ups, harvest runs,
+  rejected datasets, bundle version in force); the list is in
+  DEPLOYING, section 6. The `traceparent` header crosses only calls
+  inside one participant (connector to its STS and to its data
+  sources); DSP calls carry none and ignore one received. With export
+  on, JSON log lines inside a span start with `trace_id`. New
+  dependencies: `opentelemetry`, `opentelemetry_sdk`,
+  `opentelemetry-otlp`, `opentelemetry-http` 0.33 and
+  `tracing-opentelemetry` 0.34, grouped in one Dependabot update.
+- Each negotiation and transfer state change is logged (INFO, target
+  `portitor::state`) with both process ids and the old and new state.
+
+### Changed
+
+- The management port is always bound now (default `127.0.0.1`).
+  Without `PORTITOR_MANAGEMENT_API_KEY_FILE` it serves only the health
+  checks; with it, also the management API, as before. Two processes on
+  one host need different `PORTITOR_MANAGEMENT_BIND` ports.
+- The Compose demo's default images are 0.9.0: older images have no
+  `health` subcommand.
 
 ## [0.8.0] - 2026-11-15
 

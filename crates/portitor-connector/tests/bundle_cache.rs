@@ -112,7 +112,7 @@ impl Authority {
             issuer_service_url: format!("http://127.0.0.1:{port}/issuer"),
             bind: "unused".to_owned(),
             db_file: "unused".into(),
-            management: None,
+            management: portitor_issuer::config::ManagementConfig::default(),
             allow_http: true,
             max_active_per_holder: 10,
             bundle_key_file: None,

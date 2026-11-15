@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Portitor management API",
-    "description": "Starts and follows contract negotiations and transfers in which this connector is the consumer, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description needs the API key.",
+    "description": "Starts and follows contract negotiations and transfers in which this connector is the consumer, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description and the health checks needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
@@ -10,6 +10,120 @@
     "version": "0.8.0"
   },
   "paths": {
+    "/api/check/health": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "The component's health: the same checks as readiness.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "Every check passed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A check failed; its failure says why",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/check/liveness": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "The process answers: it lives. Checks nothing else.",
+        "operationId": "liveness",
+        "responses": {
+          "200": {
+            "description": "The process runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/check/readiness": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Whether the component can serve: its own dependencies only (its\ndatabase, its key, ...), never other participants.",
+        "operationId": "readiness",
+        "responses": {
+          "200": {
+            "description": "Every check passed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A check failed; its failure says why",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/check/startup": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Whether the component has started: the same checks as readiness.",
+        "operationId": "startup",
+        "responses": {
+          "200": {
+            "description": "Every check passed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A check failed; its failure says why",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/harvest-jobs": {
       "get": {
         "tags": [
@@ -641,6 +755,57 @@
   },
   "components": {
     "schemas": {
+      "ComponentResult": {
+        "type": "object",
+        "description": "The result of one check: EDC's `HealthCheckResult`.",
+        "required": [
+          "component",
+          "isHealthy",
+          "failure"
+        ],
+        "properties": {
+          "component": {
+            "type": "string",
+            "description": "What was checked, for example `database`."
+          },
+          "failure": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Failure",
+                "description": "Why it failed; `null` when it passed (always present)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "isHealthy": {
+            "type": "boolean",
+            "description": "Whether the check passed."
+          }
+        }
+      },
+      "Failure": {
+        "type": "object",
+        "description": "Why a check failed: EDC's `Failure`.",
+        "required": [
+          "messages",
+          "failureDetail"
+        ],
+        "properties": {
+          "failureDetail": {
+            "type": "string",
+            "description": "The messages joined with `\", \"`, as EDC's `getFailureDetail()`."
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What went wrong. Never a secret, key or token."
+          }
+        }
+      },
       "HarvestCountsView": {
         "type": "object",
         "description": "What a harvest run did, counted.",
@@ -847,6 +1012,27 @@
             "type": "string",
             "description": "What started it: `start`, `interval`, or `bundle` (a new bundle\nversion came in, so the stored datasets were checked again).",
             "example": "interval"
+          }
+        }
+      },
+      "HealthStatus": {
+        "type": "object",
+        "description": "The answer of every check route: EDC's `HealthStatus`.",
+        "required": [
+          "isSystemHealthy",
+          "componentResults"
+        ],
+        "properties": {
+          "componentResults": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ComponentResult"
+            },
+            "description": "One result per check."
+          },
+          "isSystemHealthy": {
+            "type": "boolean",
+            "description": "Whether every component is healthy. False when there is no\ncomponent at all, as in EDC."
           }
         }
       },
@@ -1097,6 +1283,10 @@
     {
       "name": "Harvest",
       "description": "Dataset harvest runs: datasets come from the source into the catalog (ADR 0020). Read only."
+    },
+    {
+      "name": "Health",
+      "description": "Health checks in Eclipse EDC's Observability API shape (ADR 0023): no API key. Served even when the management API is off."
     }
   ]
 }

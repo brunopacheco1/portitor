@@ -47,11 +47,13 @@ CLIENTS=50
 ISSUER_ADDRESS=127.0.0.1:18260
 ISSUER_MANAGEMENT=127.0.0.1:18261
 PROVIDER=127.0.0.1:18280
+PROVIDER_MANAGEMENT=127.0.0.1:18281 # health checks only (no key)
 PROVIDER_IDENTITY=127.0.0.1:18282
 PROVIDER_IDENTITY_MANAGEMENT=127.0.0.1:18283
 CONSUMER_IDENTITY=127.0.0.1:18292
 CONSUMER_IDENTITY_MANAGEMENT=127.0.0.1:18293
 TCK_PROVIDER=127.0.0.1:18284 # the tck build, without DCP
+TCK_MANAGEMENT=127.0.0.1:18285 # health checks only (no key)
 TCK_HEADER=measure-without-dcp
 
 WORK=$(mktemp -d)
@@ -117,7 +119,7 @@ echo "identity_binary_bytes=$(stat -c %s "$IDENTITY")"
 echo "issuer_binary_bytes=$(stat -c %s "$ISSUER")"
 start=$(now_ms)
 start_connector provider "$PROVIDER_ID" "$PROVIDER" "$PROVIDER_IDENTITY" \
-  PORTITOR_DATASETS_FILE=tck/datasets.json
+  PORTITOR_DATASETS_FILE=tck/datasets.json PORTITOR_MANAGEMENT_BIND="$PROVIDER_MANAGEMENT"
 CONNECTOR_PID=${PIDS[-1]}
 # includes the start check: the connector resolves its DID and asks its STS
 echo "connector_startup_ms=$(started_in_ms "http://$PROVIDER/health" "$start")"
@@ -146,6 +148,7 @@ echo "issuer_peak_rss_kb=$(rss_kb "$ISSUER_PID" VmHWM)"
 if [[ -n ${TCK_CONNECTOR:-} ]]; then
   mkdir -p "$WORK/tck"
   PORTITOR_BIND=$TCK_PROVIDER PORTITOR_PUBLIC_URL=http://$TCK_PROVIDER \
+    PORTITOR_MANAGEMENT_BIND=$TCK_MANAGEMENT \
     PORTITOR_DATASETS_FILE=tck/datasets.json PORTITOR_DB_FILE="$WORK/tck/connector.db" \
     PORTITOR_TCK_AUTHORIZATION=$TCK_HEADER \
     "$TCK_CONNECTOR" >"$WORK/tck-connector.log" 2>&1 &

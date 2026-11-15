@@ -948,7 +948,10 @@ whether the change itself lands in 0.11 or later.
   check the database or partners; there is no metrics endpoint,
   OpenTelemetry or readiness endpoint (checked in the code). ARCHITECTURE
   principle 11 asks for them.
-- **Current state: Open.** Structured JSON logs exist.
+- **Current state: Open.** Structured JSON logs exist. Since 0.9 each
+  component has liveness and readiness checks on its management port
+  (ADR 0023, DEPLOYING "Health and logs"); metrics and traces are still
+  missing.
 - **Next.** ROADMAP 0.9 (Operations).
 
 <a id="td-19"></a>

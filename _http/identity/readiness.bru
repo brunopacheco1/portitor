@@ -1,0 +1,22 @@
+meta {
+  name: Readiness
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{identityMgmtUrl}}/api/check/readiness
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+  res.body.isSystemHealthy: eq true
+}
+
+docs {
+  ADR 0023: readiness of the identity component, from its own dependencies only:
+  database (SQLite file), key (loaded and signs) and did-document (served, with that
+  key). 503 with the failing component and why when one fails. No API key.
+}

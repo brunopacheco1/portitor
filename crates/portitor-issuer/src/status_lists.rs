@@ -40,7 +40,7 @@ struct Signed {
 }
 
 impl StatusLists {
-    fn get(&self, profile: Profile) -> String {
+    pub(crate) fn get(&self, profile: Profile) -> String {
         let signed = self.signed.lock().unwrap_or_else(PoisonError::into_inner);
         match profile {
             Profile::Vc11 => signed.vc11.clone(),
@@ -58,7 +58,7 @@ impl StatusLists {
 }
 
 /// Every profile; each has its own status list.
-const PROFILES: [Profile; 2] = [Profile::Vc11, Profile::Vc20];
+pub(crate) const PROFILES: [Profile; 2] = [Profile::Vc11, Profile::Vc20];
 
 /// The last part of a list's URL. The one place that maps a profile to
 /// its list name; [`from_name`] maps back through it.

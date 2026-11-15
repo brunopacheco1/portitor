@@ -20,6 +20,7 @@
 //! entry never replaces a good one.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -402,6 +403,8 @@ pub struct DatasetHarvester {
     copy: DatasetCopy,
     /// Held while a run is going on.
     busy: Mutex<()>,
+    /// Set once [`DatasetHarvester::start`] has run (readiness, ADR 0023).
+    started: AtomicBool,
 }
 
 impl std::fmt::Debug for DatasetHarvester {
@@ -437,6 +440,7 @@ impl DatasetHarvester {
             store,
             copy: DatasetCopy::default(),
             busy: Mutex::new(()),
+            started: AtomicBool::new(false),
         }
     }
 
@@ -472,7 +476,15 @@ impl DatasetHarvester {
             );
         }
         tracing::info!(datasets = self.copy.active_count(), "catalog ready");
+        self.started.store(true, Ordering::SeqCst);
         Ok(())
+    }
+
+    /// Whether the start run ([`DatasetHarvester::start`]) is done: the
+    /// catalog has been loaded and harvested once.
+    #[must_use]
+    pub fn started(&self) -> bool {
+        self.started.load(Ordering::SeqCst)
     }
 
     /// The rules changed while the connector runs (a new bundle version,

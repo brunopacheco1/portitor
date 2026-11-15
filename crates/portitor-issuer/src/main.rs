@@ -9,11 +9,12 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use portitor_dcp::SigningKey;
-use portitor_issuer::config::Config;
+use portitor_issuer::config::{Config, ManagementConfig};
 use portitor_issuer::store::SqliteStore;
 use portitor_issuer::{Issuer, Ports, definitions};
 use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::directory::WebDirectory;
+use portitor_runtime::health;
 use portitor_runtime::http::HttpSender;
 use portitor_runtime::serve::{
     MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, bind_management, serve, with_limits,
@@ -21,15 +22,20 @@ use portitor_runtime::serve::{
 
 /// Without arguments, runs the issuer. `portitor-issuer bundle build
 /// ...` builds and signs a schema and vocabulary bundle offline instead
-/// (see `portitor_issuer::bundle_build`), and exits.
+/// (see `portitor_issuer::bundle_build`), and exits. `portitor-issuer
+/// health` asks the running issuer's readiness check (ADR 0023; for
+/// Docker's `HEALTHCHECK`), and exits 0 when it passes.
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match args.split_first() {
         None => serve_issuer(),
         Some((command, rest)) if command == "bundle" => bundle_command(rest),
+        Some((command, [])) if command == "health" => {
+            health::probe(&ManagementConfig::from_env().bind)
+        }
         Some(_) => {
             eprintln!(
-                "portitor-issuer takes no arguments, except for: {}",
+                "portitor-issuer takes no arguments, except for:\n  portitor-issuer health\n  {}",
                 portitor_issuer::bundle_build::USAGE
             );
             ExitCode::from(2)
@@ -97,16 +103,27 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let issuer = Arc::new(issuer);
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
 
-    let management = if let Some(settings) = &config.management {
-        let key = ApiKey::read(&settings.api_key_file)
-            .map_err(|e| format!("PORTITOR_MANAGEMENT_API_KEY_FILE: {e}"))?;
-        let listener = bind_management(&settings.bind).await?;
-        let app = portitor_issuer::management::router(Arc::clone(&issuer), key);
-        Some((listener, app))
+    // the management port always serves the health checks (ADR 0023);
+    // the management API only with its key
+    let checks = Arc::new(portitor_issuer::health::readiness_checks(
+        &issuer,
+        config.db_file.clone(),
+    ));
+    let api = if let Some(key_file) = &config.management.api_key_file {
+        let key =
+            ApiKey::read(key_file).map_err(|e| format!("PORTITOR_MANAGEMENT_API_KEY_FILE: {e}"))?;
+        Some(portitor_issuer::management::router(
+            Arc::clone(&issuer),
+            key,
+        ))
     } else {
-        tracing::info!("management API off (PORTITOR_MANAGEMENT_API_KEY_FILE not set)");
+        tracing::info!(
+            "management API off (PORTITOR_MANAGEMENT_API_KEY_FILE not set); the management port serves the health checks only"
+        );
         None
     };
+    let management_listener = bind_management(&config.management.bind).await?;
+    let management = Some((management_listener, health::management_app(checks, api)));
     tracing::info!(
         bind = %config.bind,
         did = %issuer.did(),

@@ -32,6 +32,7 @@ so visitors' browsers never contact third-party services.
       <nav aria-label="Main">
         <ul>
           <li><a href="#what">What it does</a></li>
+          <li><a href="#try">Try it</a></li>
           <li><a href="#components">Components</a></li>
           <li><a href="#roadmap">Roadmap</a></li>
           <li><a href="#trust">Trust</a></li>
@@ -96,6 +97,36 @@ so visitors' browsers never contact third-party services.
           <li><strong>Issue credentials</strong>, such as dataspace membership, when you run the dataspace.</li>
           <li><strong>Meet Gaia-X rules</strong>: hold and present Gaia-X compliance credentials.</li>
         </ol>
+      </div>
+    </section>
+
+    <section id="try">
+      <div class="wrap">
+        <h2>Try it</h2>
+        <p>Run a small data space on your machine: its issuer, a provider and a consumer (each a connector with its identity component) and a web server with the provider's data. A script checks that the two participants prove who they are with credentials, agree a contract and transfer a file.</p>
+        <h3>You need</h3>
+        <p>Docker with the Compose plugin, <code>git</code>, <code>bash</code>, <code>curl</code>, <code>jq</code> and <code>openssl</code>. The demo downloads about 40&nbsp;MB of images; after that it runs in about 10 seconds.</p>
+        <h3>Run the demo</h3>
+        <pre><code>git clone https://github.com/brunopacheco1/portitor
+cd portitor
+KEEP=1 scripts/demo-compose.sh</code></pre>
+        <p>The script writes new keys and secrets into <code>examples/compose/run/</code>, builds and signs the data space's HealthDCAT-AP bundle, starts the containers and has the issuer give both participants their credentials. Then it runs the demo steps, one line starting with <code>==</code> each: the provider refuses a catalog request without a token, serves its catalog checked against the bundle, agrees a contract and refuses changed terms, checks credential claims, transfers a file, and refuses a credential the issuer has revoked. The last line starts with <code>== Done</code>. If a step fails, the script prints <code>FAILED</code> and the containers' last log lines.</p>
+        <h3>Look around</h3>
+        <p><code>KEEP=1</code> leaves everything running. The consumer's management API is on <code>127.0.0.1:18091</code>, the provider's, with its harvest jobs, on <code>127.0.0.1:18081</code>:</p>
+        <pre><code>KEY=$(cat examples/compose/run/consumer/management.key)
+curl -s -H "authorization: Bearer $KEY" http://127.0.0.1:18091/v1/negotiations | jq
+curl -s -H "authorization: Bearer $KEY" http://127.0.0.1:18091/v1/transfers | jq
+PROVIDER_KEY=$(cat examples/compose/run/provider/management.key)
+curl -s -H "authorization: Bearer $PROVIDER_KEY" http://127.0.0.1:18081/v1/harvest-jobs | jq</code></pre>
+        <p>To negotiate yourself, send the consumer a request as in the <a href="https://github.com/brunopacheco1/portitor#management-api">README</a>, with the provider at <code>http://provider:8080/dsp/2025-1</code> (<code>did:web:provider-identity%3A8090</code>). The <a href="api/">HTTP interface</a> lists every call. The <a href="https://github.com/brunopacheco1/portitor/tree/main/_http">Bruno collection</a> in <code>_http/</code> has the requests ready; its environments are for the set-up without Docker in <a href="https://github.com/brunopacheco1/portitor/blob/main/docs/TESTING.md#debugging-in-vs-code">TESTING</a>.</p>
+        <h3>Traces and metrics (optional)</h3>
+        <p>Add an OpenTelemetry Collector, Jaeger and Prometheus (about 220&nbsp;MB more images); then Jaeger is on <a href="http://127.0.0.1:16686">127.0.0.1:16686</a> and Prometheus on <a href="http://127.0.0.1:9090">127.0.0.1:9090</a>. Details in <a href="https://github.com/brunopacheco1/portitor/blob/main/docs/TESTING.md#observability-stack-by-hand">TESTING</a>.</p>
+        <pre><code>EXTRA_COMPOSE=examples/compose/observability.yaml KEEP=1 scripts/demo-compose.sh</code></pre>
+        <h3>Stop and clean up</h3>
+        <p>Remove the containers and their data, then the keys (add <code>--rmi all</code> to remove the images too; with the observability stack, add <code>-f examples/compose/observability.yaml</code>):</p>
+        <pre><code>docker compose -f examples/compose/compose.yaml down --volumes
+rm -rf examples/compose/run</code></pre>
+        <p>Without <code>KEEP=1</code>, the script does this itself at the end.</p>
       </div>
     </section>
 

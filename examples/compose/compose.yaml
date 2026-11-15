@@ -28,22 +28,31 @@
 # run/provider/management.key.
 # PORTITOR_IMAGE, PORTITOR_IDENTITY_IMAGE and PORTITOR_ISSUER_IMAGE pick
 # other images, for example local builds.
+#
+# Start order: the deployment order (DEPLOYING). The issuer starts first;
+# each identity once the issuer is healthy; each connector once its own
+# identity (and, for the provider, the issuer, which serves the bundle) is
+# healthy. "Healthy" is the image's HEALTHCHECK: `<binary> health`, the
+# component's own GET /api/check/readiness on its management port (ADR
+# 0023), which needs images from 0.9 on.
 
 name: portitor-demo
 
 # shared by both participants
 x-identity: &identity
-  image: ${PORTITOR_IDENTITY_IMAGE:-ghcr.io/brunopacheco1/portitor-identity:0.8.0}
-  depends_on: [issuer]
+  image: ${PORTITOR_IDENTITY_IMAGE:-ghcr.io/brunopacheco1/portitor-identity:0.9.0}
+  depends_on:
+    issuer:
+      condition: service_healthy
 x-connector: &connector
-  image: ${PORTITOR_IMAGE:-ghcr.io/brunopacheco1/portitor-connector:0.8.0}
+  image: ${PORTITOR_IMAGE:-ghcr.io/brunopacheco1/portitor-connector:0.9.0}
 
 services:
   # The data space's authority: did:web:issuer%3A8070, its issuer service
   # (credential requests, status lists) and its management API, where
   # scripts/demo-compose.sh registers the participants.
   issuer:
-    image: ${PORTITOR_ISSUER_IMAGE:-ghcr.io/brunopacheco1/portitor-issuer:0.8.0}
+    image: ${PORTITOR_ISSUER_IMAGE:-ghcr.io/brunopacheco1/portitor-issuer:0.9.0}
     environment:
       PORTITOR_PARTICIPANT_ID: did:web:issuer%3A8070
       PORTITOR_ISSUER_SERVICE_URL: http://issuer:8070/issuer
@@ -133,9 +142,15 @@ services:
     ports:
       - 127.0.0.1:18080:8080
       - 127.0.0.1:18081:8081
-    depends_on: [provider-identity, data, issuer]
-    # the bundle and the DID documents are read at start; until the issuer
-    # and the identity answer, the start fails and is tried again
+    # the bundle and its own DID document are read at start
+    depends_on:
+      issuer:
+        condition: service_healthy
+      provider-identity:
+        condition: service_healthy
+      data:
+        condition: service_started
+    # should a start still fail, it is tried again
     restart: on-failure
 
   # --- the consumer ---------------------------------------------------------
@@ -181,7 +196,9 @@ services:
     ports:
       - 127.0.0.1:18090:8080
       - 127.0.0.1:18091:8081
-    depends_on: [consumer-identity]
+    depends_on:
+      consumer-identity:
+        condition: service_healthy
 
 # written by scripts/demo-compose.sh; the images run as user 65532, which
 # must read them
