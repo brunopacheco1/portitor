@@ -261,7 +261,7 @@ registry moved to 0.7, so each release has one main risk (maintainer,
   deletes the revoked one (DEPLOYING). The SHACL spike is done; the
   maintainer chose an own SHACL Core subset for 0.7 (ADR 0005).
 
-## 0.7 Schema and vocabulary registry, dataset harvest
+## 0.7 Schema and vocabulary registry, dataset harvest (released 2026-11-15 as v0.7.0)
 
 Plan approved by the maintainer on 2026-11-14.
 

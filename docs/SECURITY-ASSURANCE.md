@@ -32,7 +32,8 @@ dataspace participants over HTTPS.
 - **Small attack surface:** a static binary on an empty (`scratch`) image,
   running as a non-root user, with no shell.
 - **Authentic schema and vocabulary bundles (0.7):** a connector loads
-  only the bundle version it pins, signed (ES256, `typ`
+  only the newest version the authority names in `latest.json`, never one
+  issued before the version in use (or one fixed version), signed (ES256, `typ`
   `portitor-bundle+jws`) with the bundle key `<authority>#bundle-key`
   that the authority's `did:web` document lists under `assertionMethod`,
   with every file's SHA-256 matching. Any other key of the authority,
@@ -41,7 +42,7 @@ dataspace participants over HTTPS.
   cache never replaces it and is itself checked again before use
   ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)). While the
   authority cannot be reached, the connector reuses the cached copy of
-  the pinned version that it verified before, with the key it stored
+  the version in use that it verified before, with the key it stored
   then, without reading the DID document again: a bundle key revoked in
   the meantime is not noticed until the authority is reachable.
 - **No surprise in validation:** `portitor-shacl` refuses shapes that use
@@ -78,7 +79,7 @@ dataspace participants over HTTPS.
 | Participant identity | Forged or replayed self-issued tokens | Algorithm allow-list, key relationship check, audience check, expiry with bounded leeway, `jti` replay cache |
 | Credentials | A revoked, forged or someone else's credential admits a party | Only trusted issuers' credentials count, signed with an `assertionMethod` key; status lists fetched and checked, fail closed; a presentation with any failing credential is refused (DCP v1.0.1, 5.4.3); the issuer issues only to registered participants (ADR 0018) |
 | Private keys | Keys leak from the internet-facing connector | Keys live only in `portitor-identity` and `portitor-issuer`, not in the connector (ADR 0003) |
-| Schema and vocabulary bundle | A forged or changed bundle makes connectors accept bad datasets or refuse good ones | A separate bundle key, kept offline: the issuer holds only its public part and refuses to start if it is the credential key; signature checked against the authority's DID document; pinned version and authority; SHA-256 of every file; size limits (manifest 1 MiB, 64 MiB per file, 256 MiB in all) and a 120 s timeout per download; a published version is never written again |
+| Schema and vocabulary bundle | A forged or changed bundle makes connectors accept bad datasets or refuse good ones | A separate bundle key, kept offline: the issuer holds only its public part and refuses to start if it is the credential key; signature checked against the authority's DID document; the version (never older than the one in use) and authority; SHA-256 of every file; size limits (manifest 1 MiB, 64 MiB per file, 256 MiB in all) and a 120 s timeout per download; a published version is never written again |
 | Validation code | Crafted shapes or JSON-LD make the connector fetch remote content, or exploit an XML parser | JSON-LD contexts come only from a map the caller fills (the bundle's and the DSP contexts), never from the network; no Portitor binary parses RDF/XML (`bundle build` refuses it, code lists travel as N-Triples); fuzz targets `shacl_load`, `shacl_jsonld` and `bundle_manifest` |
 | Internal services | A consumer gives a `callbackAddress` that points at an internal service, so the connector calls it (SSRF) | Only `https://` URLs with a host, unless the operator allows `http://`; the response body is never read; a 10 s timeout; blocking internal addresses *(planned)* |
 | Negotiation state | A consumer drives a negotiation out of order, or two messages race | The DSP state machine as a pure function in the domain; every change is a compare-and-update on a version number; a message that races our acknowledgement is accepted only as proof of delivery of our saved pending message (ADR 0007) |

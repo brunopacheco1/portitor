@@ -657,7 +657,9 @@ DID, so usually not).
   dataspace's issuers.
 - **Bundle (ADR 0005).** The connector trusts only a bundle signed with
   the bundle key that the authority's `did:web` document lists, for the
-  version you pinned; a changed file or signature stops the start. The
+  newest version (or the one you fixed), never one older than the version
+  in use; a changed file or signature stops the start, and a newer
+  version that fails a check is not taken. The
   bundle key is separate from the issuer's credential key, and the issuer
   holds only its public part. Shapes, code lists and contexts are never
   fetched from the network apart from the authority's signed bundle, and no Portitor
@@ -804,8 +806,8 @@ issued before stay valid. Before you upgrade:
 against the authority's signed bundle (ADR 0005).
 
 1. Back up `/data/portitor.db*`. The connector's database is migrated
-   forward at start (schema version 7: the read copy and the harvest
-   jobs), so a rollback to 0.6 needs that backup. The identity's and the
+   forward at start (schema version 8: the read copy, the harvest
+   jobs and the job kind), so a rollback to 0.6 needs that backup. The identity's and the
    issuer's databases are unchanged.
 2. **Behaviour change:** a datasets file that cannot be read, or a
    dataset that breaks a rule (including an offer with a credential

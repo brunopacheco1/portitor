@@ -12,7 +12,19 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
-## [0.7.0] - 2026-11-14
+### Changed
+
+- ADR 0005 (schema and vocabulary registry, with the bundle format) and
+  ADR 0020 (dataset harvest) accepted by the maintainer after the 0.7
+  release.
+- Docs: the roadmap lists key custody and key rotation as technical
+  debt (one key per component today, no overlap when it changes; a key
+  custody service such as OpenBao to be investigated). DEPLOYING and
+  SECURITY-ASSURANCE describe the bundle that follows the newest version
+  instead of a pinned one, and the 0.6 to 0.7 upgrade names database
+  schema version 8. The 0.7.0 entry carries its tag date.
+
+## [0.7.0] - 2026-11-15
 
 ### Added
 
