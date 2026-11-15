@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! Process plumbing every Portitor binary needs: JSON logs, serving the
-//! public and the management API, limits for the public server, and
-//! stopping on Ctrl-C or SIGTERM.
+//! Process plumbing every Portitor binary needs: serving the public and
+//! the management API (each request observed, see
+//! [`crate::telemetry::http`]), limits for the public server, and
+//! stopping on Ctrl-C or SIGTERM. Logs, traces and metrics are started by
+//! [`crate::telemetry::init`].
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,6 +21,7 @@ use tokio::sync::Semaphore;
 use tracing_subscriber::EnvFilter;
 
 use crate::api_key::problem;
+use crate::telemetry::http::observe_requests;
 
 /// How long the public server works on one request before it answers
 /// 503. Longer than the slowest step behind it: the connector's data plane
@@ -31,7 +34,9 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 pub const MAX_CONCURRENT_REQUESTS: usize = 256;
 
 /// JSON logs on standard output; the level comes from `RUST_LOG`
-/// (default `info`).
+/// (default `info`). No traces or metrics: the servers use
+/// [`crate::telemetry::init`] instead; this is for short commands that
+/// serve nothing.
 pub fn init_logging() {
     tracing_subscriber::fmt()
         .json()
@@ -123,7 +128,8 @@ pub async fn bind_management(bind: &str) -> std::io::Result<TcpListener> {
 
 /// Serves `public`, and `management` when it is on, until Ctrl-C or
 /// SIGTERM. One signal stops both servers; each finishes the requests it
-/// has started.
+/// has started. Every request gets a span and a duration measure; no
+/// caller's trace context is taken (see [`serve_with_trusted_routes`]).
 ///
 /// # Errors
 /// A server fails, or the management server's task panicked.
@@ -131,8 +137,24 @@ pub async fn serve(
     public: (TcpListener, Router),
     management: Option<(TcpListener, Router)>,
 ) -> std::io::Result<()> {
+    serve_with_trusted_routes(public, management, &[]).await
+}
+
+/// Like [`serve`], and the public routes in `trusted_routes` (route
+/// templates such as `/sts/token`) take the caller's W3C trace context:
+/// routes called only from inside our own participant (ADR 0023, section
+/// 4).
+///
+/// # Errors
+/// A server fails, or the management server's task panicked.
+pub async fn serve_with_trusted_routes(
+    public: (TcpListener, Router),
+    management: Option<(TcpListener, Router)>,
+    trusted_routes: &'static [&'static str],
+) -> std::io::Result<()> {
     let (stop, stopped) = tokio::sync::watch::channel(false);
     let management = management.map(|(listener, app)| {
+        let app = observe_requests(app, &[]);
         tokio::spawn(
             axum::serve(listener, app)
                 .with_graceful_shutdown(wait(stopped.clone()))
@@ -144,6 +166,7 @@ pub async fn serve(
         let _ = stop.send(true);
     });
     let (listener, app) = public;
+    let app = observe_requests(app, trusted_routes);
     axum::serve(listener, app)
         .with_graceful_shutdown(wait(stopped))
         .await?;

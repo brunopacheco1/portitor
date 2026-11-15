@@ -13,7 +13,7 @@ use portitor_connector::auth::{AuthSettings, CallerVerifier, Prover, dcp_adapter
 use portitor_connector::bundle_harvest::BundleHarvester;
 use portitor_runtime::directory::{Directory, WebDirectory};
 use portitor_runtime::serve::{
-    MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, bind_management, init_logging, serve, with_limits,
+    MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, bind_management, serve, with_limits,
 };
 
 /// The verifier and the prover (ADR 0016).
@@ -21,8 +21,12 @@ type AuthAdapters = (Arc<dyn CallerVerifier>, Arc<dyn Prover>);
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    init_logging();
-    match run().await {
+    let telemetry = portitor_runtime::telemetry::init("portitor-connector");
+    let result = run().await;
+    // after the servers stopped (SIGTERM, Ctrl-C) or failed: send the
+    // last spans and metrics
+    telemetry.shutdown().await;
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!(%error, "portitor-connector stopped");

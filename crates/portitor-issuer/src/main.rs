@@ -16,7 +16,7 @@ use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::http::HttpSender;
 use portitor_runtime::serve::{
-    MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, bind_management, init_logging, serve, with_limits,
+    MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, bind_management, serve, with_limits,
 };
 
 /// Without arguments, runs the issuer. `portitor-issuer bundle build
@@ -53,8 +53,12 @@ fn bundle_command(args: &[OsString]) -> ExitCode {
 
 #[tokio::main]
 async fn serve_issuer() -> ExitCode {
-    init_logging();
-    match run().await {
+    let telemetry = portitor_runtime::telemetry::init("portitor-issuer");
+    let result = run().await;
+    // after the servers stopped (SIGTERM, Ctrl-C) or failed: send the
+    // last spans and metrics
+    telemetry.shutdown().await;
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!(%error, "portitor-issuer stopped");

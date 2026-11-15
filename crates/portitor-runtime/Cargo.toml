@@ -13,11 +13,18 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+# implements opentelemetry-http's `HttpClient` trait (an `#[async_trait]` trait) for the
+# exports; already in the tree through opentelemetry-http
+async-trait = "0.1"
 axum.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 hyper-rustls.workspace = true
 hyper-util.workspace = true
+opentelemetry.workspace = true
+opentelemetry-http.workspace = true
+opentelemetry-otlp.workspace = true
+opentelemetry_sdk.workspace = true
 portitor-dcp = { path = "../portitor-dcp" }
 portitor-time = { path = "../portitor-time" }
 ring.workspace = true
@@ -27,10 +34,15 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 utoipa.workspace = true
 
 [dev-dependencies]
+# decode what the fake OTLP receiver of tests/telemetry_export.rs gets; both are already in
+# the tree through opentelemetry-otlp
+opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic-messages", "trace", "metrics"] }
+prost = { version = "0.14", default-features = false, features = ["std"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 # drives a router in memory in the serve.rs tests; already in the tree
 # (axum, and the connector's and identity's tests)

@@ -24,6 +24,7 @@ pub mod serve;
 pub mod settings;
 pub mod sqlite;
 pub mod system;
+pub mod telemetry;
 
 /// A task that finishes later with a `T`: what the async methods of
 /// Portitor's ports return (the [`http::Sender`], the connector's

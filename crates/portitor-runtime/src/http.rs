@@ -17,6 +17,7 @@ use hyper_util::rt::TokioExecutor;
 use serde_json::Value;
 
 use crate::BoxFuture;
+use crate::telemetry::http::{ClientCall, TraceContext};
 
 /// Why an exchange of [`HttpSender`] got no 2xx answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,6 +126,7 @@ pub struct HttpSender {
     client: HttpsClient,
     allow_http: bool,
     has_ca_certificates: bool,
+    trace_context: TraceContext,
 }
 
 impl std::fmt::Debug for HttpSender {
@@ -132,6 +134,7 @@ impl std::fmt::Debug for HttpSender {
         f.debug_struct("HttpSender")
             .field("allow_http", &self.allow_http)
             .field("has_ca_certificates", &self.has_ca_certificates)
+            .field("trace_context", &self.trace_context)
             .finish_non_exhaustive()
     }
 }
@@ -155,7 +158,21 @@ impl HttpSender {
             client,
             allow_http,
             has_ca_certificates,
+            trace_context: TraceContext::Withhold,
         })
+    }
+
+    /// This sender with our W3C trace context (`traceparent`) on every
+    /// request, so the other side's spans join our trace. Only for a
+    /// sender whose calls stay inside our participant, such as the
+    /// connector's client of its own STS (ADR 0023, section 4); never for
+    /// one that calls other participants.
+    #[must_use]
+    pub fn sending_trace_context(self) -> Self {
+        Self {
+            trace_context: TraceContext::Send,
+            ..self
+        }
     }
 }
 
@@ -394,11 +411,12 @@ impl HttpSender {
         self.call_within(url, request, limits).await
     }
 
-    /// Like [`HttpSender::call_with_headers`], within `limits`.
+    /// Like [`HttpSender::call_with_headers`], within `limits`. Each call
+    /// that is sent gets a span and a duration measure ([`ClientCall`]).
     async fn call_within(
         &self,
         url: &str,
-        request: hyper::Request<Full<Bytes>>,
+        mut request: hyper::Request<Full<Bytes>>,
         limits: Limits,
     ) -> Result<(hyper::HeaderMap, Bytes), HttpError> {
         let Limits { timeout, .. } = limits;
@@ -413,23 +431,31 @@ impl HttpSender {
                     .to_owned(),
             ));
         }
-        let exchange = self.exchange(request, limits);
+        let mut call = ClientCall::start(&mut request, self.trace_context);
+        let span = call.span().clone();
+        let exchange =
+            tracing::Instrument::instrument(self.exchange(request, limits, &mut call), span);
         // `timeout` gives an error only when the time is up; when the
         // exchange finished in time, `answer` is its own result, which may
         // be an error too, and is returned as it is
         let Ok(answer) = tokio::time::timeout(timeout, exchange).await else {
+            call.end_timed_out();
             return Err(HttpError::NoAnswer(format!(
                 "no answer within {}s",
                 timeout.as_secs()
             )));
         };
+        call.end();
         answer
     }
 
+    /// Sends `request` and reads the answer within `limits`; records the
+    /// answer's status in `call`.
     async fn exchange(
         &self,
         request: hyper::Request<Full<Bytes>>,
         limits: Limits,
+        call: &mut ClientCall,
     ) -> Result<(hyper::HeaderMap, Bytes), HttpError> {
         use http_body_util::BodyExt as _;
         let response = self
@@ -438,6 +464,7 @@ impl HttpSender {
             .await
             .map_err(|e| HttpError::NoAnswer(e.to_string()))?;
         let status = response.status();
+        call.answered(status.as_u16());
         if !status.is_success() {
             return Err(refusal(response, limits.error_body_bytes).await);
         }

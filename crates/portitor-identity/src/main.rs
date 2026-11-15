@@ -16,13 +16,18 @@ use portitor_identity::{Identity, Ports};
 use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::serve::{
-    MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, bind_management, init_logging, serve, with_limits,
+    MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, bind_management, serve_with_trusted_routes,
+    with_limits,
 };
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    init_logging();
-    match run().await {
+    let telemetry = portitor_runtime::telemetry::init("portitor-identity");
+    let result = run().await;
+    // after the servers stopped (SIGTERM, Ctrl-C) or failed: send the
+    // last spans and metrics
+    telemetry.shutdown().await;
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!(%error, "portitor-identity stopped");
@@ -89,7 +94,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         REQUEST_TIMEOUT,
         MAX_CONCURRENT_REQUESTS,
     );
-    serve((listener, app), management).await?;
+    // only the STS is called from inside the participant (by its own
+    // connector), so only its caller's trace context is taken
+    serve_with_trusted_routes((listener, app), management, &[portitor_identity::STS_ROUTE]).await?;
     Ok(())
 }
 
