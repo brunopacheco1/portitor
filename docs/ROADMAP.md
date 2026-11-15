@@ -319,18 +319,40 @@ Plan approved by the maintainer on 2026-11-14.
 
 ## 0.8 Gaia-X Trust Framework (Danube)
 
-- The identity component obtains and stores the participant's Gaia-X
-  credentials (for example LegalPerson, registration number, terms and
-  conditions) and the Gaia-X Compliance credential from a Gaia-X Digital
-  Clearing House (GXDCH).
-- Credentials use Gaia-X's required format: VC Data Model 2.0, encoded as
-  VC-JWT (`typ: vc+jwt`), `kid` pointing to a did:web verification method.
-- The connector can require a valid Gaia-X Compliance credential in an
-  ODRL policy, and presents its own one over DCP.
-- Publish the catalog's datasets with Gaia-X-compatible DCAT descriptions.
-- Exit: a participant set up from scratch gets a Compliance credential
-  from a GXDCH (test environment) and negotiates with an EDC connector
-  under a policy that requires it.
+Plan approved by the maintainer on 2026-11-15. Gaia-X does not use DCP,
+and EDC 1.0.0-RC7 refuses a credential that is not about the holder's
+DID, which the Gaia-X compliance credential is not. So Gaia-X policies
+are tested between Portitor connectors, and the EDC interop test keeps
+running without Gaia-X (maintainer, 2026-11-15).
+
+- Spike (go/no-go): a local Gaia-X compliance service accepts a
+  presentation signed with a Portitor ES256 key. Result: go
+  ([spike report](spikes/0.8-gaia-x-compliance.md)).
+- The identity component publishes the X.509 chain of its key (`x5u`)
+  and onboards to Gaia-X: it signs the LegalPerson and terms and
+  conditions credentials, sends them with the notary's registration
+  number credential to a compliance service, stores the compliance
+  credential and renews it ([ADR 0021](adr/0021-gaia-x-onboarding.md)).
+- The connector checks a Gaia-X compliance credential from a trusted
+  compliance service, tied to the caller through the digest of its
+  LegalPerson credential, and policies can require it
+  ([ADR 0022](adr/0022-gaia-x-compliance-in-policies.md)).
+- CI: a Gaia-X job with a local compliance service (pinned image, Gaia-X
+  test mode); the DCP TCK jar is cached (Maven Central answered HTTP 429
+  on 2026-11-15).
+- Reviews before the release: engineering and testing, readability
+  (`docs/RUST-IDIOMS.md`), documentation (C4 diagrams, OpenAPI, website,
+  DEPLOYING).
+- Exit: a participant set up from scratch gets a
+  `ParticipantComplianceCredential` from the local compliance service in
+  CI, and a Portitor consumer negotiates with a Portitor provider under a
+  policy that requires it; a consumer without it is refused; a tampered
+  LegalPerson credential and an untrusted compliance service are refused.
+  The DCP TCK (issuer, credential service, verifier), the DSP TCK and the
+  EDC interop test stay green.
+- Not in 0.8 (see "Later"): the real Gaia-X Lab, Gaia-X DCAT and service
+  offering credentials, OpenID4VC, label levels 1 to 3, calling the
+  notary, Gaia-X with EDC.
 
 ## 0.9 Operations
 
@@ -390,6 +412,15 @@ Plan approved by the maintainer on 2026-11-14.
   search (SPARQL), with its own ADR.
 - Check other participants' catalogs against the bundle (warnings only,
   ADR 0005); bundle expiry and bundle key rotation.
+- Gaia-X beyond 0.8 (maintainer, 2026-11-15): a test against the real
+  Gaia-X Lab or a production clearing house, once Portitor runs beyond a
+  laptop (needs a public `did:web` and a CA certificate); Gaia-X-compatible
+  DCAT descriptions and service offering credentials, with a federated
+  catalogue; OpenID4VCI and OpenID4VP to the Gaia-X Compliance Dispatcher
+  when its wallet flow ships; label levels 1 to 3; calling the
+  registration number notary; trust anchors and compliance issuers read
+  from the Gaia-X Registry; asking EDC how it would accept Gaia-X
+  compliance credentials.
 - Explore Simpl-Open features that are not part of DSP, DCP, Data Plane
   Signaling or EDC, but add security or complete what a data space
   participant can do (maintainer, 2026-11-15). First candidates:
