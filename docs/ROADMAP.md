@@ -484,20 +484,29 @@ decided. Each names what is in place now.
   gateway, what the EDC data plane does); whether the policy is checked
   again on each request; and how this fits the consent and API gateway
   items under "Later". Standards check and an ADR before any code.
-- **A provider in several data spaces, each with its own dataset
-  schemas** (maintainer, 2026-11-15: to be investigated). A data
+- **A provider in several data spaces, each with its own rules**
+  (maintainer, 2026-11-15: to be investigated). A data
   provider may belong to several data spaces at once: long-lived ones
   that may or may not interoperate with each other (for example EHDS and
   ICUDATA4EU), and short-lived ones set up for one use case. Each data
-  space authority may require its own dataset schemas and vocabularies.
+  space authority may set its own rules, not only for dataset
+  descriptions (schemas and vocabularies) but also for offers: which
+  policy requirements and constraints apply, which credentials a
+  consumer must hold, and where data may be processed (for example the
+  data processing address or location). The same dataset may need a
+  different description and a different offer in each data space.
   Today one connector serves one data space: it pulls one signed bundle
   from one authority (`PORTITOR_BUNDLE_URL`, [ADR 0005](adr/0005-schema-and-vocabulary-registry.md)),
   checks every dataset against that one bundle ([ADR 0020](adr/0020-dataset-harvest.md)),
   and trusts one list of credential issuers ([ADR 0016](adr/0016-dsp-caller-authentication.md)).
+  Offers take their policies from the datasets file, with the left
+  operands of ADR 0009 and ADR 0019 only.
   To investigate: one connector with several data space profiles (bundle,
-  trusted issuers, policies per data space) or one connector per data
-  space; how a dataset says which data spaces it is offered in and which
-  schema it follows in each; how a caller's data space is known (its
+  trusted issuers, policy vocabulary and offer rules per data space) or
+  one connector per data space; how a dataset says which data spaces it
+  is offered in, and which schema and offer it has in each; how each data
+  space expresses constraints such as the processing location (ODRL
+  profiles, the data space's rulebook); how a caller's data space is known (its
   credentials or the catalog it asks); how EHDS and other data spaces
   publish their schemas; how short-lived data spaces are joined and left.
   Standards check and an ADR before any code.
