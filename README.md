@@ -94,6 +94,7 @@ Configuration (environment variables):
 | `PORTITOR_TRUSTED_ISSUERS` | none (**required**) | Comma-separated DIDs trusted to issue credentials: the `MembershipCredential` and those of credential constraints |
 | `PORTITOR_DCP_SCOPES` | `org.eclipse.dspace.dcp.vc.type:MembershipCredential` | Comma-separated scopes asked from callers' credential services, and granted to the counter-party in our tokens |
 | `PORTITOR_POLICY_CREDENTIALS` | none (`MembershipCredential` only) | Comma-separated credential types that offers may constrain, each `Type` (scope `org.eclipse.dspace.dcp.vc.type:<Type>:read`) or `Type=<scope>` ([ADR 0019](docs/adr/0019-credential-constraints.md)) |
+| `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` | none (no Gaia-X compliance credential accepted) | Comma-separated `did:web` DIDs of the Gaia-X compliance services you trust, for example `did:web:compliance.lab.gaia-x.eu:v2`; separate from `PORTITOR_TRUSTED_ISSUERS` ([ADR 0022](docs/adr/0022-gaia-x-compliance-in-policies.md)) |
 
 As provider, the connector agrees to a request for an offer in its
 catalog, then finalizes once the consumer verifies. It sends its messages
@@ -133,6 +134,12 @@ Policies (minimal ODRL, [ADR 0009](docs/adr/0009-minimal-odrl-policies.md),
     `MembershipCredential`). It holds if one of the consumer's verified
     credentials of that type has the claim, as text, and the comparison is
     true; a missing claim never grants access.
+  - Gaia-X compliance ([ADR 0022](docs/adr/0022-gaia-x-compliance-in-policies.md)):
+    `ParticipantComplianceCredential.gx:labelLevel` with `eq` `SC` admits
+    only consumers with a Gaia-X compliance credential of that label.
+    List `ParticipantComplianceCredential` in
+    `PORTITOR_POLICY_CREDENTIALS` and its service in
+    `PORTITOR_GAIAX_COMPLIANCE_ISSUERS`.
 
   `and`, `andSequence`, `or` and `xone` combine them.
 - Anything else is refused (fail closed): a dataset whose offer uses it

@@ -46,6 +46,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut ports = portitor_connector::Ports::new(Arc::new(sender));
     ports.use_sqlite(&store);
     let settings = AuthSettings::from_env(&config.participant_id, config.allow_http_callbacks)?;
+    if let Some(settings) = &settings {
+        settings.check_policy_types(&config.credential_types)?;
+    }
     (ports.verifier, ports.prover) = auth_adapters(settings).await?;
     let bundle = start_bundle_harvest(&config, &mut ports).await?;
     // `build` runs the first harvest before it returns: blocking work (a

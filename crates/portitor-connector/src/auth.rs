@@ -32,7 +32,8 @@ use axum::extract::{Request, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use portitor_dcp::scope::Scope;
+use portitor_dcp::gaiax::{COMPLIANCE_SCOPE_TYPE, LEGAL_PERSON_SCOPE_TYPE};
+use portitor_dcp::scope::{Scope, VC_ID, merge_scopes};
 use portitor_dsp::CatalogError;
 use portitor_dsp::negotiation::ContractNegotiationError;
 use portitor_dsp::policy::{CallerCredentials, CredentialTypes, HeldCredential, MEMBERSHIP};
@@ -353,6 +354,50 @@ fn scope_type(scope: &str) -> Option<String> {
     }
 }
 
+/// The scopes `scopes`, and after them, for each "by type" scope of
+/// `ParticipantComplianceCredential`, the scope of `LegalPerson` with the
+/// same alias and access part (ADR 0022). A verifier can only accept a
+/// Gaia-X compliance credential together with the legal person credential
+/// it names, so both sides ask for both: the consumer when it asks its
+/// STS for a token, the provider when it queries the consumer's
+/// Credential Service. Each scope is listed once.
+///
+/// For example `org.eclipse.dspace.dcp.vc.type:ParticipantComplianceCredential:read`
+/// adds `org.eclipse.dspace.dcp.vc.type:LegalPerson:read`.
+#[must_use]
+pub fn with_linked_scopes(scopes: &[String]) -> Vec<String> {
+    let mut linked = Vec::new();
+    for scope in scopes {
+        if let Some(legal_person) = legal_person_scope(scope) {
+            linked.push(legal_person);
+        }
+    }
+    merge_scopes(scopes, &linked)
+}
+
+/// The `LegalPerson` scope that goes with `scope`, when `scope` asks for
+/// credentials of type `ParticipantComplianceCredential` (any alias, so
+/// EDC's own aliases work too); `None` for any other scope.
+fn legal_person_scope(scope: &str) -> Option<String> {
+    // a scope is alias:type, or alias:type:access (see portitor_dcp::scope)
+    let (alias, discriminator) = scope.split_once(':')?;
+    if alias == VC_ID {
+        // one credential by its id, not a type
+        return None;
+    }
+    let (credential_type, access) = match discriminator.split_once(':') {
+        Some((credential_type, access)) => (credential_type, Some(access)),
+        None => (discriminator, None),
+    };
+    if credential_type != COMPLIANCE_SCOPE_TYPE {
+        return None;
+    }
+    match access {
+        Some(access) => Some(format!("{alias}:{LEGAL_PERSON_SCOPE_TYPE}:{access}")),
+        None => Some(format!("{alias}:{LEGAL_PERSON_SCOPE_TYPE}")),
+    }
+}
+
 /// The connector's DCP settings (ADR 0016).
 #[derive(Clone)]
 pub struct AuthSettings {
@@ -373,6 +418,11 @@ pub struct AuthSettings {
     /// DIDs trusted to issue `MembershipCredential`
     /// (`PORTITOR_TRUSTED_ISSUERS`, comma-separated).
     pub trusted_issuers: Vec<String>,
+    /// DIDs of the Gaia-X compliance services trusted to issue
+    /// `gx:ParticipantComplianceCredential`
+    /// (`PORTITOR_GAIAX_COMPLIANCE_ISSUERS`, comma-separated; ADR 0022).
+    /// Empty: no compliance credential is accepted.
+    pub gaiax_compliance_issuers: Vec<String>,
     /// Scopes asked for, on both sides (`PORTITOR_DCP_SCOPES`,
     /// comma-separated).
     pub scopes: Vec<String>,
@@ -390,6 +440,7 @@ impl std::fmt::Debug for AuthSettings {
             .field("sts_allow_http", &self.sts_allow_http)
             .field("sts_client_id", &self.sts_client_id)
             .field("trusted_issuers", &self.trusted_issuers)
+            .field("gaiax_compliance_issuers", &self.gaiax_compliance_issuers)
             .field("scopes", &self.scopes)
             .field("allow_http", &self.allow_http)
             .finish_non_exhaustive()
@@ -415,8 +466,9 @@ impl AuthSettings {
     ///
     /// The STS URL is plain HTTP without `PORTITOR_STS_ALLOW_HTTP`, the
     /// secret file cannot be read or is empty, no trusted issuer is set,
-    /// or a scope is empty, not a DCP scope, or asks for every credential
-    /// (type `VerifiableCredential`).
+    /// a Gaia-X compliance service is not a `did:web` DID, or a scope is
+    /// empty, not a DCP scope, or asks for every credential (type
+    /// `VerifiableCredential`).
     pub fn from_vars(
         participant_id: &str,
         allow_http: bool,
@@ -453,6 +505,17 @@ impl AuthSettings {
         if trusted_issuers.is_empty() {
             return Err("PORTITOR_TRUSTED_ISSUERS is required: the DIDs trusted to issue MembershipCredential".to_owned());
         }
+        let gaiax_compliance_issuers = comma_list(
+            text("PORTITOR_GAIAX_COMPLIANCE_ISSUERS")
+                .as_deref()
+                .unwrap_or_default(),
+        );
+        for did in &gaiax_compliance_issuers {
+            // resolved like any did:web DID (with a path, as the Gaia-X
+            // Lab's did:web:compliance.lab.gaia-x.eu:v2)
+            portitor_dcp::did_web_url(did)
+                .map_err(|e| format!("PORTITOR_GAIAX_COMPLIANCE_ISSUERS: {did}: {e}"))?;
+        }
         let scopes = match text("PORTITOR_DCP_SCOPES") {
             Some(scopes) => comma_list(&scopes),
             None => vec![DEFAULT_SCOPE.to_owned()],
@@ -474,9 +537,28 @@ impl AuthSettings {
                 .unwrap_or_else(|| participant_id.to_owned()),
             sts_client_secret,
             trusted_issuers,
+            gaiax_compliance_issuers,
             scopes,
             allow_http,
         }))
+    }
+
+    /// Checks at start that the policy types fit these settings: a policy
+    /// on `ParticipantComplianceCredential` needs a trusted Gaia-X
+    /// compliance service, or it could never hold (ADR 0022).
+    ///
+    /// # Errors
+    ///
+    /// `PORTITOR_POLICY_CREDENTIALS` lists `ParticipantComplianceCredential`
+    /// and `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` is empty.
+    pub fn check_policy_types(&self, types: &CredentialTypes) -> Result<(), String> {
+        if types.scope(COMPLIANCE_SCOPE_TYPE).is_some() && self.gaiax_compliance_issuers.is_empty()
+        {
+            return Err(format!(
+                "PORTITOR_POLICY_CREDENTIALS lists {COMPLIANCE_SCOPE_TYPE}: set PORTITOR_GAIAX_COMPLIANCE_ISSUERS to the compliance services you trust"
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -544,6 +626,7 @@ mod tests {
         assert_eq!(s.sts_client_secret, "s3cret");
         assert_eq!(s.trusted_issuers, ["did:web:a", "did:web:b"]);
         assert_eq!(s.scopes, [DEFAULT_SCOPE]);
+        assert!(s.gaiax_compliance_issuers.is_empty());
         assert!(!format!("{s:?}").contains("s3cret"));
         let s = AuthSettings::from_vars(
             me,
@@ -718,6 +801,104 @@ mod tests {
             let err =
                 policy_credentials(vars(&[("PORTITOR_POLICY_CREDENTIALS", value)])).unwrap_err();
             assert!(err.contains(reason), "{value}: {err}");
+        }
+    }
+
+    #[test]
+    fn gaiax_compliance_issuers_are_read_and_checked() {
+        let (dir, secret) = secret_file("gaiax");
+        let me = "did:web:me.example";
+        let base = [
+            ("PORTITOR_STS_URL", "https://me.example/sts/token"),
+            ("PORTITOR_STS_CLIENT_SECRET_FILE", secret.as_str()),
+            ("PORTITOR_TRUSTED_ISSUERS", "did:web:a"),
+        ];
+        let mut with = base.to_vec();
+        with.push((
+            "PORTITOR_GAIAX_COMPLIANCE_ISSUERS",
+            "did:web:compliance.lab.gaia-x.eu:v2, did:web:gx.example",
+        ));
+        let s = AuthSettings::from_vars(me, false, vars(&with))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            s.gaiax_compliance_issuers,
+            ["did:web:compliance.lab.gaia-x.eu:v2", "did:web:gx.example"]
+        );
+        let mut types = CredentialTypes::default();
+        assert_eq!(s.check_policy_types(&types), Ok(()));
+        types.add(
+            COMPLIANCE_SCOPE_TYPE,
+            "org.eclipse.dspace.dcp.vc.type:ParticipantComplianceCredential:read",
+        );
+        assert_eq!(s.check_policy_types(&types), Ok(()));
+        // a compliance policy without a trusted compliance service
+        let without = AuthSettings::from_vars(me, false, vars(&base))
+            .unwrap()
+            .unwrap();
+        let err = without.check_policy_types(&types).unwrap_err();
+        assert!(err.contains("PORTITOR_GAIAX_COMPLIANCE_ISSUERS"), "{err}");
+        // not a did:web DID
+        let mut bad = base.to_vec();
+        bad.push(("PORTITOR_GAIAX_COMPLIANCE_ISSUERS", "did:key:z6Mk"));
+        let err = AuthSettings::from_vars(me, false, vars(&bad)).unwrap_err();
+        assert!(
+            err.starts_with("PORTITOR_GAIAX_COMPLIANCE_ISSUERS"),
+            "{err}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_compliance_scope_brings_the_legal_person_scope() {
+        let list = |scopes: &[&str]| -> Vec<String> {
+            scopes.iter().map(|scope| (*scope).to_owned()).collect()
+        };
+        let cases = [
+            (vec![], vec![]),
+            (vec![DEFAULT_SCOPE], vec![DEFAULT_SCOPE]),
+            (
+                vec![
+                    DEFAULT_SCOPE,
+                    "org.eclipse.dspace.dcp.vc.type:ParticipantComplianceCredential:read",
+                ],
+                vec![
+                    DEFAULT_SCOPE,
+                    "org.eclipse.dspace.dcp.vc.type:ParticipantComplianceCredential:read",
+                    "org.eclipse.dspace.dcp.vc.type:LegalPerson:read",
+                ],
+            ),
+            // the same alias and access part, EDC's alias too
+            (
+                vec!["org.eclipse.edc.vc.type:ParticipantComplianceCredential"],
+                vec![
+                    "org.eclipse.edc.vc.type:ParticipantComplianceCredential",
+                    "org.eclipse.edc.vc.type:LegalPerson",
+                ],
+            ),
+            // listed already: once
+            (
+                vec![
+                    "org.eclipse.dspace.dcp.vc.type:LegalPerson",
+                    "org.eclipse.dspace.dcp.vc.type:ParticipantComplianceCredential",
+                ],
+                vec![
+                    "org.eclipse.dspace.dcp.vc.type:LegalPerson",
+                    "org.eclipse.dspace.dcp.vc.type:ParticipantComplianceCredential",
+                ],
+            ),
+            // a credential id is not a type
+            (
+                vec!["org.eclipse.dspace.dcp.vc.id:ParticipantComplianceCredential"],
+                vec!["org.eclipse.dspace.dcp.vc.id:ParticipantComplianceCredential"],
+            ),
+        ];
+        for (scopes, expected) in cases {
+            assert_eq!(
+                with_linked_scopes(&list(&scopes)),
+                list(&expected),
+                "{scopes:?}"
+            );
         }
     }
 
