@@ -186,10 +186,12 @@ a bearer token.
 ![C4 Code: provider transfer process](diagrams/c4-transfer-code.drawio.svg)
 
 How the connector checks who calls a DSP endpoint with DCP (the caller's
-token, its presentations, trusted issuers, status lists), and how a
-policy with credential constraints gets the caller's credentials
+token, its presentations, trusted issuers, status lists), how it checks
+Gaia-X compliance credentials and the legal person credentials they name,
+and how a policy with credential constraints gets the caller's credentials
 ([ADR 0016](adr/0016-dsp-caller-authentication.md),
-[ADR 0019](adr/0019-credential-constraints.md)).
+[ADR 0019](adr/0019-credential-constraints.md),
+[ADR 0022](adr/0022-gaia-x-compliance-in-policies.md)).
 
 ![C4 Code: DSP caller authentication with DCP](diagrams/c4-caller-auth-code.drawio.svg)
 
@@ -200,7 +202,8 @@ signs its status lists ([ADR 0018](adr/0018-issuer-component.md)).
 ![C4 Code: credential issuance in portitor-issuer](diagrams/c4-issuance-code.drawio.svg)
 
 How the identity component signs tokens for its own connector (STS) and
-answers another participant's presentation query.
+answers another participant's presentation query; a scope by type `T` also
+covers a Gaia-X credential of type `gx:T` ([ADR 0021](adr/0021-gaia-x-onboarding.md)).
 
 ![C4 Code: STS tokens and presentations in portitor-identity](diagrams/c4-presentation-code.drawio.svg)
 

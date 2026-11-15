@@ -33,6 +33,10 @@ versions may change behaviour and configuration.
   names DCP v1.0.1 and Gaia-X as shipped; the security assurance case
   names the compliance issuer pin (`PORTITOR_GAIAX_COMPLIANCE_DID`) and
   that compliance credentials from unlisted services are skipped.
+- C4 code diagrams brought up to date with 0.8: caller authentication
+  shows the Gaia-X compliance checks (ADR 0022), presentations the `gx:`
+  scope type rule (ADR 0021), and Gaia-X onboarding the steps of a run
+  and its schedule.
 
 ## [0.8.0] - 2026-11-15
 
