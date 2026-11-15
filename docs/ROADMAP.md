@@ -402,9 +402,18 @@ Plan approved by the maintainer on 2026-11-14.
   - a configurable API gateway in front of the participant's services,
     like Simpl-Open's Tier 1 and Tier 2 gateways (attribute-based access).
 
+  Most of the work sits in the data plane, but not all of it: mutual
+  TLS protects the link for the DSP messages (control plane) as well as
+  the transfer; for consent, the rule belongs to the policy (control
+  plane) but the check runs in the data plane on every request, because
+  consent can be withdrawn after the agreement; a gateway sits mainly in
+  front of the data source, but could also front the management API.
+  So: data plane first, not data plane only.
+
   For each: what it does in Simpl-Open, whether a standard defines it,
-  and whether Portitor should offer it as its own component, an adapter
-  or a deployment guide. The result is an ADR before any code.
+  which plane it touches, and whether Portitor should offer it as its
+  own component, an adapter or a deployment guide. The result is an ADR
+  before any code; consent comes first, as it is not researched yet.
 
 ## Technical debt
 
