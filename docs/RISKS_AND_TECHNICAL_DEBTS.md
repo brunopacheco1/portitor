@@ -88,6 +88,8 @@ checks this file:
 | [R-33](#r-33) | Any caller, or one participant, could exhaust the issuer | Security | 0.6 review (ADR 0018, 2026-11-14) | Addressed | done in 0.6 |
 | [R-34](#r-34) | Scorecard Branch-Protection and Fuzzing at 0 | Security | 0.1 (2026-11-12) | Addressed | done in 0.2 |
 | [R-35](#r-35) | The DCP TCK uses VCDM 1.1, Gaia-X needs VCDM 2.0 | Interoperability | 0.5 (ADR 0015, 2026-11-13) | Addressed | done in 0.5 |
+| [R-36](#r-36) | The OpenTelemetry Rust crates are 0.x and change their API often | Dependency, upstream churn | 0.9 (ADR 0023, 2026-11-15) | Mitigated | — |
+| [R-37](#r-37) | Tracing every request costs about 20% throughput at saturation | Performance | 0.9 spike (ADR 0023, 2026-11-15) | Mitigated | — |
 | [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | 0.7 (maintainer, 2026-11-14) | Open | — |
 | [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | — |
 | [TD-03](#td-03) | A provider in several data spaces, each with its own rules | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | — |
@@ -115,9 +117,11 @@ checks this file:
 | [TD-25](#td-25) | A test-only tool signed the demo credentials | Technical debt | 0.5 (ADR 0015, 2026-11-13) | Addressed | done in 0.6 |
 | [TD-26](#td-26) | One bad dataset stopped the connector at start | Technical debt | 0.7 plan (ADR 0020, 2026-11-14) | Addressed | done in 0.7 |
 | [TD-27](#td-27) | The domain crates' I/O check named too few crates | Technical debt | 0.5 review (ADR 0004, 2026-11-14) | Addressed | done 2026-11-14 |
+| [TD-28](#td-28) | No trace across participants | Technical debt | 0.9 (ADR 0023, 2026-11-15) | Accepted | — |
+| [TD-29](#td-29) | No OTLP logs export, no gRPC, no compression | Technical debt | 0.9 (ADR 0023, DEPLOYING, 2026-11-15) | Open | Later |
 
-Totals: 35 risks (Open 8, Mitigated 15, Accepted 4, Addressed 8);
-27 technical debts (Open 17, Accepted 4, Addressed 6).
+Totals: 37 risks (Open 8, Mitigated 17, Accepted 4, Addressed 8);
+29 technical debts (Open 18, Accepted 5, Addressed 6).
 
 ## Risks
 
@@ -181,7 +185,7 @@ Totals: 35 risks (Open 8, Mitigated 15, Accepted 4, Addressed 8);
   `cargo-vet` in `.github/` or `Cargo.toml`). What runs today: pinned
   actions, Dependabot, dependency review, OSV-Scanner, `cargo deny`
   (RustSec, licences, sources), ORT ([TESTING](TESTING.md#what-runs-where)).
-- **Next.** ROADMAP 0.10.
+- **Next.** ROADMAP 0.10 (supply chain).
 
 <a id="r-05"></a>
 ### R-05 No written OpenSSF Baseline level 1 self-assessment
@@ -245,8 +249,9 @@ Totals: 35 risks (Open 8, Mitigated 15, Accepted 4, Addressed 8);
   break them.
 - **Current state: Open.** The roadmap says the maintainer files them and
   their links are added; no link is in the repository (checked). The
-  maintainer moved filing them to the 0.10 hardening release
-  (2026-11-15), unless an answer is needed earlier to go on.
+  maintainer moved filing them to 0.10 (supply chain; the hardening
+  release was split on 2026-11-15), unless an answer is needed earlier
+  to go on.
 - **Next.** File them; add each link to the ROADMAP and to the code that
   works around it.
 
@@ -637,6 +642,35 @@ Totals: 35 risks (Open 8, Mitigated 15, Accepted 4, Addressed 8);
 - **Current state: Addressed** in 0.5: both DCP profiles,
   `vc11-sl2021/jwt` and `vc20-bssl/jwt` (maintainer, 2026-11-13).
 
+<a id="r-36"></a>
+### R-36 The OpenTelemetry Rust crates are 0.x and change their API often
+
+- **What.** Traces and metrics use `opentelemetry`, `opentelemetry_sdk`,
+  `opentelemetry-otlp` (0.33) and `tracing-opentelemetry` (0.34). They
+  are 0.x and change their API with most minor releases
+  ([ADR 0023](adr/0023-observability.md), Consequences).
+- **Why it matters.** Each update can need code changes, and an update
+  that is put off can leave a security fix behind.
+- **Current state: Mitigated.** All OpenTelemetry code is in one module,
+  `crates/portitor-runtime/src/telemetry.rs` and `telemetry/`, and
+  Dependabot updates the crates together in one group
+  (`opentelemetry` in `.github/dependabot.yml`).
+- **Next.** None.
+
+<a id="r-37"></a>
+### R-37 Tracing every request costs about 20% throughput at saturation
+
+- **What.** In the 0.9 spike a connector that traced every request
+  served about 20% fewer DSP requests per second at saturation; the idle
+  cost is small ([spike](spikes/0.9-opentelemetry.md), ADR 0023).
+- **Why it matters.** A busy connector with full tracing reaches its
+  limit sooner.
+- **Current state: Mitigated.** Export is off by default. Operators keep
+  a share of the traces with `OTEL_TRACES_SAMPLER` and
+  `OTEL_TRACES_SAMPLER_ARG` (DEPLOYING, "Traces and metrics"); metrics
+  are not sampled.
+- **Next.** None.
+
 ## Technical debt
 
 <a id="td-01"></a>
@@ -762,8 +796,8 @@ Raised in ADR 0015 (0.5: "no key rotation API", rotation manual) and
 ADR 0018 (0.6); recorded by the maintainer at the 0.7 close-out,
 2026-11-15 (a key custody service such as OpenBao is probably better).
 Status: **Open**; the investigation is in ROADMAP 0.11 (security
-hardening; ADR 0021 says "key rotation stays in 0.10", written before
-0.10 was split on 2026-11-15).
+hardening; ADR 0021 said "key rotation stays in 0.10", written before
+0.10 was split on 2026-11-15, and now carries an update note).
 
 Today each component (identity, issuer, bundle signing) reads one P-256
 private key from a PEM file and lists one key in its `did:web` document,
@@ -954,8 +988,9 @@ whether the change itself lands in 0.11 or later.
   and OpenTelemetry traces and metrics over OTLP/HTTP when
   `OTEL_EXPORTER_OTLP_ENDPOINT` is set (DEPLOYING "Traces and metrics").
   JSON log lines carry the `trace_id`, and every negotiation and transfer
-  state change is logged.
-- **Next.** None.
+  state change is logged. ADR 0023 stays Proposed until the maintainer
+  accepts it.
+- **Next.** The maintainer accepts ADR 0023.
 
 <a id="td-19"></a>
 ### TD-19 No TLS inside the services
@@ -1055,3 +1090,33 @@ whether the change itself lands in 0.11 or later.
   ([ADR 0004](adr/0004-hexagonal-architecture.md), amended): it also
   refuses hyper-util, hyper-rustls, mio, socket2, ureq, rusqlite,
   libsqlite3-sys, postgres and rustls (`.github/workflows/ci.yml`).
+
+<a id="td-28"></a>
+### TD-28 No trace across participants
+
+- **What.** Trace context stays inside one participant: DSP and DCP
+  calls to other participants carry no `traceparent`, and one that
+  arrives on the DSP port is ignored
+  ([ADR 0023](adr/0023-observability.md), section 4).
+- **Why it matters.** One negotiation between two organisations shows
+  as two traces; an operator matches them by hand.
+- **Current state: Accepted**, by design: a trace id from another
+  organisation is untrusted input, and ours would link our internal
+  calls to theirs. Both sides log the DSP process ids (`providerPid`,
+  `consumerPid`), which is enough to match their logs (DEPLOYING,
+  "Traces and metrics").
+- **Next.** None.
+
+<a id="td-29"></a>
+### TD-29 No OTLP logs export, no gRPC, no compression
+
+- **What.** Portitor exports traces and metrics over OTLP/HTTP with
+  Protocol Buffers only. Logs stay JSON lines on stdout (no OTLP logs
+  signal), there is no gRPC exporter, and compression is not built in:
+  `OTEL_EXPORTER_OTLP_COMPRESSION` only gets an SDK warning (ADR 0023,
+  DEPLOYING "Traces and metrics").
+- **Why it matters.** Operators whose platform takes only OTLP logs or
+  gRPC need a collector in between; exports use more bandwidth.
+- **Current state: Open.** Kept out to save binary size and
+  dependencies (spike, ADR 0023).
+- **Next.** Later; no release named.
