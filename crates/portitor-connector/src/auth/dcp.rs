@@ -403,11 +403,22 @@ impl DcpVerifier {
         Ok(presentation)
     }
 
-    /// The credentials of one presentation that are not Gaia-X compliance
-    /// or legal person credentials ([`DcpVerifier::check_gaiax`] checks
-    /// those): from a trusted issuer, about the caller, signed, valid now,
-    /// not revoked or suspended. Credentials from other issuers are
-    /// skipped.
+    /// Whether `credential` gets the Gaia-X checks of ADR 0022
+    /// ([`DcpVerifier::check_gaiax`]) instead of the dataspace ones: a
+    /// compliance or legal person credential whose issuer is not a
+    /// trusted dataspace issuer (`PORTITOR_TRUSTED_ISSUERS`). A trusted
+    /// issuer's `gx:LegalPerson` is about the caller like any other
+    /// dataspace credential, so it is checked as before 0.8, holder
+    /// binding included.
+    fn takes_gaiax_checks(&self, credential: &Credential) -> bool {
+        let gaiax_type = is_gaiax_compliance(credential) || is_legal_person(credential);
+        gaiax_type && !self.trusted_issuers.contains(&credential.issuer)
+    }
+
+    /// The credentials of one presentation that do not take the Gaia-X
+    /// checks ([`DcpVerifier::takes_gaiax_checks`]): from a trusted
+    /// issuer, about the caller, signed, valid now, not revoked or
+    /// suspended. Credentials from other issuers are skipped.
     async fn check_dataspace_credentials(
         &self,
         caller: &str,
@@ -416,7 +427,7 @@ impl DcpVerifier {
     ) -> Result<Vec<HeldCredential>, String> {
         let mut verified = Vec::new();
         for credential in credentials {
-            if is_gaiax_compliance(credential) || is_legal_person(credential) {
+            if self.takes_gaiax_checks(credential) {
                 continue;
             }
             // skipped before its issuer's DID document or status list
@@ -492,7 +503,7 @@ impl DcpVerifier {
     ) -> Result<Vec<ComplianceCheck<'a>>, String> {
         let mut checked = Vec::new();
         for credential in credentials {
-            if !is_gaiax_compliance(credential) {
+            if !is_gaiax_compliance(credential) || !self.takes_gaiax_checks(credential) {
                 continue;
             }
             // Skipped, not refused, like any credential from an untrusted
@@ -525,7 +536,7 @@ impl DcpVerifier {
     ) -> Result<Vec<HeldCredential>, String> {
         let mut verified = Vec::new();
         for credential in credentials {
-            if !is_legal_person(credential) {
+            if !is_legal_person(credential) || !self.takes_gaiax_checks(credential) {
                 continue;
             }
             let digest = digest_sri_of(credential).map_err(|e| format!("credential: {e}"))?;

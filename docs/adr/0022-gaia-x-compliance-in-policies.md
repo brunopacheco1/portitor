@@ -57,6 +57,12 @@ What the specifications and peers say (checked 2026-11-15):
 
 ### Checking a compliance credential
 
+These checks are for credentials of type
+`gx:ParticipantComplianceCredential` or `gx:LegalPerson` whose issuer is
+not in `PORTITOR_TRUSTED_ISSUERS`. A data space issuer's credential of
+these types is about the caller and is checked like any other (ADR
+0016), holder binding included.
+
 For a credential of type `gx:ParticipantComplianceCredential` (scope
 type `ParticipantComplianceCredential`, ADR 0021):
 

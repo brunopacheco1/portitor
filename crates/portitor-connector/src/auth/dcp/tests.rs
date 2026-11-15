@@ -1387,6 +1387,25 @@ async fn other_credentials_keep_the_holder_binding() {
     assert!(err.contains("not about the caller"), "{err}");
 }
 
+/// A `gx:LegalPerson` from a trusted dataspace issuer is a dataspace
+/// credential, checked as before 0.8: accepted when it is about the
+/// caller, with no compliance credential, and refused when it is not.
+#[tokio::test]
+async fn a_trusted_issuers_legal_person_is_a_dataspace_credential() {
+    let ds = dataspace().await;
+    let about_caller =
+        Dataspace::credential20(&ds.issuer, "gx:LegalPerson", &ds.holder.did, &json!({}));
+    ds.answer20(&[ds.member20(), about_caller]);
+    let caller = ds.verify(&ds.header()).await.unwrap();
+    assert_eq!(caller.credentials.len(), 2);
+    assert!(caller.credentials[1].has_type("gx:LegalPerson"));
+    let about_third =
+        Dataspace::credential20(&ds.issuer, "gx:LegalPerson", &ds.third.did, &json!({}));
+    ds.answer20(&[ds.member20(), about_third]);
+    let err = ds.refusal().await;
+    assert!(err.contains("not about the caller"), "{err}");
+}
+
 /// ADR 0022: the consumer's token and the provider's query carry the same
 /// scopes for a compliance policy, the legal person scope included.
 #[tokio::test]
