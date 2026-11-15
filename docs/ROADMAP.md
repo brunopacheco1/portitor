@@ -511,6 +511,34 @@ decided. Each names what is in place now.
   credentials or the catalog it asks); how EHDS and other data spaces
   publish their schemas; how short-lived data spaces are joined and left.
   Standards check and an ADR before any code.
+- **User to system authentication and authorisation, governed per data
+  space** (maintainer, 2026-11-15: to be investigated). Today every
+  credential is system to system: held by a participant (an
+  organisation with one DID) and checked between connectors (see "Who
+  holds the credentials" in [ARCHITECTURE](ARCHITECTURE.md)). The people
+  and applications inside an organisation are not identified: the
+  management APIs use one API key per component, and the data plane
+  only checks the transfer's bearer token. To investigate:
+  - authentication: how a person or an application of a participant
+    proves who it is to the connector, the identity and the data plane
+    (for example OpenID Connect with the organisation's own identity
+    provider, OpenID4VP with the EU Digital Identity Wallet, what
+    Simpl-Open and EDC do), and how that links to the participant's DID;
+  - authorisation: who may do what (read the catalog, negotiate, start
+    a transfer, read data, manage the connector), whether a contract
+    agreed between participants can be narrowed to some users or roles,
+    and whether ODRL policies may name them (party collections,
+    constraints on the user's credentials);
+  - governance: which of these rules each data space authority sets (the
+    accepted identity providers or wallets, the roles, the credentials a
+    user needs, audit and consent, for example EHDS rules on who may see
+    health data) and how the authority distributes them, likely with the
+    bundle of [ADR 0005](adr/0005-schema-and-vocabulary-registry.md);
+  - several data spaces: a participant in several data spaces must meet
+    different user rules in each (see "A provider in several data
+    spaces" above), so the rules are per data space, not per connector.
+  Linked to "Who calls the data plane" above. Standards check and an ADR
+  before any code.
 - **Key custody and key rotation** (maintainer, 2026-11-15: a key
   custody service such as OpenBao is probably better). Today each
   component (identity, issuer, bundle signing) reads one P-256 private
