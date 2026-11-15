@@ -12,7 +12,7 @@
 //! every task on the test's own thread, where the tracing set up here
 //! applies.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use axum::Router;
 use axum::http::HeaderMap;
@@ -79,10 +79,23 @@ impl Traced {
     }
 }
 
+/// A subscriber that sees nothing, kept for the whole test process.
+///
+/// `tracing` keeps, for each call site, whether any subscriber listens.
+/// While only one subscriber exists, it asks only the subscriber of the
+/// thread that meets a call site first. Tests run in parallel: when this
+/// test's subscriber is the only one, another test's thread, which has
+/// none, can meet a call site first and store "no one listens", and this
+/// test then misses the span. With a second subscriber always alive,
+/// `tracing` asks every subscriber, so the answer includes this test's.
+static SECOND_DISPATCHER: LazyLock<tracing::Dispatch> =
+    LazyLock::new(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default()));
+
 /// Starts tracing on this thread (see [`Traced`]), with the same choice of
 /// spans as the real export (Portitor's own, at `info`).
 #[must_use]
 pub fn trace_on_this_thread() -> Traced {
+    LazyLock::force(&SECOND_DISPATCHER);
     let spans = Collected::default();
     let provider = SdkTracerProvider::builder()
         .with_simple_exporter(Collector(Arc::clone(&spans)))
