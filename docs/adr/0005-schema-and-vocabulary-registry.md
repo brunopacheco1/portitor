@@ -6,8 +6,9 @@ SPDX-License-Identifier: Apache-2.0
 
 # ADR 0005: Schema and vocabulary registry
 
-- Status: **Proposed** (engine decided 2026-11-14; bundle format proposed
-  for 0.7)
+- Status: **Accepted** (2026-11-15, by the maintainer, with the bundle
+  format built in 0.7; how schemas are collected and stored stays open,
+  see the roadmap's technical debt)
 - Date: 2026-11-12, updated 2026-11-14
 - Build: release 0.7 (planned for 0.6 with the authority image on
   2026-11-12; moved to 0.7 by the maintainer, 2026-11-14)

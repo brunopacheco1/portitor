@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # ADR 0020: Datasets are harvested into a read copy
 
-- Status: **Proposed**
+- Status: **Accepted** (2026-11-15, by the maintainer)
 - Date: 2026-11-14
 - Scope: release 0.7. Builds on ADR 0004 (ports and adapters), ADR 0005
   (schema and vocabulary registry), ADR 0006 (SQLite store), ADR 0009
