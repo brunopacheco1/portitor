@@ -59,7 +59,7 @@ checks this file:
 | [R-04](#r-04) | Dependencies are not audited crate by crate (cargo-vet) | Dependency, security | 0.1 (maintainer, 2026-11-11 and 2026-11-12) | Open | 0.10 |
 | [R-05](#r-05) | No written OpenSSF Baseline level 1 self-assessment | Security | 0.1 (ADR 0012, maintainer, 2026-11-12) | Open | 0.10 |
 | [R-06](#r-06) | Data Plane Signaling is a draft (v1.0-RC4) | Upstream churn | 0.0 (ARCHITECTURE, 2026-11-11) | Mitigated | until Signaling 1.0 |
-| [R-07](#r-07) | Upstream findings not reported yet | Upstream churn, interoperability | 0.4 to 0.8 (maintainer, 2026-11-13 to 2026-11-15) | Open | — |
+| [R-07](#r-07) | Upstream findings not reported yet | Upstream churn, interoperability | 0.4 to 0.8 (maintainer, 2026-11-13 to 2026-11-15) | Open | 0.10 |
 | [R-08](#r-08) | The DSP TCK v1.0.2 needs a test-only build | Interoperability | 0.4, 0.5 (ADR 0014, ADR 0016, 2026-11-13) | Mitigated | — |
 | [R-09](#r-09) | EDC is tested at a release candidate (1.0.0-RC7) | Interoperability, dependency | 0.5 (maintainer, 2026-11-13) | Mitigated | pin 1.0.0 when it ships |
 | [R-10](#r-10) | EDC refuses the Gaia-X compliance credential | Interoperability | 0.8 (ADR 0022, maintainer, 2026-11-15) | Accepted | Later |
@@ -70,7 +70,7 @@ checks this file:
 | [R-15](#r-15) | Onboarding accepts a compliance answer from any issuer whose signature verifies | Security | 0.8 review (maintainer, 2026-11-15) | Addressed | 0.8 |
 | [R-16](#r-16) | A Gaia-X compliance credential cannot be revoked | Security | 0.8 (spike, ADR 0022, 2026-11-15) | Accepted | — |
 | [R-17](#r-17) | Server-side request forgery through partner-chosen URLs | Security | 0.3 (ADR 0016 security notes, SECURITY-ASSURANCE) | Mitigated | — |
-| [R-18](#r-18) | No request size limit of Portitor's own on the public ports | Security | 0.5 (SECURITY-ASSURANCE) | Open | 0.9 per SECURITY-ASSURANCE (not in the roadmap) |
+| [R-18](#r-18) | No request size limit of Portitor's own on the public ports | Security | 0.5 (SECURITY-ASSURANCE) | Mitigated | 0.10 |
 | [R-19](#r-19) | Consumer's data access tokens in the SQLite file and the management API | Security | 0.4 (ADR 0014, 2026-11-13) | Mitigated | — |
 | [R-20](#r-20) | The issuer key is the root of trust of a data space | Security | 0.6 (ADR 0018, 2026-11-14) | Mitigated | — |
 | [R-21](#r-21) | Bugs in Portitor's own SHACL engine, and new SHACL components in later profiles | Security, upstream churn | 0.6 spike (ADR 0005, 2026-11-14) | Mitigated | — |
@@ -110,7 +110,7 @@ checks this file:
 | [TD-20](#td-20) | A holder must delete a revoked credential by hand after a reissue | Technical debt | 0.6 (DEPLOYING, 2026-11-14) | Open | — |
 | [TD-21](#td-21) | Gaia-X beyond 0.8 | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | Later |
 | [TD-22](#td-22) | Migrations run forward only; a rollback needs the backup | Technical debt | 0.3 (DEPLOYING) | Accepted | — |
-| [TD-23](#td-23) | ADRs 0021 and 0022 are built but still Proposed | Technical debt | 0.8 (sweep for this file, 2026-11-15) | Open | 0.8 close-out |
+| [TD-23](#td-23) | ADRs 0021 and 0022 were built but still Proposed | Technical debt | 0.8 (sweep for this file, 2026-11-15) | Addressed | 0.8 |
 | [TD-24](#td-24) | A 3 second wait for acknowledgements; messages lost at a restart | Technical debt | 0.3 (ADR 0006, maintainer, 2026-11-12) | Addressed | done in 0.3 |
 | [TD-25](#td-25) | A test-only tool signed the demo credentials | Technical debt | 0.5 (ADR 0015, 2026-11-13) | Addressed | done in 0.6 |
 | [TD-26](#td-26) | One bad dataset stopped the connector at start | Technical debt | 0.7 plan (ADR 0020, 2026-11-14) | Addressed | done in 0.7 |
@@ -242,7 +242,9 @@ Totals: 35 risks (Open 11, Mitigated 14, Accepted 4, Addressed 6);
   differ from what others do, and the next specification release may
   break them.
 - **Current state: Open.** The roadmap says the maintainer files them and
-  their links are added; no link is in the repository (checked).
+  their links are added; no link is in the repository (checked). The
+  maintainer moved filing them to the 0.10 hardening release
+  (2026-11-15), unless an answer is needed earlier to go on.
 - **Next.** File them; add each link to the ROADMAP and to the code that
   works around it.
 
@@ -305,7 +307,7 @@ Totals: 35 risks (Open 11, Mitigated 14, Accepted 4, Addressed 6);
 - **Why it matters.** Other implementations may choose differently, and
   a later Gaia-X or DCP text may contradict ours.
 - **Current state: Open.** Both rules are in ADRs that are still
-  Proposed (TD-23), tested between Portitor connectors only.
+  Accepted (TD-23), tested between Portitor connectors only.
 - **Next.** The upstream reports (R-07).
 
 <a id="r-12"></a>
@@ -409,15 +411,18 @@ Totals: 35 risks (Open 11, Mitigated 14, Accepted 4, Addressed 6);
 <a id="r-18"></a>
 ### R-18 No request size limit of Portitor's own on the public ports
 
-- **What.** SECURITY-ASSURANCE lists request size limits as "planned,
-  0.9".
+- **What.** Portitor sets no request size limit of its own; the
+  security case planned one for 0.9, which the roadmap did not list.
 - **Why it matters.** Oversized requests can exhaust memory.
-- **Current state: Open.** The public ports have a 60 s limit per request
-  and at most 256 requests at once (DEPLOYING, section 5); presentations,
-  status lists (16 MiB after decompression) and bundles have their own
-  limits. Portitor's code sets no body limit of its own (checked); what
-  the HTTP framework's defaults cover was not checked.
-- **Next.** Add it to ROADMAP 0.9 or 0.10, which do not list it today.
+- **Current state: Mitigated.** Every body Portitor parses (JSON, text)
+  goes through axum's extractors, which refuse bodies over 2 MB by
+  default (`DefaultBodyLimit`, axum-core 0.5; no handler disables it,
+  checked 2026-11-15). Data plane bodies are streamed, not buffered, by
+  design. The public ports have a 60 s limit per request and at most 256
+  requests at once (DEPLOYING, section 5); presentations, status lists
+  (16 MiB after decompression) and bundles have their own limits.
+- **Next.** ROADMAP 0.10: explicit limits per port and route, set by
+  Portitor rather than the framework default, with tests.
 
 <a id="r-19"></a>
 ### R-19 Consumer's data access tokens in the SQLite file and the management API
@@ -501,11 +506,9 @@ Totals: 35 risks (Open 11, Mitigated 14, Accepted 4, Addressed 6);
 - **Why it matters.** Portitor is not a Simpl participant; reference
   counterpart number two (ADR 0011) is untested.
 - **Current state: Accepted** (parked by the maintainer, 2026-11-13,
-  until a Simpl-Open sandbox exists). ROADMAP 0.10 still lists
-  "Interoperability tests against ... Simpl-Open (with Gaia-X)", which
-  the parking and R-10 contradict.
-- **Next.** ROADMAP "Later"; re-check the facts before any Simpl work;
-  update the 0.10 line.
+  until a Simpl-Open sandbox exists). The ROADMAP 0.10 line now keeps EDC
+  only, without Gaia-X, and points Simpl-Open to "Later" (2026-11-15).
+- **Next.** ROADMAP "Later"; re-check the facts before any Simpl work.
 
 <a id="r-25"></a>
 ### R-25 Name not checked for trademarks and domains
@@ -985,7 +988,7 @@ whether this lands with the 0.10 hardening work.
 - **Next.** Revisit at the 0.10 API and config freeze.
 
 <a id="td-23"></a>
-### TD-23 ADRs 0021 and 0022 are built but still Proposed
+### TD-23 ADRs 0021 and 0022 were built but still Proposed
 
 - **What.** The 0.8 code implements
   [ADR 0021](adr/0021-gaia-x-onboarding.md) and
@@ -993,9 +996,9 @@ whether this lands with the 0.10 hardening work.
   "Status: Proposed". ADR 0017 (Simpl-Open) is Proposed too, on purpose
   (R-24).
 - **Why it matters.** The rules in force are not yet accepted decisions.
-- **Current state: Open.** Earlier releases accepted their ADRs at the
-  close-out (0.6: ADRs 0018 and 0019; 0.7: ADRs 0005 and 0020).
-- **Next.** The maintainer accepts or amends them at the 0.8 close-out.
+- **Current state: Addressed.** The maintainer accepted both on
+  2026-11-15, before the 0.8 release.
+- **Next.** None.
 
 <a id="td-24"></a>
 ### TD-24 A 3 second wait for acknowledgements; messages lost at a restart

@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # ADR 0021: Gaia-X onboarding in the identity component
 
-- Status: **Proposed**
+- Status: **Accepted** (2026-11-15, by the maintainer)
 - Date: 2026-11-15
 - Scope: release 0.8. Extends ADR 0015 (identity component).
 - Decisions already taken by the maintainer (2026-11-15, 0.8 plan):

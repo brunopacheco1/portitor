@@ -373,7 +373,15 @@ running without Gaia-X (maintainer, 2026-11-15).
   audited (own audits or imported sets, such as Mozilla's and Google's) or
   explicitly exempted; CI fails on an unaudited change. Deferred from 0.1
   (decided 2026-11-11) because it turns each dependency bump into review work.
-- Interoperability tests against Eclipse EDC and Simpl-Open (with Gaia-X).
+- Interoperability tests against Eclipse EDC, without Gaia-X: EDC
+  1.0.0-RC7 refuses the Gaia-X compliance credential (ADR 0022). Simpl-Open
+  stays under "Later" until a sandbox exists (ADR 0017).
+- Explicit request size limits per port and route, set by Portitor
+  (today axum's default of 2 MB on every parsed body; data plane bodies
+  are streamed), with tests ([R-18](RISKS_AND_TECHNICAL_DEBTS.md#r-18)).
+- File the upstream reports drafted from 0.4 to 0.8 and link them
+  (maintainer, 2026-11-15; earlier if an answer is needed to go on;
+  [R-07](RISKS_AND_TECHNICAL_DEBTS.md#r-07)).
 - Cache status list credentials in the connector's DCP verifier
   (maintainer, 2026-11-14): `PORTITOR_STATUS_LIST_CACHE_SECONDS`, default
   300 (5 minutes), 0 checks on every request, at most 3600; only lists

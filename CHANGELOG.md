@@ -82,6 +82,11 @@ versions may change behaviour and configuration.
 
 ### Changed
 
+- ADR 0021 (Gaia-X onboarding) and ADR 0022 (Gaia-X compliance in
+  policies) accepted by the maintainer before the release.
+- Roadmap 0.10: explicit request size limits per port (today axum's 2 MB
+  default on parsed bodies), filing the upstream reports, and the interop
+  line without Simpl-Open and Gaia-X.
 - The DID documents of the identity and the issuer give their key
   `alg: ES256` (RFC 7517 section 4.4; Gaia-X needs it). DCP ignores it.
 - The presentation API: a scope type `T` also matches a credential of

@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # ADR 0022: Gaia-X compliance in policies
 
-- Status: **Proposed**
+- Status: **Accepted** (2026-11-15, by the maintainer)
 - Date: 2026-11-15
 - Scope: release 0.8. Extends ADR 0016 (DSP caller authentication) and
   ADR 0019 (credential constraints).
