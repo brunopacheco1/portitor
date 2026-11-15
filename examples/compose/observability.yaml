@@ -23,27 +23,35 @@
 # (OpenTelemetry's own variable). service.name is the component
 # (portitor-connector, portitor-identity, portitor-issuer);
 # service.instance.id tells the two participants apart.
+# Metrics are sent every 10 s instead of the default 60 s, so they show
+# up in Prometheus soon after the demo's calls.
 x-otel: &otel
   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  OTEL_METRIC_EXPORT_INTERVAL: "10000"
 
 services:
   issuer:
+    depends_on: [otel-collector]
     environment:
       <<: *otel
       OTEL_RESOURCE_ATTRIBUTES: service.instance.id=authority
   provider-identity:
+    depends_on: [otel-collector]
     environment:
       <<: *otel
       OTEL_RESOURCE_ATTRIBUTES: service.instance.id=provider
   provider:
+    depends_on: [otel-collector]
     environment:
       <<: *otel
       OTEL_RESOURCE_ATTRIBUTES: service.instance.id=provider
   consumer-identity:
+    depends_on: [otel-collector]
     environment:
       <<: *otel
       OTEL_RESOURCE_ATTRIBUTES: service.instance.id=consumer
   consumer:
+    depends_on: [otel-collector]
     environment:
       <<: *otel
       OTEL_RESOURCE_ATTRIBUTES: service.instance.id=consumer
