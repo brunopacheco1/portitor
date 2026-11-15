@@ -4,23 +4,40 @@
 
 //! Portitor identity component binary.
 
+use std::ffi::OsString;
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use portitor_dcp::SigningKey;
-use portitor_identity::config::Config;
+use portitor_identity::config::{Config, ManagementConfig};
 use portitor_identity::gaiax::{GaiaxCompliance, HttpGaiaxCompliance};
 use portitor_identity::issuance::HttpIssuerClient;
 use portitor_identity::store::SqliteStore;
 use portitor_identity::{Identity, Ports};
 use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::directory::WebDirectory;
+use portitor_runtime::health;
 use portitor_runtime::serve::{
     MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, bind_management, init_logging, serve, with_limits,
 };
 
+/// Without arguments, runs the identity component. `portitor-identity
+/// health` asks the running component's readiness check instead (ADR
+/// 0023; for Docker's `HEALTHCHECK`), and exits 0 when it passes.
+fn main() -> ExitCode {
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    match args.as_slice() {
+        [] => serve_identity(),
+        [command] if command == "health" => health::probe(&ManagementConfig::from_env().bind),
+        _ => {
+            eprintln!("portitor-identity takes no arguments, except for: health");
+            ExitCode::from(2)
+        }
+    }
+}
+
 #[tokio::main]
-async fn main() -> ExitCode {
+async fn serve_identity() -> ExitCode {
     init_logging();
     match run().await {
         Ok(()) => ExitCode::SUCCESS,
@@ -66,16 +83,27 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
 
-    let management = if let Some(settings) = &config.management {
-        let key = ApiKey::read(&settings.api_key_file)
-            .map_err(|e| format!("PORTITOR_MANAGEMENT_API_KEY_FILE: {e}"))?;
-        let listener = bind_management(&settings.bind).await?;
-        let app = portitor_identity::management::router(Arc::clone(&identity), key);
-        Some((listener, app))
+    // the management port always serves the health checks (ADR 0023);
+    // the management API only with its key
+    let checks = Arc::new(portitor_identity::health::readiness_checks(
+        &identity,
+        config.db_file.clone(),
+    ));
+    let api = if let Some(key_file) = &config.management.api_key_file {
+        let key =
+            ApiKey::read(key_file).map_err(|e| format!("PORTITOR_MANAGEMENT_API_KEY_FILE: {e}"))?;
+        Some(portitor_identity::management::router(
+            Arc::clone(&identity),
+            key,
+        ))
     } else {
-        tracing::info!("management API off (PORTITOR_MANAGEMENT_API_KEY_FILE not set)");
+        tracing::info!(
+            "management API off (PORTITOR_MANAGEMENT_API_KEY_FILE not set); the management port serves the health checks only"
+        );
         None
     };
+    let management_listener = bind_management(&config.management.bind).await?;
+    let management = Some((management_listener, health::management_app(checks, api)));
     tracing::info!(
         bind = %config.bind,
         did = %identity.participant_id(),

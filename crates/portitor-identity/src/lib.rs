@@ -14,6 +14,7 @@
 //! - asking an issuer for credentials (holder side of DCP issuance),
 //!   [`issuance`];
 //! - a management API (API key, as the connector's), [`management`];
+//! - its readiness checks (ADR 0023), [`health`];
 //! - the X.509 chain of its key, [`certificate`], and Gaia-X onboarding,
 //!   [`gaiax`] (ADR 0021).
 //!
@@ -33,6 +34,7 @@ pub mod certificate;
 pub mod config;
 pub mod did_document;
 pub mod gaiax;
+pub mod health;
 pub mod issuance;
 pub mod management;
 pub mod presentation;

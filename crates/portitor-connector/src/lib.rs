@@ -59,6 +59,7 @@ pub mod consumer_transfer;
 pub mod data_flows;
 pub mod data_plane;
 pub mod harvest;
+pub mod health;
 pub mod http_client;
 pub mod management;
 pub mod negotiation;
@@ -389,6 +390,13 @@ impl Negotiator {
     #[must_use]
     pub fn bundle_listener(&self) -> Arc<dyn bundle_harvest::BundleListener> {
         Arc::clone(&self.harvester) as _
+    }
+
+    /// Whether the start harvest ran ([`build`] runs it): readiness, ADR
+    /// 0023.
+    #[must_use]
+    pub fn harvest_started(&self) -> bool {
+        self.harvester.started()
     }
 
     /// How many datasets are in the catalog now.

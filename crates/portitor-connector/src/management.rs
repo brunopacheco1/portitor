@@ -36,32 +36,40 @@ use crate::harvest::{EntryError, HarvestJob};
 use crate::system::xsd_date_time;
 pub use portitor_runtime::api_key::{ApiKey, MIN_KEY_LEN, Problem, problem, require_key};
 use portitor_runtime::api_key::{BearerKey, internal_error};
+use portitor_runtime::health::{self, ComponentResult, Failure as HealthFailure, HealthStatus};
 
-/// Where the management API listens, and its key.
+/// Where the management port listens unless `PORTITOR_MANAGEMENT_BIND`
+/// says otherwise: on this machine only.
+pub const DEFAULT_MANAGEMENT_BIND: &str = "127.0.0.1:8081";
+
+/// Where the management port listens, and the API key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagementConfig {
-    /// Address to listen on.
+    /// Address to listen on. The port always serves the health checks
+    /// (ADR 0023).
     pub bind: String,
-    /// The file that holds the API key.
-    pub api_key_file: PathBuf,
+    /// The file that holds the API key; without it, the management API is
+    /// off and the port serves the health checks only.
+    pub api_key_file: Option<PathBuf>,
 }
 
 impl ManagementConfig {
     /// Reads `PORTITOR_MANAGEMENT_API_KEY_FILE` and `PORTITOR_MANAGEMENT_BIND`
-    /// (default `127.0.0.1:8081`) with `var`. Without a key file there is
-    /// no management API (`None`).
-    pub fn from_vars(var: impl Fn(&str) -> Option<OsString>) -> Option<Self> {
-        let api_key_file = PathBuf::from(var("PORTITOR_MANAGEMENT_API_KEY_FILE")?);
+    /// (default [`DEFAULT_MANAGEMENT_BIND`]) with `var`.
+    pub fn from_vars(var: impl Fn(&str) -> Option<OsString>) -> Self {
+        let api_key_file = var("PORTITOR_MANAGEMENT_API_KEY_FILE")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from);
         let bind = var("PORTITOR_MANAGEMENT_BIND").map_or_else(
-            || "127.0.0.1:8081".to_owned(),
+            || DEFAULT_MANAGEMENT_BIND.to_owned(),
             |v| v.to_string_lossy().into_owned(),
         );
-        Some(Self { bind, api_key_file })
+        Self { bind, api_key_file }
     }
 
     /// Like [`ManagementConfig::from_vars`], from the environment.
     #[must_use]
-    pub fn from_env() -> Option<Self> {
+    pub fn from_env() -> Self {
         Self::from_vars(|k| std::env::var_os(k))
     }
 }
@@ -748,10 +756,14 @@ fn next_after<T>(found: &[T], limit: usize, key: impl Fn(&T) -> &String) -> Opti
 #[openapi(
     info(
         title = "Portitor management API",
-        description = "Starts and follows contract negotiations and transfers in which this connector is the consumer, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description needs the API key.",
+        description = "Starts and follows contract negotiations and transfers in which this connector is the consumer, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description and the health checks needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only.",
         license(name = "Apache-2.0", identifier = "Apache-2.0"),
     ),
     paths(
+        health::liveness,
+        health::readiness,
+        health::startup,
+        health::health,
         start,
         one,
         list,
@@ -764,6 +776,9 @@ fn next_after<T>(found: &[T], limit: usize, key: impl Fn(&T) -> &String) -> Opti
         one_harvest_job
     ),
     components(schemas(
+        HealthStatus,
+        ComponentResult,
+        HealthFailure,
         StartNegotiation,
         NegotiationView,
         NegotiationPage,
@@ -781,7 +796,8 @@ fn next_after<T>(found: &[T], limit: usize, key: impl Fn(&T) -> &String) -> Opti
     tags(
         (name = "Negotiations", description = "Contract negotiations as consumer (DSP 2025-1)"),
         (name = "Transfers", description = "Transfer processes as consumer (DSP 2025-1), pull only"),
-        (name = "Harvest", description = "Dataset harvest runs: datasets come from the source into the catalog (ADR 0020). Read only.")
+        (name = "Harvest", description = "Dataset harvest runs: datasets come from the source into the catalog (ADR 0020). Read only."),
+        (name = "Health", description = "Health checks in Eclipse EDC's Observability API shape (ADR 0023): no API key. Served even when the management API is off.")
     )
 )]
 pub struct ManagementApi;

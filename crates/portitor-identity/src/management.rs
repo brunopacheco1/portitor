@@ -26,6 +26,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use portitor_runtime::api_key::{ApiKey, BearerKey, Problem, internal_error, problem, require_key};
+use portitor_runtime::health::{self, ComponentResult, Failure as HealthFailure, HealthStatus};
 use portitor_runtime::system::{new_uuid, now_secs, xsd_date_time};
 use serde::{Deserialize, Serialize};
 use utoipa::{OpenApi, ToSchema};
@@ -598,10 +599,14 @@ async fn list_compliance_runs(State(identity): State<Arc<Identity>>) -> Response
 #[openapi(
     info(
         title = "Portitor identity management API",
-        description = "Credential requests, credentials and offers of the participant this identity component holds, and its Gaia-X compliance runs. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description needs the API key.",
+        description = "Credential requests, credentials and offers of the participant this identity component holds, and its Gaia-X compliance runs. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description and the health checks needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only.",
         license(name = "Apache-2.0", identifier = "Apache-2.0"),
     ),
     paths(
+        health::liveness,
+        health::readiness,
+        health::startup,
+        health::health,
         create_request,
         list_requests,
         get_request,
@@ -613,6 +618,9 @@ async fn list_compliance_runs(State(identity): State<Arc<Identity>>) -> Response
         list_compliance_runs
     ),
     components(schemas(
+        HealthStatus,
+        ComponentResult,
+        HealthFailure,
         NewRequest,
         RequestCreated,
         RequestView,
@@ -626,7 +634,8 @@ async fn list_compliance_runs(State(identity): State<Arc<Identity>>) -> Response
     modifiers(&BearerKey),
     tags(
         (name = "Credentials", description = "The participant's verifiable credentials (DCP v1.0.1)"),
-        (name = "Gaia-X", description = "Gaia-X onboarding: the compliance credential (ADR 0021)")
+        (name = "Gaia-X", description = "Gaia-X onboarding: the compliance credential (ADR 0021)"),
+        (name = "Health", description = "Health checks in Eclipse EDC's Observability API shape (ADR 0023): no API key. Served even when the management API is off.")
     )
 )]
 pub struct ManagementApi;

@@ -30,6 +30,7 @@ use portitor_dcp::message::{
     Context, CredentialObject, CredentialOfferMessage, CredentialOfferType,
 };
 use portitor_runtime::api_key::{ApiKey, BearerKey, Problem, internal_error, problem, require_key};
+use portitor_runtime::health::{self, ComponentResult, Failure as HealthFailure, HealthStatus};
 use portitor_runtime::system::{now_secs, xsd_date_time};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -411,15 +412,16 @@ async fn revoke(State(issuer): State<Arc<Issuer>>, Path(id): Path<String>) -> Re
 #[openapi(
     info(
         title = "Portitor issuer management API",
-        description = "Participants, offers, issued credentials and revocation of the dataspace authority's issuer. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description needs the API key.",
+        description = "Participants, offers, issued credentials and revocation of the dataspace authority's issuer. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description and the health checks needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only.",
         license(name = "Apache-2.0", identifier = "Apache-2.0"),
     ),
-    paths(create_participant, list_participants, delete_participant, send_offer, list_credentials, revoke),
-    components(schemas(NewParticipant, ParticipantView, NewOffer, CredentialView, Problem)),
+    paths(health::liveness, health::readiness, health::startup, health::health, create_participant, list_participants, delete_participant, send_offer, list_credentials, revoke),
+    components(schemas(HealthStatus, ComponentResult, HealthFailure, NewParticipant, ParticipantView, NewOffer, CredentialView, Problem)),
     modifiers(&BearerKey),
     tags(
         (name = "Participants", description = "Who may get credentials, and what their credentials say"),
-        (name = "Credentials", description = "Offers, issued credentials and revocation (DCP v1.0.1, Bitstring Status List)")
+        (name = "Credentials", description = "Offers, issued credentials and revocation (DCP v1.0.1, Bitstring Status List)"),
+        (name = "Health", description = "Health checks in Eclipse EDC's Observability API shape (ADR 0023): no API key. Served even when the management API is off.")
     )
 )]
 pub struct ManagementApi;
