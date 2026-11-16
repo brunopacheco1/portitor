@@ -12,6 +12,11 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Documentation
+
+- Close-out of 0.10: the roadmap and the website mark 0.10 released and
+  0.11 as the current release.
+
 ## [0.10.0] - 2026-11-16
 
 ### Dependencies

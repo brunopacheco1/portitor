@@ -425,7 +425,7 @@ The hardening release planned as 0.10 is split into four smaller
 releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
 0.13.
 
-## 0.10 Supply chain
+## 0.10 Supply chain (released 2026-11-16 as v0.10.0)
 
 - Dependency review with **cargo-vet**: every crate version in `Cargo.lock`
   audited (own audits or imported sets, such as Mozilla's and Google's) or
