@@ -14,6 +14,10 @@ versions may change behaviour and configuration.
 
 ### Documentation
 
+- README badges: release, licence, REUSE compliance (registered with the
+  REUSE API, 2026-11-16), and the CI, TCK, Dependencies and CodeQL
+  workflows on `main`, next to the OpenSSF Scorecard and Best Practices
+  badges.
 - Close-out of 0.10: the roadmap and the website mark 0.10 released and
   0.11 as the current release.
 
