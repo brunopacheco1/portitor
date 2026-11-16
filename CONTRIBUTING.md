@@ -98,6 +98,9 @@ cover 45 of the 204 crate versions; the other 159 are exempted at the
 versions locked that day. An exemption means "trusted as it is, not
 reviewed"; it does not cover a newer version.
 
+Install it once with `cargo install cargo-vet --version 0.10.3 --locked`
+(the version CI uses).
+
 When cargo-vet fails on a pull request (usually a Dependabot bump):
 
 1. `cargo vet` (without `--locked`) fetches newer imported audits; if one
