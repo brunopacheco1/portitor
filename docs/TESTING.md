@@ -33,8 +33,8 @@ project checks every change. All commands run from the repository root.
 You need: Rust (the version in `.github/workflows/ci.yml`; at least the
 `rust-version` in `Cargo.toml`), and for some checks `cargo-deny`, `cargo-vet`,
 `cargo-llvm-cov`, `reuse`, Java 21 and a nightly Rust toolchain. Before you
-open a pull request, run at least format, lint, tests and `cargo deny
-check`.
+open a pull request, run at least format, lint, tests, `cargo deny
+check` and `cargo vet --locked`.
 
 ## Unit and integration tests
 

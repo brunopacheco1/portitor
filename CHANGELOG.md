@@ -17,7 +17,8 @@ versions may change behaviour and configuration.
 - cargo-vet in CI (workflow `Dependencies`): every crate version in
   `Cargo.lock` must be audited or exempted (`supply-chain/`). Audits are
   imported from Mozilla, Google, Bytecode Alliance, ISRG and Zcash (45
-  crate versions); the other 159 are exempted at today's versions, so a
+  crate versions); the other 159 are exempted at the versions locked on
+  2026-11-16, so a
   new or bumped crate needs a maintainer's audit or a recorded exemption
   (CONTRIBUTING, "Dependency audits").
 
@@ -30,7 +31,9 @@ versions may change behaviour and configuration.
 ### Documentation
 
 - ADR 0023 (health checks, traces and metrics) accepted.
-
+- CONTRIBUTING explains what to do when cargo-vet fails; TESTING,
+  SECURITY-ASSURANCE and RELEASING list the check; risk R-04 (crates not
+  audited) is now mitigated.
 - Close-out of 0.9: the roadmap and the website mark 0.9 released and
   0.10 as the current release.
 - Roadmap "Later": a health data space demo with four participants and

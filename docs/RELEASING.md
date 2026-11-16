@@ -108,6 +108,7 @@ pull request, or record why it stays.
    and the same with `-p portitor-identity`) and
    `docs/api/issuer-management-openapi.json`
    (`cargo test -p portitor-issuer --test issuer -- --ignored write_management_description`),
+   update the fuzz lock file (`cargo update -w` in `fuzz/`),
    set the default image tags in `examples/compose/compose.yaml` and the
    `git clone --branch` tag in `site/index.html` to `X.Y.Z` (`vX.Y.Z`),
    and merge.

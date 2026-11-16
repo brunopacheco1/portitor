@@ -56,9 +56,9 @@ jobs:
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-vet@0.10.3
-      # --locked: use the audits pinned in supply-chain/imports.lock, no network.
+      # --locked: check against the audits pinned in supply-chain/imports.lock (no newer ones fetched).
       # A new or bumped crate fails here until a maintainer audits it (cargo vet certify)
-      # or exempts it with a reason; see CONTRIBUTING.md, "Dependencies".
+      # or exempts it with a reason; see CONTRIBUTING.md, "Dependency audits (cargo-vet)".
       - name: cargo vet
         run: cargo vet --locked
 

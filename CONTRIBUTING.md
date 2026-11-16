@@ -78,17 +78,19 @@ The build enforces the style, so a pull request that breaks it fails:
 ## Dependency audits (cargo-vet)
 
 CI runs [cargo-vet](https://mozilla.github.io/cargo-vet/) (`cargo vet
---locked`, workflow `Dependencies`) on the shipped workspace's
-`Cargo.lock`. Every crate version must be audited or exempted, in
+--locked`, workflow `Dependencies`) on the root `Cargo.lock`
+(the shipped crates). Every crate version must be audited or exempted, in
 `supply-chain/`:
 
-- `config.toml`: the audit sets we import, and the exemptions. Shipped
-  crates need `safe-to-deploy`; crates used only to build or test need
-  `safe-to-run` (cargo-vet's defaults).
+- `config.toml`: the audit sets we import, and the exemptions. Crates the
+  shipped code uses, including build dependencies and macros, need
+  `safe-to-deploy`; crates used only by tests need `safe-to-run`
+  (cargo-vet's defaults).
 - `audits.toml`: our own audits. An audit is a claim that **a person**
   read the code, so only a maintainer records one, under their own name;
   tools and AI agents never do.
-- `imports.lock`: the imported audits, pinned, so CI needs no network.
+- `imports.lock`: the imported audits, pinned, so CI checks against the
+  same audits every time (`--locked` fetches no newer ones).
 
 Imported sets (from [cargo-vet's registry](https://github.com/mozilla/cargo-vet/blob/main/registry.toml)):
 Mozilla, Google, Bytecode Alliance, ISRG and Zcash. On 2026-11-16 they
@@ -99,14 +101,16 @@ reviewed"; it does not cover a newer version.
 When cargo-vet fails on a pull request (usually a Dependabot bump):
 
 1. `cargo vet` (without `--locked`) fetches newer imported audits; if one
-   covers the new version, commit the updated `imports.lock`.
+   covers the new version, commit the updated `imports.lock` and
+   `config.toml` (it may also drop exemptions no longer needed).
 2. Otherwise `cargo vet suggest` lists what is missing, and
    `cargo vet diff <crate> <old> <new>` shows the change to read. After
    reading it, record it with `cargo vet certify <crate> <old> <new>`
    (a delta audit), and commit `audits.toml`.
 3. If the change cannot be reviewed now, exempt that version with
-   `cargo vet add-exemption <crate> <version>`, add a `notes` line saying
-   why, and say so in the pull request.
+   `cargo vet add-exemption <crate> <version> --criteria safe-to-deploy
+   --notes "why"` (`safe-to-run` for a test-only crate), and say so in
+   the pull request.
 
 `fuzz/` has its own lock file and is not shipped, so cargo-vet does not
 check it.
