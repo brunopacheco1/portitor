@@ -23,14 +23,15 @@ carries the data to the other side. The project was called LDSC until 0.3
 ([ADR 0008](docs/adr/0008-project-name.md)).
 
 [![Release](https://img.shields.io/github/v/release/brunopacheco1/portitor)](https://github.com/brunopacheco1/portitor/releases/latest)
-[![Licence: Apache-2.0](https://img.shields.io/github/license/brunopacheco1/portitor)](LICENSE)
-[![REUSE status](https://api.reuse.software/badge/github.com/brunopacheco1/portitor)](https://api.reuse.software/info/github.com/brunopacheco1/portitor)
 [![CI](https://github.com/brunopacheco1/portitor/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/brunopacheco1/portitor/actions/workflows/ci.yml)
 [![TCK](https://github.com/brunopacheco1/portitor/actions/workflows/tck.yml/badge.svg?branch=main)](https://github.com/brunopacheco1/portitor/actions/workflows/tck.yml)
-[![Dependencies](https://github.com/brunopacheco1/portitor/actions/workflows/dependencies.yml/badge.svg?branch=main)](https://github.com/brunopacheco1/portitor/actions/workflows/dependencies.yml)
 [![CodeQL](https://github.com/brunopacheco1/portitor/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/brunopacheco1/portitor/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/brunopacheco1/portitor/badge)](https://scorecard.dev/viewer/?uri=github.com/brunopacheco1/portitor)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16578/badge)](https://www.bestpractices.dev/projects/16578)
+[![OpenSSF Baseline](https://www.bestpractices.dev/projects/16578/baseline)](https://www.bestpractices.dev/projects/16578)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![REUSE status](https://api.reuse.software/badge/github.com/brunopacheco1/portitor)](https://api.reuse.software/info/github.com/brunopacheco1/portitor)
+[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](CODE_OF_CONDUCT.md)
 
 Status: early prototype (0.x). Not for production use.
 
