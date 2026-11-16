@@ -124,8 +124,12 @@ trusted compliance credential names is skipped too.
 - The binding rule is our reading. The DCP project is asked how a
   compliance credential should be bound to its holder over DCP:
   https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/278 (2026-11-16). The same
-  question to Gaia-X is not asked yet: no Gaia-X document named "Gaia-X
-  Trust Protocol" was found, and the place for it, the ICAM working group,
-  is on GitLab, where the maintainer has no account (2026-11-16).
+  question to Gaia-X is not asked yet. No Gaia-X document answers it: the
+  Compliance Document 4.0.0 sets the compliance rules only; the ICAM
+  document 25.11 adopts OID4VCI and OID4VP, and binds only party
+  credentials to a holder key (`gx:holder`); the Architecture Document 3.1,
+  section 4.5 "Gaia-X Trust Protocol", covers trust between ecosystems.
+  The place to ask is the ICAM working group, on GitLab, where the
+  maintainer has no account (2026-11-16).
 - The verifier now computes JCS digests: one small, pure module in
   `portitor-dcp`, tested against the digests of the 0.8 spike.
