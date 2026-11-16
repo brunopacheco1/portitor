@@ -87,6 +87,9 @@ pull request, or record why it stays.
   `git clone --branch` tag, the commands and the ports it names.
 - [ROADMAP.md](ROADMAP.md) and the [CHANGELOG](../CHANGELOG.md) say what
   shipped.
+- Supply chain: `cargo vet --locked` passes; count the exemptions in
+  `supply-chain/config.toml` and note the number in R-04 (it should
+  shrink).
 - [RISKS_AND_TECHNICAL_DEBTS.md](RISKS_AND_TECHNICAL_DEBTS.md): each open
   item is checked against the release's code and gets its new status;
   what the release raised (ADR consequences, spike risks, review

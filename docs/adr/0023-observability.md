@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # ADR 0023: Health checks, traces and metrics
 
-- Status: **Proposed**
+- Status: **Accepted** (2026-11-16, by the maintainer)
 - Date: 2026-11-15
 - Scope: release 0.9, all three components (connector, identity,
   issuer). Closes [TD-18](../RISKS_AND_TECHNICAL_DEBTS.md#td-18) and

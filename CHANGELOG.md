@@ -12,7 +12,24 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Security
+
+- cargo-vet in CI (workflow `Dependencies`): every crate version in
+  `Cargo.lock` must be audited or exempted (`supply-chain/`). Audits are
+  imported from Mozilla, Google, Bytecode Alliance, ISRG and Zcash (45
+  crate versions); the other 159 are exempted at today's versions, so a
+  new or bumped crate needs a maintainer's audit or a recorded exemption
+  (CONTRIBUTING, "Dependency audits").
+
+### Fixed
+
+- The website shows the SonarQube Cloud quality gate again: the site
+  build asks for the `main` branch, because SonarQube Cloud still names
+  its main branch `master`.
+
 ### Documentation
+
+- ADR 0023 (health checks, traces and metrics) accepted.
 
 - Close-out of 0.9: the roadmap and the website mark 0.9 released and
   0.10 as the current release.

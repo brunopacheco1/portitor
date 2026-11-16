@@ -56,7 +56,7 @@ checks this file:
 | [R-01](#r-01) | Rust is hard to read for the maintainer and slower to build | Delivery | 0.0 (ADR 0002, 2026-11-11); 0.4 (maintainer, 2026-11-13) | Mitigated | every release |
 | [R-02](#r-02) | One maintainer: no two-person review | Delivery, security | 0.1 (ADR 0012, maintainer, 2026-11-11) | Accepted | until a second maintainer (not a 1.0 blocker) |
 | [R-03](#r-03) | Pre-1.0 JSON-LD and VC crates | Dependency | 0.0 (ADR 0002, 2026-11-11) | Mitigated | — |
-| [R-04](#r-04) | Dependencies are not audited crate by crate (cargo-vet) | Dependency, security | 0.1 (maintainer, 2026-11-11 and 2026-11-12) | Open | 0.10 |
+| [R-04](#r-04) | Dependencies are not audited crate by crate (cargo-vet) | Dependency, security | 0.1 (maintainer, 2026-11-11 and 2026-11-12) | Mitigated | 0.10 |
 | [R-05](#r-05) | No written OpenSSF Baseline level 1 self-assessment | Security | 0.1 (ADR 0012, maintainer, 2026-11-12) | Open | 0.13 |
 | [R-06](#r-06) | Data Plane Signaling is a draft (v1.0-RC4) | Upstream churn | 0.0 (ARCHITECTURE, 2026-11-11) | Mitigated | until Signaling 1.0 |
 | [R-07](#r-07) | Upstream findings not reported yet | Upstream churn, interoperability | 0.4 to 0.8 (maintainer, 2026-11-13 to 2026-11-15) | Open | 0.10 |
@@ -124,7 +124,7 @@ checks this file:
 | [TD-29](#td-29) | No OTLP logs export, no gRPC, no compression | Technical debt | 0.9 (ADR 0023, DEPLOYING, 2026-11-15) | Open | Later |
 | [TD-30](#td-30) | The outbox resends a message the counter-party refused | Technical debt | 0.9 (outbox metrics, 2026-11-15) | Open | 0.11 |
 
-Totals: 40 risks (Open 11, Mitigated 17, Accepted 4, Addressed 8);
+Totals: 40 risks (Open 10, Mitigated 18, Accepted 4, Addressed 8);
 30 technical debts (Open 19, Accepted 5, Addressed 6).
 
 ## Risks
@@ -186,11 +186,19 @@ Totals: 40 risks (Open 11, Mitigated 17, Accepted 4, Addressed 8);
   release was renumbered 0.10 on 2026-11-14).
 - **Why it matters.** A malicious or careless crate update could reach a
   release.
-- **Current state: Open.** No cargo-vet in CI (checked: no
-  `cargo-vet` in `.github/` or `Cargo.toml`). What runs today: pinned
-  actions, Dependabot, dependency review, OSV-Scanner, `cargo deny`
-  (RustSec, licences, sources), ORT ([TESTING](TESTING.md#what-runs-where)).
-- **Next.** ROADMAP 0.10 (supply chain).
+- **Current state: Mitigated (0.10).** CI runs `cargo vet --locked`
+  (workflow `Dependencies`), so a new or bumped crate cannot merge
+  without an audit or a recorded exemption
+  ([CONTRIBUTING](../CONTRIBUTING.md#dependency-audits-cargo-vet)).
+  Imported audits from Mozilla, Google, Bytecode Alliance, ISRG and
+  Zcash cover 45 of the 204 crate versions; the other 159 are exempted
+  at the versions locked on 2026-11-16, so they are trusted, not
+  reviewed. Also running: pinned actions, Dependabot, dependency review,
+  OSV-Scanner, `cargo deny` (RustSec, licences, sources), ORT
+  ([TESTING](TESTING.md#what-runs-where)).
+- **Next.** Every bump of an exempted crate is reviewed (delta audit) or
+  exempted again with a reason, so the exemption list shrinks over time.
+  Count the exemptions at each release.
 
 <a id="r-05"></a>
 ### R-05 No written OpenSSF Baseline level 1 self-assessment
@@ -1041,9 +1049,9 @@ a signer port with an OpenBao adapter in ROADMAP 1.4.
   and OpenTelemetry traces and metrics over OTLP/HTTP when
   `OTEL_EXPORTER_OTLP_ENDPOINT` is set (DEPLOYING "Traces and metrics").
   JSON log lines carry the `trace_id`, and every negotiation and transfer
-  state change is logged. ADR 0023 stays Proposed until the maintainer
-  accepts it.
-- **Next.** The maintainer accepts ADR 0023.
+  state change is logged. The maintainer accepted ADR 0023 on
+  2026-11-16.
+- **Next.** None.
 
 <a id="td-19"></a>
 ### TD-19 No TLS inside the services

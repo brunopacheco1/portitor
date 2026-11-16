@@ -56,8 +56,9 @@ jobs:
             score=$(jq -r '.score // empty' <<< "$card")
             [[ "$score" =~ ^[0-9]+(\.[0-9]+)?$ ]] && scorecard="${score} / 10"
           fi
+          # branch=main: SonarQube Cloud still calls its main branch "master", so without it the API answers NONE
           gate="not available"
-          if result=$(curl -fsS --max-time 20 "https://sonarcloud.io/api/qualitygates/project_status?projectKey=brunopacheco1_portitor"); then
+          if result=$(curl -fsS --max-time 20 "https://sonarcloud.io/api/qualitygates/project_status?projectKey=brunopacheco1_portitor&branch=main"); then
             case "$(jq -r '.projectStatus.status // empty' <<< "$result")" in
               OK) gate=passed ;;
               ERROR) gate=failing ;;

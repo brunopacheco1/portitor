@@ -67,12 +67,49 @@ The build enforces the style, so a pull request that breaks it fails:
    `REUSE.toml`. CI runs [`reuse lint`](https://reuse.software).
 4. New dependencies must have a licence on the allowlist in `deny.toml`
    (compatible with Apache-2.0); say in the pull request why the
-   dependency is needed.
+   dependency is needed. Every new or bumped crate must also pass
+   cargo-vet (below).
 5. Describe what changed and why, and add a line to `CHANGELOG.md` under
    *Unreleased*.
 6. Commits must be signed, and `main` only changes through pull requests
    that pass the required checks, are up to date with `main`, and are
    approved by a code owner (`.github/CODEOWNERS`).
+
+## Dependency audits (cargo-vet)
+
+CI runs [cargo-vet](https://mozilla.github.io/cargo-vet/) (`cargo vet
+--locked`, workflow `Dependencies`) on the shipped workspace's
+`Cargo.lock`. Every crate version must be audited or exempted, in
+`supply-chain/`:
+
+- `config.toml`: the audit sets we import, and the exemptions. Shipped
+  crates need `safe-to-deploy`; crates used only to build or test need
+  `safe-to-run` (cargo-vet's defaults).
+- `audits.toml`: our own audits. An audit is a claim that **a person**
+  read the code, so only a maintainer records one, under their own name;
+  tools and AI agents never do.
+- `imports.lock`: the imported audits, pinned, so CI needs no network.
+
+Imported sets (from [cargo-vet's registry](https://github.com/mozilla/cargo-vet/blob/main/registry.toml)):
+Mozilla, Google, Bytecode Alliance, ISRG and Zcash. On 2026-11-16 they
+cover 45 of the 204 crate versions; the other 159 are exempted at the
+versions locked that day. An exemption means "trusted as it is, not
+reviewed"; it does not cover a newer version.
+
+When cargo-vet fails on a pull request (usually a Dependabot bump):
+
+1. `cargo vet` (without `--locked`) fetches newer imported audits; if one
+   covers the new version, commit the updated `imports.lock`.
+2. Otherwise `cargo vet suggest` lists what is missing, and
+   `cargo vet diff <crate> <old> <new>` shows the change to read. After
+   reading it, record it with `cargo vet certify <crate> <old> <new>`
+   (a delta audit), and commit `audits.toml`.
+3. If the change cannot be reviewed now, exempt that version with
+   `cargo vet add-exemption <crate> <version>`, add a `notes` line saying
+   why, and say so in the pull request.
+
+`fuzz/` has its own lock file and is not shipped, so cargo-vet does not
+check it.
 
 ## Licensing of contributions
 

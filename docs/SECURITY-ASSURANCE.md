@@ -109,7 +109,7 @@ dataspace participants over HTTPS.
 | Negotiation state | A consumer drives a negotiation out of order, or two messages race | The DSP state machine as a pure function in the domain; every change is a compare-and-update on a version number; a message that races our acknowledgement is accepted only as proof of delivery of our saved pending message (ADR 0007) |
 | Service availability | Crafted or oversized messages crash or exhaust a service | Typed parsing with no `unsafe`; axum's default limit of 2 MB on every parsed body, explicit limits per port *(planned, 0.11)*; fuzzing of the DSP, DCP and ODRL parsers, the SHACL shapes and JSON-LD readers, the bundle manifest and the Gaia-X compliance checks and JCS digest (ClusterFuzzLite), of every parser *(planned, 0.11)*; a nesting limit in SHACL validation |
 | Operational data (health answers, traces, metrics) | A caller reads health answers, or a receiver reads traces and metrics, and learns secrets, partners or process ids; a partner links our internal calls through trace context | Health checks only on the management port, which stays on the operator's network; failure messages without secrets; export off by default and only to the receiver the operator names; attribute allow-list (no tokens, keys, headers, bodies or id-bearing paths); client metrics name only hosts inside the participant (no untrusted cardinality); `traceparent` neither sent to nor taken from other participants, and taken on `/sts/token` only after the client is authenticated (ADR 0023) |
-| Users' supply chain | A tampered release or dependency | Pinned CI actions; signed commits; Dependabot, dependency review, OSV, cargo-deny (RustSec advisories, licence allowlist, crate sources) and ORT; signed images with SBOM and provenance attestations |
+| Users' supply chain | A tampered release or dependency | Pinned CI actions; signed commits; Dependabot, dependency review, OSV, cargo-deny (RustSec advisories, licence allowlist, crate sources), cargo-vet (every crate version audited or exempted) and ORT; signed images with SBOM and provenance attestations |
 
 ## Trust boundaries
 
@@ -180,7 +180,8 @@ dataspace participants over HTTPS.
 - **Static analysis:** Clippy pedantic with warnings as errors; CodeQL and
   SonarQube Cloud quality gate on every pull request.
 - **Supply chain:** pinned workflow actions, least-privilege workflow
-  tokens, REUSE compliance; OpenSSF Scorecard.
+  tokens, REUSE compliance; OpenSSF Scorecard; cargo-vet, so a new or
+  bumped crate needs a recorded audit or exemption before it merges.
 
 ## OpenSSF Baseline
 

@@ -18,6 +18,7 @@ project checks every change. All commands run from the repository root.
 | Unit and integration tests | `cargo test --workspace` | every PR (`CI`) |
 | Coverage | `cargo llvm-cov --workspace` | every PR (`CI`, sent to SonarQube Cloud) |
 | Dependencies: advisories, licences, sources | `cargo deny check` | every PR |
+| Dependencies: every crate version audited or exempted | `cargo vet --locked`, see [CONTRIBUTING](../CONTRIBUTING.md#dependency-audits-cargo-vet) | every PR (`Dependencies`) |
 | Licence headers | `reuse lint` | every PR (`REUSE compliance`) |
 | DSP conformance (TCK) | see [below](#dsp-conformance-tck) | every PR (`TCK`) |
 | DCP conformance: identity component, connector as verifier, issuer (TCK) | see [below](#dcp-conformance-tck) | every PR (`TCK`) |
@@ -30,7 +31,7 @@ project checks every change. All commands run from the repository root.
 | Static analysis | CodeQL, OpenSSF Scorecard, ORT | every PR or on `main` |
 
 You need: Rust (the version in `.github/workflows/ci.yml`; at least the
-`rust-version` in `Cargo.toml`), and for some checks `cargo-deny`,
+`rust-version` in `Cargo.toml`), and for some checks `cargo-deny`, `cargo-vet`,
 `cargo-llvm-cov`, `reuse`, Java 21 and a nightly Rust toolchain. Before you
 open a pull request, run at least format, lint, tests and `cargo deny
 check`.
