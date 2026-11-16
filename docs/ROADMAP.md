@@ -486,18 +486,20 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
   ([TD-04](RISKS_AND_TECHNICAL_DEBTS.md#td-04)). Their answers may change
   the API and the configuration, so they must be known before the 0.13
   freeze (maintainer, 2026-11-15).
-- README badges match the website's "Trust and quality" checks
-  (maintainer, 2026-11-16): add REUSE
-  (`https://api.reuse.software/badge/github.com/brunopacheco1/portitor`)
-  and the SonarQube Cloud quality gate (on branch `main`, while SonarQube
-  Cloud still names the main branch `master`) next to Scorecard and Best
-  Practices.
+- README badges, as in praecepta (maintainer, 2026-11-16): release, CI,
+  TCK, CodeQL, OpenSSF Scorecard, Best Practices and Baseline, licence,
+  REUSE (API registered the same day) and Contributor Covenant. Still to
+  add: the SonarQube Cloud quality gate and coverage badges. SonarQube
+  Cloud analyses `main` as a short-lived branch (its main branch is still
+  named `master`, with no analysis), and its badges read "not computed"
+  for both, so they wait until the maintainer renames `master` to `main`
+  in SonarQube Cloud.
 - Exit: every parser has a fuzz target; the request limits per port and
   route are tested; the status list cache is tested at 0 and 300 s; the
   threat model review is recorded in SECURITY-ASSURANCE; a key change
   with two keys listed leaves no verification gap (tested); the outbox
   stops at the first 4xx it may not retry (tested); the README shows the
-  REUSE and quality gate badges.
+  quality gate and coverage badges.
 - Main risk: a finding that needs a design change.
 
 ## 0.12 Interoperability and performance

@@ -14,10 +14,13 @@ versions may change behaviour and configuration.
 
 ### Documentation
 
+- README badges, as in praecepta: release, CI, TCK, CodeQL, OpenSSF
+  Scorecard, Best Practices and Baseline, licence, REUSE compliance
+  (registered with the REUSE API, 2026-11-16) and Contributor Covenant.
 - Close-out of 0.10: the roadmap and the website mark 0.10 released and
   0.11 as the current release.
-- Roadmap 0.11: README badges for REUSE and the SonarQube Cloud quality
-  gate.
+- Roadmap 0.11: the SonarQube Cloud quality gate and coverage badges,
+  once SonarQube Cloud's main branch is renamed to `main`.
 
 ## [0.10.0] - 2026-11-16
 
