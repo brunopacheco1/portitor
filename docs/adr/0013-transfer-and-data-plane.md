@@ -93,7 +93,7 @@ from the provider after the consumer restarts a transfer (TP:02-04).
 Data Plane Signaling says only the party that suspended may resume; DSP
 2025-1 lets either party start a suspended transfer again. Portitor follows
 DSP, which governs the exchange between connectors, and reports the
-difference upstream (ROADMAP 0.4).
+difference upstream (ROADMAP 0.4). Reported upstream: https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/135
 
 ### The data
 
@@ -127,7 +127,8 @@ flow starts. Settled with the data plane (0.4 PR 4):
 examples, the DSP TCK and EDC's DSP tests use it. The Data Plane Signaling
 HTTP profile uses `https://w3id.org/dspace-sig/profile/http-pull` between
 control plane and data plane; that value stays inside Portitor. The EDC
-interop test (0.5) confirms the choice.
+interop test (0.5) confirms the choice. Reported upstream:
+https://github.com/eclipse-dataplane-signaling/profiles/issues/8
 
 ## Consequences
 

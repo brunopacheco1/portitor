@@ -199,6 +199,7 @@ fn vc11_credential_from_the_tck_shape() {
 #[test]
 fn vc11_credential_id_wins_over_jti() {
     // the DCP TCK v1.2.1 writes a random `jti` and another random `id`
+    // (reported upstream: https://github.com/eclipse-dataspacetck/dcp-tck/issues/243)
     let issuer = Party::new(ISSUER);
     let jwt = issuer.sign(
         "JWT",

@@ -40,6 +40,9 @@ versions may change behaviour and configuration.
   an authority (HDAB, ICUdata4EU), which must answer how the same data is
   reached through a provider and an intermediary with a secure
   processing environment.
+- The upstream reports drafted from 0.4 to 0.8 are filed (2026-11-16) and
+  linked from R-07, the roadmap, the ADRs, ARCHITECTURE, TESTING and the
+  code comments next to each workaround.
 
 ## [0.9.0] - 2026-11-15
 

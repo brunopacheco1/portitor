@@ -9,6 +9,8 @@
 //! addresses lack the `@type` fields that the DSP `DataAddress` schema
 //! requires (and two use an empty `{}` data address). Each such example is
 //! checked to fail, then fixed the smallest way and checked again.
+//! Reported upstream:
+//! <https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/133>
 #![allow(clippy::unwrap_used, missing_docs)]
 
 use portitor_dps::message::{

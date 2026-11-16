@@ -288,6 +288,7 @@ impl Prover for TckProver {
 /// before the TCK has read our answer is refused, and every retry then
 /// gets 404. A real consumer saves its transfer before it sends the
 /// request, so this delay exists only in the TCK build.
+/// Reported upstream: <https://github.com/eclipse-dataspacetck/dsp-tck/issues/338>
 #[derive(Debug, Clone)]
 pub struct LateStart<S>(pub S);
 

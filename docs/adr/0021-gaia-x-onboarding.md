@@ -135,7 +135,8 @@ protocol, "Scopes"). So:
   (an IRI starting with `https://w3id.org/gaia-x/`). That is the same
   IRI under JSON-LD; nothing else is expanded.
 - This rule is ours. The upstream report asks the DCP project how a
-  scope should name a type that is a compact IRI.
+  scope should name a type that is a compact IRI:
+  https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/277
 
 ## Consequences
 

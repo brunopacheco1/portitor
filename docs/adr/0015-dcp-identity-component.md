@@ -69,7 +69,7 @@ context and `issuanceDate`, and its presentations are JWTs with a `vp`
 claim (`JwtCredentialGenerator`, `JwtPresentationGenerator`). Its
 verifier tests put a BitstringStatusList entry on those 1.1 credentials.
 So `vc20-bssl/jwt` alone cannot pass the TCK, while Gaia-X Danube needs
-VCDM 2.0 in 0.7.
+VCDM 2.0 in 0.7. Reported upstream: https://github.com/eclipse-dataspacetck/dcp-tck/issues/243
 
 ## Decision
 

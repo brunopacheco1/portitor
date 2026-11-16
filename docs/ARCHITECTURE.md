@@ -587,35 +587,38 @@ reports: `prepared`, `started`, `completed`, `errored`). The optional
 agreement retrieval endpoint and registration are left out: one built-in
 data plane needs neither.
 
-What implementing v1.0-RC4 showed (to report to the Data Plane Signaling
-project, and to settle in ADR 0013 where it affects us):
+What implementing v1.0-RC4 showed (reported to the Data Plane Signaling
+project on 2026-11-16, and settled in ADR 0013 where it affects us):
 
 - Five examples (start, started, resume, status and the base data address
   example) fail the specification's own schemas: their data addresses lack
   the `@type` fields that the DSP `DataAddress` schema requires, and two
-  are an empty `{}`.
+  are an empty `{}`. Reported upstream: https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/133
 - The `DataFlowStartMessage` example is an HTTP pull with a `dataAddress`,
   while the text says a data address on `start` for a pull "MUST result in
-  a HTTP 4xx Client Error".
+  a HTTP 4xx Client Error". Reported upstream: https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/134
 - Resume: the specification lets only the party that suspended resume;
   DSP 2025-1 lets either party start a suspended transfer again.
+  Reported upstream: https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/135
 - The HTTP transfer profile (`profiles` repository, no release yet) sets
   `endpointType` to `https://w3id.org/dspace-sig/profile/http-pull` and
   requires HTTPS endpoints; DSP examples and the TCK use
   `https://w3id.org/idsa/v4.1/HTTP` and the format `HTTP-PULL`. Which value
-  Portitor sends over DSP is decided in ADR 0013 (0.4 PR 3).
+  Portitor sends over DSP is decided in ADR 0013 (0.4 PR 3). Reported
+  upstream: https://github.com/eclipse-dataplane-signaling/profiles/issues/8
 - Starting a suspended pull transfer again from the provider side: DSP
   requires a data address in the provider's start message, but Signaling
   has no way to ask the data plane for a new one. Portitor's built-in data
-  plane gives the flow a new token (ADR 0014).
+  plane gives the flow a new token (ADR 0014). Reported upstream with
+  the resume point: https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/135
 - The diagram "Consumer Pull – Consumer Suspend/Start" shows the provider
   sending a `TransferStartMessage` with a data address back after the
   consumer started the transfer again. The DSP TCK refuses that message
   (its consumer is already STARTED), and Portitor does not send it
-  (ADR 0013).
+  (ADR 0013). Reported upstream with the resume point: https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/135
 
-What the transfer work showed about the DSP TCK v1.0.2 (to report to the
-TCK project):
+What the transfer work showed about the DSP TCK v1.0.2 (reported to the
+TCK project: https://github.com/eclipse-dataspacetck/dsp-tck/issues/338):
 
 - Its consumer moves a transfer to REQUESTED only after it reads the
   provider's answer to the request, and its start handler removes itself

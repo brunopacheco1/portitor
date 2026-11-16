@@ -432,7 +432,8 @@ EDC v1.0.0-RC7 sources):
   operation), so the control plane asks for
   `org.eclipse.dspace.dcp.vc.type:MembershipCredential:read`
   (`edc.iam.dcp.scopes.*` in `config/edc-controlplane.properties`) and
-  Portitor's `PORTITOR_DCP_SCOPES` is the same string.
+  Portitor's `PORTITOR_DCP_SCOPES` is the same string. Reported upstream:
+  https://github.com/eclipse-edc/IdentityHub/issues/1278
 - **Trust.** `edc.iam.trustedissuer.authority.id=did:web:issuer%3A8070`
   (the issuer), and `PORTITOR_TRUSTED_ISSUERS` on both Portitor
   components.

@@ -138,6 +138,8 @@ all checks green, Scorecard published.
   error) whose `$ref` to `AbstractTransferCodeMessage` is not a valid JSON
   pointer (`#definitions/...` instead of `#/definitions/...`; tag
   2025-1-err2). Each report links back from the code that works around it.
+  Filed 2026-11-16 on the existing issue
+  https://github.com/eclipse-dataspace-protocol-base/DataspaceProtocol/issues/265.
 - Report the same way to the Eclipse Data Plane Signaling project what
   implementing v1.0-RC4 shows (listed in ARCHITECTURE, "Data plane"):
   examples that fail the specification's own schemas, a pull `start`
@@ -145,7 +147,12 @@ all checks green, Scorecard published.
   `endpointType` (maintainer, 2026-11-13), plus what the consumer side
   showed: no Signaling message for a new token when the provider starts a
   transfer again, and the "Consumer Suspend/Start" diagram. Report the
-  DSP TCK race (ADR 0014) to the TCK project.
+  DSP TCK race (ADR 0014) to the TCK project. Filed 2026-11-16:
+  https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/133,
+  https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/134,
+  https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/135,
+  https://github.com/eclipse-dataplane-signaling/profiles/issues/8 (`endpointType`),
+  https://github.com/eclipse-dataspacetck/dsp-tck/issues/338 (TCK race).
 - Code quality and readability review of the whole code base before the
   release, so a maintainer who is not a Rust expert can follow it (asked
   by the maintainer, 2026-11-13): simpler code where it is hard to read,
@@ -163,7 +170,9 @@ all checks green, Scorecard published.
   metadata, catalog and negotiation. `scripts/demo-compose.sh` has two
   connectors in Docker Compose negotiate a contract and fetch the data
   over HTTP pull; CI runs it on every pull request. The upstream reports
-  are drafted; the maintainer files them, and their links are added here.
+  are drafted; the maintainer files them, and their links are added here
+  (filed 2026-11-16, linked above and in
+  [R-07](RISKS_AND_TECHNICAL_DEBTS.md#r-07)).
 
 ## 0.5 DCP: identity and DSP authentication (released 2026-11-13 as v0.5.0)
 
@@ -213,7 +222,9 @@ TCK v1.2.1 are the targets (latest releases, checked 2026-11-13).
   refuses the other once its credential is revoked, and is green in CI. The
   Simpl-Open spike stays at ADR 0017 (proposed) until the maintainer sets
   up a Simpl-Open sandbox (maintainer, 2026-11-13). Upstream reports
-  (DCP TCK, EDC IdentityHub, DCP schemas) are still to be filed.
+  (DCP TCK, EDC IdentityHub, DCP schemas) are still to be filed. They
+  were filed on 2026-11-16; the links are in
+  [R-07](RISKS_AND_TECHNICAL_DEBTS.md#r-07).
 
 ## 0.6 DCP: issuance and credential-based policies (released 2026-11-14 as v0.6.0)
 
@@ -434,6 +445,16 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
   site shows the SonarQube and REUSE values; each upstream report filed
   and linked.
 - Main risk: the audit load of cargo-vet.
+- Result (2026-11-16): cargo-vet runs in CI: 45 of 204 crate versions
+  are audited by imported sets from Mozilla, Google, Bytecode Alliance,
+  ISRG and Zcash, and 159 are exempted. The SonarQube quality gate is
+  fixed: the site asks for `branch=main`, because SonarQube Cloud still
+  names its main branch `master`. The REUSE value is pending: the
+  maintainer registers the repository with the REUSE API. Upstream
+  reports: 12 filed and linked in
+  [R-07](RISKS_AND_TECHNICAL_DEBTS.md#r-07) (11 issues and 1 comment), 1
+  not filed (Gaia-X, no GitLab account), 1 on hold (R-10), 1 dropped
+  (already filed by a third party).
 
 ## 0.11 Security hardening
 

@@ -277,7 +277,8 @@ const VC_TYPE_PREFIX: &str = "org.eclipse.dspace.dcp.vc.type:";
 
 /// Reads `PORTITOR_POLICY_CREDENTIALS` (ADR 0019): the credential types
 /// that policies may use, comma-separated, each `Type` or `Type=scope`. A
-/// type alone gets the scope `org.eclipse.dspace.dcp.vc.type:<Type>:read`.
+/// type alone gets the scope `org.eclipse.dspace.dcp.vc.type:<Type>:read`
+/// (`:read` for EDC, reported upstream: <https://github.com/eclipse-edc/IdentityHub/issues/1278>).
 /// `MembershipCredential` is always there; unless listed, its scope is
 /// the `MembershipCredential` scope of `PORTITOR_DCP_SCOPES` (default
 /// [`DEFAULT_SCOPE`]), which every query asks for anyway.
@@ -320,7 +321,7 @@ pub fn policy_credentials(
 
 /// One entry of `PORTITOR_POLICY_CREDENTIALS`: `Type` or `Type=scope`,
 /// read as the type and its scope (for `Type` alone,
-/// `org.eclipse.dspace.dcp.vc.type:<Type>:read`). Whether the scope fits
+/// `org.eclipse.dspace.dcp.vc.type:<Type>:read`; see <https://github.com/eclipse-edc/IdentityHub/issues/1278>). Whether the scope fits
 /// the type is checked by the caller.
 ///
 /// # Errors

@@ -15,7 +15,8 @@
 //!   `gx:ParticipantComplianceCredential`.
 //! - [`matches_scope_type`]: how a DCP scope type (no colon allowed)
 //!   names a Gaia-X type (a compact IRI such as `gx:LegalPerson`),
-//!   ADR 0021 "Credential types and scopes".
+//!   ADR 0021 "Credential types and scopes". Reported upstream:
+//!   <https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/277>.
 
 use serde_json::{Map, Value};
 

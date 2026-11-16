@@ -9,13 +9,16 @@
 //! Points where the published schemas or examples are off, found while
 //! writing these tests:
 //! - `context-schema.json` declares `$id` `.../v08/common/...`, but the
-//!   other schemas refer to it as `.../v1.0/common/...`.
+//!   other schemas refer to it as `.../v1.0/common/...`. Reported
+//!   upstream: <https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/270>
 //! - `credential-message-schema.json` sits under `issuance/` but declares
 //!   `$id` `.../presentation/...`, and defines `credentialType` with the
 //!   constant `CredentialMessage` where it means `type` (so `type` is
-//!   required but never checked).
+//!   required but never checked). Reported upstream: <https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/270>
+//!   (`$id`) and <https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/276> (`credentialType`).
 //! - The offer example uses the profile `vc10-sl2021/jwt`; the profiles
-//!   are `vc11-sl2021/jwt` and `vc20-bssl/jwt`.
+//!   are `vc11-sl2021/jwt` and `vc20-bssl/jwt`. Reported upstream:
+//!   <https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/276>
 //! - The Presentation Exchange schemas the messages refer to are not part
 //!   of the release; they are replaced by "anything" here.
 #![allow(clippy::unwrap_used, missing_docs)]
