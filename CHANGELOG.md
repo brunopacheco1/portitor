@@ -12,6 +12,13 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-16
+
+### Dependencies
+
+- jsonschema 0.61.1 to 0.61.2 (test-only; Dependabot #50) and
+  SonarSource/sonarqube-scan-action 8.4.1 to 8.5.0 (CI; Dependabot #51).
+
 ### Security
 
 - cargo-vet in CI (workflow `Dependencies`): every crate version in
