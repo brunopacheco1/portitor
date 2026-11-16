@@ -14,6 +14,10 @@ versions may change behaviour and configuration.
 
 ### Documentation
 
+- ADR 0022: says which Gaia-X documents were checked for how a
+  compliance credential is bound to its holder (none defines it), and
+  that "Gaia-X Trust Protocol" is a section of the Architecture Document
+  3.1, not a separate document.
 - README badges, as in praecepta: release, CI, TCK, CodeQL, OpenSSF
   Scorecard, Best Practices and Baseline, licence, REUSE compliance
   (registered with the REUSE API, 2026-11-16) and Contributor Covenant.
