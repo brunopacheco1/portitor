@@ -14,10 +14,10 @@ versions may change behaviour and configuration.
 
 ### Documentation
 
-- README badges: release, licence, REUSE compliance (registered with the
-  REUSE API, 2026-11-16), and the CI, TCK, Dependencies and CodeQL
-  workflows on `main`, next to the OpenSSF Scorecard and Best Practices
-  badges.
+- README badges, the same set as Praecepta: release, CI, CodeQL, OpenSSF
+  Scorecard, Best Practices and Baseline, licence, REUSE compliance
+  (registered with the REUSE API, 2026-11-16), Contributor Covenant 2.1,
+  and the SonarQube Cloud quality gate and coverage.
 - Close-out of 0.10: the roadmap and the website mark 0.10 released and
   0.11 as the current release.
 

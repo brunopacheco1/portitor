@@ -486,9 +486,10 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
   ([TD-04](RISKS_AND_TECHNICAL_DEBTS.md#td-04)). Their answers may change
   the API and the configuration, so they must be known before the 0.13
   freeze (maintainer, 2026-11-15).
-- README badges: release, licence, REUSE, and the CI, TCK, Dependencies
-  and CodeQL workflows (maintainer, 2026-11-16; REUSE API registered
-  the same day).
+- README badges as in Praecepta (maintainer, 2026-11-16): release, CI,
+  CodeQL, OpenSSF Scorecard, Best Practices and Baseline, licence, REUSE
+  (API registered the same day), Contributor Covenant, SonarQube Cloud
+  quality gate and coverage. The Sonar badges need `SONAR_TOKEN` set.
 - Exit: every parser has a fuzz target; the request limits per port and
   route are tested; the status list cache is tested at 0 and 300 s; the
   threat model review is recorded in SECURITY-ASSURANCE; a key change
