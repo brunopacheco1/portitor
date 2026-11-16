@@ -16,6 +16,7 @@
 //! for "by type" are configuration, and a trailing `:<access>` part (such
 //! as `:read`) is accepted and kept. The DCP TCK's default pattern does the
 //! same: `org[.]eclipse[.]dspace[.]dcp[.]vc[.]type:(?<type>[^:]+)(?<suffix>:.+)?`.
+//! The grammar is reported upstream: <https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/277>.
 
 /// The DCP alias for "credentials of this type".
 pub const VC_TYPE: &str = "org.eclipse.dspace.dcp.vc.type";

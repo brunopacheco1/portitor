@@ -25,6 +25,7 @@
 //! bits). Portitor does not enforce that minimum: the DCP TCK v1.2.1
 //! publishes lists of 16,384 bits. Larger lists are limited instead, so a
 //! small compressed list cannot expand without bound ([`MAX_LIST_BYTES`]).
+//! Reported upstream: <https://github.com/eclipse-dataspacetck/dcp-tck/issues/243>.
 
 use base64::Engine as _;
 use base64::alphabet;

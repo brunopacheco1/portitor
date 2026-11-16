@@ -90,6 +90,7 @@ the flow a new token with a full lifetime (`NewAddress`), and the start
 message carries it. Data Plane Signaling v1.0-RC4 has no message for
 this; it is a Portitor extension of the built-in data plane, listed with
 the other Signaling findings for the upstream report (ARCHITECTURE.md).
+Reported upstream: https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/135
 When the consumer starts the transfer again, the token stays the same and
 no start message is sent back (ADR 0013).
 
@@ -107,6 +108,7 @@ no start message is sent back (ADR 0013).
   sends start messages 300 ms late (`tck::LateStart`). A real consumer,
   Portitor included, saves its transfer before it sends the request, so the
   release build sends at once. The race is listed for an upstream report.
+Reported upstream: https://github.com/eclipse-dataspacetck/dsp-tck/issues/338
 
 ## Consequences
 

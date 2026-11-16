@@ -147,3 +147,21 @@ SPDX-FileCopyrightText = [
     "SEMIC, European Commission",
 ]
 SPDX-License-Identifier = "CC-BY-4.0 AND W3C-20150513 AND CC-BY-1.0 AND CC-BY-3.0"
+
+# cargo-vet (ROADMAP 0.10): config.toml and audits.toml are ours, but cargo vet
+# rewrites them, so no header
+[[annotations]]
+path = ["supply-chain/config.toml", "supply-chain/audits.toml"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Portitor contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+# cargo-vet's cache of the imported audit sets, copied by cargo vet from
+# google/supply-chain (Apache-2.0), bytecodealliance/wasmtime (Apache-2.0 WITH
+# LLVM-exception), mozilla/supply-chain and zcash/rust-ecosystem (Apache-2.0 OR MIT,
+# used under Apache-2.0) and divviup/libprio-rs (MPL-2.0); URLs in supply-chain/config.toml
+[[annotations]]
+path = "supply-chain/imports.lock"
+precedence = "override"
+SPDX-FileCopyrightText = ["google/supply-chain contributors", "bytecodealliance/wasmtime contributors", "mozilla/supply-chain contributors", "zcash/rust-ecosystem contributors", "divviup/libprio-rs contributors"]
+SPDX-License-Identifier = "Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND MPL-2.0"

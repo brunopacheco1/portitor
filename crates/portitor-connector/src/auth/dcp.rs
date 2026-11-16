@@ -39,7 +39,9 @@
 //! `validUntil`, and the same presentation holds a `gx:LegalPerson`
 //! credential that it names by digest (`gx:compliantCredentials`,
 //! `digestSRI`), issued and signed by the caller. The holder binding is
-//! not applied to these two credentials; it stays for every other one. A
+//! not applied to these two credentials; it stays for every other one
+//! (reported upstream:
+//! <https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/278>). A
 //! compliance credential from a trusted service that fails makes its
 //! presentation invalid (step 8 above). A compliance credential from
 //! another service, and a legal person credential that no trusted

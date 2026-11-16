@@ -300,7 +300,8 @@ pub struct CredentialMessage {
 ///
 /// The schema requires `type`, but the DCP TCK v1.2.1 sends "sparse"
 /// offers whose objects hold only an `id` and expects them to be
-/// accepted, so `type` is optional here.
+/// accepted, so `type` is optional here. Reported upstream:
+/// <https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/276>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CredentialObject {

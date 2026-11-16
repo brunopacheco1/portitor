@@ -56,10 +56,10 @@ checks this file:
 | [R-01](#r-01) | Rust is hard to read for the maintainer and slower to build | Delivery | 0.0 (ADR 0002, 2026-11-11); 0.4 (maintainer, 2026-11-13) | Mitigated | every release |
 | [R-02](#r-02) | One maintainer: no two-person review | Delivery, security | 0.1 (ADR 0012, maintainer, 2026-11-11) | Accepted | until a second maintainer (not a 1.0 blocker) |
 | [R-03](#r-03) | Pre-1.0 JSON-LD and VC crates | Dependency | 0.0 (ADR 0002, 2026-11-11) | Mitigated | — |
-| [R-04](#r-04) | Dependencies are not audited crate by crate (cargo-vet) | Dependency, security | 0.1 (maintainer, 2026-11-11 and 2026-11-12) | Open | 0.10 |
+| [R-04](#r-04) | Dependencies are not audited crate by crate (cargo-vet) | Dependency, security | 0.1 (maintainer, 2026-11-11 and 2026-11-12) | Mitigated | 0.10 |
 | [R-05](#r-05) | No written OpenSSF Baseline level 1 self-assessment | Security | 0.1 (ADR 0012, maintainer, 2026-11-12) | Open | 0.13 |
 | [R-06](#r-06) | Data Plane Signaling is a draft (v1.0-RC4) | Upstream churn | 0.0 (ARCHITECTURE, 2026-11-11) | Mitigated | until Signaling 1.0 |
-| [R-07](#r-07) | Upstream findings not reported yet | Upstream churn, interoperability | 0.4 to 0.8 (maintainer, 2026-11-13 to 2026-11-15) | Open | 0.10 |
+| [R-07](#r-07) | Upstream findings not reported yet | Upstream churn, interoperability | 0.4 to 0.8 (maintainer, 2026-11-13 to 2026-11-15) | Addressed | 0.10 |
 | [R-08](#r-08) | The DSP TCK v1.0.2 needs a test-only build | Interoperability | 0.4, 0.5 (ADR 0014, ADR 0016, 2026-11-13) | Mitigated | — |
 | [R-09](#r-09) | EDC is tested at a release candidate (1.0.0-RC7) | Interoperability, dependency | 0.5 (maintainer, 2026-11-13) | Mitigated | pin 1.0.0 when it ships |
 | [R-10](#r-10) | EDC refuses the Gaia-X compliance credential | Interoperability | 0.8 (ADR 0022, maintainer, 2026-11-15) | Accepted | Later |
@@ -124,7 +124,7 @@ checks this file:
 | [TD-29](#td-29) | No OTLP logs export, no gRPC, no compression | Technical debt | 0.9 (ADR 0023, DEPLOYING, 2026-11-15) | Open | Later |
 | [TD-30](#td-30) | The outbox resends a message the counter-party refused | Technical debt | 0.9 (outbox metrics, 2026-11-15) | Open | 0.11 |
 
-Totals: 40 risks (Open 11, Mitigated 17, Accepted 4, Addressed 8);
+Totals: 40 risks (Open 9, Mitigated 18, Accepted 4, Addressed 9);
 30 technical debts (Open 19, Accepted 5, Addressed 6).
 
 ## Risks
@@ -186,11 +186,19 @@ Totals: 40 risks (Open 11, Mitigated 17, Accepted 4, Addressed 8);
   release was renumbered 0.10 on 2026-11-14).
 - **Why it matters.** A malicious or careless crate update could reach a
   release.
-- **Current state: Open.** No cargo-vet in CI (checked: no
-  `cargo-vet` in `.github/` or `Cargo.toml`). What runs today: pinned
-  actions, Dependabot, dependency review, OSV-Scanner, `cargo deny`
-  (RustSec, licences, sources), ORT ([TESTING](TESTING.md#what-runs-where)).
-- **Next.** ROADMAP 0.10 (supply chain).
+- **Current state: Mitigated (0.10).** CI runs `cargo vet --locked`
+  (workflow `Dependencies`), so a new or bumped crate cannot merge
+  without an audit or a recorded exemption
+  ([CONTRIBUTING](../CONTRIBUTING.md#dependency-audits-cargo-vet)).
+  Imported audits from Mozilla, Google, Bytecode Alliance, ISRG and
+  Zcash cover 45 of the 204 crate versions; the other 159 are exempted
+  at the versions locked on 2026-11-16, so they are trusted, not
+  reviewed. Also running: pinned actions, Dependabot, dependency review,
+  OSV-Scanner, `cargo deny` (RustSec, licences, sources), ORT
+  ([TESTING](TESTING.md#what-runs-where)).
+- **Next.** Every bump of an exempted crate is reviewed (delta audit) or
+  exempted again with a reason, so the exemption list shrinks over time.
+  Count the exemptions at each release.
 
 <a id="r-05"></a>
 ### R-05 No written OpenSSF Baseline level 1 self-assessment
@@ -225,40 +233,67 @@ Totals: 40 risks (Open 11, Mitigated 17, Accepted 4, Addressed 8);
 ### R-07 Upstream findings not reported yet
 
 - **What.** Implementing the specifications showed errors and gaps
-  upstream. The reports are drafted but not filed:
-  - DSP 2025-1: three transfer JSON Schemas whose `$ref` to
-    `AbstractTransferCodeMessage` is not a valid JSON pointer (tag
-    `2025-1-err2`; ROADMAP 0.4). Comments on DSP issue #265 (maintainer,
-    project chat).
-  - Data Plane Signaling v1.0-RC4: five examples that fail its own
-    schemas, a pull `start` example that breaks a MUST, who may resume,
-    the HTTP profile's `endpointType`, no message for a new token when
-    the provider starts again, the "Consumer Suspend/Start" diagram
-    ([ARCHITECTURE](ARCHITECTURE.md#data-plane-inside-the-connector-or-separate),
-    ADR 0013, ADR 0014). Comments on Signaling issue #122 (maintainer,
-    project chat).
-  - DSP TCK v1.0.2: the transfer start race (ADR 0014, R-08).
-  - DCP TCK, EDC IdentityHub and DCP schemas (ROADMAP 0.5): the schema
-    `$id` mistakes and the offer example's profile listed in
-    `crates/portitor-dcp/tests/spec.rs`; IdentityHub's `:read` scope
-    suffix (ADR 0019).
-  - DCP: a scope cannot name a compact IRI type such as
-    `gx:ParticipantComplianceCredential`, because the DCP TCK's scope
-    pattern `vc.type:(?<type>[^:]+)(?<suffix>:.+)?` forbids `:` in the
-    type; Portitor uses the matching rule of
-    [ADR 0021](adr/0021-gaia-x-onboarding.md#credential-types-and-scopes).
-  - Gaia-X Trust Protocol and DCP: how a compliance credential is bound
-    to its holder over DCP (ADR 0022).
+  upstream. The maintainer filed the reports on 2026-11-16:
+  1. DSP 2025-1: three transfer JSON Schemas whose `$ref` to
+     `AbstractTransferCodeMessage` is not a valid JSON pointer (tag
+     `2025-1-err2`; ROADMAP 0.4). Existing issue
+     https://github.com/eclipse-dataspace-protocol-base/DataspaceProtocol/issues/265;
+     the maintainer opens the fix as a pull request.
+  2. Data Plane Signaling v1.0-RC4: five examples that fail its own
+     schemas
+     (https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/133).
+  3. Data Plane Signaling: a pull `start` example that breaks a MUST
+     (https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/134).
+  4. Data Plane Signaling: who may resume, no message for a new data
+     address when the provider starts again, the "Consumer Suspend/Start"
+     diagram
+     ([ARCHITECTURE](ARCHITECTURE.md#data-plane-inside-the-connector-or-separate),
+     ADR 0013, ADR 0014;
+     https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/135).
+  5. Signaling HTTP profile: its `endpointType` versus DSP and the DSP
+     TCK (ADR 0013;
+     https://github.com/eclipse-dataplane-signaling/profiles/issues/8). Signaling issue
+     #122 is about `authorizationType`, not this.
+  6. DSP TCK v1.0.2: the transfer start race (ADR 0014, R-08;
+     https://github.com/eclipse-dataspacetck/dsp-tck/issues/338).
+  7. DCP v1.0.1: the `$id` mistakes of `credential-message-schema.json`
+     and `context-schema.json` (`crates/portitor-dcp/tests/spec.rs`;
+     comment on
+     https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/270).
+  8. DCP: `credentialType` in `CredentialMessage`, `type` required on
+     sparse `CredentialObject`s, the offer example's profile
+     (https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/276).
+  9. DCP: the scope grammar; a scope cannot name a compact IRI type such
+     as `gx:ParticipantComplianceCredential`, because the DCP TCK's scope
+     pattern `vc.type:(?<type>[^:]+)(?<suffix>:.+)?` forbids `:` in the
+     type; Portitor uses the matching rule of
+     [ADR 0021](adr/0021-gaia-x-onboarding.md#credential-types-and-scopes)
+     (https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/277).
+  10. EDC IdentityHub: the default scope transformer needs the `:read`
+      suffix (ADR 0019;
+      https://github.com/eclipse-edc/IdentityHub/issues/1278).
+  11. DCP TCK v1.2.1: test credentials whose `jti` differs from the
+      credential `id`, 2 KB status lists, and BitstringStatusList on a
+      VC 1.1 credential (ADR 0015;
+      https://github.com/eclipse-dataspacetck/dcp-tck/issues/243).
+  12. DCP: how a credential whose subject is not the holder, such as the
+      Gaia-X compliance credential, is bound to its holder (ADR 0022;
+      https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/278).
+  13. Gaia-X: the same binding question. Not filed: the place for it is
+      the ICAM working group on GitLab, and the maintainer has no GitLab
+      account (2026-11-16). DCP issue #278 asks the question on the DCP
+      side.
+  14. EDC Connector: the subject check on every credential. On hold
+      under R-10 (ROADMAP "Later").
 - **Why it matters.** Until upstream decides, Portitor's workarounds may
   differ from what others do, and the next specification release may
   break them.
-- **Current state: Open.** The roadmap says the maintainer files them and
-  their links are added; no link is in the repository (checked). The
-  maintainer moved filing them to 0.10 (supply chain; the hardening
-  release was split on 2026-11-15), unless an answer is needed earlier
-  to go on.
-- **Next.** File them; add each link to the ROADMAP and to the code that
-  works around it.
+- **Current state: Addressed (0.10).** Twelve reports are filed and
+  linked here and in the code that works around them (eleven issues and
+  one comment). Report 13 is not filed (no GitLab account); report 14
+  is on hold under R-10.
+- **Next.** Follow the upstream answers, and remove each workaround when
+  upstream fixes it.
 
 <a id="r-08"></a>
 ### R-08 The DSP TCK v1.0.2 needs a test-only build
@@ -275,7 +310,8 @@ Totals: 40 risks (Open 11, Mitigated 17, Accepted 4, Addressed 8);
   TCK's own messages use (ADR 0016, amended 2026-11-13; the first text
   said "a test DID"). DCP authentication is covered by the DCP TCK and
   the EDC interop test instead.
-- **Next.** Report the race (R-07); drop `LateStart` when a fixed TCK
+- **Next.** The race is reported
+  (https://github.com/eclipse-dataspacetck/dsp-tck/issues/338, R-07); drop `LateStart` when a fixed TCK
   ships.
 
 <a id="r-09"></a>
@@ -320,7 +356,11 @@ Totals: 40 risks (Open 11, Mitigated 17, Accepted 4, Addressed 8);
   a later Gaia-X or DCP text may contradict ours.
 - **Current state: Open.** Both rules are in ADRs that are still
   Accepted (TD-23), tested between Portitor connectors only.
-- **Next.** The upstream reports (R-07).
+- **Next.** Follow the upstream reports (R-07): the scope grammar
+  (https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/277)
+  and the holder binding
+  (https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/278).
+  The Gaia-X side is not asked yet (R-07, report 13).
 
 <a id="r-12"></a>
 ### R-12 Gaia-X never tested with a real trust anchor or the Gaia-X Lab
@@ -1041,9 +1081,9 @@ a signer port with an OpenBao adapter in ROADMAP 1.4.
   and OpenTelemetry traces and metrics over OTLP/HTTP when
   `OTEL_EXPORTER_OTLP_ENDPOINT` is set (DEPLOYING "Traces and metrics").
   JSON log lines carry the `trace_id`, and every negotiation and transfer
-  state change is logged. ADR 0023 stays Proposed until the maintainer
-  accepts it.
-- **Next.** The maintainer accepts ADR 0023.
+  state change is logged. The maintainer accepted ADR 0023 on
+  2026-11-16.
+- **Next.** None.
 
 <a id="td-19"></a>
 ### TD-19 No TLS inside the services

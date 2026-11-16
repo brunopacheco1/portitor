@@ -37,7 +37,8 @@ commit 17bb5b8, `k8s/provider/application/controlplane-config.yaml`):
   A policy whose left operand starts with the prefix adds that scope.
 - The MVD's policies use left operands such as
   `ManufacturerCredential.part_types` and `DataAccess.level`.
-- EDC IdentityHub expects the `:read` suffix on scopes (found in 0.5).
+- EDC IdentityHub expects the `:read` suffix on scopes (found in 0.5;
+  reported upstream: https://github.com/eclipse-edc/IdentityHub/issues/1278).
 
 ## Decision
 

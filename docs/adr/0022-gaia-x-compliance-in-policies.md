@@ -41,6 +41,7 @@ What the specifications and peers say (checked 2026-11-15):
   so EDC refuses the Gaia-X compliance credential.
 - No specification we follow (DCP, Gaia-X ICAM, the Gaia-X Trust
   Protocol) says how to present a Gaia-X compliance credential over DCP.
+  Asked of the DCP project: https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/278
 
 ## Decision
 
@@ -120,8 +121,11 @@ trusted compliance credential names is skipped too.
 - Gaia-X policies work between Portitor connectors. EDC cannot meet
   them without its own extension, and an EDC provider cannot ask
   Portitor for them; the EDC interop test keeps running without Gaia-X.
-- The binding rule is our reading. We ask the Gaia-X Trust Protocol
-  authors and the DCP project in upstream reports how a compliance
-  credential should be bound to its holder over DCP.
+- The binding rule is our reading. The DCP project is asked how a
+  compliance credential should be bound to its holder over DCP:
+  https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/278 (2026-11-16). The same
+  question to Gaia-X is not asked yet: no Gaia-X document named "Gaia-X
+  Trust Protocol" was found, and the place for it, the ICAM working group,
+  is on GitLab, where the maintainer has no account (2026-11-16).
 - The verifier now computes JCS digests: one small, pure module in
   `portitor-dcp`, tested against the digests of the 0.8 spike.

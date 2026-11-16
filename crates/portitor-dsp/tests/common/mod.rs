@@ -112,6 +112,8 @@ impl jsonschema::Retrieve for Local {
 /// `transfer-schema.json#definitions/AbstractTransferCodeMessage`, which is
 /// not a valid JSON pointer (it lacks the `/` after `#`). The files stay
 /// unchanged; the pointer is corrected here, when they are read.
+/// Reported upstream:
+/// <https://github.com/eclipse-dataspace-protocol-base/DataspaceProtocol/issues/265>
 fn load(raw: &str) -> Value {
     serde_json::from_str(&raw.replace("#definitions/", "#/definitions/")).unwrap()
 }

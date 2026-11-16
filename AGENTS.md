@@ -55,6 +55,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 reuse lint
 cargo deny check
+cargo vet --locked
 ```
 
 ## Rules

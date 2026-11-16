@@ -18,6 +18,7 @@ project checks every change. All commands run from the repository root.
 | Unit and integration tests | `cargo test --workspace` | every PR (`CI`) |
 | Coverage | `cargo llvm-cov --workspace` | every PR (`CI`, sent to SonarQube Cloud) |
 | Dependencies: advisories, licences, sources | `cargo deny check` | every PR |
+| Dependencies: every crate version audited or exempted | `cargo vet --locked`, see [CONTRIBUTING](../CONTRIBUTING.md#dependency-audits-cargo-vet) | every PR (`Dependencies`) |
 | Licence headers | `reuse lint` | every PR (`REUSE compliance`) |
 | DSP conformance (TCK) | see [below](#dsp-conformance-tck) | every PR (`TCK`) |
 | DCP conformance: identity component, connector as verifier, issuer (TCK) | see [below](#dcp-conformance-tck) | every PR (`TCK`) |
@@ -30,10 +31,10 @@ project checks every change. All commands run from the repository root.
 | Static analysis | CodeQL, OpenSSF Scorecard, ORT | every PR or on `main` |
 
 You need: Rust (the version in `.github/workflows/ci.yml`; at least the
-`rust-version` in `Cargo.toml`), and for some checks `cargo-deny`,
+`rust-version` in `Cargo.toml`), and for some checks `cargo-deny`, `cargo-vet`,
 `cargo-llvm-cov`, `reuse`, Java 21 and a nightly Rust toolchain. Before you
-open a pull request, run at least format, lint, tests and `cargo deny
-check`.
+open a pull request, run at least format, lint, tests, `cargo deny
+check` and `cargo vet --locked`.
 
 ## Unit and integration tests
 
@@ -431,7 +432,8 @@ EDC v1.0.0-RC7 sources):
   operation), so the control plane asks for
   `org.eclipse.dspace.dcp.vc.type:MembershipCredential:read`
   (`edc.iam.dcp.scopes.*` in `config/edc-controlplane.properties`) and
-  Portitor's `PORTITOR_DCP_SCOPES` is the same string.
+  Portitor's `PORTITOR_DCP_SCOPES` is the same string. Reported upstream:
+  https://github.com/eclipse-edc/IdentityHub/issues/1278
 - **Trust.** `edc.iam.trustedissuer.authority.id=did:web:issuer%3A8070`
   (the issuer), and `PORTITOR_TRUSTED_ISSUERS` on both Portitor
   components.

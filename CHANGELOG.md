@@ -12,14 +12,44 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-16
+
+### Dependencies
+
+- jsonschema 0.61.1 to 0.61.2 (test-only; Dependabot #50) and
+  SonarSource/sonarqube-scan-action 8.4.1 to 8.5.0 (CI; Dependabot #51).
+
+### Security
+
+- cargo-vet in CI (workflow `Dependencies`): every crate version in
+  `Cargo.lock` must be audited or exempted (`supply-chain/`). Audits are
+  imported from Mozilla, Google, Bytecode Alliance, ISRG and Zcash (45
+  crate versions); the other 159 are exempted at the versions locked on
+  2026-11-16, so a
+  new or bumped crate needs a maintainer's audit or a recorded exemption
+  (CONTRIBUTING, "Dependency audits").
+
+### Fixed
+
+- The website shows the SonarQube Cloud quality gate again: the site
+  build asks for the `main` branch, because SonarQube Cloud still names
+  its main branch `master`.
+
 ### Documentation
 
+- ADR 0023 (health checks, traces and metrics) accepted.
+- CONTRIBUTING explains what to do when cargo-vet fails; TESTING,
+  SECURITY-ASSURANCE and RELEASING list the check; risk R-04 (crates not
+  audited) is now mitigated.
 - Close-out of 0.9: the roadmap and the website mark 0.9 released and
   0.10 as the current release.
 - Roadmap "Later": a health data space demo with four participants and
   an authority (HDAB, ICUdata4EU), which must answer how the same data is
   reached through a provider and an intermediary with a secure
   processing environment.
+- The upstream reports drafted from 0.4 to 0.8 are filed (2026-11-16) and
+  linked from R-07, the roadmap, the ADRs, ARCHITECTURE, TESTING and the
+  code comments next to each workaround.
 
 ## [0.9.0] - 2026-11-15
 

@@ -87,6 +87,9 @@ pull request, or record why it stays.
   `git clone --branch` tag, the commands and the ports it names.
 - [ROADMAP.md](ROADMAP.md) and the [CHANGELOG](../CHANGELOG.md) say what
   shipped.
+- Supply chain: `cargo vet --locked` passes; count the exemptions in
+  `supply-chain/config.toml` and note the number in R-04 (it should
+  shrink).
 - [RISKS_AND_TECHNICAL_DEBTS.md](RISKS_AND_TECHNICAL_DEBTS.md): each open
   item is checked against the release's code and gets its new status;
   what the release raised (ADR consequences, spike risks, review
@@ -105,6 +108,7 @@ pull request, or record why it stays.
    and the same with `-p portitor-identity`) and
    `docs/api/issuer-management-openapi.json`
    (`cargo test -p portitor-issuer --test issuer -- --ignored write_management_description`),
+   update the fuzz lock file (`cargo update -w` in `fuzz/`),
    set the default image tags in `examples/compose/compose.yaml` and the
    `git clone --branch` tag in `site/index.html` to `X.Y.Z` (`vX.Y.Z`),
    and merge.
