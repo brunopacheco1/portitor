@@ -18,8 +18,9 @@ use portitor_dcp::credential::Credential;
 use portitor_dcp::issuance::STATUS_LIST_ENTRIES;
 use portitor_dcp::message::RequestStatus;
 use portitor_dcp::status_list::{Status, check, list_in};
+use portitor_dcp::x509::p256_public_key_pem;
 use portitor_dcp::{
-    Claims, DidDocument, JtiCache, Relationship, Service, SigningKey, VerificationMethod,
+    Claims, DidDocument, JtiCache, Jws, Relationship, Service, SigningKey, VerificationMethod,
     validate_self_issued,
 };
 use portitor_issuer::config::Config;
@@ -31,6 +32,7 @@ use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::directory::Directory;
 use portitor_runtime::http::Sender;
 use portitor_runtime::system::{new_uuid, now_secs};
+use portitor_runtime::testing::TempDir;
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
@@ -224,6 +226,8 @@ struct Setup {
     max_active_per_holder: u64,
     /// `PORTITOR_ISSUER_BUNDLE_DIR`.
     bundle_dir: Option<PathBuf>,
+    /// `PORTITOR_ISSUER_RETIRED_KEY_FILES`.
+    retired_key_files: Vec<PathBuf>,
 }
 
 impl Setup {
@@ -233,6 +237,7 @@ impl Setup {
             key: SigningKey::generate().unwrap(),
             max_active_per_holder: 10,
             bundle_dir: None,
+            retired_key_files: Vec::new(),
         }
     }
 
@@ -244,6 +249,7 @@ impl Setup {
             key: SigningKey::from_pkcs8(key.pkcs8()).unwrap(),
             max_active_per_holder: 10,
             bundle_dir: None,
+            retired_key_files: Vec::new(),
         }
     }
 }
@@ -264,6 +270,7 @@ impl World {
         let config = Config {
             participant_id: ISSUER.to_owned(),
             key_file: "unused".into(),
+            retired_key_files: setup.retired_key_files,
             credentials_file: "unused".into(),
             issuer_service_url: SERVICE.to_owned(),
             bind: "unused".to_owned(),
@@ -966,30 +973,10 @@ async fn a_holder_may_hold_a_limited_number_of_active_credentials() {
     assert_eq!(world.ask("h-4", &["membership-vc20"]).await, "ISSUED");
 }
 
-/// A temporary directory, removed when dropped.
-struct TempDir(std::path::PathBuf);
-
-impl TempDir {
-    fn new() -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "portitor-issuer-test-{}",
-            new_uuid().trim_start_matches("urn:uuid:")
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        Self(dir)
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
 #[tokio::test]
 async fn a_full_status_list_rejects_the_request() {
-    let dir = TempDir::new();
-    let path = dir.0.join("issuer.db");
+    let dir = TempDir::new("issuer-test");
+    let path = dir.path().join("issuer.db");
     let world = World::with(Setup::on_file(&path, &SigningKey::generate().unwrap()));
     // every position of the vc11 list is taken, by other holders
     let mut conn = rusqlite::Connection::open(&path).unwrap();
@@ -1031,8 +1018,8 @@ async fn a_full_status_list_rejects_the_request() {
 
 #[tokio::test]
 async fn after_a_restart_waiting_work_is_done_and_revocations_kept() {
-    let dir = TempDir::new();
-    let path = dir.0.join("issuer.db");
+    let dir = TempDir::new("issuer-test");
+    let path = dir.path().join("issuer.db");
     let key = SigningKey::generate().unwrap();
 
     // before the restart: one credential delivered and revoked, one
@@ -1095,6 +1082,113 @@ async fn after_a_restart_waiting_work_is_done_and_revocations_kept() {
     for jwt in after.delivered(0).iter().chain(&after.delivered(1)) {
         assert_eq!(after.status_in_list(jwt).await, Status::Clear);
     }
+}
+
+/// A key change with the old public key listed as retired
+/// (`PORTITOR_ISSUER_RETIRED_KEY_FILES`, TD-05): the credentials and
+/// status lists the old key signed keep verifying while it is listed;
+/// the new key signs the lists from the restart on; once the old key is
+/// removed from the list, what it signed no longer verifies.
+#[tokio::test]
+async fn a_key_change_with_the_old_key_retired_leaves_no_gap() {
+    let dir = TempDir::new("issuer-test");
+    let path = dir.path().join("issuer.db");
+    let old_key = SigningKey::generate().unwrap();
+    let new_key = SigningKey::generate().unwrap();
+
+    // before the change: one credential per profile, and both status
+    // lists, signed with the old key
+    let before = World::with(Setup::on_file(&path, &old_key));
+    let old_kid = before.issuer.kid().to_owned();
+    before.register(HOLDER, json!({})).await;
+    assert_eq!(
+        before
+            .ask("h-1", &["membership-vc11", "membership-vc20"])
+            .await,
+        "ISSUED"
+    );
+    delivery::send_due(&before.issuer).await;
+    let credentials = before.delivered(0);
+    assert_eq!(credentials.len(), 2);
+    let mut old_signed = credentials.clone();
+    for name in ["vc11", "vc20"] {
+        old_signed.push(before.status_list(name).await);
+    }
+    for jwt in &old_signed {
+        assert_eq!(Jws::parse(jwt).unwrap().kid(), Some(old_kid.as_str()));
+    }
+    drop(before);
+
+    // after: the new key signs, the old public key is listed as retired
+    let old_public = p256_public_key_pem(&old_key.public_jwk()).unwrap();
+    let retired_file = dir.write("old-key.pub.pem", &old_public);
+    let after = World::with(Setup {
+        retired_key_files: vec![retired_file],
+        ..Setup::on_file(&path, &new_key)
+    });
+    assert_ne!(after.issuer.kid(), old_kid);
+    let document = after.did_document().await;
+    for jwt in &old_signed {
+        let credential = Credential::parse(jwt).unwrap();
+        credential.verify(&document, now_secs(), 5).unwrap();
+    }
+    // the lists are signed again at start, with the new key; a credential
+    // of the old key is checked against them, and can still be revoked
+    for name in ["vc11", "vc20"] {
+        let list = after.status_list(name).await;
+        assert_eq!(Jws::parse(&list).unwrap().kid(), Some(after.issuer.kid()));
+    }
+    let revoked_id = Credential::parse(&credentials[0]).unwrap().id.unwrap();
+    assert_eq!(after.revoke(&revoked_id).await, StatusCode::NO_CONTENT);
+    assert_eq!(after.status_in_list(&credentials[0]).await, Status::Set);
+    assert_eq!(after.status_in_list(&credentials[1]).await, Status::Clear);
+    drop(after);
+
+    // the operator removes the old key from the list: what it signed no
+    // longer verifies; the lists the new key signed still do
+    let removed = World::with(Setup::on_file(&path, &new_key));
+    let document = removed.did_document().await;
+    assert_eq!(document.verification_method.len(), 1);
+    for jwt in &old_signed {
+        let credential = Credential::parse(jwt).unwrap();
+        assert!(credential.verify(&document, now_secs(), 5).is_err());
+    }
+    assert_eq!(removed.status_in_list(&credentials[0]).await, Status::Set);
+}
+
+#[test]
+fn the_issuer_does_not_start_with_its_own_key_as_retired() {
+    let dir = TempDir::new("issuer-test");
+    let key = SigningKey::generate().unwrap();
+    let current_public = p256_public_key_pem(&key.public_jwk()).unwrap();
+    let current_file = dir.write("current.pub.pem", &current_public);
+    let config = Config {
+        participant_id: ISSUER.to_owned(),
+        key_file: "unused".into(),
+        retired_key_files: vec![current_file],
+        credentials_file: "unused".into(),
+        issuer_service_url: SERVICE.to_owned(),
+        bind: "unused".to_owned(),
+        db_file: "unused".into(),
+        management: portitor_issuer::config::ManagementConfig::health_only(
+            portitor_issuer::config::DEFAULT_MANAGEMENT_BIND,
+        ),
+        allow_http: false,
+        max_active_per_holder: 10,
+        bundle_key_file: None,
+        bundle_dir: None,
+    };
+    let ports = Ports {
+        store: Arc::new(SqliteStore::in_memory().unwrap()),
+        directory: Arc::new(FakeDirectory::default()),
+        sender: Arc::new(FakeSender::default()),
+    };
+    let error = Issuer::new(&config, key, Vec::new(), ports).err().unwrap();
+    assert!(
+        error.starts_with("PORTITOR_ISSUER_RETIRED_KEY_FILES: "),
+        "{error}"
+    );
+    assert!(error.contains("is the current key"), "{error}");
 }
 
 #[tokio::test]
@@ -1288,8 +1382,8 @@ fn write_management_description() {
 #[tokio::test]
 async fn health_checks_its_own_dependencies_without_the_key() {
     use portitor_runtime::health::management_app;
-    let dir = TempDir::new();
-    let path = dir.0.join("issuer.db");
+    let dir = TempDir::new("issuer-test");
+    let path = dir.path().join("issuer.db");
     let world = World::with(Setup::on_file(&path, &SigningKey::generate().unwrap()));
     let checks = Arc::new(portitor_issuer::health::readiness_checks(
         &world.issuer,
@@ -1327,7 +1421,7 @@ async fn health_checks_its_own_dependencies_without_the_key() {
         StatusCode::NOT_FOUND
     );
     // the file is gone: not ready, and the answer says which check failed
-    std::fs::remove_dir_all(&dir.0).unwrap();
+    std::fs::remove_dir_all(dir.path()).unwrap();
     let (status, body) = call(&checks_only, get("/api/check/health")).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["isSystemHealthy"], false);
@@ -1349,4 +1443,35 @@ fn unknown_arguments_exit_with_2() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("takes no arguments"), "{stderr}");
     }
+}
+
+/// Request size limits (R-18): a body one byte over the limit gets 413,
+/// a body at the limit is not refused for its size. A credential request
+/// has the fixed limit of small messages, or the public port's limit
+/// when that is lower.
+#[tokio::test]
+async fn request_bodies_over_the_limits_get_413() {
+    use portitor_runtime::request_size::testing::assert_size_limit;
+    use portitor_runtime::request_size::{
+        MANAGEMENT_SETTING, PUBLIC_SETTING, RequestLimits, SMALL_MESSAGE_MAX_BYTES,
+    };
+    use portitor_runtime::testing::vars;
+    // the limits as `main.rs` reads and applies them
+    let limits = |public: &str| {
+        let settings = vars(&[(PUBLIC_SETTING, public), (MANAGEMENT_SETTING, "100000")]);
+        RequestLimits::from_vars(settings).unwrap()
+    };
+    let world = World::new();
+    let credentials =
+        || Request::post("/issuer/credentials").header(header::CONTENT_TYPE, "application/json");
+    let public = limits("").on_public_port(world.app.clone());
+    assert_size_limit(&public, credentials, SMALL_MESSAGE_MAX_BYTES).await;
+    let public = limits("1000").on_public_port(world.app.clone());
+    assert_size_limit(&public, credentials, 1_000).await;
+
+    let management = limits("").on_management_port(world.management.clone());
+    let participants = || {
+        authed(Request::post("/v1/participants")).header(header::CONTENT_TYPE, "application/json")
+    };
+    assert_size_limit(&management, participants, 100_000).await;
 }

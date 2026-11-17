@@ -302,6 +302,7 @@ async fn dataspace() -> Dataspace {
         gaiax_compliance_issuers: vec![compliance.did.clone()],
         scopes: vec![super::super::DEFAULT_SCOPE.to_owned()],
         allow_http: true,
+        status_list_cache_seconds: 0,
     };
     let me_did = me.did.clone();
     let mut verifier = DcpVerifier::new(&settings, Arc::new(LocalSts(me))).unwrap();
@@ -496,8 +497,20 @@ impl Dataspace {
         )
     }
 
+    /// The check of `header`; the error as text, for the reason.
     async fn verify(&self, header: &str) -> Result<Caller, String> {
-        self.verifier.verify(Some(header)).await
+        self.verifier
+            .verify(Some(header))
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    /// The error a fresh header of the holder gets, with its kind.
+    async fn verify_error(&self) -> VerifyError {
+        self.verifier
+            .verify(Some(&self.header()))
+            .await
+            .unwrap_err()
     }
 
     /// The reason a fresh header of the holder is refused.
@@ -618,7 +631,8 @@ async fn tokens_are_checked() {
         ),
     ];
     let err = ds.verifier.verify(None).await.unwrap_err();
-    assert!(err.contains("no Authorization header"), "{err}");
+    assert!(err.reason().contains("no Authorization header"), "{err}");
+    assert!(!err.is_temporary());
     for (header, reason) in refused {
         let err = ds.verify(&header).await.unwrap_err();
         assert!(err.contains(reason), "{reason}: {err}");
@@ -752,6 +766,62 @@ async fn presentations_and_credentials_are_checked() {
         ],
     )]);
     assert!(ds.verify(&header()).await.is_ok());
+}
+
+/// A revoked credential, and a server of the caller or its issuer that
+/// answers 404, refuse the caller (HTTP 401). A server that does not
+/// answer is a temporary failure (HTTP 503): the caller may be fine.
+#[tokio::test]
+async fn unreachable_services_are_temporary_and_refusals_are_not() {
+    let ds = dataspace().await;
+    // nobody listens on port 9 (discard)
+    let down = "http://127.0.0.1:9";
+
+    // revoked: a refusal
+    ds.answer_member(&ds.status_entry("5"));
+    ds.publish_status_list(&ds.issuer, &[5]);
+    let revoked = ds.verify_error().await;
+    assert!(!revoked.is_temporary(), "{revoked}");
+    assert!(revoked.reason().contains("revoked"), "{revoked}");
+
+    // the status list's host does not answer: temporary
+    let mut entry = ds.entry("1", "BitstringStatusListEntry", "revocation", "5");
+    entry["statusListCredential"] = Value::from(format!("{down}/status/1"));
+    ds.answer_member(&json!({"credentialStatus": entry}));
+    let unreachable = ds.verify_error().await;
+    assert!(unreachable.is_temporary(), "{unreachable}");
+
+    // the status list is not there (404): a refusal
+    ds.answer_member(
+        &json!({"credentialStatus": ds.entry("1", "BitstringStatusListEntry", "revocation", "9")}),
+    );
+    ds.world.lock().unwrap().status_lists.clear();
+    let missing = ds.verify_error().await;
+    assert!(!missing.is_temporary(), "{missing}");
+
+    // the holder's DID document is cached now, so the last two cases
+    // use callers not seen before
+    let token_of = |caller: &Party| {
+        let jti = portitor_runtime::system::new_uuid();
+        format!("Bearer {}", caller.id_token(&ds.me_did, Some("a"), &jti))
+    };
+
+    // the caller's Credential Service does not answer: temporary
+    let moved = Party::new(&ds.base, "moved");
+    ds.world
+        .lock()
+        .unwrap()
+        .documents
+        .insert("moved".into(), moved.document(down, true));
+    let no_service = ds.verifier.verify(Some(&token_of(&moved))).await;
+    let no_service = no_service.unwrap_err();
+    assert!(no_service.is_temporary(), "{no_service}");
+
+    // the caller's DID document is not there (404): a refusal
+    let unknown = Party::new(&ds.base, "unknown");
+    let no_document = ds.verifier.verify(Some(&token_of(&unknown))).await;
+    let no_document = no_document.unwrap_err();
+    assert!(!no_document.is_temporary(), "{no_document}");
 }
 
 #[tokio::test]
@@ -1060,6 +1130,7 @@ async fn our_identity_must_match_the_sts() {
         gaiax_compliance_issuers: Vec::new(),
         scopes: Vec::new(),
         allow_http: true,
+        status_list_cache_seconds: 0,
     };
     let other = Party::new(&ds.base, "third");
     let mut verifier = DcpVerifier::new(&settings, Arc::new(LocalSts(other))).unwrap();
@@ -1630,6 +1701,7 @@ async fn readiness_checks_our_identity_in_the_background() {
         gaiax_compliance_issuers: Vec::new(),
         scopes: Vec::new(),
         allow_http: true,
+        status_list_cache_seconds: 0,
     };
     let sts = Arc::new(CountingSts {
         party: mine,
@@ -1663,4 +1735,163 @@ async fn readiness_checks_our_identity_in_the_background() {
     fresh.refresh().await;
     let err = fresh.check().await.unwrap_err();
     assert!(err.contains("cannot read the DID document"), "{err}");
+}
+
+/// How far ahead of the system clock a test has moved the verifier's
+/// clock, in seconds.
+type Offset = Arc<std::sync::atomic::AtomicU64>;
+
+impl Dataspace {
+    /// The verifier keeps status lists for `seconds`. Returns the offset
+    /// of its clock, which the test moves forward ([`move_clock`]).
+    fn cache_status_lists(&mut self, seconds: u64) -> Offset {
+        let offset: Offset = Arc::default();
+        let ahead = Arc::clone(&offset);
+        self.verifier.status_lists = StatusListCache::new(seconds);
+        // A fixed start, so a tick of the real clock during the test does
+        // not move the verifier's time past a cache boundary.
+        let start = now_secs();
+        self.verifier.clock =
+            Arc::new(move || start + ahead.load(std::sync::atomic::Ordering::SeqCst));
+        offset
+    }
+
+    /// How many status lists were fetched since
+    /// [`Dataspace::forget_fetches`].
+    fn status_fetches(&self) -> usize {
+        let mut count = 0;
+        for path in self.fetched() {
+            if path.starts_with("/status/") {
+                count += 1;
+            }
+        }
+        count
+    }
+}
+
+/// Moves the verifier's clock to `seconds` after the start of the test.
+fn move_clock(offset: &Offset, seconds: u64) {
+    offset.store(seconds, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[tokio::test]
+async fn at_zero_every_check_fetches_the_status_list() {
+    let mut ds = dataspace().await;
+    let _offset = ds.cache_status_lists(0);
+    ds.answer_member(&ds.status_entry("5"));
+    ds.publish_status_list(&ds.issuer, &[]);
+    for _ in 0..3 {
+        assert!(ds.verify(&ds.header()).await.is_ok());
+    }
+    assert_eq!(ds.status_fetches(), 3);
+}
+
+#[tokio::test]
+async fn at_300_seconds_a_status_list_is_fetched_again_only_when_stale() {
+    let mut ds = dataspace().await;
+    let offset = ds.cache_status_lists(300);
+    ds.answer_member(&ds.status_entry("5"));
+    ds.publish_status_list(&ds.issuer, &[]);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    assert_eq!(ds.status_fetches(), 1);
+    // within 300 s: from the cache
+    move_clock(&offset, 299);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    assert_eq!(ds.status_fetches(), 1);
+    // after 300 s: fetched again, and kept again
+    move_clock(&offset, 300);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    assert_eq!(ds.status_fetches(), 2);
+    move_clock(&offset, 301);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    assert_eq!(ds.status_fetches(), 2);
+}
+
+#[tokio::test]
+async fn a_status_list_that_ends_sooner_is_fetched_again_at_its_end() {
+    let mut ds = dataspace().await;
+    let offset = ds.cache_status_lists(300);
+    ds.answer_member(&ds.status_entry("5"));
+    let ends = json!({"validUntil": xsd_date_time(now_secs() + 100)});
+    ds.publish_list("1", &ds.issuer, "revocation", &[], &ends);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    move_clock(&offset, 99);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    assert_eq!(ds.status_fetches(), 1);
+    // at its end: fetched again (still accepted, within the leeway)
+    move_clock(&offset, 100);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    assert_eq!(ds.status_fetches(), 2);
+}
+
+#[tokio::test]
+async fn a_status_list_that_fails_is_not_cached() {
+    let mut ds = dataspace().await;
+    let _offset = ds.cache_status_lists(300);
+    ds.answer_member(&ds.status_entry("5"));
+    // not found
+    let err = ds.refusal().await;
+    assert!(err.contains("HTTP 404"), "{err}");
+    // signed by another issuer
+    ds.publish_status_list(&ds.third, &[]);
+    let err = ds.refusal().await;
+    assert!(err.contains("has another issuer"), "{err}");
+    // each failure was fetched, and the good list is fetched at once
+    ds.publish_status_list(&ds.issuer, &[]);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    assert_eq!(ds.status_fetches(), 3);
+    // and then kept
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    assert_eq!(ds.status_fetches(), 3);
+}
+
+#[tokio::test]
+async fn a_revocation_is_seen_once_the_cached_list_is_stale() {
+    let mut ds = dataspace().await;
+    let offset = ds.cache_status_lists(300);
+    ds.answer_member(&ds.status_entry("5"));
+    ds.publish_status_list(&ds.issuer, &[]);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    // the issuer revokes the credential: not seen while the list is cached
+    ds.publish_status_list(&ds.issuer, &[5]);
+    move_clock(&offset, 299);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    move_clock(&offset, 300);
+    let err = ds.refusal().await;
+    assert!(err.contains("revoked or suspended (revocation)"), "{err}");
+}
+
+#[tokio::test]
+async fn a_stale_list_that_cannot_be_fetched_again_refuses_the_caller() {
+    let mut ds = dataspace().await;
+    let offset = ds.cache_status_lists(300);
+    ds.answer_member(&ds.status_entry("5"));
+    ds.publish_status_list(&ds.issuer, &[]);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    // the list is gone: the cached copy serves while it is fresh
+    ds.world.lock().unwrap().status_lists.clear();
+    move_clock(&offset, 299);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    // once stale, the failed fetch refuses the caller: a stale copy is
+    // never used instead (fail closed)
+    move_clock(&offset, 300);
+    let err = ds.refusal().await;
+    assert!(err.contains("HTTP 404"), "{err}");
+}
+
+#[tokio::test]
+async fn a_cached_status_list_serves_only_its_own_issuer() {
+    let mut ds = dataspace().await;
+    let _offset = ds.cache_status_lists(300);
+    ds.verifier.trusted_issuers.push(ds.third.did.clone());
+    ds.answer_member(&ds.status_entry("5"));
+    ds.publish_status_list(&ds.issuer, &[]);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    // another trusted issuer's credential names the same, cached, URL
+    let credential =
+        Dataspace::credential(&ds.third, MEMBERSHIP, &ds.holder.did, &ds.status_entry("5"));
+    ds.answer(&[ds.presentation(&ds.holder, &[credential])]);
+    let err = ds.refusal().await;
+    assert!(err.contains("has another issuer"), "{err}");
+    assert_eq!(ds.status_fetches(), 1);
 }

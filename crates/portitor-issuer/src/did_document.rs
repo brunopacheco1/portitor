@@ -2,31 +2,41 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! The issuer's DID document (W3C `did:web`, "Create"): one verification
-//! method, the P-256 key, in `assertionMethod` (it signs credentials and
-//! status lists) and `capabilityInvocation` (it signs the self-issued
-//! tokens of deliveries and offers, DCP 4.3), and the `IssuerService`
-//! entry (DCP v1.0.1, "Issuer Service Endpoint Discovery").
+//! The issuer's DID document (W3C `did:web`, "Create"): the P-256 key in
+//! `assertionMethod` (it signs credentials and status lists) and
+//! `capabilityInvocation` (it signs the self-issued tokens of deliveries
+//! and offers, DCP 4.3), each retired public key in the same two
+//! (`PORTITOR_ISSUER_RETIRED_KEY_FILES`, TD-05), and the `IssuerService`
+//! entry (DCP v1.0.1, "Issuer Service Endpoint Discovery"). The bundle
+//! key is added apart, at start ([`crate::bundles::add_bundle_key`]).
 
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
-use portitor_dcp::{Purpose, SigningKey};
+use portitor_dcp::{Jwk, Purpose, SigningKey};
 use portitor_runtime::did_document::OwnDocument;
 pub use portitor_runtime::did_document::{DID_CONTEXT, path};
 use serde_json::Value;
 
 use crate::Issuer;
 
-/// The DID document of `did`, with `key` known as `kid`, and the issuer
-/// service at `issuer_service_url`.
+/// The DID document of `did`, with `key` known as `kid`, the public
+/// `retired_keys` that no longer sign, and the issuer service at
+/// `issuer_service_url`.
 #[must_use]
-pub fn build(did: &str, kid: &str, key: &SigningKey, issuer_service_url: &str) -> Value {
+pub fn build(
+    did: &str,
+    kid: &str,
+    key: &SigningKey,
+    retired_keys: &[Jwk],
+    issuer_service_url: &str,
+) -> Value {
     portitor_runtime::did_document::build(&OwnDocument {
         did,
         kid,
         key,
+        retired_keys,
         purposes: &[Purpose::AssertionMethod, Purpose::CapabilityInvocation],
         service_fragment: "issuer-service",
         service_type: "IssuerService",
@@ -50,7 +60,7 @@ mod tests {
         let key = SigningKey::generate().unwrap();
         let did = "did:web:issuer.example";
         let kid = format!("{did}#key-1");
-        let json = build(did, &kid, &key, "https://issuer.example/issuer");
+        let json = build(did, &kid, &key, &[], "https://issuer.example/issuer");
         assert_eq!(json["@context"][0], DID_CONTEXT);
         let document: DidDocument = serde_json::from_value(json).unwrap();
         for purpose in [Purpose::AssertionMethod, Purpose::CapabilityInvocation] {

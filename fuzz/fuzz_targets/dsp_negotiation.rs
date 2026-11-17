@@ -2,16 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! Untrusted DSP input: contract negotiation messages from any counter-party,
-//! and arbitrary message sequences against the state machine. Parsing must
-//! never panic, what parses must survive a round trip unchanged, and no
-//! sequence may leave a terminal state.
+//! Untrusted DSP input: contract negotiation messages and answers from any
+//! counter-party, and arbitrary message sequences against the state
+//! machine. Parsing must never panic, what parses must survive a round
+//! trip unchanged, and no sequence may leave a terminal state.
 #![no_main]
 
 use portitor_dsp::negotiation::{
-    ContractAgreementMessage, ContractAgreementVerificationMessage,
-    ContractNegotiationEventMessage, ContractNegotiationTerminationMessage, ContractOfferMessage,
-    ContractRequestMessage, NegotiationState, Role, Transition, next_state,
+    ContractAgreementMessage, ContractAgreementVerificationMessage, ContractNegotiation,
+    ContractNegotiationError, ContractNegotiationEventMessage,
+    ContractNegotiationTerminationMessage, ContractOfferMessage, ContractRequestMessage,
+    NegotiationState, Role, Transition, next_state,
 };
 use libfuzzer_sys::fuzz_target;
 use serde::Serialize;
@@ -42,6 +43,9 @@ fuzz_target!(|data: &[u8]| {
     round_trip::<ContractAgreementVerificationMessage>(data);
     round_trip::<ContractNegotiationEventMessage>(data);
     round_trip::<ContractNegotiationTerminationMessage>(data);
+    // the counter-party's answers: acknowledgement or state, and error
+    round_trip::<ContractNegotiation>(data);
+    round_trip::<ContractNegotiationError>(data);
 
     // each byte is one message: low bits pick the message, bit 3 the sender
     let mut state = None;

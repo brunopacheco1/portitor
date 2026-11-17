@@ -70,9 +70,13 @@ impl SendError {
             {
                 Self::Refused(error.to_string())
             }
-            HttpError::Status(_) | HttpError::StatusWithBody(..) | HttpError::NoAnswer(_) => {
-                Self::Unknown(error.to_string())
-            }
+            // a request that was not sent, and an answer that cannot be
+            // used, count as unknown, like a missing answer
+            HttpError::Status(_)
+            | HttpError::StatusWithBody(..)
+            | HttpError::NoAnswer(_)
+            | HttpError::NotSent(_)
+            | HttpError::BadAnswer(_) => Self::Unknown(error.to_string()),
         }
     }
 }

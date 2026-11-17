@@ -30,8 +30,10 @@ use axum::Router;
 use axum::routing::{get, post};
 use portitor_dcp::message::IssuerMetadata;
 use portitor_dcp::{JtiCache, Jwk, SigningKey};
+use portitor_runtime::did_document::{key_id, read_retired_keys};
 use portitor_runtime::directory::Directory;
 use portitor_runtime::http::Sender;
+use portitor_runtime::request_size::small_message;
 
 pub mod bundle_build;
 pub mod bundles;
@@ -66,6 +68,9 @@ pub struct Issuer {
     did: String,
     kid: String,
     key: SigningKey,
+    /// The retired public keys listed in the DID document
+    /// (`PORTITOR_ISSUER_RETIRED_KEY_FILES`); they never sign.
+    retired_keys: Vec<Jwk>,
     document: serde_json::Value,
     did_path: String,
     /// The issuer service's public base URL, without a trailing `/`.
@@ -111,10 +116,13 @@ pub struct Ports {
 
 impl Issuer {
     /// Builds the component from its settings, its key and its credential
-    /// definitions, and signs the status lists.
+    /// definitions, reads the retired public keys, and signs the status
+    /// lists (with `key`: a retired key never signs).
     ///
     /// # Errors
-    /// The DID or the issuer service URL is invalid, or the store fails.
+    /// The DID or the issuer service URL is invalid, a retired key file is
+    /// refused ([`portitor_runtime::did_document::read_retired_keys`]), or
+    /// the store fails.
     pub fn new(
         config: &Config,
         key: SigningKey,
@@ -122,8 +130,14 @@ impl Issuer {
         ports: Ports,
     ) -> Result<Self, String> {
         let did = config.participant_id.clone();
-        let kid = format!("{did}#{}", key.public_jwk().thumbprint());
-        let document = did_document::build(&did, &kid, &key, &config.issuer_service_url);
+        let kid = key_id(&did, &key.public_jwk());
+        let retired_keys = read_retired_keys(
+            "PORTITOR_ISSUER_RETIRED_KEY_FILES",
+            &config.retired_key_files,
+            &key.public_jwk(),
+        )?;
+        let document =
+            did_document::build(&did, &kid, &key, &retired_keys, &config.issuer_service_url);
         let did_path = did_document::path(&did)?;
         let service_path = config::base_path(&config.issuer_service_url)
             .ok_or("PORTITOR_ISSUER_SERVICE_URL is not an http(s) URL")?;
@@ -132,6 +146,7 @@ impl Issuer {
             did,
             kid,
             key,
+            retired_keys,
             document,
             did_path,
             service_url: config.issuer_service_url.trim_end_matches('/').to_owned(),
@@ -164,6 +179,12 @@ impl Issuer {
         &self.kid
     }
 
+    /// The retired public keys listed in its DID document.
+    #[must_use]
+    pub fn retired_keys(&self) -> &[Jwk] {
+        &self.retired_keys
+    }
+
     /// Lists the public bundle key in the DID document, as its own
     /// verification method `<did>#bundle-key` under `assertionMethod`
     /// (ADR 0005). Called at start when `PORTITOR_ISSUER_BUNDLE_KEY_FILE`
@@ -186,6 +207,11 @@ impl Issuer {
 /// `PORTITOR_ISSUER_SERVICE_URL` the DCP issuer service and the status
 /// lists, and, with `PORTITOR_ISSUER_BUNDLE_DIR`, the built bundles at
 /// `/bundles/{version}/{path}` and `/bundles/latest.json`.
+///
+/// A credential request (DCP v1.0.1, section 6.4) names only the holder's
+/// request id and credential ids, so its route has the fixed size limit
+/// of small messages ([`small_message`], R-18). The other public routes
+/// take no body.
 pub fn router(issuer: Arc<Issuer>) -> Router {
     let service = issuer.service_path.clone();
     let mut router = Router::new();
@@ -198,7 +224,10 @@ pub fn router(issuer: Arc<Issuer>) -> Router {
     router
         .route(&issuer.did_path, get(did_document::serve))
         .route(&format!("{service}/metadata"), get(requests::metadata))
-        .route(&format!("{service}/credentials"), post(requests::create))
+        .route(
+            &format!("{service}/credentials"),
+            small_message(post(requests::create)),
+        )
         .route(
             &format!("{service}/requests/{{issuer_pid}}"),
             get(requests::status),

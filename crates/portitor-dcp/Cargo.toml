@@ -25,5 +25,10 @@ thiserror.workspace = true
 [dev-dependencies]
 jsonschema.workspace = true
 
+[features]
+# x509::p256_public_key_pem, which writes a public key file for tests;
+# switched on only by other crates' [dev-dependencies]
+test-support = []
+
 [lints]
 workspace = true

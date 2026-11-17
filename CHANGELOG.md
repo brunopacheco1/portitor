@@ -12,8 +12,97 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-17
+
+### Security
+
+- Request size limits per port and route, set by Portitor (R-18). New
+  settings in the three binaries: `PORTITOR_MAX_REQUEST_BYTES` (public
+  port) and `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` (management port),
+  default 2097152 (2 MiB, the value axum applied before, so nothing
+  changes by default), from 1 to 67108864 (64 MiB); another value stops
+  the start. Routes whose messages are small by specification have a
+  fixed limit of 64 KiB, or the port's when lower: the DSP catalog
+  request, negotiation event, verification and termination, and
+  transfer suspension, completion and termination (also on the consumer
+  callbacks), the identity's `POST /sts/token` and the issuer's
+  `POST <issuer service>/credentials`. A larger body gets HTTP 413 with
+  a problem body; a declared `Content-Length` over the limit is refused
+  before the body is read, and a body without one is not read before
+  the DSP caller check. Data plane answers are still streamed.
+
+- Every parser of input from outside the process has a fuzz target
+  (roadmap 0.11). New targets: `dcp_x509` (X.509 chains), `dps_messages`
+  (Data Plane Signaling messages and states), `time_parse` (`xsd:date`
+  and `xsd:dateTime`), `shacl_datatypes` (lexical forms for
+  `sh:datatype`), `harvest_datasets` (the harvested datasets file, through
+  the DSP and SHACL checks), `bundle_rules` (the bundle's contexts, shapes
+  and vocabularies as the connector reads them, and the message guard)
+  and `http_inputs` (`Authorization` headers and URLs that other
+  participants choose). Existing targets now also read the credential
+  request and request status messages, scopes, the DSP
+  acknowledgements and errors, `latest.json`, the claims read before a
+  token is checked, and the keys of DID documents. The list of parsers
+  and targets is in SECURITY-ASSURANCE, "Parsers and fuzz targets".
+
+### Added
+
+- Status list cache in the connector's DCP verifier (TD-06, ADR 0016
+  amended): `PORTITOR_STATUS_LIST_CACHE_SECONDS`, default 300, at most
+  3600 (a larger value stops the start; empty counts as not set), `0`
+  fetches the list on every check. Only lists that were fetched and verified are kept, by URL, in
+  memory, never past the list's own `validUntil` or `exp`. A revocation
+  now takes up to that long to be seen (DEPLOYING, "Status list
+  cache"). The Compose demo, `scripts/demo.sh`, the EDC interop test
+  and the DCP TCK run set `0`.
+
+- Key rotation without a verification gap (TD-05):
+  `PORTITOR_IDENTITY_RETIRED_KEY_FILES` and
+  `PORTITOR_ISSUER_RETIRED_KEY_FILES` list old **public** keys (PEM,
+  comma-separated) in the DID document, each as its own verification
+  method in the same relationships as the current key. What the old key
+  signed (tokens, presentations, access tokens, credentials, status
+  lists, Gaia-X credentials) keeps verifying until the operator removes
+  it from the list; a retired key never signs. The start fails for a
+  private key, a key that is not P-256, the current key, a key given
+  twice, or (issuer) the bundle key. DEPLOYING has a "Rotating a key"
+  runbook; ADR 0015 and ADR 0018 are amended, ADR 0021 has an update
+  note.
+
+### Changed
+
+- The connector's DCP check answers HTTP 503, not 401, when it could not
+  finish because a server it fetches from did not answer or answered
+  408, 429 or 5xx (the caller's DID document or Credential Service, an
+  issuer's DID document or status list, our STS), or took longer than
+  20 s. A partner's outbox then tries again, where a 401 ends the tries.
+  Real refusals (bad token, revoked credential, untrusted issuer, a 404
+  from the caller's server) still answer 401. ADR 0016 is amended
+  (maintainer's choice, 2026-11-17).
+- The connector's outbox retries a DSP message only when no answer came,
+  or the answer was 408, 429 or 5xx; any other answer (400, 404, 409,
+  ...) ends the tries at once (TD-30, ADR 0007 amended). The state check
+  after a failed send is unchanged. The `tck` build, never released,
+  still tries a 404 again, because the DSP TCK registers some handlers
+  late (R-08). The issuer's delivery outbox already
+  stopped at a refusal (it also retries 401 and a holder not found) and
+  is not changed.
+
 ### Documentation
 
+- Threat model review 0.11 in SECURITY-ASSURANCE: a STRIDE pass over
+  each trust boundary, checked against the code of 0.11.0, with ten
+  findings (no high; medium: internal addresses not blocked with no
+  release named, no audit trail, one management key). New items in
+  RISKS_AND_TECHNICAL_DEBTS: R-41 to R-45 and TD-31; R-17 names the
+  issuer's and the identity's partner-chosen URLs too. The threat table
+  gets a row "Evidence of who did what".
+- ADR 0024 (Proposed): a provider in several data spaces (TD-03).
+  Compares one connector per data space, EDC's dataspace profiles and
+  EDC's participant contexts with DSP 2025-1, DCP v1.0.1, Gaia-X and
+  Simpl-Open; proposes one connector per data space for 1.0, EDC-style
+  profiles after 1.0, and trusted issuers by credential type. TD-03
+  points to it.
 - ADR 0022: says which Gaia-X documents were checked for how a
   compliance credential is bound to its holder (none defines it), and
   that "Gaia-X Trust Protocol" is a section of the Architecture Document

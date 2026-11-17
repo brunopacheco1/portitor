@@ -494,6 +494,20 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
   named `master`, with no analysis), and its badges read "not computed"
   for both, so they wait until the maintainer renames `master` to `main`
   in SonarQube Cloud.
+- Decisions on the 0.11 plan (maintainer, 2026-11-17): a parser is any
+  code that reads bytes from outside the process that the operator did
+  not write (network messages, DID documents, certificates, tokens, the
+  bundle, harvested datasets), not the operator's own configuration;
+  request limits are settings, one per port, with lower fixed limits on
+  routes whose messages are small by specification; the status list
+  cache amends ADR 0016; a retired key is listed as a public key only
+  (`PORTITOR_IDENTITY_RETIRED_KEY_FILES`, `PORTITOR_ISSUER_RETIRED_KEY_FILES`),
+  so the old private key can be destroyed, as EDC IdentityHub rotates;
+  the bundle key stays one key (its rotation is under "Later"); the
+  TD-03 ADR comes in 0.11 and the TD-04 ADR in 0.12; the threat model
+  keeps its table and gets a STRIDE pass per trust boundary; the 300 ms
+  `LateStart` workaround stays until a DSP TCK release includes the fix
+  of dsp-tck #338 (PR #339, merged 2026-11-17, not released).
 - Exit: every parser has a fuzz target; the request limits per port and
   route are tested; the status list cache is tested at 0 and 300 s; the
   threat model review is recorded in SECURITY-ASSURANCE; a key change
@@ -501,6 +515,20 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
   stops at the first 4xx it may not retry (tested); the README shows the
   quality gate and coverage badges.
 - Main risk: a finding that needs a design change.
+- Result (2026-11-17): 22 fuzz targets, one for each parser of outside
+  input (list in SECURITY-ASSURANCE, "Parsers and fuzz targets"); request
+  size limits per port (`PORTITOR_MAX_REQUEST_BYTES`,
+  `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES`, 2 MiB by default) and 64 KiB on
+  routes with small messages, HTTP 413 above them; the status list cache
+  (`PORTITOR_STATUS_LIST_CACHE_SECONDS`, tested at 0 and 300 s; ADR 0016
+  amended); retired public keys in the identity's and issuer's DID
+  documents, tested with no verification gap (ADRs 0015 and 0018
+  amended); the outbox stops at the first answer it may not retry (ADR
+  0007 amended), and the connector answers 503, not 401, when a service
+  it needs to check a caller is down; the threat model review with a
+  STRIDE pass per trust boundary (10 findings, F-01 to F-10); ADR 0024 on
+  a provider in several data spaces (Proposed). Not met: the quality gate
+  and coverage badges, which wait for the SonarQube Cloud branch rename.
 
 ## 0.12 Interoperability and performance
 
@@ -715,7 +743,9 @@ applies from March 2029.
   participants' DSP catalogs, check them with the same bundle and offer
   search (SPARQL), with its own ADR.
 - Check other participants' catalogs against the bundle (warnings only,
-  ADR 0005); bundle expiry and bundle key rotation.
+  ADR 0005); bundle expiry and bundle key rotation (two bundle keys
+  listed need another key id than the fixed `<DID>#bundle-key`;
+  maintainer, 2026-11-17).
 - Gaia-X beyond 0.8 (maintainer, 2026-11-15): a test against the real
   Gaia-X Lab or a production clearing house, once Portitor runs beyond a
   laptop (needs a public `did:web` and a CA certificate); Gaia-X-compatible

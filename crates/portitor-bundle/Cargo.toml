@@ -21,5 +21,9 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 
+[dev-dependencies]
+# testing::vars: settings from a list in the tests
+portitor-runtime = { path = "../portitor-runtime", features = ["test-support"] }
+
 [lints]
 workspace = true

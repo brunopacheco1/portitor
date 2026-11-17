@@ -10,6 +10,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub use portitor_runtime::settings::base_path;
+use portitor_runtime::settings::path_list;
 
 /// Where the public server listens unless `PORTITOR_BIND` says otherwise.
 pub const DEFAULT_BIND: &str = "0.0.0.0:8070";
@@ -35,6 +36,10 @@ pub struct Config {
     pub participant_id: String,
     /// The P-256 private key, PEM (`PORTITOR_ISSUER_KEY_FILE`).
     pub key_file: PathBuf,
+    /// Public keys that signed before a key change, one PEM file each,
+    /// listed in the DID document but never used to sign
+    /// (`PORTITOR_ISSUER_RETIRED_KEY_FILES`, comma-separated; TD-05).
+    pub retired_key_files: Vec<PathBuf>,
     /// The credential definitions, JSON (`PORTITOR_ISSUER_CREDENTIALS_FILE`).
     pub credentials_file: PathBuf,
     /// The issuer service's public base URL, written into the DID
@@ -123,6 +128,9 @@ impl Config {
         Ok(Self {
             participant_id,
             key_file: PathBuf::from(required("PORTITOR_ISSUER_KEY_FILE")?),
+            retired_key_files: path_list(
+                &text("PORTITOR_ISSUER_RETIRED_KEY_FILES").unwrap_or_default(),
+            ),
             credentials_file: PathBuf::from(required("PORTITOR_ISSUER_CREDENTIALS_FILE")?),
             issuer_service_url: issuer_service_url.trim_end_matches('/').to_owned(),
             bind: text("PORTITOR_BIND").unwrap_or_else(|| DEFAULT_BIND.to_owned()),
@@ -154,14 +162,9 @@ fn invalid(name: &'static str, problem: &str) -> ConfigError {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     fn read(pairs: &[(&str, &str)]) -> Result<Config, ConfigError> {
-        let vars: HashMap<String, OsString> = pairs
-            .iter()
-            .map(|(k, v)| ((*k).to_owned(), OsString::from(v)))
-            .collect();
-        Config::from_vars(|name| vars.get(name).cloned())
+        Config::from_vars(portitor_runtime::testing::vars(pairs))
     }
 
     const MINIMAL: &[(&str, &str)] = &[
@@ -192,6 +195,23 @@ mod tests {
         assert_eq!(config.max_active_per_holder, 10);
         assert_eq!(config.bundle_key_file, None);
         assert_eq!(config.bundle_dir, None);
+        assert!(config.retired_key_files.is_empty());
+    }
+
+    #[test]
+    fn retired_key_files_are_a_comma_separated_list() {
+        let mut vars = MINIMAL.to_vec();
+        vars.push((
+            "PORTITOR_ISSUER_RETIRED_KEY_FILES",
+            "/run/keys/2025.pub.pem,/run/keys/2026.pub.pem",
+        ));
+        assert_eq!(
+            read(&vars).unwrap().retired_key_files,
+            [
+                PathBuf::from("/run/keys/2025.pub.pem"),
+                PathBuf::from("/run/keys/2026.pub.pem")
+            ]
+        );
     }
 
     #[test]

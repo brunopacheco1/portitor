@@ -99,12 +99,7 @@ mod tests {
     use super::*;
 
     fn read(pairs: &'static [(&'static str, &'static str)]) -> ManagementConfig {
-        ManagementConfig::from_vars("127.0.0.1:9", |name| {
-            pairs
-                .iter()
-                .find(|(n, _)| *n == name)
-                .map(|(_, value)| OsString::from(value))
-        })
+        ManagementConfig::from_vars("127.0.0.1:9", crate::testing::vars(pairs))
     }
 
     #[test]

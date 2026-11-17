@@ -337,7 +337,8 @@ image keeps its state in its own SQLite file under `/data`.
                                                  did:web resolver, API key,
                                                  logging, shutdown, traces
                                                  and metrics (OpenTelemetry),
-                                                 health checks)
+                                                 health checks, request
+                                                 size limits)
    portitor-dps       --> portitor-dsp          (DataAddress)
    portitor-dsp, portitor-dcp --> portitor-time
    portitor-shacl     --> oxrdf, oxttl, oxjsonld (Oxigraph's RDF crates)
@@ -399,7 +400,9 @@ adapters in `auth/dcp.rs` and `auth/sts.rs`:
   `PORTITOR_DCP_SCOPES` to the caller's credential service, with a token
   from our STS that carries the caller's access token. It verifies every
   presentation and credential (both profiles), fetches and verifies each
-  status list credential (signed by the credential's issuer, fail closed),
+  status list credential (signed by the credential's issuer, fail closed;
+  a verified list is reused for `PORTITOR_STATUS_LIST_CACHE_SECONDS`, from
+  0.11),
   and requires a `MembershipCredential` from a trusted issuer about the
   caller. One credential that fails its checks makes its presentation
   invalid and refuses the caller (DCP v1.0.1, 5.4.3, step 8). The verified DID and credentials go to the handler as `Caller`;

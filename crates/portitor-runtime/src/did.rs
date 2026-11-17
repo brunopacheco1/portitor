@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use portitor_dcp::{DidDocument, did_web_url};
 
-use crate::http::{HttpSender, Sender as _};
+use crate::http::HttpSender;
 
 /// How long a resolved DID document is reused by default.
 pub const DEFAULT_TTL: Duration = Duration::from_secs(300);
@@ -26,6 +26,50 @@ pub const DEFAULT_TTL: Duration = Duration::from_secs(300);
 /// The most DID documents kept at once. Callers choose the DIDs, so
 /// without a limit the cache could grow with every new caller.
 pub const MAX_CACHED: usize = 1_000;
+
+/// Why a DID could not be resolved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolveError {
+    /// What went wrong, for the log.
+    pub reason: String,
+    /// Whether trying again later may help: the DID's host did not
+    /// answer, or answered 408, 429 or 5xx
+    /// ([`crate::http::HttpError::is_temporary`]). A DID that is not
+    /// `did:web`, a 404 and a document that is not valid are final.
+    pub temporary: bool,
+}
+
+impl ResolveError {
+    /// A final failure: trying again will not help.
+    fn rejected(reason: String) -> Self {
+        Self {
+            reason,
+            temporary: false,
+        }
+    }
+
+    /// Whether trying again later may help (see the `temporary` field).
+    #[must_use]
+    pub fn is_temporary(&self) -> bool {
+        self.temporary
+    }
+}
+
+impl std::fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.reason)
+    }
+}
+
+impl std::error::Error for ResolveError {}
+
+/// Lets `?` turn a [`ResolveError`] into its text, in code whose errors
+/// are text.
+impl From<ResolveError> for String {
+    fn from(error: ResolveError) -> Self {
+        error.reason
+    }
+}
 
 /// One document in the cache, and when it was fetched.
 #[derive(Debug)]
@@ -77,17 +121,27 @@ impl DidWebResolver {
     ///
     /// # Errors
     /// Not a valid `did:web` DID, the document cannot be fetched or read,
-    /// or its `id` is another DID.
-    pub async fn resolve(&self, did: &str) -> Result<Arc<DidDocument>, String> {
+    /// or its `id` is another DID. [`ResolveError::is_temporary`] tells
+    /// whether trying again later may help.
+    pub async fn resolve(&self, did: &str) -> Result<Arc<DidDocument>, ResolveError> {
         if let Some(doc) = self.cached(did) {
             return Ok(doc);
         }
-        let url = self.url(did)?;
-        let json = self.http.get(&url).await?;
-        let doc: DidDocument =
-            serde_json::from_value(json).map_err(|e| format!("DID document of {did}: {e}"))?;
+        let url = self.url(did).map_err(ResolveError::rejected)?;
+        let json = match self.http.get_json(&url).await {
+            Ok(json) => json,
+            Err(error) => {
+                return Err(ResolveError {
+                    reason: error.to_string(),
+                    temporary: error.is_temporary(),
+                });
+            }
+        };
+        let doc: DidDocument = serde_json::from_value(json)
+            .map_err(|e| ResolveError::rejected(format!("DID document of {did}: {e}")))?;
         if doc.id != did {
-            return Err(format!("the DID document at {url} is for {}", doc.id));
+            let reason = format!("the DID document at {url} is for {}", doc.id);
+            return Err(ResolveError::rejected(reason));
         }
         let doc = Arc::new(doc);
         self.keep(did, &doc);
@@ -244,7 +298,37 @@ mod tests {
         let (did, _) = serve(serde_json::json!({"id": "did:web:someone.else"})).await;
         let resolver = DidWebResolver::new(true, DEFAULT_TTL).unwrap();
         let err = resolver.resolve(&did).await.unwrap_err();
-        assert!(err.contains("is for did:web:someone.else"), "{err}");
+        assert!(err.reason.contains("is for did:web:someone.else"), "{err}");
+        assert!(!err.is_temporary());
+    }
+
+    /// A host that does not answer, or answers 5xx, may answer later; a
+    /// 404 and a DID that is not `did:web` will not change.
+    #[tokio::test]
+    async fn tells_temporary_failures_from_final_ones() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let app = axum::Router::new()
+            .route(
+                "/down/did.json",
+                axum::routing::get(|| async { axum::http::StatusCode::SERVICE_UNAVAILABLE }),
+            )
+            .route(
+                "/gone/did.json",
+                axum::routing::get(|| async { axum::http::StatusCode::NOT_FOUND }),
+            );
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let resolver = DidWebResolver::new(true, DEFAULT_TTL).unwrap();
+        let host = format!("did:web:127.0.0.1%3A{port}");
+        let down = resolver.resolve(&format!("{host}:down")).await.unwrap_err();
+        assert!(down.is_temporary(), "{down}");
+        let gone = resolver.resolve(&format!("{host}:gone")).await.unwrap_err();
+        assert!(!gone.is_temporary(), "{gone}");
+        // nobody listens on port 9 (discard)
+        let unreachable = resolver.resolve("did:web:127.0.0.1%3A9").await.unwrap_err();
+        assert!(unreachable.is_temporary(), "{unreachable}");
+        let not_web = resolver.resolve("did:key:z6Mk").await.unwrap_err();
+        assert!(!not_web.is_temporary(), "{not_web}");
     }
 
     #[tokio::test]

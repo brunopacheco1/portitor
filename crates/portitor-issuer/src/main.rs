@@ -16,6 +16,7 @@ use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::health;
 use portitor_runtime::http::HttpSender;
 use portitor_runtime::management::management_port;
+use portitor_runtime::request_size::RequestLimits;
 use portitor_runtime::serve::{
     MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, run_component, serve, with_limits,
 };
@@ -65,6 +66,7 @@ async fn serve_issuer() -> ExitCode {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_env()?;
+    let limits = RequestLimits::from_env()?;
     if config.allow_http {
         tracing::warn!("plain-http DIDs and URLs allowed (PORTITOR_ALLOW_HTTP_CALLBACKS)");
     }
@@ -79,10 +81,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     let credential_key = key.public_jwk();
     let mut issuer = Issuer::new(&config, key, definitions, ports)?;
+    for retired in issuer.retired_keys() {
+        let kid = portitor_runtime::did_document::key_id(issuer.did(), retired);
+        tracing::info!(kid = %kid, "retired key listed in the DID document; it does not sign");
+    }
     if let Some(file) = &config.bundle_key_file {
         let bundle_key = portitor_issuer::bundles::read_public_key(file)?;
         if bundle_key == credential_key {
             return Err("PORTITOR_ISSUER_BUNDLE_KEY_FILE: the bundle key must not be the credential signing key".into());
+        }
+        if issuer.retired_keys().contains(&bundle_key) {
+            return Err("PORTITOR_ISSUER_BUNDLE_KEY_FILE: the bundle key must not be a retired credential key".into());
         }
         issuer.add_bundle_key(&bundle_key);
         tracing::info!(kid = %portitor_issuer::bundles::bundle_kid(issuer.did()), "bundle key listed in the DID document");
@@ -99,10 +108,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         &issuer,
         config.db_file.clone(),
     ));
-    let management = management_port(&config.management, checks, |key| {
-        portitor_issuer::management::router(Arc::clone(&issuer), key)
-    })
-    .await?;
+    let (management_listener, management_app) =
+        management_port(&config.management, checks, |key| {
+            portitor_issuer::management::router(Arc::clone(&issuer), key)
+        })
+        .await?;
+    let management = (
+        management_listener,
+        limits.on_management_port(management_app),
+    );
     tracing::info!(
         bind = %config.bind,
         did = %issuer.did(),
@@ -113,12 +127,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     // the outbox runs until the process stops
     tokio::spawn(portitor_issuer::delivery::run_outbox(Arc::clone(&issuer)));
-    // the public routes: anyone can call them
-    let app = with_limits(
-        portitor_issuer::router(issuer),
-        REQUEST_TIMEOUT,
-        MAX_CONCURRENT_REQUESTS,
-    );
+    // the public routes: anyone can call them. The size limit is inside
+    // the time limit, so a slow body counts against the time too
+    let app = limits.on_public_port(portitor_issuer::router(issuer));
+    let app = with_limits(app, REQUEST_TIMEOUT, MAX_CONCURRENT_REQUESTS);
     serve((listener, app), Some(management)).await?;
     Ok(())
 }

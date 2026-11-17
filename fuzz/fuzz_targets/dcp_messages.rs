@@ -3,16 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Parsing of the DCP messages a Credential Service receives (and the
-//! issuer metadata it reads), and the presentation responses the
-//! connector's verifier receives, from any bytes. Parsing must never panic;
-//! a message that parses must be written back and parse again to the
-//! same value.
+//! issuer metadata and request status it reads), the credential requests
+//! an issuer service receives, the presentation responses the
+//! connector's verifier receives, and scopes, from any bytes. Parsing
+//! must never panic; a message that parses must be written back and
+//! parse again to the same value.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
 use portitor_dcp::message::{
-    CredentialMessage, CredentialOfferMessage, IssuerMetadata, PresentationQueryMessage,
-    PresentationResponseMessage,
+    CredentialMessage, CredentialOfferMessage, CredentialRequestMessage, CredentialStatus,
+    IssuerMetadata, PresentationQueryMessage, PresentationResponseMessage,
 };
 use portitor_dcp::scope::Scope;
 use serde::Serialize;
@@ -38,4 +39,12 @@ fuzz_target!(|data: &[u8]| {
     let _ = round_trip::<CredentialOfferMessage>(data);
     let _ = round_trip::<IssuerMetadata>(data);
     let _ = round_trip::<PresentationResponseMessage>(data);
+    let _ = round_trip::<CredentialRequestMessage>(data);
+    let _ = round_trip::<CredentialStatus>(data);
+    // the whole input as one scope, as the STS and the credential
+    // service read them, without and with the EDC alias
+    if let Ok(text) = std::str::from_utf8(data) {
+        let _ = Scope::parse(text, &[]);
+        let _ = Scope::parse(text, &["org.eclipse.edc.vc.type"]);
+    }
 });

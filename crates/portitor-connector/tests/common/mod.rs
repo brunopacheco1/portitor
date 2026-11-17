@@ -13,9 +13,11 @@ use std::sync::{Arc, Mutex};
 
 use axum::http::request::Builder;
 use portitor_connector::Ports;
-use portitor_connector::auth::{Caller, CallerVerifier, Prover};
+use portitor_connector::auth::{Caller, CallerVerifier, Prover, VerifyError};
+use portitor_connector::http_client::Sender;
 use portitor_dsp::policy::HeldCredential;
 use portitor_runtime::BoxFuture;
+use serde_json::Value;
 
 pub mod network;
 
@@ -24,6 +26,15 @@ pub const CONSUMER: &str = "did:web:consumer.example";
 /// The provider's DID in the tests.
 pub const PROVIDER: &str = "did:web:provider.example";
 
+/// Sends nothing: for tests where every request is answered locally.
+pub struct NoSender;
+
+impl Sender for NoSender {
+    fn post<'a>(&'a self, _: &'a str, _: &'a Value) -> BoxFuture<'a, Result<Value, String>> {
+        Box::pin(async { Err("not sent in this test".to_owned()) })
+    }
+}
+
 /// Believes `Bearer <did>`: the caller is `<did>`.
 pub struct NamedCaller;
 
@@ -31,9 +42,9 @@ impl CallerVerifier for NamedCaller {
     fn verify<'a>(
         &'a self,
         authorization: Option<&'a str>,
-    ) -> BoxFuture<'a, Result<Caller, String>> {
+    ) -> BoxFuture<'a, Result<Caller, VerifyError>> {
         let did = authorization.and_then(|value| value.strip_prefix("Bearer "));
-        let caller = did.map(Caller::new).ok_or_else(|| "no caller".to_owned());
+        let caller = did.map(Caller::new).ok_or(VerifyError::from("no caller"));
         Box::pin(async move { caller })
     }
 

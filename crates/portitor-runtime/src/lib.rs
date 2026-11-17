@@ -5,8 +5,8 @@
 //! Adapters shared by the Portitor binaries (the connector, the identity
 //! component and the issuer): outbound HTTP, `did:web` resolution and the
 //! directory of other parties' documents, the check of a DCP caller's
-//! token, the management API key and port, health checks, logging and
-//! shutdown,
+//! token, the management API key and port, request size limits, health
+//! checks, logging and shutdown,
 //! `SQLite` files, settings, the retry delay, and the system clock.
 //!
 //! The protocol crates (`portitor-dsp`, `portitor-dcp`) do no I/O; this
@@ -22,12 +22,15 @@ pub mod directory;
 pub mod health;
 pub mod http;
 pub mod management;
+pub mod request_size;
 pub mod retry;
 pub mod serve;
 pub mod settings;
 pub mod sqlite;
 pub mod system;
 pub mod telemetry;
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing;
 
 /// A task that finishes later with a `T`: what the async methods of
 /// Portitor's ports return (the [`http::Sender`], the connector's

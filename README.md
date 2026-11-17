@@ -102,6 +102,8 @@ Configuration (environment variables):
 | `PORTITOR_DB_FILE` | `portitor.db` (`/data/portitor.db` in the image) | SQLite file that keeps negotiations; one connector per file |
 | `PORTITOR_MANAGEMENT_API_KEY_FILE` | none (management API off) | File with the management API key (at least 32 characters, for example `openssl rand -hex 32`); an empty value counts as unset |
 | `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8081` | Address of the management port: always the health checks (`/api/check/...`, no key, [DEPLOYING](docs/DEPLOYING.md#health-and-logs)), and the management API with its key |
+| `PORTITOR_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | Largest request body on the public port, `1` to `67108864` (64 MiB); larger gets HTTP 413. Small DSP messages have a lower fixed limit ([DEPLOYING](docs/DEPLOYING.md#5-security)) |
+| `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | Largest request body on the management port, `1` to `67108864` (64 MiB) |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | `false` | `true` allows plain `http://` for consumers' callbacks, providers, partners' `did:web` DIDs and credential services, status lists and the STS; development and tests only |
 | `PORTITOR_DATA_TOKEN_SECONDS` | `3600` | How long a data access token is valid after the transfer starts; `1` to `31536000` (one year) |
 | `PORTITOR_STS_URL` | none (**required**) | Token endpoint of the participant's STS (`portitor-identity`: `<base URL>/sts/token`); every DSP request is authenticated with DCP (ADR 0016) |
@@ -111,13 +113,15 @@ Configuration (environment variables):
 | `PORTITOR_TRUSTED_ISSUERS` | none (**required**) | Comma-separated DIDs trusted to issue credentials: the `MembershipCredential` and those of credential constraints |
 | `PORTITOR_DCP_SCOPES` | `org.eclipse.dspace.dcp.vc.type:MembershipCredential` | Comma-separated scopes asked from callers' credential services, and granted to the counter-party in our tokens |
 | `PORTITOR_POLICY_CREDENTIALS` | none (`MembershipCredential` only) | Comma-separated credential types that offers may constrain, each `Type` (scope `org.eclipse.dspace.dcp.vc.type:<Type>:read`) or `Type=<scope>` ([ADR 0019](docs/adr/0019-credential-constraints.md)) |
+| `PORTITOR_STATUS_LIST_CACHE_SECONDS` | `300` | How long a verified status list credential is reused, in seconds; `0` fetches it on every check, at most `3600`. A revocation takes up to that long to be seen ([DEPLOYING](docs/DEPLOYING.md#status-list-cache)) |
 | `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` | none (no Gaia-X compliance credential accepted) | Comma-separated `did:web` DIDs of the Gaia-X compliance services you trust, for example `did:web:compliance.lab.gaia-x.eu:v2`; separate from `PORTITOR_TRUSTED_ISSUERS` ([ADR 0022](docs/adr/0022-gaia-x-compliance-in-policies.md)) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | none (no traces or metrics) | Base URL of an OTLP/HTTP receiver: traces and metrics are sent there with OpenTelemetry. The other `OTEL_*` variables are in [DEPLOYING](docs/DEPLOYING.md#traces-and-metrics) ([ADR 0023](docs/adr/0023-observability.md)) |
 
 As provider, the connector agrees to a request for an offer in its
 catalog, then finalizes once the consumer verifies. It sends its messages
-to the consumer's `callbackAddress` and retries 3 times; if the consumer
-cannot be reached, it terminates the negotiation.
+to the consumer's `callbackAddress`. It tries again up to 3 times when no
+answer came, or the answer was 408, 429 or 5xx; any other answer ends the
+tries. If the message did not arrive, it terminates the negotiation.
 
 As consumer, the connector accepts the provider's offer and verifies its
 agreement. Providers send their messages to the callback endpoints above.

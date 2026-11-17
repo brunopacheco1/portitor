@@ -57,6 +57,17 @@
 //! through the shared HTTP client: HTTPS only unless allowed for tests,
 //! time and size limits, no redirects.
 //!
+//! A fetch that got no answer, or the answer 408, 429 or 5xx, and a
+//! check that took too long, are temporary failures
+//! ([`VerifyError::Unavailable`], HTTP 503): the caller may be fine. Any
+//! other failure refuses the caller ([`VerifyError::Rejected`], HTTP
+//! 401), also a 404 or an invalid document from the caller's or the
+//! issuer's server.
+//!
+//! Status list credentials are cached for a short time, by URL
+//! ([`status_list_cache`]; ADR 0016, amended in 0.11). Tokens and
+//! presentations are not: they are checked on every request.
+//!
 //! The caller chooses what is in its presentations, and each credential
 //! could make the verifier fetch more (the issuer's DID document, status
 //! lists). So credentials from issuers that are not trusted are skipped
@@ -80,12 +91,20 @@ use portitor_dcp::{Claims, DidDocument, JtiCache, unverified_claims, validate_se
 use portitor_dsp::policy::HeldCredential;
 use portitor_runtime::BoxFuture;
 use portitor_runtime::did::{DEFAULT_TTL, DidWebResolver};
-use portitor_runtime::http::{HttpSender, Sender as _, bearer_token};
+use portitor_runtime::http::{HttpError, HttpSender, bearer_token};
 use portitor_runtime::system::now_secs;
 use serde_json::Value;
 
 use super::sts::{SecureTokenService, TokenRequest};
-use super::{AuthSettings, Caller, CallerVerifier, with_linked_scopes};
+use super::{AuthSettings, Caller, CallerVerifier, VerifyError, with_linked_scopes};
+
+pub mod status_list_cache;
+
+use status_list_cache::StatusListCache;
+
+/// Where the verifier reads the current time, in seconds since 1970:
+/// [`now_secs`], except in tests, which move time forward.
+type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
 /// Allowed clock difference between participants, in seconds.
 const LEEWAY: u64 = 60;
@@ -134,6 +153,11 @@ pub struct DcpVerifier {
     /// Token ids already used (DCP 4.3.3, step 6). In memory: one replica
     /// per store (ADR 0016).
     used_token_ids: Mutex<JtiCache>,
+    /// Verified status list credentials, by URL
+    /// (`PORTITOR_STATUS_LIST_CACHE_SECONDS`).
+    status_lists: StatusListCache,
+    /// The current time.
+    clock: Clock,
     start_tries: u32,
     deadline: Duration,
 }
@@ -175,6 +199,8 @@ impl DcpVerifier {
             // on the prover's side (ADR 0022)
             scopes: with_linked_scopes(&settings.scopes),
             used_token_ids: Mutex::new(JtiCache::default()),
+            status_lists: StatusListCache::new(settings.status_list_cache_seconds),
+            clock: Arc::new(now_secs),
             start_tries: START_TRIES,
             deadline: DEADLINE,
         })
@@ -226,7 +252,7 @@ impl DcpVerifier {
         let token = self.sts.token(request).await?;
         // a cache of its own: this token is never presented anywhere
         let mut unused = JtiCache::default();
-        validate_self_issued(&token, doc, own, now_secs(), LEEWAY, &mut unused).map_err(|e| {
+        validate_self_issued(&token, doc, own, self.now(), LEEWAY, &mut unused).map_err(|e| {
             format!("PORTITOR_PARTICIPANT_ID is {own}, but the STS token is not signed as it: {e}")
         })?;
         Ok(())
@@ -253,12 +279,17 @@ impl DcpVerifier {
         Ok(verifier)
     }
 
+    /// The current time, in seconds since 1970.
+    fn now(&self) -> u64 {
+        (self.clock)()
+    }
+
     async fn resolve_own_document(&self) -> Result<Arc<DidDocument>, String> {
         let mut last = String::new();
         for attempt in 1..=self.start_tries.max(1) {
             match self.resolver.resolve(&self.participant_id).await {
                 Ok(doc) => return Ok(doc),
-                Err(e) => last = e,
+                Err(e) => last = e.reason,
             }
             if attempt < self.start_tries {
                 tracing::info!(did = %self.participant_id, error = %last, "own DID document not readable yet");
@@ -272,28 +303,29 @@ impl DcpVerifier {
     }
 
     /// The whole check, cut off after [`DEADLINE`].
-    async fn check(&self, authorization: Option<&str>) -> Result<Caller, String> {
+    async fn check(&self, authorization: Option<&str>) -> Result<Caller, VerifyError> {
         self.within_deadline("checking the caller", self.check_steps(authorization))
             .await
     }
 
-    /// `work`, cut off after [`DEADLINE`].
+    /// `work`, cut off after [`DEADLINE`]. Running out of time is a
+    /// temporary failure: the services the check fetches from were slow.
     async fn within_deadline<T>(
         &self,
         what: &str,
-        work: impl Future<Output = Result<T, String>>,
-    ) -> Result<T, String> {
+        work: impl Future<Output = Result<T, VerifyError>>,
+    ) -> Result<T, VerifyError> {
         match tokio::time::timeout(self.deadline, work).await {
             Ok(result) => result,
-            Err(_) => Err(format!(
+            Err(_) => Err(VerifyError::Unavailable(format!(
                 "{what} took longer than {} s",
                 self.deadline.as_secs_f32()
-            )),
+            ))),
         }
     }
 
     /// Steps 1 to 5 of the module doc.
-    async fn check_steps(&self, authorization: Option<&str>) -> Result<Caller, String> {
+    async fn check_steps(&self, authorization: Option<&str>) -> Result<Caller, VerifyError> {
         let token = bearer(authorization)?;
         let checked = self.check_token(token).await?;
         let caller = checked.doc.id.clone();
@@ -305,7 +337,8 @@ impl DcpVerifier {
             .iter()
             .any(|credential| credential.has_type(MEMBERSHIP));
         if !is_member {
-            return Err(format!("no {MEMBERSHIP} from a trusted issuer"));
+            let reason = format!("no {MEMBERSHIP} from a trusted issuer");
+            return Err(VerifyError::Rejected(reason));
         }
         Ok(Caller {
             id: caller,
@@ -320,7 +353,7 @@ impl DcpVerifier {
         &self,
         caller: &Caller,
         extra: &[String],
-    ) -> Result<Vec<HeldCredential>, String> {
+    ) -> Result<Vec<HeldCredential>, VerifyError> {
         let access_token = caller
             .access_token
             .clone()
@@ -334,9 +367,9 @@ impl DcpVerifier {
     }
 
     /// Step 2: the caller's self-issued ID token.
-    async fn check_token(&self, token: &str) -> Result<CheckedToken, String> {
+    async fn check_token(&self, token: &str) -> Result<CheckedToken, VerifyError> {
         let unverified = unverified_claims(token).map_err(|e| format!("ID token: {e}"))?;
-        let now = now_secs();
+        let now = self.now();
         let doc = self.resolver.resolve(&unverified.iss).await?;
         let claims = self
             .validate_and_remember(token, &doc, now)
@@ -371,7 +404,7 @@ impl DcpVerifier {
         &self,
         checked: &CheckedToken,
         scopes: &[String],
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<Vec<String>, VerifyError> {
         let service = checked
             .doc
             .credential_service()
@@ -383,15 +416,21 @@ impl DcpVerifier {
             scopes: &[],
             access_token: Some(&checked.access_token),
         };
-        let our_token = self.sts.token(request).await?;
+        // our own STS failing is never the caller's fault
+        let our_token = self
+            .sts
+            .token(request)
+            .await
+            .map_err(|e| VerifyError::Unavailable(format!("our STS: {e}")))?;
         let query = PresentationQueryMessage::for_scopes(scopes.to_vec());
         let body = serde_json::to_value(&query).map_err(|e| e.to_string())?;
         let answer = self
             .http
-            .post_authorized(&url, &body, &format!("Bearer {our_token}"))
+            .post_json_authorized(&url, &body, &format!("Bearer {our_token}"))
             .await
-            .map_err(|e| format!("presentation query to {url}: {e}"))?;
-        presentation_jwts(answer)
+            .map_err(|e| fetch_failed(&format!("presentation query to {url}"), &e))?;
+        let jwts = presentation_jwts(answer)?;
+        Ok(jwts)
     }
 
     /// Step 4. Only credentials from trusted issuers are checked (and
@@ -403,8 +442,8 @@ impl DcpVerifier {
         caller: &str,
         holder: &DidDocument,
         jwts: &[String],
-    ) -> Result<Vec<HeldCredential>, String> {
-        let now = now_secs();
+    ) -> Result<Vec<HeldCredential>, VerifyError> {
+        let now = self.now();
         let mut verified = Vec::new();
         for jwt in jwts {
             let presentation = self.check_presentation(caller, holder, jwt, now)?;
@@ -467,7 +506,7 @@ impl DcpVerifier {
         caller: &str,
         credentials: &[Credential],
         now: u64,
-    ) -> Result<Vec<HeldCredential>, String> {
+    ) -> Result<Vec<HeldCredential>, VerifyError> {
         let mut verified = Vec::new();
         for credential in credentials {
             if self.takes_gaiax_checks(credential) {
@@ -481,13 +520,16 @@ impl DcpVerifier {
             }
             // holder binding (DCP 5.4.3) and the fetch limit
             if !credential.is_only_about(caller) {
-                return Err(
-                    "a credential is not about the caller (credentialSubject.id)".to_owned(),
-                );
+                return Err(VerifyError::from(
+                    "a credential is not about the caller (credentialSubject.id)",
+                ));
             }
             check_status_count(credential)?;
-            if let Err(reason) = self.check_credential(credential, now).await {
-                return Err(refused(caller, credential, &reason));
+            match self.check_credential(credential, now).await {
+                Ok(()) => {}
+                // its issuer's server is down: not the credential's fault
+                Err(error) if error.is_temporary() => return Err(error),
+                Err(error) => return Err(refused(caller, credential, error.reason())),
             }
             verified.push(held_credential(credential));
         }
@@ -507,7 +549,7 @@ impl DcpVerifier {
         holder: &DidDocument,
         credentials: &[Credential],
         now: u64,
-    ) -> Result<Vec<HeldCredential>, String> {
+    ) -> Result<Vec<HeldCredential>, VerifyError> {
         let mut compliance = self
             .check_compliance_credentials(caller, credentials, now)
             .await?;
@@ -542,7 +584,7 @@ impl DcpVerifier {
         caller: &str,
         credentials: &'a [Credential],
         now: u64,
-    ) -> Result<Vec<ComplianceCheck<'a>>, String> {
+    ) -> Result<Vec<ComplianceCheck<'a>>, VerifyError> {
         let mut checked = Vec::new();
         for credential in credentials {
             if !is_gaiax_compliance(credential) || !self.takes_gaiax_checks(credential) {
@@ -556,8 +598,11 @@ impl DcpVerifier {
                 tracing::debug!(issuer = %credential.issuer, "gx:ParticipantComplianceCredential from an untrusted compliance service skipped");
                 continue;
             }
-            if let Err(reason) = self.check_compliance_credential(credential, now).await {
-                return Err(refused(caller, credential, &reason));
+            match self.check_compliance_credential(credential, now).await {
+                Ok(()) => {}
+                // the service's server is down: not the credential's fault
+                Err(error) if error.is_temporary() => return Err(error),
+                Err(error) => return Err(refused(caller, credential, error.reason())),
             }
             checked.push(ComplianceCheck::new(credential));
         }
@@ -575,7 +620,7 @@ impl DcpVerifier {
         credentials: &[Credential],
         compliance: &mut [ComplianceCheck<'_>],
         now: u64,
-    ) -> Result<Vec<HeldCredential>, String> {
+    ) -> Result<Vec<HeldCredential>, VerifyError> {
         let mut verified = Vec::new();
         for credential in credentials {
             if !is_legal_person(credential) || !self.takes_gaiax_checks(credential) {
@@ -606,12 +651,14 @@ impl DcpVerifier {
         &self,
         credential: &Credential,
         now: u64,
-    ) -> Result<(), String> {
+    ) -> Result<(), VerifyError> {
         // The JWT's `exp` is not read (milliseconds), so `validUntil` is
         // the only end. Without one the credential would never expire,
         // which a compliance service must not issue (ADR 0022, step 2).
         if credential.stated_validity().until.is_none() {
-            return Err("it has no validUntil (expirationDate in VC 1.1)".to_owned());
+            return Err(VerifyError::from(
+                "it has no validUntil (expirationDate in VC 1.1)",
+            ));
         }
         check_status_count(credential)?;
         let issuer = self.resolver.resolve(&credential.issuer).await?;
@@ -627,7 +674,7 @@ impl DcpVerifier {
     /// One credential about the caller (checked before): signed by its
     /// issuer, valid now, not revoked or suspended. The error says why
     /// not.
-    async fn check_credential(&self, credential: &Credential, now: u64) -> Result<(), String> {
+    async fn check_credential(&self, credential: &Credential, now: u64) -> Result<(), VerifyError> {
         let issuer = self.resolver.resolve(&credential.issuer).await?;
         credential
             .verify(&issuer, now, LEEWAY)
@@ -638,39 +685,72 @@ impl DcpVerifier {
         Ok(())
     }
 
-    /// One status entry: fetches the status list credential, which must be
-    /// signed by the same issuer and valid now, and looks up the bit. A
-    /// list that cannot be read or checked refuses the credential.
+    /// One status entry: takes the status list credential, which must be
+    /// signed by the same issuer and valid now
+    /// ([`DcpVerifier::status_list_credential`]), and looks up the bit. A
+    /// list that cannot be read or checked refuses the credential, unless
+    /// its server did not answer or answered 408, 429 or 5xx (a temporary
+    /// failure).
     async fn check_status(
         &self,
         credential: &Credential,
         issuer: &DidDocument,
         entry: &StatusEntry,
         now: u64,
-    ) -> Result<(), String> {
+    ) -> Result<(), VerifyError> {
         let url = &entry.status_list_credential;
-        let text = self
-            .http
-            .get_text(url, "application/vc+jwt", MAX_STATUS_LIST)
-            .await
-            .map_err(|e| format!("status list {url}: {e}"))?;
-        let list_credential =
-            Credential::parse(text.trim()).map_err(|e| format!("status list {url}: {e}"))?;
-        if list_credential.issuer != credential.issuer {
-            return Err(format!("status list {url} has another issuer"));
-        }
-        list_credential
-            .verify(issuer, now, LEEWAY)
-            .map_err(|e| format!("status list {url}: {e}"))?;
+        let list_credential = self
+            .status_list_credential(credential, issuer, url, now)
+            .await?;
         let list = status_list::list_in(&list_credential, entry)
             .map_err(|e| format!("status list {url}: {e}"))?;
         match status_list::check(entry, &list).map_err(|e| format!("status list {url}: {e}"))? {
             Status::Clear => Ok(()),
-            Status::Set => Err(format!(
+            Status::Set => Err(VerifyError::Rejected(format!(
                 "a credential is revoked or suspended ({})",
                 entry.status_purpose
-            )),
+            ))),
         }
+    }
+
+    /// The status list credential at `url` for `credential`, signed by
+    /// the same issuer (`issuer` is its DID document) and valid at `now`:
+    /// from the cache, or fetched, checked and then kept in the cache.
+    async fn status_list_credential(
+        &self,
+        credential: &Credential,
+        issuer: &DidDocument,
+        url: &str,
+        now: u64,
+    ) -> Result<Arc<Credential>, VerifyError> {
+        let another_issuer =
+            || VerifyError::Rejected(format!("status list {url} has another issuer"));
+        if let Some(cached) = self.status_lists.get(url, now) {
+            // it was checked against its own issuer when it was fetched;
+            // another issuer's credential may name the same URL
+            if cached.issuer != credential.issuer {
+                return Err(another_issuer());
+            }
+            return Ok(cached);
+        }
+        let text = self
+            .http
+            .get_text(url, "application/vc+jwt", MAX_STATUS_LIST)
+            .await
+            .map_err(|e| fetch_failed(&format!("status list {url}"), &e))?;
+        let list_credential =
+            Credential::parse(text.trim()).map_err(|e| format!("status list {url}: {e}"))?;
+        if list_credential.issuer != credential.issuer {
+            return Err(another_issuer());
+        }
+        list_credential
+            .verify(issuer, now, LEEWAY)
+            .map_err(|e| format!("status list {url}: {e}"))?;
+        // only now, fetched and verified, may it be kept
+        let list_credential = Arc::new(list_credential);
+        self.status_lists
+            .keep(url, Arc::clone(&list_credential), now);
+        Ok(list_credential)
     }
 }
 
@@ -716,7 +796,7 @@ impl CallerVerifier for DcpVerifier {
     fn verify<'a>(
         &'a self,
         authorization: Option<&'a str>,
-    ) -> BoxFuture<'a, Result<Caller, String>> {
+    ) -> BoxFuture<'a, Result<Caller, VerifyError>> {
         Box::pin(self.check(authorization))
     }
 
@@ -730,11 +810,14 @@ impl CallerVerifier for DcpVerifier {
             if scopes.iter().all(|scope| self.scopes.contains(scope)) {
                 return Ok(caller.credentials.clone());
             }
-            self.within_deadline(
-                "asking the caller for more credentials",
-                self.more_credentials(caller, scopes),
-            )
-            .await
+            let more = self
+                .within_deadline(
+                    "asking the caller for more credentials",
+                    self.more_credentials(caller, scopes),
+                )
+                .await;
+            // this port gives text: any failure means no credentials
+            more.map_err(|error| error.to_string())
         })
     }
 }
@@ -788,10 +871,16 @@ fn check_status_count(credential: &Credential) -> Result<(), String> {
     Ok(())
 }
 
-/// Logs a credential that failed its checks, and returns the reason the
-/// caller is refused: the whole presentation is invalid (DCP 5.4.3, step
-/// 8).
-fn refused(caller: &str, credential: &Credential, reason: &str) -> String {
+/// A fetch for the check that failed: [`VerifyError::Unavailable`] when
+/// trying again later may help (no answer, 408, 429, 5xx;
+/// [`HttpError::is_temporary`]), [`VerifyError::Rejected`] otherwise.
+fn fetch_failed(what: &str, error: &HttpError) -> VerifyError {
+    VerifyError::new(format!("{what}: {error}"), error.is_temporary())
+}
+
+/// Logs a credential that failed its checks, and returns why the caller
+/// is refused: the whole presentation is invalid (DCP 5.4.3, step 8).
+fn refused(caller: &str, credential: &Credential, reason: &str) -> VerifyError {
     tracing::info!(
         %caller,
         issuer = %credential.issuer,
@@ -799,10 +888,10 @@ fn refused(caller: &str, credential: &Credential, reason: &str) -> String {
         %reason,
         "credential refused"
     );
-    format!(
+    VerifyError::Rejected(format!(
         "a {} credential fails its checks, so its presentation is invalid: {reason}",
         credential_types(credential)
-    )
+    ))
 }
 
 /// A checked credential as the policy evaluator reads it (ADR 0019).

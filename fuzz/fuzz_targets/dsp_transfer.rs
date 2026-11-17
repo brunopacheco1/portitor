@@ -2,16 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! Untrusted DSP input: transfer process messages from any counter-party,
-//! and arbitrary message sequences against the state machine. Parsing must
-//! never panic, what parses must survive a round trip unchanged, and no
-//! sequence may leave a terminal state.
+//! Untrusted DSP input: transfer process messages and answers from any
+//! counter-party, and arbitrary message sequences against the state
+//! machine. Parsing must never panic, what parses must survive a round
+//! trip unchanged, and no sequence may leave a terminal state.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
 use portitor_dsp::transfer::{
-    Role, TransferCompletionMessage, TransferRequestMessage, TransferStartMessage, TransferState,
-    TransferSuspensionMessage, TransferTerminationMessage, Transition, next_state,
+    Role, TransferCompletionMessage, TransferError, TransferProcess, TransferRequestMessage,
+    TransferStartMessage, TransferState, TransferSuspensionMessage, TransferTerminationMessage,
+    Transition, next_state,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -38,6 +39,9 @@ fuzz_target!(|data: &[u8]| {
     round_trip::<TransferSuspensionMessage>(data);
     round_trip::<TransferCompletionMessage>(data);
     round_trip::<TransferTerminationMessage>(data);
+    // the counter-party's answers: acknowledgement or state, and error
+    round_trip::<TransferProcess>(data);
+    round_trip::<TransferError>(data);
 
     // each byte is one message: low bits pick the message, bit 3 the sender
     let mut state = None;

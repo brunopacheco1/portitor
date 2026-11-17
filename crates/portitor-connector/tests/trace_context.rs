@@ -50,6 +50,7 @@ fn settings(base: &str) -> AuthSettings {
         gaiax_compliance_issuers: Vec::new(),
         scopes: Vec::new(),
         allow_http: true,
+        status_list_cache_seconds: 0,
     }
 }
 

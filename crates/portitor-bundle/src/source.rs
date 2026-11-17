@@ -647,15 +647,10 @@ impl BundleSource for UrlSource {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     fn read(pairs: &[(&str, &str)]) -> Result<Option<BundleConfig>, BundleSourceError> {
-        let vars: HashMap<String, OsString> = pairs
-            .iter()
-            .map(|(k, v)| ((*k).to_owned(), OsString::from(v)))
-            .collect();
         BundleConfig::from_vars(
-            |name| vars.get(name).cloned(),
+            portitor_runtime::testing::vars(pairs),
             Path::new("/data/portitor.db"),
             false,
         )

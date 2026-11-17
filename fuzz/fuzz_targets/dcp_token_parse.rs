@@ -3,10 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Untrusted DCP input: a bearer token and a DID from any remote party.
-//! Parsing and validation must fail cleanly, never panic.
+//! Parsing and validation must fail cleanly, never panic. That includes
+//! reading the claims before the signature is checked, to learn whose
+//! DID document to fetch.
 #![no_main]
 
-use portitor_dcp::{DidDocument, JtiCache, Jws, did_web_url, validate_self_issued};
+use portitor_dcp::{
+    DidDocument, JtiCache, Jws, did_web_url, unverified_claims, validate_self_issued,
+};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
@@ -18,6 +22,7 @@ fuzz_target!(|data: &[u8]| {
         let _ = jws.kid();
         let _ = jws.payload();
     }
+    let _ = unverified_claims(text);
     let doc = DidDocument {
         id: "did:web:alice.example".to_owned(),
         ..DidDocument::default()

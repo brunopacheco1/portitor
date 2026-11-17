@@ -39,7 +39,9 @@ use portitor_dsp::negotiation::ContractNegotiationError;
 use portitor_dsp::policy::{CallerCredentials, CredentialTypes, HeldCredential, MEMBERSHIP};
 use portitor_dsp::transfer::TransferError;
 use portitor_runtime::BoxFuture;
-use portitor_runtime::settings::comma_list;
+use portitor_runtime::api_key::problem;
+use portitor_runtime::did::ResolveError;
+use portitor_runtime::settings::{bounded_number, comma_list};
 use portitor_runtime::telemetry::metrics::{self, Refusal};
 
 pub mod dcp;
@@ -110,6 +112,85 @@ impl std::fmt::Debug for Caller {
     }
 }
 
+/// Why [`CallerVerifier::verify`] did not accept a caller. The text
+/// says why; it goes to the log, never to the caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VerifyError {
+    /// The caller is refused: no token or a bad one, a replayed token, an
+    /// invalid or revoked credential, an untrusted issuer, or a service
+    /// of the caller that answered with a final error (such as 404).
+    /// [`require_caller`] answers HTTP 401.
+    Rejected(String),
+    /// The check could not finish: a service it needs (the caller's DID
+    /// document or Credential Service, an issuer's DID document or status
+    /// list, our own STS) did not answer in time, or answered 408, 429 or
+    /// 5xx. The caller may be fine. [`require_caller`] answers HTTP 503,
+    /// so the caller can try again later.
+    Unavailable(String),
+}
+
+impl VerifyError {
+    /// [`VerifyError::Unavailable`] when `temporary`, otherwise
+    /// [`VerifyError::Rejected`].
+    #[must_use]
+    pub fn new(reason: String, temporary: bool) -> Self {
+        if temporary {
+            Self::Unavailable(reason)
+        } else {
+            Self::Rejected(reason)
+        }
+    }
+
+    /// Whether trying again later may help ([`VerifyError::Unavailable`]).
+    #[must_use]
+    pub fn is_temporary(&self) -> bool {
+        match self {
+            Self::Rejected(_) => false,
+            Self::Unavailable(_) => true,
+        }
+    }
+
+    /// Why, for the log.
+    #[must_use]
+    pub fn reason(&self) -> &str {
+        match self {
+            Self::Rejected(reason) | Self::Unavailable(reason) => reason,
+        }
+    }
+}
+
+impl std::fmt::Display for VerifyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.reason())
+    }
+}
+
+/// Lets `?` turn a text error into a [`VerifyError::Rejected`]: a check
+/// that fails with text refuses the caller. Only the fetches mark a
+/// failure as temporary, explicitly.
+impl From<String> for VerifyError {
+    fn from(reason: String) -> Self {
+        Self::Rejected(reason)
+    }
+}
+
+/// As `From<String>`, for fixed texts.
+impl From<&str> for VerifyError {
+    fn from(reason: &str) -> Self {
+        Self::Rejected(reason.to_owned())
+    }
+}
+
+/// Lets `?` turn a failed DID resolution into a [`VerifyError`]:
+/// temporary when the DID's host did not answer or answered 408, 429 or
+/// 5xx ([`ResolveError::is_temporary`]), a rejection otherwise.
+impl From<ResolveError> for VerifyError {
+    fn from(error: ResolveError) -> Self {
+        let temporary = error.is_temporary();
+        Self::new(error.reason, temporary)
+    }
+}
+
 /// Port: who sent a DSP request.
 pub trait CallerVerifier: Send + Sync {
     /// Checks `authorization`, the request's `Authorization` header, and
@@ -117,12 +198,12 @@ pub trait CallerVerifier: Send + Sync {
     ///
     /// # Errors
     ///
-    /// The caller is not authenticated. The text says why; it goes to the
-    /// log, never to the caller.
+    /// The caller is refused ([`VerifyError::Rejected`]), or could not be
+    /// checked now ([`VerifyError::Unavailable`]).
     fn verify<'a>(
         &'a self,
         authorization: Option<&'a str>,
-    ) -> BoxFuture<'a, Result<Caller, String>>;
+    ) -> BoxFuture<'a, Result<Caller, VerifyError>>;
 
     /// The caller's verified credentials for `scopes` as well as the
     /// configured ones (ADR 0019): the credentials of `caller` when they
@@ -194,8 +275,8 @@ pub async fn credentials_for(
 pub struct RefuseAll;
 
 impl CallerVerifier for RefuseAll {
-    fn verify<'a>(&'a self, _: Option<&'a str>) -> BoxFuture<'a, Result<Caller, String>> {
-        Box::pin(async { Err("no caller verifier configured".to_owned()) })
+    fn verify<'a>(&'a self, _: Option<&'a str>) -> BoxFuture<'a, Result<Caller, VerifyError>> {
+        Box::pin(async { Err(VerifyError::from("no caller verifier configured")) })
     }
 
     fn credentials<'a>(
@@ -226,8 +307,17 @@ impl Prover for NoTokens {
 pub type AnyVerifier = Arc<dyn CallerVerifier>;
 
 /// Middleware for every DSP route: runs the verifier, and either passes
-/// the request on with its [`Caller`] or answers HTTP 401 with a DSP error
-/// that says no more than "unauthorized" (the reason goes to the log).
+/// the request on with its [`Caller`], or answers:
+///
+/// - HTTP 401 with a DSP error that says no more than "unauthorized"
+///   when the caller is refused ([`VerifyError::Rejected`]);
+/// - HTTP 503 with a problem body when the check could not finish
+///   because a service it needs is down ([`VerifyError::Unavailable`]).
+///   A partner's outbox tries a 503 again, but takes a 401 as final
+///   (ADR 0007), so a short outage at its issuer does not end a
+///   negotiation.
+///
+/// The reason goes to the log only.
 pub async fn require_caller(
     State(verifier): State<AnyVerifier>,
     mut request: Request,
@@ -242,13 +332,29 @@ pub async fn require_caller(
             request.extensions_mut().insert(caller);
             next.run(request).await
         }
-        Err(reason) => {
+        Err(error) if error.is_temporary() => {
             let path = request.uri().path();
+            let reason = error.reason();
+            tracing::warn!(%path, %reason, "DSP request not checked: a service the check needs is unavailable; answered 503");
+            check_unavailable()
+        }
+        Err(error) => {
+            let path = request.uri().path();
+            let reason = error.reason();
             tracing::warn!(%path, %reason, "DSP request refused: caller not authenticated");
             metrics::dsp_request_refused(Refusal::Unauthenticated);
             unauthorized(path)
         }
     }
+}
+
+/// HTTP 503 with a problem body: the caller could not be checked now.
+/// No reason: it would tell the caller which service failed.
+fn check_unavailable() -> Response {
+    problem(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the caller cannot be checked now; try again later",
+    )
 }
 
 /// HTTP 401 with the DSP error type of the endpoint at `path`
@@ -432,6 +538,10 @@ pub struct AuthSettings {
     /// Allow plain-HTTP DIDs and URLs (`PORTITOR_ALLOW_HTTP_CALLBACKS`;
     /// tests and the TCKs only).
     pub allow_http: bool,
+    /// How long a verified status list credential is kept, in seconds
+    /// (`PORTITOR_STATUS_LIST_CACHE_SECONDS`, default 300, at most 3600;
+    /// 0: fetched on every check). See [`dcp::status_list_cache`].
+    pub status_list_cache_seconds: u64,
 }
 
 impl std::fmt::Debug for AuthSettings {
@@ -446,6 +556,7 @@ impl std::fmt::Debug for AuthSettings {
             .field("gaiax_compliance_issuers", &self.gaiax_compliance_issuers)
             .field("scopes", &self.scopes)
             .field("allow_http", &self.allow_http)
+            .field("status_list_cache_seconds", &self.status_list_cache_seconds)
             .finish_non_exhaustive()
     }
 }
@@ -469,9 +580,10 @@ impl AuthSettings {
     ///
     /// The STS URL is plain HTTP without `PORTITOR_STS_ALLOW_HTTP`, the
     /// secret file cannot be read or is empty, no trusted issuer is set,
-    /// a Gaia-X compliance service is not a `did:web` DID, or a scope is
+    /// a Gaia-X compliance service is not a `did:web` DID, a scope is
     /// empty, not a DCP scope, or asks for every credential (type
-    /// `VerifiableCredential`).
+    /// `VerifiableCredential`), or `PORTITOR_STATUS_LIST_CACHE_SECONDS` is
+    /// not a number from 0 to 3600.
     pub fn from_vars(
         participant_id: &str,
         allow_http: bool,
@@ -531,6 +643,8 @@ impl AuthSettings {
             // must understand
             Scope::parse(scope, &[]).map_err(|e| format!("PORTITOR_DCP_SCOPES: {e}"))?;
         }
+        let status_list_cache_seconds =
+            status_list_cache_seconds(text("PORTITOR_STATUS_LIST_CACHE_SECONDS").as_deref())?;
         Ok(Some(Self {
             participant_id: participant_id.to_owned(),
             sts_url,
@@ -543,6 +657,7 @@ impl AuthSettings {
             gaiax_compliance_issuers,
             scopes,
             allow_http,
+            status_list_cache_seconds,
         }))
     }
 
@@ -562,6 +677,16 @@ impl AuthSettings {
         }
         None
     }
+}
+
+/// Reads `PORTITOR_STATUS_LIST_CACHE_SECONDS` (`value`): whole seconds
+/// from 0 to [`dcp::status_list_cache::MAX_SECONDS`];
+/// [`dcp::status_list_cache::DEFAULT_SECONDS`] when it is not set or
+/// empty ([`bounded_number`]).
+fn status_list_cache_seconds(value: Option<&str>) -> Result<u64, String> {
+    use dcp::status_list_cache::{DEFAULT_SECONDS, MAX_SECONDS};
+    let name = "PORTITOR_STATUS_LIST_CACHE_SECONDS";
+    bounded_number(name, value, 0..=MAX_SECONDS, DEFAULT_SECONDS)
 }
 
 /// The DCP adapters for `settings`: the verifier and the prover, both
@@ -585,19 +710,7 @@ pub async fn dcp_adapters(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-
-    fn vars(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
-        let pairs: Vec<(String, String)> = pairs
-            .iter()
-            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-            .collect();
-        move |name| {
-            pairs
-                .iter()
-                .find(|(k, _)| k == name)
-                .map(|(_, v)| OsString::from(v))
-        }
-    }
+    use portitor_runtime::testing::vars;
 
     #[test]
     fn reads_the_settings() {
@@ -686,6 +799,38 @@ mod tests {
         std::fs::write(&secret, "s3cret\n").unwrap();
         let path = secret.to_string_lossy().into_owned();
         (dir, path)
+    }
+
+    #[test]
+    fn the_status_list_cache_setting_is_bounded() {
+        let (dir, secret) = secret_file("status-cache");
+        let me = "did:web:me.example";
+        let base = [
+            ("PORTITOR_STS_URL", "https://me.example/sts/token"),
+            ("PORTITOR_STS_CLIENT_SECRET_FILE", secret.as_str()),
+            ("PORTITOR_TRUSTED_ISSUERS", "did:web:a"),
+        ];
+        let read = |value: Option<&str>| {
+            let mut with = base.to_vec();
+            if let Some(value) = value {
+                with.push(("PORTITOR_STATUS_LIST_CACHE_SECONDS", value));
+            }
+            AuthSettings::from_vars(me, false, vars(&with))
+                .map(|settings| settings.unwrap().status_list_cache_seconds)
+        };
+        assert_eq!(read(None), Ok(300));
+        // empty is not set, as for every number setting
+        assert_eq!(read(Some("")), Ok(300));
+        assert_eq!(read(Some("0")), Ok(0));
+        assert_eq!(read(Some(" 3600 ")), Ok(3600));
+        for refused in ["3601", "-1", "5m"] {
+            let err = read(Some(refused)).unwrap_err();
+            assert!(
+                err.starts_with("PORTITOR_STATUS_LIST_CACHE_SECONDS"),
+                "{refused}: {err}"
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -923,6 +1068,72 @@ mod tests {
             assert_eq!(body["@type"], kind);
             assert_eq!(body["code"], "401");
         }
+    }
+
+    #[tokio::test]
+    async fn a_check_that_could_not_finish_answers_503_and_a_refusal_401() {
+        use axum::routing::get;
+        use tower::ServiceExt as _;
+
+        /// Fails every check with `error`.
+        struct Fails(VerifyError);
+
+        impl CallerVerifier for Fails {
+            fn verify<'a>(
+                &'a self,
+                _: Option<&'a str>,
+            ) -> BoxFuture<'a, Result<Caller, VerifyError>> {
+                Box::pin(async { Err(self.0.clone()) })
+            }
+
+            fn credentials<'a>(
+                &'a self,
+                _: &'a Caller,
+                _: &'a [String],
+            ) -> BoxFuture<'a, Result<Vec<HeldCredential>, String>> {
+                Box::pin(async { Ok(Vec::new()) })
+            }
+        }
+
+        for (error, expected) in [
+            (
+                VerifyError::Unavailable("status list: no answer within 10s".to_owned()),
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (
+                VerifyError::Rejected("a credential is revoked".to_owned()),
+                StatusCode::UNAUTHORIZED,
+            ),
+        ] {
+            let verifier: AnyVerifier = Arc::new(Fails(error));
+            let app = axum::Router::new()
+                .route("/dsp/2025-1/catalog/request", get(|| async { "ok" }))
+                .route_layer(axum::middleware::from_fn_with_state(
+                    verifier,
+                    require_caller,
+                ));
+            let request = Request::get("/dsp/2025-1/catalog/request")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = app.oneshot(request).await.unwrap();
+            assert_eq!(response.status(), expected);
+        }
+    }
+
+    #[test]
+    fn verify_errors_say_whether_to_try_again() {
+        let down = VerifyError::new("x".to_owned(), true);
+        assert!(down.is_temporary());
+        assert_eq!(down, VerifyError::Unavailable("x".to_owned()));
+        assert!(!VerifyError::new("x".to_owned(), false).is_temporary());
+        // text errors are refusals
+        assert!(!VerifyError::from("bad signature").is_temporary());
+        let resolve = |temporary| ResolveError {
+            reason: "r".to_owned(),
+            temporary,
+        };
+        assert!(VerifyError::from(resolve(true)).is_temporary());
+        assert!(!VerifyError::from(resolve(false)).is_temporary());
     }
 
     #[tokio::test]

@@ -25,9 +25,11 @@ use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use axum::routing::{get, post};
-use portitor_dcp::{JtiCache, SigningKey};
+use portitor_dcp::{JtiCache, Jwk, SigningKey};
 use portitor_runtime::api_key::ApiKey;
+use portitor_runtime::did_document::{key_id, read_retired_keys};
 use portitor_runtime::directory::Directory;
+use portitor_runtime::request_size::small_message;
 
 mod caller;
 pub mod certificate;
@@ -61,6 +63,9 @@ pub struct Identity {
     participant_id: String,
     kid: String,
     key: SigningKey,
+    /// The retired public keys listed in the DID document
+    /// (`PORTITOR_IDENTITY_RETIRED_KEY_FILES`); they never sign.
+    retired_keys: Vec<Jwk>,
     document: serde_json::Value,
     did_path: String,
     service_path: String,
@@ -108,11 +113,13 @@ pub struct Ports {
 
 impl Identity {
     /// Builds the component from its settings, its key and the STS client
-    /// secret. Reads the certificate chain and the Gaia-X participant
-    /// file, if configured.
+    /// secret. Reads the retired public keys, and the certificate chain
+    /// and the Gaia-X participant file, if configured.
     ///
     /// # Errors
-    /// The participant DID or the credential service URL is invalid; the
+    /// The participant DID or the credential service URL is invalid; a
+    /// retired key file is refused
+    /// ([`portitor_runtime::did_document::read_retired_keys`]); the
     /// certificate chain cannot be read or its first certificate is not
     /// for `key`; Gaia-X is on without a compliance adapter, or its
     /// participant file is invalid.
@@ -122,15 +129,20 @@ impl Identity {
         sts_client_secret: ApiKey,
         ports: Ports,
     ) -> Result<Self, String> {
-        let kid = format!(
-            "{}#{}",
-            config.participant_id,
-            key.public_jwk().thumbprint()
-        );
+        let kid = key_id(&config.participant_id, &key.public_jwk());
+        let retired_keys = read_retired_keys(
+            "PORTITOR_IDENTITY_RETIRED_KEY_FILES",
+            &config.retired_key_files,
+            &key.public_jwk(),
+        )?;
+        // the chain (`x5u`, below) is for the current key only: a
+        // certificate names one key, and only the current key signs new
+        // Gaia-X credentials (ADR 0021)
         let mut document = did_document::build(
             &config.participant_id,
             &kid,
             &key,
+            &retired_keys,
             &config.credential_service_url,
         );
         let did_path = did_document::path(&config.participant_id)?;
@@ -164,6 +176,7 @@ impl Identity {
             participant_id: config.participant_id.clone(),
             kid,
             key,
+            retired_keys,
             document,
             did_path,
             service_path,
@@ -212,6 +225,37 @@ impl Identity {
         &self.kid
     }
 
+    /// The retired public keys listed in its DID document (the same
+    /// shape as the issuer's `Issuer::retired_keys`). The id of each is
+    /// [`key_id`] of our DID and the key.
+    #[must_use]
+    pub fn retired_keys(&self) -> &[Jwk] {
+        &self.retired_keys
+    }
+
+    /// The public key of this participant that signed `token`, named by
+    /// the token's `kid`: the current key, or a retired key still listed
+    /// in the DID document. So an access token that the component signed
+    /// before a key change stays usable until it expires (TD-05).
+    ///
+    /// # Errors
+    /// `token` is not a JWS, or its `kid` names none of these keys.
+    fn own_key_for(&self, token: &str) -> Result<Jwk, String> {
+        let jws = portitor_dcp::Jws::parse(token).map_err(|e| e.to_string())?;
+        let Some(kid) = jws.kid() else {
+            return Err("no kid".to_owned());
+        };
+        if kid == self.kid {
+            return Ok(self.key.public_jwk());
+        }
+        for retired in &self.retired_keys {
+            if key_id(&self.participant_id, retired) == kid {
+                return Ok(retired.clone());
+            }
+        }
+        Err("signed by a key this participant does not list".to_owned())
+    }
+
     /// Whether `did` is a trusted issuer (`PORTITOR_TRUSTED_ISSUERS`).
     fn trusts(&self, did: &str) -> bool {
         self.trusted_issuers.iter().any(|trusted| trusted == did)
@@ -241,13 +285,19 @@ pub const STS_ROUTE: &str = "/sts/token";
 /// service (under the path of `PORTITOR_CREDENTIAL_SERVICE_URL`), the
 /// certificate chain and the public Gaia-X credentials (under the DID's
 /// path, see [`gaiax::public_path`]).
+///
+/// The STS takes a form of a few short fields, so it has the fixed size
+/// limit of small messages ([`small_message`], R-18). The credential
+/// service's messages can carry credentials and presentation
+/// definitions, so they take the port's limit
+/// (`PORTITOR_MAX_REQUEST_BYTES`), which the binary sets.
 pub fn router(identity: Arc<Identity>) -> Router {
     let service = identity.service_path.clone();
     // below the DID's path, where the x5u and credential ids point
     let public = identity.public_path.clone();
     Router::new()
         .route(&identity.did_path, get(did_document::serve))
-        .route(STS_ROUTE, post(sts::token))
+        .route(STS_ROUTE, small_message(post(sts::token)))
         .route(
             &format!("{service}/presentations/query"),
             post(presentation::query),

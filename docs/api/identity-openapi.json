@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.10.0"
+    "version": "0.11.0"
   },
   "externalDocs": {
     "description": "Decentralized Claims Protocol v1.0.1",
@@ -23,7 +23,7 @@
     "/.well-known/did.json": {
       "get": {
         "summary": "The participant's DID document (did:web)",
-        "description": "Served at the path the did:web method gives for PORTITOR_PARTICIPANT_ID: /.well-known/did.json for a DID without a path, /<path>/did.json otherwise. One P-256 verification method (authentication, assertionMethod, capabilityInvocation), whose publicKeyJwk has alg ES256 (RFC 7517 section 4.4) and, when PORTITOR_IDENTITY_CERTIFICATE_CHAIN is set, x5u: the URL of /.well-known/x509CertificateChain.pem, below the DID path for a DID with one (RFC 7517 section 4.6, ADR 0021); and the CredentialService entry.",
+        "description": "Served at the path the did:web method gives for PORTITOR_PARTICIPANT_ID: /.well-known/did.json for a DID without a path, /<path>/did.json otherwise. One P-256 verification method for the current key (authentication, assertionMethod, capabilityInvocation), whose publicKeyJwk has alg ES256 (RFC 7517 section 4.4) and, when PORTITOR_IDENTITY_CERTIFICATE_CHAIN is set, x5u: the URL of /.well-known/x509CertificateChain.pem, below the DID path for a DID with one (RFC 7517 section 4.6, ADR 0021); after it, one for each retired public key in PORTITOR_IDENTITY_RETIRED_KEY_FILES, with the same relationships and alg, never x5u (TD-05); each id is <did>#<JWK thumbprint>; and the CredentialService entry.",
         "operationId": "didDocument",
         "responses": {
           "200": {

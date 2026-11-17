@@ -18,6 +18,7 @@ use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::health;
 use portitor_runtime::management::management_port;
+use portitor_runtime::request_size::RequestLimits;
 use portitor_runtime::serve::{
     MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, run_component, serve_with_trusted_routes, with_limits,
 };
@@ -46,6 +47,7 @@ async fn serve_identity() -> ExitCode {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_env()?;
+    let limits = RequestLimits::from_env()?;
     if config.allow_http {
         tracing::warn!("plain-http DIDs and URLs allowed (PORTITOR_ALLOW_HTTP_CALLBACKS)");
     }
@@ -68,6 +70,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         compliance,
     };
     let identity = Arc::new(Identity::new(&config, key, sts_client_secret, ports)?);
+    for retired in identity.retired_keys() {
+        let kid = portitor_runtime::did_document::key_id(identity.participant_id(), retired);
+        tracing::info!(kid = %kid, "retired key listed in the DID document; it does not sign");
+    }
     if let Some(chain) = identity.certificate_chain() {
         tokio::spawn(portitor_identity::certificate::watch(chain));
     }
@@ -85,10 +91,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         &identity,
         config.db_file.clone(),
     ));
-    let management = management_port(&config.management, checks, |key| {
-        portitor_identity::management::router(Arc::clone(&identity), key)
-    })
-    .await?;
+    let (management_listener, management_app) =
+        management_port(&config.management, checks, |key| {
+            portitor_identity::management::router(Arc::clone(&identity), key)
+        })
+        .await?;
+    let management = (
+        management_listener,
+        limits.on_management_port(management_app),
+    );
     tracing::info!(
         bind = %config.bind,
         did = %identity.participant_id(),
@@ -96,12 +107,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         db = %config.db_file.display(),
         "portitor-identity listening"
     );
-    // the public routes: anyone can call them
-    let app = with_limits(
-        portitor_identity::router(identity),
-        REQUEST_TIMEOUT,
-        MAX_CONCURRENT_REQUESTS,
-    );
+    // the public routes: anyone can call them. The size limit is inside
+    // the time limit, so a slow body counts against the time too
+    let app = limits.on_public_port(portitor_identity::router(identity));
+    let app = with_limits(app, REQUEST_TIMEOUT, MAX_CONCURRENT_REQUESTS);
     // only the STS is called from inside the participant (by its own
     // connector), so only its caller's trace context is taken
     serve_with_trusted_routes(

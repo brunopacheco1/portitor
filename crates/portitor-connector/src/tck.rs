@@ -57,7 +57,7 @@ use portitor_dsp::transfer::{TransferError, TransferState};
 use portitor_dsp::{OfferType, Rule};
 use serde::Deserialize;
 
-use crate::auth::{Caller, CallerVerifier, Prover};
+use crate::auth::{Caller, CallerVerifier, Prover, VerifyError};
 use crate::consumer::Consumer;
 use crate::consumer_transfer::TransferConsumer;
 use crate::http_client::Sender;
@@ -233,7 +233,7 @@ impl CallerVerifier for TckVerifier {
     fn verify<'a>(
         &'a self,
         authorization: Option<&'a str>,
-    ) -> BoxFuture<'a, Result<Caller, String>> {
+    ) -> BoxFuture<'a, Result<Caller, VerifyError>> {
         if self.fixed.is_some() && authorization == self.fixed.as_deref() {
             return Box::pin(async { Ok(Caller::new(TCK_PARTICIPANT)) });
         }

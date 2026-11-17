@@ -196,6 +196,24 @@ Where the tests are:
   share the trace, no trace context crosses a DSP-like call, and no
   secret or `Authorization` value appears in any export.
   `cargo test -p portitor-runtime --test telemetry_export`.
+- **Request size limits** (R-18): `crates/portitor-runtime/src/request_size.rs`
+  tests the settings and their bounds, and the lower of the port's and
+  the route's limit. `tests/request_size.rs` in the connector and the
+  identity, and `request_bodies_over_the_limits_get_413` in the issuer's
+  `tests/issuer.rs`, send each limited route a body at its limit and one
+  byte over, with and without `Content-Length`.
+- **Status list cache** (ADR 0016, amended): the unit tests in
+  `crates/portitor-connector/src/auth/dcp/status_list_cache.rs`, and the
+  verifier tests in `src/auth/dcp/tests.rs` (at 0 and 300 seconds, a
+  list that ends sooner, a failed fetch, a revocation seen once the list
+  is stale). `cargo test -p portitor-connector --lib auth::dcp`.
+- **Retired keys** (TD-05): `crates/portitor-identity/tests/key_rotation.rs`,
+  and `a_key_change_with_the_old_key_retired_leaves_no_gap` in the
+  issuer's `tests/issuer.rs`: what the old key signed verifies while it
+  is listed, and stops once it is removed.
+- **Outbox retries** (ADR 0007, amended): `src/outbox.rs` in the
+  connector checks which failures are tried again and that any other
+  answer ends the tries. `cargo test -p portitor-connector --lib outbox`.
 
 Rules for new tests:
 
@@ -446,7 +464,8 @@ EDC v1.0.0-RC7 sources):
 - **Status lists.** EDC needs an `id` on every `credentialStatus`, and
   reads status lists again after one second here
   (`edc.iam.credential.revocation.cache.validity`), so the revocation
-  check sees a new list at once.
+  check sees a new list at once. Portitor's connector fetches them on
+  every check here (`PORTITOR_STATUS_LIST_CACHE_SECONDS=0`).
 - **Data plane.** EDC 1.0 has no data plane of its own; the test's is
   built with the Eclipse Data Plane SDK 1.2.1 (`runtimes/dataplane`), and
   serves one file. Control plane and data plane register with each other
@@ -620,15 +639,32 @@ cargo +nightly fuzz list
 cargo +nightly fuzz run dsp_negotiation -- -max_total_time=60
 ```
 
+Some targets link the bundled SQLite (through `portitor-connector` and
+`portitor-runtime`). Build them with Clang, as ClusterFuzzLite does: with
+GCC as `cc`, AddressSanitizer stops them at start with an
+`odr-violation` in `sqlite3.c`.
+
+```sh
+CC=clang CXX=clang++ cargo +nightly fuzz build -O --debug-assertions
+```
+
 Targets (`fuzz/fuzz_targets`): `dsp_messages`, `dsp_negotiation`, `dsp_transfer`,
 `odrl_policy`, `dcp_token_parse`, `dcp_token_validate`, `dcp_messages`,
 `dcp_status_list`, `dcp_credentials`, `dcp_access_token`, `dcp_did_document`,
-`bundle_manifest` (the bundle manifest and its signature), `shacl_load`
+`dcp_x509` (X.509 chains, PEM and DER), `bundle_manifest` (`latest.json`,
+the bundle manifest and its signature), `bundle_rules` (the bundle's
+files and the message guard, as the connector reads them), `shacl_load`
 (Turtle shapes loaded by `portitor-shacl`), `shacl_jsonld` (JSON-LD to
-RDF with local contexts) and `gaiax_compliance` (the RFC 8785 JCS form and
+RDF with local contexts), `shacl_datatypes` (lexical forms for
+`sh:datatype`), `harvest_datasets` (the harvested datasets file),
+`dps_messages` (Data Plane Signaling messages and states), `time_parse`
+(`xsd:date` and `xsd:dateTime`), `http_inputs` (`Authorization`
+headers and URLs other participants choose) and `gaiax_compliance` (the RFC 8785 JCS form and
 `digestSRI` of any JSON, the Gaia-X compliance credential's list and the
-answer check; the JCS form must not change when applied again). A new parser of untrusted input
-gets a target. In CI, ClusterFuzzLite fuzzes every pull request briefly
+answer check; the JCS form must not change when applied again). Every
+parser of input from outside the process gets a target; the list of
+parsers and targets is in
+[SECURITY-ASSURANCE](SECURITY-ASSURANCE.md#parsers-and-fuzz-targets). In CI, ClusterFuzzLite fuzzes every pull request briefly
 (`cflite_pr.yml`) and runs longer each week (`cflite_batch.yml`). A crash
 is a bug: add the input that caused it as a regression test.
 

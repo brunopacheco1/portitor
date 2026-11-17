@@ -71,6 +71,12 @@ pub enum CredentialError {
 }
 ```
 
+The connector's DCP verifier uses this to sort its failures
+(`portitor-connector/src/auth.rs`, `VerifyError`): `?` on a text error
+gives `VerifyError::Rejected` (HTTP 401), and `?` on a failed DID
+resolution gives `Unavailable` (HTTP 503) when the server did not
+answer. Other fetches say which one they are with `fetch_failed`.
+
 ### A function name in `map_err`
 
 ```rust
@@ -174,6 +180,15 @@ while let Some(row) = rows.next()? {
 another row" (`portitor-identity/src/store.rs`). `JtiCache` uses it with a
 let chain to drop expired token ids from the front of a sorted set.
 
+```rust
+let Ok(response) = app.clone().oneshot(request).await;
+```
+
+A `let` with a pattern and no `else`: allowed only when the pattern
+always fits. An axum router never fails, so its error type,
+`Infallible`, has no values, and `Ok` is the only case
+(`portitor-runtime/src/request_size.rs`, `testing`).
+
 ## Building values
 
 ```rust
@@ -260,6 +275,19 @@ transaction, after it has picked the positions and before it writes
 anything, so a position is used only if the credentials are written
 (`portitor-issuer/src/store.rs`). `dyn` because the store is a port: it
 takes any such function, chosen while the program runs.
+
+```rust
+type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
+
+clock: Arc::new(now_secs),
+```
+
+A function kept in a field: `Clock` is "a function that returns the
+current time in seconds". The DCP verifier reads the time through it
+(`portitor-connector/src/auth/dcp.rs`). It is `now_secs` in the
+program; a test puts in a closure that returns a later time, to move
+time forward without waiting. `Send + Sync` let it be used from several
+requests at once.
 
 ```rust
 fn named<T>(what: &str, text: &str, from_name: fn(&str) -> Option<T>) -> Result<T, StoreError>
@@ -854,6 +882,13 @@ from the form body. Normally a body that cannot be read is refused by
 axum itself, with its own answer. Taking `Result<Form<...>, ...>`
 instead lets the handler see the failure and answer in the format the
 API needs (here the STS error list, `portitor-identity/src/sts.rs`).
+
+A *layer* wraps routes with code that runs before the handler (a
+middleware, written with `axum::middleware::from_fn_with_state`).
+`router.layer(...)` wraps every route of a router;
+`post(handler).layer(...)` wraps one route. Both wrap, so both run:
+`small_message(post(negotiation::event))` in the connector is behind the
+port's size limit and its own (`portitor-runtime/src/request_size.rs`).
 
 ## Small things
 

@@ -98,7 +98,8 @@ steps 3 and 5, including revocation.
 - Each DSP request costs one DID resolution, one token from our STS and
   one presentation query. DID documents are cached for a short time
   (default 5 minutes). Presentations are not cached in 0.5: revocation
-  must take effect at once. Measure before adding more caching.
+  must take effect at once. Measure before adding more caching. Status
+  lists are cached from 0.11 (amendment below).
 
 ### Security
 
@@ -120,6 +121,52 @@ The decision stands; one detail changed while it was built:
   participant id `TCK_PARTICIPANT` (the TCK's
   `DspConstants.TCK_PARTICIPANT_ID`), not to a test DID: that id is
   what the TCK's own messages and agreements use.
+
+### Amended in 0.11: status lists are cached (2026-11-17)
+
+The maintainer decided to amend this ADR, not to write a new one
+(ROADMAP 0.11, "Decisions on the 0.11 plan", 2026-11-17). It changes
+"Cost and caching" above for status lists only:
+
+- The verifier reuses a status list credential for
+  `PORTITOR_STATUS_LIST_CACHE_SECONDS` (default 300, at most 3600; `0`
+  fetches it on every check), keyed by its URL, in memory.
+- Only a list that was fetched and verified (signed by the credential's
+  issuer, valid now) is kept. A failed fetch or check is never kept.
+- A list is never kept past its own end (`validUntil`, or the JWT's
+  `exp`).
+- The cost: a revocation takes up to that long to be seen (DEPLOYING,
+  "Status list cache"). Eclipse EDC 1.0.0-RC7 caches status lists for 15
+  minutes by default (`edc.iam.credential.revocation.cache.validity`).
+- Presentations and tokens are still not cached: each DSP request still
+  costs one DID resolution (cached as before), one STS token and one
+  presentation query. Whether to cache them is decided after measuring
+  ([TD-07](../RISKS_AND_TECHNICAL_DEBTS.md#td-07)).
+- The demos, the EDC interop test and the TCK runs set `0`, so their
+  revocation steps see a revocation at once.
+
+### Amended in 0.11: a check that could not finish answers 503 (2026-11-17)
+
+The 0.11 engineering review found that every failed check answered 401,
+also when a service the check needs was down. From 0.11 a partner's
+outbox takes a 401 as final (ADR 0007, amended in 0.11), so a short
+outage at the partner's issuer would end a negotiation. The review
+recommended this change, and the maintainer chose it on 2026-11-17
+over two other options (retry a 401 in the outbox, or keep 401 final).
+It changes "Which requests need a token" above:
+
+- The check answers HTTP 503 with a problem body, and no reason, when it
+  could not finish: a fetch it needs got no answer (connection failed,
+  timeout), or the answer 408, 429 or 5xx. The fetches are the caller's
+  DID document and Credential Service, the issuer's DID document and
+  status lists, and our own STS. A check that takes longer than its
+  deadline (20 s) answers 503 too.
+- Every other failure still answers 401: no token or a bad one, a
+  replayed token, wrong audience, an untrusted issuer, a revoked or
+  invalid credential, and also a 404 or an invalid document from the
+  caller's or the issuer's server. Those do not change when sent again.
+- The log line for a 503 is `DSP request not checked: a service the
+  check needs is unavailable; answered 503` (WARN), with the reason.
 
 ## Consequences
 

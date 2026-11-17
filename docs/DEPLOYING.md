@@ -116,6 +116,8 @@ All configuration is by environment variable. The full table is in the
 | `PORTITOR_BIND` | leave the default, `0.0.0.0:8080` |
 | `PORTITOR_MANAGEMENT_API_KEY_FILE` | path of the mounted key file, or unset (management API off; the management port then serves only the [health checks](#health-and-logs)). The value is trimmed; an empty value counts as unset |
 | `PORTITOR_MANAGEMENT_BIND` | `0.0.0.0:8081` in a container (publish it only on an internal interface); the default `127.0.0.1:8081` is unreachable from outside a container. The port is always bound: it serves the [health checks](#health-and-logs), with or without the key |
+| `PORTITOR_MAX_REQUEST_BYTES` | leave the default, `2097152` (2 MiB): the largest request body the public port takes; a larger one gets HTTP 413. Some routes have a lower fixed limit ([section 5](#5-security)). A value that is not a whole number from `1` to `67108864` (64 MiB) stops the start |
+| `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | leave the default, `2097152` (2 MiB): the same for the management port |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | **unset** (never `true` in production) |
 | `PORTITOR_DATA_TOKEN_SECONDS` | leave the default, `3600`, unless consumers need longer to fetch; at most `31536000` (one year) |
 | `PORTITOR_STS_URL` | **required**: your identity's STS token endpoint, `<identity base URL>/sts/token` |
@@ -126,8 +128,32 @@ All configuration is by environment variable. The full table is in the
 | `PORTITOR_DCP_SCOPES` | leave the default, `org.eclipse.dspace.dcp.vc.type:MembershipCredential` (comma-separated). Each must be a DCP scope (`org.eclipse.dspace.dcp.vc.type:<Type>[:access]` or `org.eclipse.dspace.dcp.vc.id:<id>`); the type `VerifiableCredential` is refused, as it would let a partner read every credential. The connector does not start otherwise |
 | `PORTITOR_POLICY_CREDENTIALS` | unset, unless your offers constrain credential claims: the credential types they use, comma-separated, each `Type` or `Type=<scope>` (see [Credential constraints](#credential-constraints)) |
 | `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` | unset, unless your offers require Gaia-X compliance: comma-separated `did:web` DIDs of the compliance services you trust (see [Gaia-X compliance](#gaia-x-compliance)) |
+| `PORTITOR_STATUS_LIST_CACHE_SECONDS` | leave the default, `300` (5 minutes): how long a status list credential is reused; `0` fetches it on every check. At most `3600` (one hour); a larger value, or one that is not a whole number, stops the start. See [Status list cache](#status-list-cache) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (no traces or metrics), or your OTLP receiver's base URL; see [Traces and metrics](#traces-and-metrics) for this and the other `OTEL_*` variables |
 | `RUST_LOG` | `info` (default); `debug` only while diagnosing |
+
+### Status list cache
+
+The connector checks each partner's credentials against the issuer's
+status list on every DSP request. It reuses a status list credential it
+fetched for `PORTITOR_STATUS_LIST_CACHE_SECONDS` (default 300 seconds),
+by the list's URL, in memory.
+
+- **The trade-off.** A revocation or suspension takes up to that long to
+  be seen: a partner whose credential was just revoked is still admitted
+  until the cached list is fetched again. With `0` it is seen on the
+  next request, at the cost of one fetch per credential status on every
+  request. Eclipse EDC 1.0.0-RC7 reuses status lists for 15 minutes by
+  default (`edc.iam.credential.revocation.cache.validity`).
+- Only a list that was fetched and verified (signed by the credential's
+  issuer, valid now) is reused. A failed fetch or check is not: it is
+  tried again on the next request.
+- A list is never reused past its own end (`validUntil`, or the JWT's
+  `exp`), even if that comes before the configured time.
+- The cache is per process: a restart empties it. Presentations and
+  tokens are not cached; they are checked on every request (ADR 0016).
+- The Compose demo, `scripts/demo.sh`, the EDC interop test and the DCP
+  TCK run set `0`, so their revocation steps see a revocation at once.
 
 ### Credential constraints
 
@@ -498,6 +524,7 @@ participant.
 |---|---|---|
 | `PORTITOR_PARTICIPANT_ID` | required | your `did:web` DID |
 | `PORTITOR_IDENTITY_KEY_FILE` | required | path of the mounted PEM key |
+| `PORTITOR_IDENTITY_RETIRED_KEY_FILES` | unset (no retired key) | only during a key change: comma-separated paths of the old **public** keys (`-----BEGIN PUBLIC KEY-----`), listed in the DID document so that what they signed keeps verifying; they never sign. The start fails for a private key, a key that is not P-256, the current key, or a key given twice ([Rotating a key](#rotating-a-key)) |
 | `PORTITOR_CREDENTIAL_SERVICE_URL` | required | public `https://` base URL of the credential service, written into the DID document; its path is where the component serves it (for example `https://identity.example.com/cs` serves `/cs/presentations/query`, `/cs/credentials`, `/cs/offers`) |
 | `PORTITOR_STS_CLIENT_SECRET_FILE` | required | path of the mounted STS secret (at least 32 characters) |
 | `PORTITOR_STS_CLIENT_ID` | the participant DID | leave the default, or the client id your connector sends |
@@ -506,6 +533,8 @@ participant.
 | `PORTITOR_DB_FILE` | `/data/portitor-identity.db` | leave the default |
 | `PORTITOR_MANAGEMENT_API_KEY_FILE` | unset (management API off; the port serves only the health checks; an empty value counts as unset) | path of the mounted key file |
 | `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8091` | `0.0.0.0:8091` in a container, published only on an internal interface. Always bound, for the health checks |
+| `PORTITOR_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | leave the default; the largest request body the public port takes (HTTP 413 above it; `POST /sts/token` has a lower fixed limit, [section 5](#5-security)). From `1` to `67108864` (64 MiB), or the start stops |
+| `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | leave the default; the same for the management port |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (no traces or metrics) | your OTLP receiver's base URL, if you collect them ([Traces and metrics](#traces-and-metrics)) |
 | `PORTITOR_SCOPE_TYPE_ALIASES` | `org.eclipse.edc.vc.type` | comma-separated scope aliases that mean "credentials of this type", besides DCP's `org.eclipse.dspace.dcp.vc.type` |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | unset | **unset** (`true` allows plain-HTTP DIDs and URLs, tests only) |
@@ -810,14 +839,16 @@ registration number credentials of the last good run are public at
 so anyone can check the digests in the compliance credential.
 
 Network: outbound to the compliance service (`https://`); it calls back
-your DID document, the certificate chain and the notary's DID. A key
-change breaks the Gaia-X credentials too: run again after one.
+your DID document, the certificate chain and the notary's DID. After
+a key change, run again ([Rotating a key](#rotating-a-key)): the chain
+is published for the current key only.
 
 ### Logs and operation
 
 | Log message (level) | Meaning |
 |---|---|
 | `portitor-identity listening` (INFO) | Started; shows the DID, the key id and the database |
+| `retired key listed in the DID document; it does not sign` (INFO, at start) | One line per key in `PORTITOR_IDENTITY_RETIRED_KEY_FILES`; shows its key id |
 | `management port listening` (INFO, at start) | The management port's address (`bind`); always bound, for the health checks |
 | `telemetry: exporting` (INFO, at start) | Traces and metrics are exported ([Traces and metrics](#traces-and-metrics)) |
 | `STS token issued` (INFO) | Your connector got a token for the named audience |
@@ -840,13 +871,8 @@ Backup, restore, upgrade and rollback work as for the connector, with
 `/data/portitor-identity.db*`. Used token ids (`jti`) are kept in memory
 until their token expires (ADR 0016), so one replica per database file.
 
-**Key rotation** is manual (0.6): there is one key at a time, and its
-id is its thumbprint, so a new key file gives a new key id. Tokens and
-presentations signed with the old key stop verifying once verifiers
-reload the DID document (they cache it, Portitor for 5 minutes). Change
-the key when the connector is idle, and ask issuers to reissue
-credentials only if they bound them to the key (DCP binds them to the
-DID, so usually not).
+**Key rotation:** see [Rotating a key](#rotating-a-key). The key id
+is the key's thumbprint, so a new key file gives a new key id.
 
 ## 5. Security
 
@@ -856,7 +882,9 @@ DID, so usually not).
   credential service for its presentations, and accepts the caller only
   with a valid `MembershipCredential` from a DID in
   `PORTITOR_TRUSTED_ISSUERS` whose subject is the caller, not revoked or
-  suspended (the status list must be signed by the same issuer). One
+  suspended (the status list must be signed by the same issuer; a
+  verified list is reused for `PORTITOR_STATUS_LIST_CACHE_SECONDS`, see
+  [Status list cache](#status-list-cache)). One
   credential from a trusted issuer that fails its checks (revoked,
   expired, bad signature, status list not readable, about someone else)
   makes its presentation invalid and refuses the caller, even next to a
@@ -865,7 +893,9 @@ DID, so usually not).
   credential once its reissued one arrives (section 4). Credentials from
   other issuers are skipped. When refused it
   answers HTTP 401 with a DSP error that says only "unauthorized"; the
-  reason is in the log. Each negotiation and transfer is bound to the DID
+  reason is in the log. When the check cannot finish because a server
+  it fetches from does not answer, or answers 408, 429 or 5xx, it
+  answers HTTP 503 instead, so the partner tries again later. Each negotiation and transfer is bound to the DID
   that started it: another caller is told it does not exist. As
   consumer, an agreement must name your participant id as `assignee`.
   Only `/.well-known/dspace-version`, `/health` and the data plane are
@@ -879,6 +909,28 @@ DID, so usually not).
   after 20 s. On the public ports each request gets 60 s and at most 256
   are worked on at once; the others wait, and a request over time gets
   HTTP 503 (log `request took too long or waited too long`, WARN).
+- **Request size limits (R-18).** Each port takes request bodies up to
+  its setting, `PORTITOR_MAX_REQUEST_BYTES` (public port) and
+  `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` (management port), 2 MiB by
+  default. These routes, whose messages are small by specification, have
+  a fixed limit of 64 KiB, or the port's limit when that is lower:
+  - connector: `POST /dsp/2025-1/catalog/request`; `POST
+    /dsp/2025-1/negotiations/{providerPid}/events`,
+    `/agreement/verification` and `/termination`; `POST
+    /dsp/2025-1/transfers/{providerPid}/suspension`, `/completion` and
+    `/termination`; and the same messages on the consumer callbacks
+    (`/dsp/2025-1/callback/negotiations/{consumerPid}/events` and
+    `/termination`, `/dsp/2025-1/callback/transfers/{consumerPid}/suspension`,
+    `/completion` and `/termination`);
+  - identity: `POST /sts/token`;
+  - issuer: `POST <issuer service>/credentials`.
+
+  A larger body gets HTTP 413 with a problem body (log `request body too
+  large`, INFO). A request that declares its length (`Content-Length`)
+  is refused before its body is read; a body without a declared length
+  is read by the handler, after the DSP caller check, and refused once
+  it goes over the limit. Data plane answers are streamed and have no
+  size limit.
 - **Trusted issuers.** Whoever controls a DID in
   `PORTITOR_TRUSTED_ISSUERS` can admit any participant. List only your
   dataspace's issuers.
@@ -1006,17 +1058,18 @@ DID, so usually not).
 
 | Log message (level) | Meaning | What to do |
 |---|---|---|
-| `counter-party not reachable; terminating` (WARN) | A message to a partner failed after 4 tries (0.5 s, 1 s, 2 s apart) and the partner's state does not show it arrived; the negotiation or transfer is terminated | Check the partner's address, DNS, TLS trust and your egress rules |
+| `counter-party not reachable; terminating` (WARN) | A message to a partner failed and the partner's state does not show it arrived; the negotiation or transfer is terminated. The message is tried up to 4 times (0.5 s, 1 s, 2 s apart) when no answer came, or the answer was 408, 429 or 5xx; any other answer (400, 404, 409, ...) is final after one try, and `error` shows it | No answer: check the partner's address, DNS, TLS trust and your egress rules. An HTTP status: the partner refused the message; its logs say why |
 | `message breaks the dataspace's message rules; not sent, terminating` (WARN) | With bundle message shapes: our own message failed them (`error` lists the SHACL reasons), so it was not sent and the negotiation or transfer is terminated; `..., process not started` for a consumer's first request, `termination breaks ...; not sent` for a termination | Check the offer or policy against the authority's rules |
 | `outbound DSP message breaks the dataspace's message rules; not sent` (WARN) | The same breach, logged by the check itself with `message_type` and `reasons` | As above |
 | `inbound DSP message breaks the dataspace's message rules; answered 400` (INFO) | A partner's negotiation or transfer message failed the bundle's message shapes; it got HTTP 400 and nothing changed | Nothing, unless the partner asks |
 | `message had arrived before` (INFO) | A send failed, but the partner's state shows it had received the message (a lost answer, or a resend after a restart); the negotiation goes on | Nothing |
 | `sending pending negotiation messages again` (INFO, at start) | Messages saved but not acknowledged before the last stop are being sent | Nothing |
-| `counter-party not reachable; process not started` (WARN) | The first request of a negotiation or transfer we started as consumer failed after 4 tries; it ends without a message, as the provider never knew it | Same as above |
+| `counter-party not reachable; process not started` (WARN) | The first request of a negotiation or transfer we started as consumer failed (tried as above); it ends without a message, as the provider never knew it | Same as above |
 | `termination not acknowledged` (WARN) | The partner did not take a termination; DSP allows this, the negotiation is terminated anyway | Nothing, unless it repeats for one partner |
 | `no CA certificates: https calls will fail` (WARN, at start) | The CA bundle was not found (for example `SSL_CERT_DIR` points to an empty folder) | Fix the mount or the variable |
 | `negotiation store failed` (ERROR) | The SQLite file could not be read or written; partners get HTTP 500 | Check disk space and the `/data` volume |
 | `DSP request refused: caller not authenticated` (WARN) | A DSP request got HTTP 401; `reason` says why (token, presentation, credential or status list) | If a partner should be admitted: check its credential, its issuer against `PORTITOR_TRUSTED_ISSUERS`, and clock skew (60 s allowed) |
+| `DSP request not checked: a service the check needs is unavailable; answered 503` (WARN) | A server the check fetches from (the partner's DID document or Credential Service, its issuer's DID document or status list, your STS) did not answer, or answered 408, 429 or 5xx; `reason` names it. The partner tries again | If it repeats: check your STS, then ask the partner about its services |
 | `no token: ...` in a send failure (WARN) | The STS did not give a token for an outgoing DSP request | Check the identity component, `PORTITOR_STS_URL` and the shared secret |
 | `own identity checked: DID document and STS agree` (INFO, at start) | The connector's DID document resolves and the STS signs for it | Nothing |
 | `portitor-connector stopped` (ERROR) | The process could not start or stopped with an error; the message says why | Fix the cause; the container restarts |
@@ -1206,6 +1259,52 @@ The database is `/data/portitor.db` plus, while the connector runs,
 
 Negotiations and transfers that were in progress at backup time continue
 from their saved state.
+
+### Rotating a key
+
+The identity and the issuer each sign with one P-256 key. A new key
+gets a new key id (its thumbprint). To change it without a gap, list
+the old **public** key as retired for a while: what the old key signed
+keeps verifying, and only the new key signs. EDC IdentityHub rotates
+the same way: the old key stays listed until it is revoked
+([EDC decision record 2024-09-02](https://github.com/eclipse-edc/IdentityHub/blob/main/docs/developer/decision-records/2024-09-02-resource-operations/README.md)).
+
+1. Make the new key, as at the first deployment:
+   `openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out new-key.pem`.
+2. Write the old public key to a file:
+   `openssl pkey -in old-key.pem -pubout -out old-key.pub.pem`.
+3. Mount `new-key.pem` as the key file and `old-key.pub.pem` read-only,
+   and set `PORTITOR_IDENTITY_RETIRED_KEY_FILES` (or
+   `PORTITOR_ISSUER_RETIRED_KEY_FILES`) to its path. With Gaia-X, also
+   mount a certificate chain for the new key: the identity does not
+   start with a chain for another key. Restart. The start log shows the
+   new key id and one `retired key listed` line.
+4. Destroy the old private key at once, with its backups. It is no
+   longer needed: a retired key never signs, and the start fails if a
+   retired file holds a private key.
+5. Wait until everything the old key signed has expired:
+   - identity: tokens and presentations (5 minutes), access tokens
+     given to issuers with a credential request (30 days, or until the
+     request is delivered). With Gaia-X, start a run at once
+     (`POST /v1/gaiax/compliance`): Gaia-X services want the chain of
+     the signing key, and the chain is published for the current key
+     only. When the run succeeds, the Gaia-X credentials of the old key
+     are replaced;
+   - issuer: every credential it issued (their `validityDays`). Status
+     lists are signed again with the new key at start. To end sooner,
+     reissue the credentials with the new key.
+6. Remove the file from the setting and restart. The old key id leaves
+   the DID document; what the old key signed no longer verifies.
+
+Verifiers cache DID documents (Portitor for 5 minutes), so a new key id
+may be refused for that long after step 3 by a verifier that has not
+seen the new document. Do step 3 when the component is quiet.
+
+**A leaked or lost key.** Never list a leaked key as retired: anyone
+with it could sign in your name while it is listed. Change the key
+without a retired list; what the old key signed stops verifying, and
+the issuer must reissue every credential. A lost issuer key (not
+leaked) can be listed as retired, since only its public key is needed.
 
 ### Upgrade and rollback
 
@@ -1400,10 +1499,13 @@ DID.
   Mount it read-only. It signs every credential and status list of the
   dataspace: it is the dataspace's root of trust.
 - [ ] **Key backup.** Keep an encrypted copy offline, apart from the
-  database backups, with access for at least two people. Without the key
-  the issuer can neither issue nor revoke, so a lost key means a new key
-  and new credentials for every participant. A leaked key lets anyone
-  issue credentials in the dataspace's name: replace it at once.
+  database backups, with access for at least two people. Keep its public
+  key too (`openssl pkey -in issuer-key.pem -pubout`). Without the key
+  the issuer can neither issue nor revoke, so a lost key means a new key;
+  list the old public key as retired and the issued credentials keep
+  verifying ([Rotating a key](#rotating-a-key)). A leaked key lets anyone
+  issue credentials in the dataspace's name: replace it at once, without
+  listing it, and reissue every credential.
 - [ ] **Credential definitions.** A JSON file listing what the issuer can
   issue (ADR 0018, "Credential definitions"); the issuer checks it at
   start and refuses to start if it is wrong.
@@ -1423,11 +1525,14 @@ DID.
 | `PORTITOR_PARTICIPANT_ID` | required | the issuer's `did:web` DID; its document is served at the path the DID gives |
 | `PORTITOR_ISSUER_SERVICE_URL` | required | public base URL of the issuer service, for example `https://issuer.example.com/issuer`; written into the DID document (`IssuerService`). The status lists are served under it (`/status-lists/vc11`, `/status-lists/vc20`) and every credential points there, so **never change it** once credentials are issued |
 | `PORTITOR_ISSUER_KEY_FILE` | required | path of the mounted PEM key |
+| `PORTITOR_ISSUER_RETIRED_KEY_FILES` | unset (no retired key) | only during a key change: comma-separated paths of the old **public** keys, as for the identity ([Rotating a key](#rotating-a-key)). The start fails for a private key, a key that is not P-256, the current key, a key given twice, or the bundle key |
 | `PORTITOR_ISSUER_CREDENTIALS_FILE` | required | path of the mounted credential definitions file |
 | `PORTITOR_BIND` | `0.0.0.0:8070` | keep |
 | `PORTITOR_DB_FILE` | `/data/portitor-issuer.db` | keep the image default |
 | `PORTITOR_MANAGEMENT_API_KEY_FILE` | unset (management API off; the port serves only the health checks; an empty value counts as unset) | path of the mounted key file |
 | `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8071` | `0.0.0.0:8071` in a container, published only on an internal interface. Always bound, for the health checks |
+| `PORTITOR_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | keep; the largest request body the public port takes (HTTP 413 above it; credential requests have a lower fixed limit, [section 5](#5-security)). From `1` to `67108864` (64 MiB), or the start stops |
+| `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | keep; the same for the management port |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (no traces or metrics) | your OTLP receiver's base URL, if you collect them ([Traces and metrics](#traces-and-metrics)) |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | unset | **unset**; `true` only for local tests with plain-HTTP DIDs |
 | `PORTITOR_ISSUER_BUNDLE_KEY_FILE` | unset | with a bundle: the **public** bundle key as a JWK (as `bundle build` prints it), so the private key stays offline; a PKCS#8 PEM is accepted too. Listed in the DID document as `<did>#bundle-key` under `assertionMethod`. The start fails if it is the credential key |
@@ -1545,6 +1650,7 @@ and `curl -sf https://issuer.example.com/issuer/metadata`.
 | Log message (level) | Meaning |
 |---|---|
 | `portitor-issuer listening` (INFO, at start) | Started; shows the DID, key id, issuer service URL and database |
+| `retired key listed in the DID document; it does not sign` (INFO, at start) | One line per key in `PORTITOR_ISSUER_RETIRED_KEY_FILES`; shows its key id |
 | `management port listening` (INFO, at start) | The management port's address (`bind`); always bound, for the health checks |
 | `telemetry: exporting` (INFO, at start) | Traces and metrics are exported ([Traces and metrics](#traces-and-metrics)) |
 | `credential offer sent` (INFO) / `credential offer not taken` (WARN) | An offer (`POST /v1/offers`) reached the holder, or not (the call answers 502) |
@@ -1584,6 +1690,9 @@ known risk and technical debt, with its status and target release):
   schemas (`credentialSchema`) are not checked.
 - STS tokens are not cached: each DSP request costs one STS call, and each
   incoming one a presentation query.
+- Status lists are reused for up to `PORTITOR_STATUS_LIST_CACHE_SECONDS`
+  (default 300 seconds), so a revocation takes up to that long to be
+  seen ([Status list cache](#status-list-cache)).
 - One replica per database file; no PostgreSQL adapter yet.
 - Internal callback addresses are not blocked.
 - Policies: only `dateTime` and credential claims are understood;

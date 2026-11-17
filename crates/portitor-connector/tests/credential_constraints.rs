@@ -26,7 +26,7 @@ use std::time::Duration;
 
 use portitor_connector::auth::dcp::DcpVerifier;
 use portitor_connector::auth::sts::{SecureTokenService, TokenRequest};
-use portitor_connector::auth::{AuthSettings, Caller, CallerVerifier, Prover};
+use portitor_connector::auth::{AuthSettings, Caller, CallerVerifier, Prover, VerifyError};
 use portitor_connector::harvest::{CheckKind, FixedSource};
 use portitor_connector::http_client::Sender;
 use portitor_connector::ports::Retry;
@@ -106,7 +106,7 @@ impl CallerVerifier for FakeCredentialService {
     fn verify<'a>(
         &'a self,
         authorization: Option<&'a str>,
-    ) -> BoxFuture<'a, Result<Caller, String>> {
+    ) -> BoxFuture<'a, Result<Caller, VerifyError>> {
         Box::pin(async move {
             let token = authorization
                 .and_then(|value| value.strip_prefix("Bearer "))
@@ -115,7 +115,7 @@ impl CallerVerifier for FakeCredentialService {
             let asked = vec![MEMBERSHIP_SCOPE.to_owned()];
             let credentials = present(&self.wallets, did, &asked, granted);
             if credentials.is_empty() {
-                return Err(format!("no {MEMBERSHIP}"));
+                return Err(VerifyError::Rejected(format!("no {MEMBERSHIP}")));
             }
             Ok(Caller::with_credentials(did, credentials).with_access_token(granted))
         })
@@ -818,6 +818,7 @@ fn verified_connectors(network: &Arc<Network>, dataspace: &LocalDataspace) -> Ne
         gaiax_compliance_issuers: Vec::new(),
         scopes: vec![MEMBERSHIP_SCOPE.to_owned()],
         allow_http: true,
+        status_list_cache_seconds: 0,
     };
     let mut provider_ports = Ports::new(Arc::clone(network) as Arc<dyn Sender>);
     provider_ports.verifier = Arc::new(DcpVerifier::new(&settings, Arc::new(ProviderSts)).unwrap());
