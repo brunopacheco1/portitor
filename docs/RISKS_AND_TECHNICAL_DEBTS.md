@@ -277,7 +277,11 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
      (https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/277).
   10. EDC IdentityHub: the default scope transformer needs the `:read`
       suffix (ADR 0019;
-      https://github.com/eclipse-edc/IdentityHub/issues/1278).
+      https://github.com/eclipse-edc/IdentityHub/issues/1278). Answered
+      2026-11-17, won't fix: DCP leaves the discriminator's shape to each
+      implementation, `type:operation` is EDC's chosen default, and the
+      transformer can be replaced. Portitor keeps sending `:read` and
+      accepts both forms; the grammar question stays with DCP #277.
   11. DCP TCK v1.2.1: test credentials whose `jti` differs from the
       credential `id`, 2 KB status lists, and BitstringStatusList on a
       VC 1.1 credential (ADR 0015;
