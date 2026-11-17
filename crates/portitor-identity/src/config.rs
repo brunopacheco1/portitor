@@ -8,7 +8,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use portitor_runtime::settings::comma_list;
+use portitor_runtime::settings::{comma_list, path_list};
 
 /// The default scope aliases that mean "credentials of this type", on top
 /// of DCP's own `org.eclipse.dspace.dcp.vc.type`: EDC's (`portitor_dcp::scope`).
@@ -31,6 +31,10 @@ pub struct Config {
     pub participant_id: String,
     /// The P-256 private key, PEM (`PORTITOR_IDENTITY_KEY_FILE`).
     pub key_file: PathBuf,
+    /// Public keys that signed before a key change, one PEM file each,
+    /// listed in the DID document but never used to sign
+    /// (`PORTITOR_IDENTITY_RETIRED_KEY_FILES`, comma-separated; TD-05).
+    pub retired_key_files: Vec<PathBuf>,
     /// Where the public server listens (`PORTITOR_BIND`).
     pub bind: String,
     /// The credential service's public base URL
@@ -132,6 +136,8 @@ impl Config {
         }
         let management = ManagementConfig::from_vars(DEFAULT_MANAGEMENT_BIND, &var);
         let key_file = PathBuf::from(required("PORTITOR_IDENTITY_KEY_FILE")?);
+        let retired_key_files =
+            path_list(&text("PORTITOR_IDENTITY_RETIRED_KEY_FILES").unwrap_or_default());
         // the one STS client is the participant's own connector, so it is
         // named by the participant's DID unless set
         let sts_client_id = text("PORTITOR_STS_CLIENT_ID")
@@ -149,6 +155,7 @@ impl Config {
         Ok(Self {
             participant_id,
             key_file,
+            retired_key_files,
             bind: text("PORTITOR_BIND").unwrap_or_else(|| DEFAULT_BIND.to_owned()),
             credential_service_url,
             db_file: PathBuf::from(
@@ -277,6 +284,23 @@ mod tests {
         assert!(!config.allow_http);
         assert_eq!(config.certificate_chain_file, None);
         assert_eq!(config.gaiax, None);
+        assert!(config.retired_key_files.is_empty());
+    }
+
+    #[test]
+    fn retired_key_files_are_a_comma_separated_list() {
+        let mut vars = MINIMAL.to_vec();
+        vars.push((
+            "PORTITOR_IDENTITY_RETIRED_KEY_FILES",
+            " /run/keys/2025.pub.pem, ,/run/keys/2026.pub.pem ",
+        ));
+        assert_eq!(
+            read(&vars).unwrap().retired_key_files,
+            [
+                PathBuf::from("/run/keys/2025.pub.pem"),
+                PathBuf::from("/run/keys/2026.pub.pem")
+            ]
+        );
     }
 
     #[test]

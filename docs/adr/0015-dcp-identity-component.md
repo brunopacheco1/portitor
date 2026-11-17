@@ -159,6 +159,39 @@ The decision stands; two details changed while it was built:
   `scripts/`: it reuses the signing and status list code of
   `portitor-dcp`. It is still never built into a release image.
 
+### Amended in 0.11: retired keys (2026-11-17)
+
+Decided by the maintainer for 0.11 (ROADMAP, "Decisions on the 0.11
+plan"; [TD-05](../RISKS_AND_TECHNICAL_DEBTS.md#td-05)). It makes "add the
+new key, switch, remove the old key" above possible:
+
+- `PORTITOR_IDENTITY_RETIRED_KEY_FILES`: comma-separated paths of PEM
+  files, each holding one P-256 **public** key (`-----BEGIN PUBLIC
+  KEY-----`, as `openssl pkey -pubout` writes it). The old private key
+  can be destroyed at once.
+- Each retired key gets its own verification method, id
+  `<did>#<thumbprint>` like the current key, after the current key, in
+  the same three relationships (`authentication`, `assertionMethod`,
+  `capabilityInvocation`). So the tokens, presentations, access tokens
+  and Gaia-X credentials the old key signed keep verifying. A retired
+  key never signs.
+- The identity also accepts its own access tokens (presentation API,
+  Storage API) signed by a listed retired key, chosen by their `kid`.
+- The start fails for a file with a private key (so it is not kept), a
+  key that is not P-256, the current key, or a key given twice.
+- "Revoke" is the operator removing the file from the list and
+  restarting: then what the old key signed no longer verifies.
+- This follows EDC IdentityHub: on rotate, the new key's verification
+  method is added, the old private key is destroyed and the old public
+  key stays listed until it is revoked
+  ([decision record 2024-09-02](https://github.com/eclipse-edc/IdentityHub/blob/main/docs/developer/decision-records/2024-09-02-resource-operations/README.md)).
+- Every JWS Portitor signs carries `kid`, the full key id
+  (`SigningKey::sign_json` always writes it; the Gaia-X credentials set
+  it in their headers). A verifier needs it to pick the key once two
+  are listed: Portitor's own verifier refuses a JWS without `kid` when a
+  document lists several keys (`DidDocument::key_for`).
+- Key custody in OpenBao stays in ROADMAP 1.4.
+
 ## Consequences
 
 - The release pipeline builds, signs and attests a second image,

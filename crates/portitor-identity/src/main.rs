@@ -70,6 +70,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         compliance,
     };
     let identity = Arc::new(Identity::new(&config, key, sts_client_secret, ports)?);
+    for retired in identity.retired_kids() {
+        tracing::info!(kid = %retired, "retired key listed in the DID document; it does not sign");
+    }
     if let Some(chain) = identity.certificate_chain() {
         tokio::spawn(portitor_identity::certificate::watch(chain));
     }

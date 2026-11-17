@@ -19,6 +19,16 @@ pub fn comma_list(text: &str) -> Vec<String> {
     items
 }
 
+/// The file paths of a comma-separated setting, read as [`comma_list`].
+#[must_use]
+pub fn path_list(text: &str) -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+    for item in comma_list(text) {
+        paths.push(std::path::PathBuf::from(item));
+    }
+    paths
+}
+
 /// The path part of an `http(s)` URL, without a trailing `/`: `""` for
 /// `https://id.example/`, `"/cs"` for `https://id.example/cs/`. `None`
 /// if it is not an `http(s)` URL with a host, or has a query or fragment.
@@ -58,5 +68,12 @@ mod tests {
         assert_eq!(comma_list("a, b,,c "), ["a", "b", "c"]);
         assert!(comma_list("").is_empty());
         assert!(comma_list(" , ").is_empty());
+        assert_eq!(
+            path_list("/run/a.pem, /run/b.pem"),
+            [
+                std::path::PathBuf::from("/run/a.pem"),
+                std::path::PathBuf::from("/run/b.pem")
+            ]
+        );
     }
 }

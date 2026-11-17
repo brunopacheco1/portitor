@@ -250,6 +250,7 @@ pub fn config() -> Config {
     Config {
         participant_id: HOLDER.to_owned(),
         key_file: "unused".into(),
+        retired_key_files: Vec::new(),
         bind: "unused".to_owned(),
         credential_service_url: "https://holder.example/cs".to_owned(),
         db_file: "unused".into(),

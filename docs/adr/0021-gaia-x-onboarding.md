@@ -18,6 +18,13 @@ SPDX-License-Identifier: Apache-2.0
   the hardening release was split into 0.10 to 0.13 (maintainer,
   2026-11-15). Key custody and key rotation are now investigated in
   0.11 (ROADMAP, [TD-05](../RISKS_AND_TECHNICAL_DEBTS.md#td-05)).
+- Update (2026-11-17): from 0.11 the old public key can stay listed as a
+  retired key (ADR 0015, "Amended in 0.11: retired keys"), so the
+  self-signed Gaia-X credentials of the old key keep verifying in DCP.
+  The certificate chain (`x5u`) stays on the current key only: a
+  certificate names one key, and the identity refuses a chain for
+  another key. So a key change still needs a certificate for the new
+  key and a new compliance run (DEPLOYING, "Rotating a key").
 
 ## Context
 

@@ -153,6 +153,24 @@ index, dates; not the signed JWT), the status list bits, and the outbox.
 - Signing the ADR 0005 shape bundle is not decided here; it is decided
   with ADR 0005 in 0.7.
 
+## Amended in 0.11: retired keys (2026-11-17)
+
+As for the identity (ADR 0015, "Amended in 0.11: retired keys";
+[TD-05](../RISKS_AND_TECHNICAL_DEBTS.md#td-05)), replacing "Key rotation
+is later work" above:
+
+- `PORTITOR_ISSUER_RETIRED_KEY_FILES`: comma-separated paths of PEM
+  files, each holding one P-256 public key. Each retired key gets its
+  own verification method (`<did>#<thumbprint>`) in `assertionMethod`
+  and `capabilityInvocation`, after the current key. So the credentials
+  and status lists the old key signed keep verifying until they expire
+  or the key is removed from the list. A retired key never signs: the
+  status lists are signed again with the current key at start.
+- The start fails for a private key, a key that is not P-256, the
+  current key, a key given twice, or the bundle key.
+- The bundle key stays one key, apart from this list; its rotation is
+  under ROADMAP "Later".
+
 ## Amended during the 0.6 review (2026-11-14)
 
 The engineering review of release 0.6 found that some behaviour decided

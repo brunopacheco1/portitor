@@ -81,10 +81,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     let credential_key = key.public_jwk();
     let mut issuer = Issuer::new(&config, key, definitions, ports)?;
+    for retired in issuer.retired_keys() {
+        let kid = portitor_runtime::did_document::key_id(issuer.did(), retired);
+        tracing::info!(kid = %kid, "retired key listed in the DID document; it does not sign");
+    }
     if let Some(file) = &config.bundle_key_file {
         let bundle_key = portitor_issuer::bundles::read_public_key(file)?;
         if bundle_key == credential_key {
             return Err("PORTITOR_ISSUER_BUNDLE_KEY_FILE: the bundle key must not be the credential signing key".into());
+        }
+        if issuer.retired_keys().contains(&bundle_key) {
+            return Err("PORTITOR_ISSUER_BUNDLE_KEY_FILE: the bundle key must not be a retired credential key".into());
         }
         issuer.add_bundle_key(&bundle_key);
         tracing::info!(kid = %portitor_issuer::bundles::bundle_kid(issuer.did()), "bundle key listed in the DID document");

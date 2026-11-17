@@ -108,6 +108,7 @@ impl Authority {
         let config = Config {
             participant_id: did.clone(),
             key_file: "unused".into(),
+            retired_key_files: Vec::new(),
             credentials_file: "unused".into(),
             issuer_service_url: format!("http://127.0.0.1:{port}/issuer"),
             bind: "unused".to_owned(),

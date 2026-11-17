@@ -39,6 +39,19 @@ versions may change behaviour and configuration.
   cache"). The Compose demo, `scripts/demo.sh`, the EDC interop test
   and the DCP TCK run set `0`.
 
+- Key rotation without a verification gap (TD-05):
+  `PORTITOR_IDENTITY_RETIRED_KEY_FILES` and
+  `PORTITOR_ISSUER_RETIRED_KEY_FILES` list old **public** keys (PEM,
+  comma-separated) in the DID document, each as its own verification
+  method in the same relationships as the current key. What the old key
+  signed (tokens, presentations, access tokens, credentials, status
+  lists, Gaia-X credentials) keeps verifying until the operator removes
+  it from the list; a retired key never signs. The start fails for a
+  private key, a key that is not P-256, the current key, a key given
+  twice, or (issuer) the bundle key. DEPLOYING has a "Rotating a key"
+  runbook; ADR 0015 and ADR 0018 are amended, ADR 0021 has an update
+  note.
+
 ### Changed
 
 - The connector's outbox retries a DSP message only when no answer came,

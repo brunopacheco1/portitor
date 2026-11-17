@@ -524,6 +524,7 @@ participant.
 |---|---|---|
 | `PORTITOR_PARTICIPANT_ID` | required | your `did:web` DID |
 | `PORTITOR_IDENTITY_KEY_FILE` | required | path of the mounted PEM key |
+| `PORTITOR_IDENTITY_RETIRED_KEY_FILES` | unset (no retired key) | only during a key change: comma-separated paths of the old **public** keys (`-----BEGIN PUBLIC KEY-----`), listed in the DID document so that what they signed keeps verifying; they never sign. The start fails for a private key, a key that is not P-256, the current key, or a key given twice ([Rotating a key](#rotating-a-key)) |
 | `PORTITOR_CREDENTIAL_SERVICE_URL` | required | public `https://` base URL of the credential service, written into the DID document; its path is where the component serves it (for example `https://identity.example.com/cs` serves `/cs/presentations/query`, `/cs/credentials`, `/cs/offers`) |
 | `PORTITOR_STS_CLIENT_SECRET_FILE` | required | path of the mounted STS secret (at least 32 characters) |
 | `PORTITOR_STS_CLIENT_ID` | the participant DID | leave the default, or the client id your connector sends |
@@ -838,14 +839,16 @@ registration number credentials of the last good run are public at
 so anyone can check the digests in the compliance credential.
 
 Network: outbound to the compliance service (`https://`); it calls back
-your DID document, the certificate chain and the notary's DID. A key
-change breaks the Gaia-X credentials too: run again after one.
+your DID document, the certificate chain and the notary's DID. After
+a key change, run again ([Rotating a key](#rotating-a-key)): the chain
+is published for the current key only.
 
 ### Logs and operation
 
 | Log message (level) | Meaning |
 |---|---|
 | `portitor-identity listening` (INFO) | Started; shows the DID, the key id and the database |
+| `retired key listed in the DID document; it does not sign` (INFO, at start) | One line per key in `PORTITOR_IDENTITY_RETIRED_KEY_FILES`; shows its key id |
 | `management port listening` (INFO, at start) | The management port's address (`bind`); always bound, for the health checks |
 | `telemetry: exporting` (INFO, at start) | Traces and metrics are exported ([Traces and metrics](#traces-and-metrics)) |
 | `STS token issued` (INFO) | Your connector got a token for the named audience |
@@ -868,13 +871,8 @@ Backup, restore, upgrade and rollback work as for the connector, with
 `/data/portitor-identity.db*`. Used token ids (`jti`) are kept in memory
 until their token expires (ADR 0016), so one replica per database file.
 
-**Key rotation** is manual (0.6): there is one key at a time, and its
-id is its thumbprint, so a new key file gives a new key id. Tokens and
-presentations signed with the old key stop verifying once verifiers
-reload the DID document (they cache it, Portitor for 5 minutes). Change
-the key when the connector is idle, and ask issuers to reissue
-credentials only if they bound them to the key (DCP binds them to the
-DID, so usually not).
+**Key rotation:** see [Rotating a key](#rotating-a-key). The key id
+is the key's thumbprint, so a new key file gives a new key id.
 
 ## 5. Security
 
@@ -1258,6 +1256,52 @@ The database is `/data/portitor.db` plus, while the connector runs,
 Negotiations and transfers that were in progress at backup time continue
 from their saved state.
 
+### Rotating a key
+
+The identity and the issuer each sign with one P-256 key. A new key
+gets a new key id (its thumbprint). To change it without a gap, list
+the old **public** key as retired for a while: what the old key signed
+keeps verifying, and only the new key signs. EDC IdentityHub rotates
+the same way: the old key stays listed until it is revoked
+([EDC decision record 2024-09-02](https://github.com/eclipse-edc/IdentityHub/blob/main/docs/developer/decision-records/2024-09-02-resource-operations/README.md)).
+
+1. Make the new key, as at the first deployment:
+   `openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out new-key.pem`.
+2. Write the old public key to a file:
+   `openssl pkey -in old-key.pem -pubout -out old-key.pub.pem`.
+3. Mount `new-key.pem` as the key file and `old-key.pub.pem` read-only,
+   and set `PORTITOR_IDENTITY_RETIRED_KEY_FILES` (or
+   `PORTITOR_ISSUER_RETIRED_KEY_FILES`) to its path. With Gaia-X, also
+   mount a certificate chain for the new key: the identity does not
+   start with a chain for another key. Restart. The start log shows the
+   new key id and one `retired key listed` line.
+4. Destroy the old private key at once, with its backups. It is no
+   longer needed: a retired key never signs, and the start fails if a
+   retired file holds a private key.
+5. Wait until everything the old key signed has expired:
+   - identity: tokens and presentations (5 minutes), access tokens
+     given to issuers with a credential request (30 days, or until the
+     request is delivered). With Gaia-X, start a run at once
+     (`POST /v1/gaiax/compliance`): Gaia-X services want the chain of
+     the signing key, and the chain is published for the current key
+     only. When the run succeeds, the Gaia-X credentials of the old key
+     are replaced;
+   - issuer: every credential it issued (their `validityDays`). Status
+     lists are signed again with the new key at start. To end sooner,
+     reissue the credentials with the new key.
+6. Remove the file from the setting and restart. The old key id leaves
+   the DID document; what the old key signed no longer verifies.
+
+Verifiers cache DID documents (Portitor for 5 minutes), so a new key id
+may be refused for that long after step 3 by a verifier that has not
+seen the new document. Do step 3 when the component is quiet.
+
+**A leaked or lost key.** Never list a leaked key as retired: anyone
+with it could sign in your name while it is listed. Change the key
+without a retired list; what the old key signed stops verifying, and
+the issuer must reissue every credential. A lost issuer key (not
+leaked) can be listed as retired, since only its public key is needed.
+
 ### Upgrade and rollback
 
 1. Read the [CHANGELOG](../CHANGELOG.md) entries between your version and
@@ -1451,10 +1495,13 @@ DID.
   Mount it read-only. It signs every credential and status list of the
   dataspace: it is the dataspace's root of trust.
 - [ ] **Key backup.** Keep an encrypted copy offline, apart from the
-  database backups, with access for at least two people. Without the key
-  the issuer can neither issue nor revoke, so a lost key means a new key
-  and new credentials for every participant. A leaked key lets anyone
-  issue credentials in the dataspace's name: replace it at once.
+  database backups, with access for at least two people. Keep its public
+  key too (`openssl pkey -in issuer-key.pem -pubout`). Without the key
+  the issuer can neither issue nor revoke, so a lost key means a new key;
+  list the old public key as retired and the issued credentials keep
+  verifying ([Rotating a key](#rotating-a-key)). A leaked key lets anyone
+  issue credentials in the dataspace's name: replace it at once, without
+  listing it, and reissue every credential.
 - [ ] **Credential definitions.** A JSON file listing what the issuer can
   issue (ADR 0018, "Credential definitions"); the issuer checks it at
   start and refuses to start if it is wrong.
@@ -1474,6 +1521,7 @@ DID.
 | `PORTITOR_PARTICIPANT_ID` | required | the issuer's `did:web` DID; its document is served at the path the DID gives |
 | `PORTITOR_ISSUER_SERVICE_URL` | required | public base URL of the issuer service, for example `https://issuer.example.com/issuer`; written into the DID document (`IssuerService`). The status lists are served under it (`/status-lists/vc11`, `/status-lists/vc20`) and every credential points there, so **never change it** once credentials are issued |
 | `PORTITOR_ISSUER_KEY_FILE` | required | path of the mounted PEM key |
+| `PORTITOR_ISSUER_RETIRED_KEY_FILES` | unset (no retired key) | only during a key change: comma-separated paths of the old **public** keys, as for the identity ([Rotating a key](#rotating-a-key)). The start fails for a private key, a key that is not P-256, the current key, a key given twice, or the bundle key |
 | `PORTITOR_ISSUER_CREDENTIALS_FILE` | required | path of the mounted credential definitions file |
 | `PORTITOR_BIND` | `0.0.0.0:8070` | keep |
 | `PORTITOR_DB_FILE` | `/data/portitor-issuer.db` | keep the image default |
@@ -1598,6 +1646,7 @@ and `curl -sf https://issuer.example.com/issuer/metadata`.
 | Log message (level) | Meaning |
 |---|---|
 | `portitor-issuer listening` (INFO, at start) | Started; shows the DID, key id, issuer service URL and database |
+| `retired key listed in the DID document; it does not sign` (INFO, at start) | One line per key in `PORTITOR_ISSUER_RETIRED_KEY_FILES`; shows its key id |
 | `management port listening` (INFO, at start) | The management port's address (`bind`); always bound, for the health checks |
 | `telemetry: exporting` (INFO, at start) | Traces and metrics are exported ([Traces and metrics](#traces-and-metrics)) |
 | `credential offer sent` (INFO) / `credential offer not taken` (WARN) | An offer (`POST /v1/offers`) reached the holder, or not (the call answers 502) |
