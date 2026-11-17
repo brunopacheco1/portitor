@@ -118,6 +118,9 @@ services:
       PORTITOR_STS_URL: http://provider-identity:8090/sts/token
       PORTITOR_STS_CLIENT_SECRET_FILE: /run/secrets/provider-sts-secret
       PORTITOR_TRUSTED_ISSUERS: did:web:issuer%3A8070
+      # status lists fetched on every check, so a revocation in the demo
+      # is seen at once (docs/DEPLOYING.md, PORTITOR_STATUS_LIST_CACHE_SECONDS)
+      PORTITOR_STATUS_LIST_CACHE_SECONDS: "0"
       # where data addresses point: your app, on this machine, fetches the
       # data from there (the consumer reaches the provider as
       # http://provider:8080, the address given when negotiating)
@@ -183,6 +186,9 @@ services:
       PORTITOR_STS_URL: http://consumer-identity:8090/sts/token
       PORTITOR_STS_CLIENT_SECRET_FILE: /run/secrets/consumer-sts-secret
       PORTITOR_TRUSTED_ISSUERS: did:web:issuer%3A8070
+      # status lists fetched on every check, so a revocation in the demo
+      # is seen at once (docs/DEPLOYING.md, PORTITOR_STATUS_LIST_CACHE_SECONDS)
+      PORTITOR_STATUS_LIST_CACHE_SECONDS: "0"
       PORTITOR_PUBLIC_URL: http://consumer:8080
       PORTITOR_POLICY_CREDENTIALS: DataProcessorCredential
       PORTITOR_ALLOW_HTTP_CALLBACKS: "true"

@@ -262,6 +262,19 @@ anything, so a position is used only if the credentials are written
 takes any such function, chosen while the program runs.
 
 ```rust
+type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
+
+clock: Arc::new(now_secs),
+```
+
+A function kept in a field: `Clock` is "a function that returns the
+current time in seconds". The DCP verifier reads the time through it
+(`portitor-connector/src/auth/dcp.rs`). It is `now_secs` in the
+program; a test puts in a closure that returns a later time, to move
+time forward without waiting. `Send + Sync` let it be used from several
+requests at once.
+
+```rust
 fn named<T>(what: &str, text: &str, from_name: fn(&str) -> Option<T>) -> Result<T, StoreError>
 ```
 

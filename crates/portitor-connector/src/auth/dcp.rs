@@ -57,6 +57,10 @@
 //! through the shared HTTP client: HTTPS only unless allowed for tests,
 //! time and size limits, no redirects.
 //!
+//! Status list credentials are cached for a short time, by URL
+//! ([`status_list_cache`]; ADR 0016, amended in 0.11). Tokens and
+//! presentations are not: they are checked on every request.
+//!
 //! The caller chooses what is in its presentations, and each credential
 //! could make the verifier fetch more (the issuer's DID document, status
 //! lists). So credentials from issuers that are not trusted are skipped
@@ -86,6 +90,14 @@ use serde_json::Value;
 
 use super::sts::{SecureTokenService, TokenRequest};
 use super::{AuthSettings, Caller, CallerVerifier, with_linked_scopes};
+
+pub mod status_list_cache;
+
+use status_list_cache::StatusListCache;
+
+/// Where the verifier reads the current time, in seconds since 1970:
+/// [`now_secs`], except in tests, which move time forward.
+type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
 /// Allowed clock difference between participants, in seconds.
 const LEEWAY: u64 = 60;
@@ -134,6 +146,11 @@ pub struct DcpVerifier {
     /// Token ids already used (DCP 4.3.3, step 6). In memory: one replica
     /// per store (ADR 0016).
     used_token_ids: Mutex<JtiCache>,
+    /// Verified status list credentials, by URL
+    /// (`PORTITOR_STATUS_LIST_CACHE_SECONDS`).
+    status_lists: StatusListCache,
+    /// The current time.
+    clock: Clock,
     start_tries: u32,
     deadline: Duration,
 }
@@ -175,6 +192,8 @@ impl DcpVerifier {
             // on the prover's side (ADR 0022)
             scopes: with_linked_scopes(&settings.scopes),
             used_token_ids: Mutex::new(JtiCache::default()),
+            status_lists: StatusListCache::new(settings.status_list_cache_seconds),
+            clock: Arc::new(now_secs),
             start_tries: START_TRIES,
             deadline: DEADLINE,
         })
@@ -226,7 +245,7 @@ impl DcpVerifier {
         let token = self.sts.token(request).await?;
         // a cache of its own: this token is never presented anywhere
         let mut unused = JtiCache::default();
-        validate_self_issued(&token, doc, own, now_secs(), LEEWAY, &mut unused).map_err(|e| {
+        validate_self_issued(&token, doc, own, self.now(), LEEWAY, &mut unused).map_err(|e| {
             format!("PORTITOR_PARTICIPANT_ID is {own}, but the STS token is not signed as it: {e}")
         })?;
         Ok(())
@@ -251,6 +270,11 @@ impl DcpVerifier {
         verifier.http = verifier.http.unobserved();
         verifier.start_tries = 1;
         Ok(verifier)
+    }
+
+    /// The current time, in seconds since 1970.
+    fn now(&self) -> u64 {
+        (self.clock)()
     }
 
     async fn resolve_own_document(&self) -> Result<Arc<DidDocument>, String> {
@@ -336,7 +360,7 @@ impl DcpVerifier {
     /// Step 2: the caller's self-issued ID token.
     async fn check_token(&self, token: &str) -> Result<CheckedToken, String> {
         let unverified = unverified_claims(token).map_err(|e| format!("ID token: {e}"))?;
-        let now = now_secs();
+        let now = self.now();
         let doc = self.resolver.resolve(&unverified.iss).await?;
         let claims = self
             .validate_and_remember(token, &doc, now)
@@ -404,7 +428,7 @@ impl DcpVerifier {
         holder: &DidDocument,
         jwts: &[String],
     ) -> Result<Vec<HeldCredential>, String> {
-        let now = now_secs();
+        let now = self.now();
         let mut verified = Vec::new();
         for jwt in jwts {
             let presentation = self.check_presentation(caller, holder, jwt, now)?;
@@ -638,8 +662,9 @@ impl DcpVerifier {
         Ok(())
     }
 
-    /// One status entry: fetches the status list credential, which must be
-    /// signed by the same issuer and valid now, and looks up the bit. A
+    /// One status entry: takes the status list credential, which must be
+    /// signed by the same issuer and valid now
+    /// ([`DcpVerifier::status_list_credential`]), and looks up the bit. A
     /// list that cannot be read or checked refuses the credential.
     async fn check_status(
         &self,
@@ -649,6 +674,38 @@ impl DcpVerifier {
         now: u64,
     ) -> Result<(), String> {
         let url = &entry.status_list_credential;
+        let list_credential = self
+            .status_list_credential(credential, issuer, url, now)
+            .await?;
+        let list = status_list::list_in(&list_credential, entry)
+            .map_err(|e| format!("status list {url}: {e}"))?;
+        match status_list::check(entry, &list).map_err(|e| format!("status list {url}: {e}"))? {
+            Status::Clear => Ok(()),
+            Status::Set => Err(format!(
+                "a credential is revoked or suspended ({})",
+                entry.status_purpose
+            )),
+        }
+    }
+
+    /// The status list credential at `url` for `credential`, signed by
+    /// the same issuer (`issuer` is its DID document) and valid at `now`:
+    /// from the cache, or fetched, checked and then kept in the cache.
+    async fn status_list_credential(
+        &self,
+        credential: &Credential,
+        issuer: &DidDocument,
+        url: &str,
+        now: u64,
+    ) -> Result<Arc<Credential>, String> {
+        if let Some(cached) = self.status_lists.get(url, now) {
+            // it was checked against its own issuer when it was fetched;
+            // another issuer's credential may name the same URL
+            if cached.issuer != credential.issuer {
+                return Err(format!("status list {url} has another issuer"));
+            }
+            return Ok(cached);
+        }
         let text = self
             .http
             .get_text(url, "application/vc+jwt", MAX_STATUS_LIST)
@@ -662,15 +719,11 @@ impl DcpVerifier {
         list_credential
             .verify(issuer, now, LEEWAY)
             .map_err(|e| format!("status list {url}: {e}"))?;
-        let list = status_list::list_in(&list_credential, entry)
-            .map_err(|e| format!("status list {url}: {e}"))?;
-        match status_list::check(entry, &list).map_err(|e| format!("status list {url}: {e}"))? {
-            Status::Clear => Ok(()),
-            Status::Set => Err(format!(
-                "a credential is revoked or suspended ({})",
-                entry.status_purpose
-            )),
-        }
+        // only now, fetched and verified, may it be kept
+        let list_credential = Arc::new(list_credential);
+        self.status_lists
+            .keep(url, Arc::clone(&list_credential), now);
+        Ok(list_credential)
     }
 }
 

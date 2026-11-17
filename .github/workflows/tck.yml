@@ -224,6 +224,7 @@ jobs:
           PORTITOR_DB_FILE="$RUNNER_TEMP/connector.db" \
           PORTITOR_STS_URL=http://localhost:8090/sts/token \
           PORTITOR_STS_CLIENT_SECRET_FILE="$secrets/sts.secret" \
+          PORTITOR_STATUS_LIST_CACHE_SECONDS=0 \
             nohup target/debug/portitor-connector > portitor.log 2>&1 &
           for _ in $(seq 100); do curl -sf http://127.0.0.1:8080/health && break; sleep 0.2; done
       - name: Run TCK

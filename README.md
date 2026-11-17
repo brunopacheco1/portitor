@@ -111,6 +111,7 @@ Configuration (environment variables):
 | `PORTITOR_TRUSTED_ISSUERS` | none (**required**) | Comma-separated DIDs trusted to issue credentials: the `MembershipCredential` and those of credential constraints |
 | `PORTITOR_DCP_SCOPES` | `org.eclipse.dspace.dcp.vc.type:MembershipCredential` | Comma-separated scopes asked from callers' credential services, and granted to the counter-party in our tokens |
 | `PORTITOR_POLICY_CREDENTIALS` | none (`MembershipCredential` only) | Comma-separated credential types that offers may constrain, each `Type` (scope `org.eclipse.dspace.dcp.vc.type:<Type>:read`) or `Type=<scope>` ([ADR 0019](docs/adr/0019-credential-constraints.md)) |
+| `PORTITOR_STATUS_LIST_CACHE_SECONDS` | `300` | How long a verified status list credential is reused, in seconds; `0` fetches it on every check, at most `3600`. A revocation takes up to that long to be seen ([DEPLOYING](docs/DEPLOYING.md#status-list-cache)) |
 | `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` | none (no Gaia-X compliance credential accepted) | Comma-separated `did:web` DIDs of the Gaia-X compliance services you trust, for example `did:web:compliance.lab.gaia-x.eu:v2`; separate from `PORTITOR_TRUSTED_ISSUERS` ([ADR 0022](docs/adr/0022-gaia-x-compliance-in-policies.md)) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | none (no traces or metrics) | Base URL of an OTLP/HTTP receiver: traces and metrics are sent there with OpenTelemetry. The other `OTEL_*` variables are in [DEPLOYING](docs/DEPLOYING.md#traces-and-metrics) ([ADR 0023](docs/adr/0023-observability.md)) |
 

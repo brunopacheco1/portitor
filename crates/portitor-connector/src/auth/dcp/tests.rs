@@ -302,6 +302,7 @@ async fn dataspace() -> Dataspace {
         gaiax_compliance_issuers: vec![compliance.did.clone()],
         scopes: vec![super::super::DEFAULT_SCOPE.to_owned()],
         allow_http: true,
+        status_list_cache_seconds: 0,
     };
     let me_did = me.did.clone();
     let mut verifier = DcpVerifier::new(&settings, Arc::new(LocalSts(me))).unwrap();
@@ -1060,6 +1061,7 @@ async fn our_identity_must_match_the_sts() {
         gaiax_compliance_issuers: Vec::new(),
         scopes: Vec::new(),
         allow_http: true,
+        status_list_cache_seconds: 0,
     };
     let other = Party::new(&ds.base, "third");
     let mut verifier = DcpVerifier::new(&settings, Arc::new(LocalSts(other))).unwrap();
@@ -1630,6 +1632,7 @@ async fn readiness_checks_our_identity_in_the_background() {
         gaiax_compliance_issuers: Vec::new(),
         scopes: Vec::new(),
         allow_http: true,
+        status_list_cache_seconds: 0,
     };
     let sts = Arc::new(CountingSts {
         party: mine,
@@ -1663,4 +1666,142 @@ async fn readiness_checks_our_identity_in_the_background() {
     fresh.refresh().await;
     let err = fresh.check().await.unwrap_err();
     assert!(err.contains("cannot read the DID document"), "{err}");
+}
+
+/// How far ahead of the system clock a test has moved the verifier's
+/// clock, in seconds.
+type Offset = Arc<std::sync::atomic::AtomicU64>;
+
+impl Dataspace {
+    /// The verifier keeps status lists for `seconds`. Returns the offset
+    /// of its clock, which the test moves forward ([`move_clock`]).
+    fn cache_status_lists(&mut self, seconds: u64) -> Offset {
+        let offset: Offset = Arc::default();
+        let ahead = Arc::clone(&offset);
+        self.verifier.status_lists = StatusListCache::new(seconds);
+        self.verifier.clock =
+            Arc::new(move || now_secs() + ahead.load(std::sync::atomic::Ordering::SeqCst));
+        offset
+    }
+
+    /// How many status lists were fetched since
+    /// [`Dataspace::forget_fetches`].
+    fn status_fetches(&self) -> usize {
+        let mut count = 0;
+        for path in self.fetched() {
+            if path.starts_with("/status/") {
+                count += 1;
+            }
+        }
+        count
+    }
+}
+
+/// Moves the verifier's clock to `seconds` after the start of the test.
+fn move_clock(offset: &Offset, seconds: u64) {
+    offset.store(seconds, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[tokio::test]
+async fn at_zero_every_check_fetches_the_status_list() {
+    let mut ds = dataspace().await;
+    let _offset = ds.cache_status_lists(0);
+    ds.answer_member(&ds.status_entry("5"));
+    ds.publish_status_list(&ds.issuer, &[]);
+    for _ in 0..3 {
+        assert!(ds.verify(&ds.header()).await.is_ok());
+    }
+    assert_eq!(ds.status_fetches(), 3);
+}
+
+#[tokio::test]
+async fn at_300_seconds_a_status_list_is_fetched_again_only_when_stale() {
+    let mut ds = dataspace().await;
+    let offset = ds.cache_status_lists(300);
+    ds.answer_member(&ds.status_entry("5"));
+    ds.publish_status_list(&ds.issuer, &[]);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    assert_eq!(ds.status_fetches(), 1);
+    // within 300 s: from the cache
+    move_clock(&offset, 299);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    assert_eq!(ds.status_fetches(), 1);
+    // after 300 s: fetched again, and kept again
+    move_clock(&offset, 300);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    assert_eq!(ds.status_fetches(), 2);
+    move_clock(&offset, 301);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    assert_eq!(ds.status_fetches(), 2);
+}
+
+#[tokio::test]
+async fn a_status_list_that_ends_sooner_is_fetched_again_at_its_end() {
+    let mut ds = dataspace().await;
+    let offset = ds.cache_status_lists(300);
+    ds.answer_member(&ds.status_entry("5"));
+    let ends = json!({"validUntil": xsd_date_time(now_secs() + 100)});
+    ds.publish_list("1", &ds.issuer, "revocation", &[], &ends);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    move_clock(&offset, 99);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    assert_eq!(ds.status_fetches(), 1);
+    // at its end: fetched again (still accepted, within the leeway)
+    move_clock(&offset, 100);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    assert_eq!(ds.status_fetches(), 2);
+}
+
+#[tokio::test]
+async fn a_status_list_that_fails_is_not_cached() {
+    let mut ds = dataspace().await;
+    let _offset = ds.cache_status_lists(300);
+    ds.answer_member(&ds.status_entry("5"));
+    // not found
+    let err = ds.refusal().await;
+    assert!(err.contains("HTTP 404"), "{err}");
+    // signed by another issuer
+    ds.publish_status_list(&ds.third, &[]);
+    let err = ds.refusal().await;
+    assert!(err.contains("has another issuer"), "{err}");
+    // each failure was fetched, and the good list is fetched at once
+    ds.publish_status_list(&ds.issuer, &[]);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    assert_eq!(ds.status_fetches(), 3);
+    // and then kept
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    assert_eq!(ds.status_fetches(), 3);
+}
+
+#[tokio::test]
+async fn a_revocation_is_seen_once_the_cached_list_is_stale() {
+    let mut ds = dataspace().await;
+    let offset = ds.cache_status_lists(300);
+    ds.answer_member(&ds.status_entry("5"));
+    ds.publish_status_list(&ds.issuer, &[]);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    // the issuer revokes the credential: not seen while the list is cached
+    ds.publish_status_list(&ds.issuer, &[5]);
+    move_clock(&offset, 299);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    move_clock(&offset, 300);
+    let err = ds.refusal().await;
+    assert!(err.contains("revoked or suspended (revocation)"), "{err}");
+}
+
+#[tokio::test]
+async fn a_cached_status_list_serves_only_its_own_issuer() {
+    let mut ds = dataspace().await;
+    let _offset = ds.cache_status_lists(300);
+    ds.verifier.trusted_issuers.push(ds.third.did.clone());
+    ds.answer_member(&ds.status_entry("5"));
+    ds.publish_status_list(&ds.issuer, &[]);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    // another trusted issuer's credential names the same, cached, URL
+    let credential =
+        Dataspace::credential(&ds.third, MEMBERSHIP, &ds.holder.did, &ds.status_entry("5"));
+    ds.answer(&[ds.presentation(&ds.holder, &[credential])]);
+    let err = ds.refusal().await;
+    assert!(err.contains("has another issuer"), "{err}");
+    assert_eq!(ds.status_fetches(), 1);
 }

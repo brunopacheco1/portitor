@@ -12,6 +12,17 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Added
+
+- Status list cache in the connector's DCP verifier (TD-06, ADR 0016
+  amended): `PORTITOR_STATUS_LIST_CACHE_SECONDS`, default 300, at most
+  3600 (a larger value stops the start), `0` fetches the list on every
+  check. Only lists that were fetched and verified are kept, by URL, in
+  memory, never past the list's own `validUntil` or `exp`. A revocation
+  now takes up to that long to be seen (DEPLOYING, "Status list
+  cache"). The Compose demo, `scripts/demo.sh`, the EDC interop test
+  and the DCP TCK run set `0`.
+
 ### Documentation
 
 - ADR 0022: says which Gaia-X documents were checked for how a

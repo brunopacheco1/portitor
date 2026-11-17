@@ -432,6 +432,10 @@ pub struct AuthSettings {
     /// Allow plain-HTTP DIDs and URLs (`PORTITOR_ALLOW_HTTP_CALLBACKS`;
     /// tests and the TCKs only).
     pub allow_http: bool,
+    /// How long a verified status list credential is kept, in seconds
+    /// (`PORTITOR_STATUS_LIST_CACHE_SECONDS`, default 300, at most 3600;
+    /// 0: fetched on every check). See [`dcp::status_list_cache`].
+    pub status_list_cache_seconds: u64,
 }
 
 impl std::fmt::Debug for AuthSettings {
@@ -446,6 +450,7 @@ impl std::fmt::Debug for AuthSettings {
             .field("gaiax_compliance_issuers", &self.gaiax_compliance_issuers)
             .field("scopes", &self.scopes)
             .field("allow_http", &self.allow_http)
+            .field("status_list_cache_seconds", &self.status_list_cache_seconds)
             .finish_non_exhaustive()
     }
 }
@@ -469,9 +474,10 @@ impl AuthSettings {
     ///
     /// The STS URL is plain HTTP without `PORTITOR_STS_ALLOW_HTTP`, the
     /// secret file cannot be read or is empty, no trusted issuer is set,
-    /// a Gaia-X compliance service is not a `did:web` DID, or a scope is
+    /// a Gaia-X compliance service is not a `did:web` DID, a scope is
     /// empty, not a DCP scope, or asks for every credential (type
-    /// `VerifiableCredential`).
+    /// `VerifiableCredential`), or `PORTITOR_STATUS_LIST_CACHE_SECONDS` is
+    /// not a number from 0 to 3600.
     pub fn from_vars(
         participant_id: &str,
         allow_http: bool,
@@ -531,6 +537,8 @@ impl AuthSettings {
             // must understand
             Scope::parse(scope, &[]).map_err(|e| format!("PORTITOR_DCP_SCOPES: {e}"))?;
         }
+        let status_list_cache_seconds =
+            status_list_cache_seconds(text("PORTITOR_STATUS_LIST_CACHE_SECONDS").as_deref())?;
         Ok(Some(Self {
             participant_id: participant_id.to_owned(),
             sts_url,
@@ -543,6 +551,7 @@ impl AuthSettings {
             gaiax_compliance_issuers,
             scopes,
             allow_http,
+            status_list_cache_seconds,
         }))
     }
 
@@ -561,6 +570,22 @@ impl AuthSettings {
             ));
         }
         None
+    }
+}
+
+/// Reads `PORTITOR_STATUS_LIST_CACHE_SECONDS` (`value`, trimmed): whole
+/// seconds from 0 to [`dcp::status_list_cache::MAX_SECONDS`];
+/// [`dcp::status_list_cache::DEFAULT_SECONDS`] when it is not set.
+fn status_list_cache_seconds(value: Option<&str>) -> Result<u64, String> {
+    use dcp::status_list_cache::{DEFAULT_SECONDS, MAX_SECONDS};
+    let Some(value) = value else {
+        return Ok(DEFAULT_SECONDS);
+    };
+    match value.parse::<u64>() {
+        Ok(seconds) if seconds <= MAX_SECONDS => Ok(seconds),
+        _ => Err(format!(
+            "PORTITOR_STATUS_LIST_CACHE_SECONDS has an invalid value {value:?}: whole seconds from 0 to {MAX_SECONDS}"
+        )),
     }
 }
 
@@ -686,6 +711,36 @@ mod tests {
         std::fs::write(&secret, "s3cret\n").unwrap();
         let path = secret.to_string_lossy().into_owned();
         (dir, path)
+    }
+
+    #[test]
+    fn the_status_list_cache_setting_is_bounded() {
+        let (dir, secret) = secret_file("status-cache");
+        let me = "did:web:me.example";
+        let base = [
+            ("PORTITOR_STS_URL", "https://me.example/sts/token"),
+            ("PORTITOR_STS_CLIENT_SECRET_FILE", secret.as_str()),
+            ("PORTITOR_TRUSTED_ISSUERS", "did:web:a"),
+        ];
+        let read = |value: Option<&str>| {
+            let mut with = base.to_vec();
+            if let Some(value) = value {
+                with.push(("PORTITOR_STATUS_LIST_CACHE_SECONDS", value));
+            }
+            AuthSettings::from_vars(me, false, vars(&with))
+                .map(|settings| settings.unwrap().status_list_cache_seconds)
+        };
+        assert_eq!(read(None), Ok(300));
+        assert_eq!(read(Some("0")), Ok(0));
+        assert_eq!(read(Some(" 3600 ")), Ok(3600));
+        for refused in ["3601", "-1", "5m", ""] {
+            let err = read(Some(refused)).unwrap_err();
+            assert!(
+                err.starts_with("PORTITOR_STATUS_LIST_CACHE_SECONDS"),
+                "{refused}: {err}"
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

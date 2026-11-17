@@ -818,6 +818,7 @@ fn verified_connectors(network: &Arc<Network>, dataspace: &LocalDataspace) -> Ne
         gaiax_compliance_issuers: Vec::new(),
         scopes: vec![MEMBERSHIP_SCOPE.to_owned()],
         allow_http: true,
+        status_list_cache_seconds: 0,
     };
     let mut provider_ports = Ports::new(Arc::clone(network) as Arc<dyn Sender>);
     provider_ports.verifier = Arc::new(DcpVerifier::new(&settings, Arc::new(ProviderSts)).unwrap());

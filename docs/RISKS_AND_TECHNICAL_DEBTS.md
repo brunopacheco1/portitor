@@ -98,7 +98,7 @@ checks this file:
 | [TD-03](#td-03) | A provider in several data spaces, each with its own rules | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | research, before the 0.13 freeze |
 | [TD-04](#td-04) | User to system authentication and authorisation, governed per data space | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | research before the 0.13 freeze; code 1.5 |
 | [TD-05](#td-05) | Key custody and key rotation | Technical debt | 0.5 (ADR 0015); 0.7 close-out (maintainer, 2026-11-15) | Open | 0.11 (two keys listed); 1.4 (OpenBao) |
-| [TD-06](#td-06) | Status lists are not cached in the connector's DCP verifier | Technical debt | 0.6 (maintainer, 2026-11-14) | Open | 0.11 |
+| [TD-06](#td-06) | Status lists are not cached in the connector's DCP verifier | Technical debt | 0.6 (maintainer, 2026-11-14) | Addressed | done in 0.11 |
 | [TD-07](#td-07) | STS tokens and presentations are not cached | Technical debt | 0.5 (ADR 0016) | Open | 1.4, if 0.11 measurements need it |
 | [TD-08](#td-08) | One replica per SQLite file; no PostgreSQL adapter | Technical debt | 0.3 (ADR 0006, maintainer, 2026-11-12) | Accepted | Later |
 | [TD-09](#td-09) | Used token ids are kept in memory only | Technical debt | 0.5 (ADR 0015, ADR 0016, 2026-11-13) | Accepted | with TD-08 |
@@ -622,9 +622,11 @@ Totals: 40 risks (Open 9, Mitigated 18, Accepted 4, Addressed 9);
   fetched every time.
 - **Why it matters.** Capacity, and load on partners' identities and
   issuers.
-- **Current state: Open.** DID documents are cached 5 minutes; nothing
-  else (TD-06, TD-07).
-- **Next.** Status list caching in 0.11 (TD-06); measure again.
+- **Current state: Open.** DID documents are cached 5 minutes, and from
+  0.11 status lists too (TD-06, `PORTITOR_STATUS_LIST_CACHE_SECONDS`,
+  default 5 minutes); tokens and presentations are not (TD-07).
+- **Next.** Measure again with the status list cache (TD-06 done in
+  0.11).
 
 <a id="r-30"></a>
 ### R-30 DSP callers were not authenticated
@@ -911,19 +913,21 @@ a signer port with an OpenBao adapter in ROADMAP 1.4.
 <a id="td-06"></a>
 ### TD-06 Status lists are not cached in the connector's DCP verifier
 
-- **What.** The verifier fetches the issuer's status list on every
-  request ([ADR 0016](adr/0016-dsp-caller-authentication.md):
+- **What.** Until 0.11 the verifier fetched the issuer's status list on
+  every request ([ADR 0016](adr/0016-dsp-caller-authentication.md):
   "Presentations are not cached").
 - **Why it matters.** Cost per request (R-29) and load on the issuer.
-- **Current state: Open.** No status list cache in the code (checked: no
-  `PORTITOR_STATUS_LIST_CACHE_SECONDS`).
-- **Next.** ROADMAP 0.11 (maintainer, 2026-11-14):
-  `PORTITOR_STATUS_LIST_CACHE_SECONDS`, default 300, 0 checks on every
-  request, at most 3600; only lists that were fetched and verified are
-  cached, never longer than the list's own expiry; the trade-off (a
-  revocation takes up to that long to be seen) goes in DEPLOYING. EDC
-  RC7 caches 15 minutes by default. Demos, the EDC test and the TCK runs
-  use 0. Amends ADR 0016.
+- **Current state: Addressed** in 0.11, as planned (ROADMAP 0.11,
+  maintainer, 2026-11-14): `PORTITOR_STATUS_LIST_CACHE_SECONDS`, default
+  300, 0 checks on every request, at most 3600 (a larger value stops the
+  start). Only lists that were fetched and verified are cached, keyed by
+  URL, in memory, never past the list's own `validUntil` or `exp`
+  (`crates/portitor-connector/src/auth/dcp/status_list_cache.rs`). The
+  trade-off (a revocation takes up to that long to be seen) is in
+  DEPLOYING, "Status list cache". The Compose demo, `scripts/demo.sh`,
+  the EDC interop test and the DCP TCK run set 0. ADR 0016 is amended.
+  Tested at 0 and 300 s (`src/auth/dcp/tests.rs`).
+- **Next.** Measure again (R-29), then decide TD-07.
 
 <a id="td-07"></a>
 ### TD-07 STS tokens and presentations are not cached
