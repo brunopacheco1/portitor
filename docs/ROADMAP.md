@@ -515,6 +515,20 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
   stops at the first 4xx it may not retry (tested); the README shows the
   quality gate and coverage badges.
 - Main risk: a finding that needs a design change.
+- Result (2026-11-17): 22 fuzz targets, one for each parser of outside
+  input (list in SECURITY-ASSURANCE, "Parsers and fuzz targets"); request
+  size limits per port (`PORTITOR_MAX_REQUEST_BYTES`,
+  `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES`, 2 MiB by default) and 64 KiB on
+  routes with small messages, HTTP 413 above them; the status list cache
+  (`PORTITOR_STATUS_LIST_CACHE_SECONDS`, tested at 0 and 300 s; ADR 0016
+  amended); retired public keys in the identity's and issuer's DID
+  documents, tested with no verification gap (ADRs 0015 and 0018
+  amended); the outbox stops at the first answer it may not retry (ADR
+  0007 amended), and the connector answers 503, not 401, when a service
+  it needs to check a caller is down; the threat model review with a
+  STRIDE pass per trust boundary (10 findings, F-01 to F-10); ADR 0024 on
+  a provider in several data spaces (Proposed). Not met: the quality gate
+  and coverage badges, which wait for the SonarQube Cloud branch rename.
 
 ## 0.12 Interoperability and performance
 

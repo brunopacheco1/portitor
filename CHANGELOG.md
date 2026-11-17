@@ -12,6 +12,8 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-17
+
 ### Security
 
 - Request size limits per port and route, set by Portitor (R-18). New
