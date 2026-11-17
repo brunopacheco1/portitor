@@ -5,14 +5,15 @@
 //! Validation of correctly signed DCP self-issued tokens whose claims and
 //! clock come from the fuzzer, so the time and identity checks after the
 //! signature are reached. Validation must never panic, and must accept a
-//! token only if the claims really hold.
+//! token only if the claims really hold. The claims read before the
+//! signature is checked are the claims that were signed.
 #![no_main]
 
 use std::sync::OnceLock;
 
 use portitor_dcp::{
     Claims, DidDocument, JtiCache, MAX_TOKEN_LIFETIME, Relationship, SigningKey, VerificationMethod,
-    validate_self_issued,
+    unverified_claims, validate_self_issued,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -70,6 +71,7 @@ fuzz_target!(|data: &[u8]| {
     let Ok(token) = key.sign(&format!("{ALICE}#key-1"), &claims) else {
         return;
     };
+    assert_eq!(unverified_claims(&token), Ok(claims.clone()));
     let result = validate_self_issued(&token, doc, BOB, now, leeway, &mut JtiCache::default());
     if result.is_ok() {
         assert_eq!(claims.iss, claims.sub);

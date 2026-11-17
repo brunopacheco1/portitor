@@ -17,9 +17,15 @@ cargo-fuzz = true
 [dependencies]
 base64 = { version = "0.23", default-features = false, features = ["std"] }
 libfuzzer-sys = "0.4"
+# the harvested datasets file and the bundle's rules, as the connector reads them
+portitor-connector = { path = "../crates/portitor-connector" }
 portitor-dcp = { path = "../crates/portitor-dcp" }
+portitor-dps = { path = "../crates/portitor-dps" }
 portitor-dsp = { path = "../crates/portitor-dsp" }
+# the Authorization header and the URLs that other participants choose
+portitor-runtime = { path = "../crates/portitor-runtime" }
 portitor-shacl = { path = "../crates/portitor-shacl" }
+portitor-time = { path = "../crates/portitor-time" }
 serde = "1"
 serde_json = "1"
 
@@ -126,6 +132,55 @@ bench = false
 [[bin]]
 name = "gaiax_compliance"
 path = "fuzz_targets/gaiax_compliance.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dcp_x509"
+path = "fuzz_targets/dcp_x509.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dps_messages"
+path = "fuzz_targets/dps_messages.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "time_parse"
+path = "fuzz_targets/time_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "shacl_datatypes"
+path = "fuzz_targets/shacl_datatypes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "harvest_datasets"
+path = "fuzz_targets/harvest_datasets.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bundle_rules"
+path = "fuzz_targets/bundle_rules.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "http_inputs"
+path = "fuzz_targets/http_inputs.rs"
 test = false
 doc = false
 bench = false

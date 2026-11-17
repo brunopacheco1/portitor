@@ -28,6 +28,20 @@ versions may change behaviour and configuration.
   a problem body; a declared `Content-Length` over the limit is refused
   before the body is read. Data plane answers are still streamed.
 
+- Every parser of input from outside the process has a fuzz target
+  (roadmap 0.11). New targets: `dcp_x509` (X.509 chains), `dps_messages`
+  (Data Plane Signaling messages and states), `time_parse` (`xsd:date`
+  and `xsd:dateTime`), `shacl_datatypes` (lexical forms for
+  `sh:datatype`), `harvest_datasets` (the harvested datasets file, through
+  the DSP and SHACL checks), `bundle_rules` (the bundle's contexts, shapes
+  and vocabularies as the connector reads them, and the message guard)
+  and `http_inputs` (`Authorization` headers and URLs that other
+  participants choose). Existing targets now also read the credential
+  request and request status messages, scopes, the DSP
+  acknowledgements and errors, `latest.json`, the claims read before a
+  token is checked, and the keys of DID documents. The list of parsers
+  and targets is in SECURITY-ASSURANCE, "Parsers and fuzz targets".
+
 ### Added
 
 - Status list cache in the connector's DCP verifier (TD-06, ADR 0016
