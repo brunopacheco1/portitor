@@ -12,6 +12,22 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Security
+
+- Request size limits per port and route, set by Portitor (R-18). New
+  settings in the three binaries: `PORTITOR_MAX_REQUEST_BYTES` (public
+  port) and `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` (management port),
+  default 2097152 (2 MiB, the value axum applied before, so nothing
+  changes by default), from 1 to 67108864 (64 MiB); another value stops
+  the start. Routes whose messages are small by specification have a
+  fixed limit of 64 KiB, or the port's when lower: the DSP catalog
+  request, negotiation event, verification and termination, and
+  transfer suspension, completion and termination (also on the consumer
+  callbacks), the identity's `POST /sts/token` and the issuer's
+  `POST <issuer service>/credentials`. A larger body gets HTTP 413 with
+  a problem body; a declared `Content-Length` over the limit is refused
+  before the body is read. Data plane answers are still streamed.
+
 ### Documentation
 
 - ADR 0022: says which Gaia-X documents were checked for how a

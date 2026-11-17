@@ -70,7 +70,7 @@ checks this file:
 | [R-15](#r-15) | Onboarding accepts a compliance answer from any issuer whose signature verifies | Security | 0.8 review (maintainer, 2026-11-15) | Addressed | 0.8 |
 | [R-16](#r-16) | A Gaia-X compliance credential cannot be revoked | Security | 0.8 (spike, ADR 0022, 2026-11-15) | Accepted | — |
 | [R-17](#r-17) | Server-side request forgery through partner-chosen URLs | Security | 0.3 (ADR 0016 security notes, SECURITY-ASSURANCE) | Mitigated | — |
-| [R-18](#r-18) | No request size limit of Portitor's own on the public ports | Security | 0.5 (SECURITY-ASSURANCE) | Mitigated | 0.11 |
+| [R-18](#r-18) | No request size limit of Portitor's own on the public ports | Security | 0.5 (SECURITY-ASSURANCE) | Addressed | done in 0.11 |
 | [R-19](#r-19) | Consumer's data access tokens in the SQLite file and the management API | Security | 0.4 (ADR 0014, 2026-11-13) | Mitigated | — |
 | [R-20](#r-20) | The issuer key is the root of trust of a data space | Security | 0.6 (ADR 0018, 2026-11-14) | Mitigated | — |
 | [R-21](#r-21) | Bugs in Portitor's own SHACL engine, and new SHACL components in later profiles | Security, upstream churn | 0.6 spike (ADR 0005, 2026-11-14) | Mitigated | — |
@@ -466,15 +466,28 @@ Totals: 40 risks (Open 9, Mitigated 18, Accepted 4, Addressed 9);
 - **What.** Portitor sets no request size limit of its own; the
   security case planned one for 0.9, which the roadmap did not list.
 - **Why it matters.** Oversized requests can exhaust memory.
-- **Current state: Mitigated.** Every body Portitor parses (JSON, text)
-  goes through axum's extractors, which refuse bodies over 2 MB by
-  default (`DefaultBodyLimit`, axum-core 0.5; no handler disables it,
-  checked 2026-11-15). Data plane bodies are streamed, not buffered, by
-  design. The public ports have a 60 s limit per request and at most 256
-  requests at once (DEPLOYING, section 5); presentations, status lists
-  (16 MiB after decompression) and bundles have their own limits.
-- **Next.** ROADMAP 0.11: explicit limits per port and route, set by
-  Portitor rather than the framework default, with tests.
+- **Current state: Addressed in 0.11.** Each port of each binary has its
+  own limit, a setting: `PORTITOR_MAX_REQUEST_BYTES` (public port) and
+  `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` (management port), 2 MiB by
+  default (the value axum applied before), at most 64 MiB. The routes
+  whose messages are small by specification have a fixed limit of
+  64 KiB, or the port's limit when that is lower: the DSP catalog
+  request, negotiation event, verification and termination, transfer
+  suspension, completion and termination (provider routes and consumer
+  callbacks), the identity's STS and the issuer's credential request.
+  The largest example of these messages in the DSP 2025-1 and DCP
+  v1.0.1 specifications is 329 bytes. A larger body gets HTTP 413; a
+  declared `Content-Length` over the limit is refused before the body is
+  read (`portitor-runtime`, `request_size.rs`). Tests check each port of
+  each binary and each fixed route, one byte over and at the limit. Data
+  plane answers are streamed and not limited. The public ports have a
+  60 s limit per request and at most 256 requests at once (DEPLOYING,
+  section 5); presentations, status lists (16 MiB after decompression)
+  and bundles have their own limits.
+- **Next.** None planned. Contract and transfer requests, offers and
+  agreements, presentations and credentials take the port's limit, as
+  their policies and credentials have no size bound in the
+  specifications.
 
 <a id="r-19"></a>
 ### R-19 Consumer's data access tokens in the SQLite file and the management API

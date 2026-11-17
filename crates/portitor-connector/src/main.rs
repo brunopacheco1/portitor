@@ -17,6 +17,7 @@ use portitor_connector::management::{DEFAULT_MANAGEMENT_BIND, ManagementConfig};
 use portitor_runtime::directory::{Directory, WebDirectory};
 use portitor_runtime::health;
 use portitor_runtime::management::management_port;
+use portitor_runtime::request_size::{RequestLimits, limit_port};
 use portitor_runtime::serve::{
     MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, run_component, serve, with_limits,
 };
@@ -48,6 +49,7 @@ async fn serve_connector() -> ExitCode {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = portitor_connector::Config::from_env()?;
+    let limits = RequestLimits::from_env()?;
     let sender = portitor_connector::dsp_sender(config.allow_http_callbacks)?;
     if config.allow_http_callbacks {
         tracing::warn!("http callback addresses allowed (PORTITOR_ALLOW_HTTP_CALLBACKS)");
@@ -119,19 +121,22 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         identity: identity_check,
     }));
     let settings = ManagementConfig::from_env(DEFAULT_MANAGEMENT_BIND);
-    let management = management_port(&settings, checks, |key| {
+    let (management_listener, management_app) = management_port(&settings, checks, |key| {
         portitor_connector::management::router(negotiator.clone(), key)
     })
     .await?;
+    let management_app = limit_port(management_app, limits.management);
     tracing::info!(
         %bind,
         datasets = negotiator.catalog_size(),
         db = %config.db_file.display(),
         "portitor-connector listening"
     );
-    // the public routes: anyone can call them
+    // the public routes: anyone can call them. The size limit is inside
+    // the time limit, so a slow body counts against the time too
+    let app = limit_port(app, limits.public);
     let app = with_limits(app, REQUEST_TIMEOUT, MAX_CONCURRENT_REQUESTS);
-    serve((listener, app), Some(management)).await?;
+    serve((listener, app), Some((management_listener, management_app))).await?;
     Ok(())
 }
 

@@ -51,6 +51,7 @@ use portitor_dsp::policy::CredentialTypes;
 use portitor_dsp::transfer::consumer::{ConsumerTransfer, ConsumerTransferDecision};
 use portitor_dsp::transfer::provider::Failure as TransferFailure;
 use portitor_dsp::{Binding, CatalogError, ProtocolVersion, VERSION, VersionResponse};
+use portitor_runtime::request_size::small_message;
 use serde::Serialize;
 
 pub mod auth;
@@ -568,11 +569,16 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         .route("/health", get(|| async { "ok" }))
         .with_state(Arc::clone(&state))
         .merge(data_routes(data_plane));
-    // every DSP endpoint: the caller must be authenticated (ADR 0016)
+    // every DSP endpoint: the caller must be authenticated (ADR 0016).
+    // The routes of messages that are small by specification (catalog
+    // request, negotiation event, verification and termination, transfer
+    // suspension, completion and termination) have a fixed size limit
+    // (`small_message`, R-18); the others take the port's limit, which
+    // the binary sets (`PORTITOR_MAX_REQUEST_BYTES`)
     let dsp = Router::new()
         .route(
             &format!("{DSP_PATH}/catalog/request"),
-            post(catalog_request),
+            small_message(post(catalog_request)),
         )
         .route(&format!("{DSP_PATH}/catalog/datasets/{{id}}"), get(dataset))
         .with_state(state)
@@ -618,10 +624,13 @@ fn callback_routes(consumer: &Arc<consumer::Consumer>) -> Router {
         .route(&format!("{n}/{{pid}}"), get(consumer::get))
         .route(&format!("{n}/{{pid}}/offers"), post(consumer::offer))
         .route(&format!("{n}/{{pid}}/agreement"), post(consumer::agreement))
-        .route(&format!("{n}/{{pid}}/events"), post(consumer::event))
+        .route(
+            &format!("{n}/{{pid}}/events"),
+            small_message(post(consumer::event)),
+        )
         .route(
             &format!("{n}/{{pid}}/termination"),
-            post(consumer::terminate),
+            small_message(post(consumer::terminate)),
         );
     router.with_state(Arc::clone(consumer))
 }
@@ -636,15 +645,15 @@ fn transfer_callback_routes(consumer: &Arc<consumer_transfer::TransferConsumer>)
         )
         .route(
             &format!("{t}/{{pid}}/suspension"),
-            post(consumer_transfer::suspension),
+            small_message(post(consumer_transfer::suspension)),
         )
         .route(
             &format!("{t}/{{pid}}/completion"),
-            post(consumer_transfer::completion),
+            small_message(post(consumer_transfer::completion)),
         )
         .route(
             &format!("{t}/{{pid}}/termination"),
-            post(consumer_transfer::termination),
+            small_message(post(consumer_transfer::termination)),
         );
     router.with_state(Arc::clone(consumer))
 }
@@ -658,14 +667,17 @@ fn negotiation_routes(provider: Arc<negotiation::Provider>) -> Router {
             &format!("{n}/{{pid}}/request"),
             post(negotiation::request_counter),
         )
-        .route(&format!("{n}/{{pid}}/events"), post(negotiation::event))
+        .route(
+            &format!("{n}/{{pid}}/events"),
+            small_message(post(negotiation::event)),
+        )
         .route(
             &format!("{n}/{{pid}}/agreement/verification"),
-            post(negotiation::verify),
+            small_message(post(negotiation::verify)),
         )
         .route(
             &format!("{n}/{{pid}}/termination"),
-            post(negotiation::terminate),
+            small_message(post(negotiation::terminate)),
         )
         .with_state(provider)
 }
@@ -752,15 +764,15 @@ fn transfer_routes(provider: Arc<transfer::TransferProvider>) -> Router {
         .route(&format!("{t}/{{pid}}/start"), post(transfer::start))
         .route(
             &format!("{t}/{{pid}}/suspension"),
-            post(transfer::suspension),
+            small_message(post(transfer::suspension)),
         )
         .route(
             &format!("{t}/{{pid}}/completion"),
-            post(transfer::completion),
+            small_message(post(transfer::completion)),
         )
         .route(
             &format!("{t}/{{pid}}/termination"),
-            post(transfer::termination),
+            small_message(post(transfer::termination)),
         )
         .with_state(provider)
 }

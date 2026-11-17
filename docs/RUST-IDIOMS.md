@@ -855,6 +855,13 @@ axum itself, with its own answer. Taking `Result<Form<...>, ...>`
 instead lets the handler see the failure and answer in the format the
 API needs (here the STS error list, `portitor-identity/src/sts.rs`).
 
+A *layer* wraps routes with code that runs before the handler (a
+middleware, written with `axum::middleware::from_fn_with_state`).
+`router.layer(...)` wraps every route of a router;
+`post(handler).layer(...)` wraps one route. Both wrap, so both run:
+`small_message(post(negotiation::event))` in the connector is behind the
+port's size limit and its own (`portitor-runtime/src/request_size.rs`).
+
 ## Small things
 
 - `let _ = x;` ignores a result on purpose. A comment says why that is
