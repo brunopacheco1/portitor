@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The bundle manifest (`portitor_dcp::bundle`, ADR 0005). The input is
-//! used three ways: as `manifest.json` (anything a bundle host can
-//! serve); as a junk `manifest.jws` next to it; and, if it is a valid
-//! manifest, signed correctly, so the checks after the signature are
-//! reached. Nothing may panic, and a bundle is accepted only from the
-//! expected authority, at the pinned version, with every file checked.
+//! used four ways: as `latest.json`; as `manifest.json` (anything a
+//! bundle host can serve); as a junk `manifest.jws` next to it; and, if
+//! it is a valid manifest, signed correctly, so the checks after the
+//! signature are reached. Nothing may panic, and a bundle is accepted
+//! only from the expected authority, at the pinned version, with every
+//! file checked.
 #![no_main]
 
 use std::collections::BTreeMap;
@@ -32,6 +33,10 @@ fuzz_target!(|data: &[u8]| {
         authority: AUTHORITY,
         version: VERSION,
     };
+    // the same bytes as `latest.json`, the pointer to the newest version
+    if let Ok(latest) = bundle::Latest::parse(data) {
+        assert!(bundle::check_version(&latest.version).is_ok());
+    }
     let parsed = Manifest::parse(data);
     // junk as the signature
     if let Ok(text) = std::str::from_utf8(data) {

@@ -620,15 +620,32 @@ cargo +nightly fuzz list
 cargo +nightly fuzz run dsp_negotiation -- -max_total_time=60
 ```
 
+Some targets link the bundled SQLite (through `portitor-connector` and
+`portitor-runtime`). Build them with Clang, as ClusterFuzzLite does: with
+GCC as `cc`, AddressSanitizer stops them at start with an
+`odr-violation` in `sqlite3.c`.
+
+```sh
+CC=clang CXX=clang++ cargo +nightly fuzz build -O --debug-assertions
+```
+
 Targets (`fuzz/fuzz_targets`): `dsp_messages`, `dsp_negotiation`, `dsp_transfer`,
 `odrl_policy`, `dcp_token_parse`, `dcp_token_validate`, `dcp_messages`,
 `dcp_status_list`, `dcp_credentials`, `dcp_access_token`, `dcp_did_document`,
-`bundle_manifest` (the bundle manifest and its signature), `shacl_load`
+`dcp_x509` (X.509 chains, PEM and DER), `bundle_manifest` (`latest.json`,
+the bundle manifest and its signature), `bundle_rules` (the bundle's
+files and the message guard, as the connector reads them), `shacl_load`
 (Turtle shapes loaded by `portitor-shacl`), `shacl_jsonld` (JSON-LD to
-RDF with local contexts) and `gaiax_compliance` (the RFC 8785 JCS form and
+RDF with local contexts), `shacl_datatypes` (lexical forms for
+`sh:datatype`), `harvest_datasets` (the harvested datasets file),
+`dps_messages` (Data Plane Signaling messages and states), `time_parse`
+(`xsd:date` and `xsd:dateTime`), `http_inputs` (`Authorization`
+headers and URLs other participants choose) and `gaiax_compliance` (the RFC 8785 JCS form and
 `digestSRI` of any JSON, the Gaia-X compliance credential's list and the
-answer check; the JCS form must not change when applied again). A new parser of untrusted input
-gets a target. In CI, ClusterFuzzLite fuzzes every pull request briefly
+answer check; the JCS form must not change when applied again). Every
+parser of input from outside the process gets a target; the list of
+parsers and targets is in
+[SECURITY-ASSURANCE](SECURITY-ASSURANCE.md#parsers-and-fuzz-targets). In CI, ClusterFuzzLite fuzzes every pull request briefly
 (`cflite_pr.yml`) and runs longer each week (`cflite_batch.yml`). A crash
 is a bug: add the input that caused it as a regression test.
 

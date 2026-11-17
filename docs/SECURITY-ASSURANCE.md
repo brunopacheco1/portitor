@@ -107,7 +107,7 @@ dataspace participants over HTTPS.
 | Validation code | Crafted shapes or JSON-LD make the connector fetch remote content, or exploit an XML parser | JSON-LD contexts come only from a map the caller fills (the bundle's and the DSP contexts), never from the network; no Portitor binary parses RDF/XML (`bundle build` refuses it, code lists travel as N-Triples); fuzz targets `shacl_load`, `shacl_jsonld` and `bundle_manifest` |
 | Internal services | A consumer gives a `callbackAddress` that points at an internal service, so the connector calls it (SSRF) | Only `https://` URLs with a host, unless the operator allows `http://`; the response body is never read; a 10 s timeout; blocking internal addresses *(planned)* |
 | Negotiation state | A consumer drives a negotiation out of order, or two messages race | The DSP state machine as a pure function in the domain; every change is a compare-and-update on a version number; a message that races our acknowledgement is accepted only as proof of delivery of our saved pending message (ADR 0007) |
-| Service availability | Crafted or oversized messages crash or exhaust a service | Typed parsing with no `unsafe`; axum's default limit of 2 MB on every parsed body, explicit limits per port *(planned, 0.11)*; fuzzing of the DSP, DCP and ODRL parsers, the SHACL shapes and JSON-LD readers, the bundle manifest and the Gaia-X compliance checks and JCS digest (ClusterFuzzLite), of every parser *(planned, 0.11)*; a nesting limit in SHACL validation |
+| Service availability | Crafted or oversized messages crash or exhaust a service | Typed parsing with no `unsafe`; axum's default limit of 2 MB on every parsed body, explicit limits per port *(planned, 0.11)*; fuzzing of every parser of input from outside the process (ClusterFuzzLite; list in [Parsers and fuzz targets](#parsers-and-fuzz-targets)); a nesting limit in SHACL validation |
 | Operational data (health answers, traces, metrics) | A caller reads health answers, or a receiver reads traces and metrics, and learns secrets, partners or process ids; a partner links our internal calls through trace context | Health checks only on the management port, which stays on the operator's network; failure messages without secrets; export off by default and only to the receiver the operator names; attribute allow-list (no tokens, keys, headers, bodies or id-bearing paths); client metrics name only hosts inside the participant (no untrusted cardinality); `traceparent` neither sent to nor taken from other participants, and taken on `/sts/token` only after the client is authenticated (ADR 0023) |
 | Users' supply chain | A tampered release or dependency | Pinned CI actions; signed commits; Dependabot, dependency review, OSV, cargo-deny (RustSec advisories, licence allowlist, crate sources), cargo-vet (every crate version audited or exempted) and ORT; signed images with SBOM and provenance attestations |
 
@@ -182,6 +182,62 @@ dataspace participants over HTTPS.
 - **Supply chain:** pinned workflow actions, least-privilege workflow
   tokens, REUSE compliance; OpenSSF Scorecard; cargo-vet, so a new or
   bumped crate needs a recorded audit or exemption before it merges.
+- **Fuzzing:** every parser below has a fuzz target. ClusterFuzzLite
+  builds every target in `fuzz/fuzz_targets` on each pull request and
+  each week (`docs/TESTING.md`, "Fuzzing").
+
+### Parsers and fuzz targets
+
+A parser is any code that reads bytes from outside the process that the
+operator did not write: network messages, DID documents, certificates,
+tokens, the bundle and harvested datasets. The operator's own
+configuration is not a parser (maintainer, 2026-11-17). Each target
+also checks rules that must hold for what it reads, not only that
+nothing panics.
+
+| Input | Parser | Fuzz target |
+|---|---|---|
+| DSP catalog request (compacted or expanded JSON-LD) | `portitor_dsp::catalog::read_catalog_request`, `CatalogRequestMessage` | `dsp_messages` |
+| DSP negotiation messages, and the other party's `ContractNegotiation` and `ContractNegotiationError` answers | `portitor_dsp::negotiation` | `dsp_negotiation` |
+| DSP transfer messages, and the other party's `TransferProcess` and `TransferError` answers | `portitor_dsp::transfer` | `dsp_transfer` |
+| ODRL policies in offers and agreements | `portitor_dsp::policy` | `odrl_policy` |
+| `xsd:date` and `xsd:dateTime` in policies and credentials | `portitor_time` | `time_parse`, `odrl_policy` |
+| DSP messages checked against the bundle's message shapes | `portitor_connector::shacl` (`ShaclGuard`) | `bundle_rules` |
+| JSON-LD from DSP messages and harvested datasets | `portitor_shacl::jsonld_to_graph` | `shacl_jsonld` |
+| Literals checked with `sh:datatype` (lexical forms) | `portitor-shacl`, `lexical.rs` | `shacl_datatypes` |
+| Self-issued ID tokens (JWS header and claims, claims read before the check) | `portitor_dcp::Jws`, `unverified_claims`, `validate_self_issued` | `dcp_token_parse`, `dcp_token_validate` |
+| Access tokens sent to the credential service | `portitor_dcp::holder::AccessToken` | `dcp_access_token` |
+| DCP messages: presentation query and response, credential, offer, credential request, request status, issuer metadata; scopes | `portitor_dcp::message`, `portitor_dcp::scope` | `dcp_messages` |
+| Credentials and presentations (VC 1.1 and 2.0 JWT) | `portitor_dcp::credential` | `dcp_credentials` |
+| Status lists (base64 and GZIP) | `portitor_dcp::status_list` | `dcp_status_list`, `dcp_credentials` |
+| Gaia-X credentials and compliance answers; JCS | `portitor_dcp::gaiax`, `gaiax_sign::check_answer` | `gaiax_compliance` |
+| DID documents, and their keys (JWK) used to check signatures | `portitor_dcp::DidDocument`, `Jws::verify`, `bundle::key_from_document` | `dcp_did_document` |
+| `did:web` DIDs | `portitor_dcp::did_web_url` | `dcp_token_parse` |
+| X.509 certificate chains (PEM and DER) | `portitor_dcp::x509` | `dcp_x509` |
+| `Authorization: Bearer` headers, and URLs that other participants choose (`callbackAddress`, Credential Service) | `portitor_runtime::http::bearer_token`, `outbound_url_allowed` | `http_inputs` |
+| The bundle: `latest.json`, `manifest.json` and `manifest.jws` | `portitor_dcp::bundle` | `bundle_manifest` |
+| The bundle: shapes and vocabularies (Turtle, N-Triples) | `portitor_shacl::Shapes::load` | `shacl_load`, `bundle_rules` |
+| The bundle: JSON-LD contexts | `portitor_connector::shacl::BundleRules` | `bundle_rules` |
+| Harvested datasets file | `portitor_connector::harvest` (`FileSource`, `DspCheck`, the bundle's dataset shapes) | `harvest_datasets`, `dsp_messages` |
+| Data Plane Signaling messages | `portitor_dps::message` | `dps_messages` |
+
+Notes:
+
+- Data Plane Signaling messages are function calls inside the connector
+  in 0.x. They are fuzzed because they keep the shape they have on HTTP,
+  for a data plane in its own process later.
+- Not parsers by the definition above: settings, key files, the issuer's
+  credential definitions, the Gaia-X participant file, the management
+  APIs (called with the operator's key), and the files each process
+  writes for itself (SQLite stores, the bundle cache). The TCK routes are
+  only in test builds.
+- The STS form (`/sts/token`) is read into plain strings by axum; its
+  scopes go through `Scope::parse` (`dcp_messages`).
+- Bytes that are passed on but not read, such as the data a data plane
+  serves, are not parsed.
+- serde_json and Oxigraph's Turtle and N-Triples readers are reached
+  through these targets. The HTTP and TLS libraries (hyper, axum,
+  rustls) are not fuzzed here.
 
 ## OpenSSF Baseline
 
