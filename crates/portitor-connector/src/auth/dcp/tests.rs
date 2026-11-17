@@ -1748,8 +1748,11 @@ impl Dataspace {
         let offset: Offset = Arc::default();
         let ahead = Arc::clone(&offset);
         self.verifier.status_lists = StatusListCache::new(seconds);
+        // A fixed start, so a tick of the real clock during the test does
+        // not move the verifier's time past a cache boundary.
+        let start = now_secs();
         self.verifier.clock =
-            Arc::new(move || now_secs() + ahead.load(std::sync::atomic::Ordering::SeqCst));
+            Arc::new(move || start + ahead.load(std::sync::atomic::Ordering::SeqCst));
         offset
     }
 
