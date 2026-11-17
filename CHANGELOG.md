@@ -82,7 +82,9 @@ versions may change behaviour and configuration.
 - The connector's outbox retries a DSP message only when no answer came,
   or the answer was 408, 429 or 5xx; any other answer (400, 404, 409,
   ...) ends the tries at once (TD-30, ADR 0007 amended). The state check
-  after a failed send is unchanged. The issuer's delivery outbox already
+  after a failed send is unchanged. The `tck` build, never released,
+  still tries a 404 again, because the DSP TCK registers some handlers
+  late (R-08). The issuer's delivery outbox already
   stopped at a refusal (it also retries 401 and a holder not found) and
   is not changed.
 

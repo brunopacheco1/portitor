@@ -315,7 +315,10 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
 - **Why it matters.** The conformance run does not test exactly the
   release build.
 - **Current state: Mitigated.** The `tck` feature, never in release
-  images: start messages 300 ms late (`tck::LateStart`, ADR 0014) and the
+  images: start messages 300 ms late (`tck::LateStart`, ADR 0014), the
+  outbox tries a 404 again (from 0.11, when the release build stopped
+  retrying it: the TCK registers a handler only after it has seen the
+  state before, `TP_C:02-03` and `CN:02-01`), and the
   fixed header mapped to the participant id `TCK_PARTICIPANT`, the id the
   TCK's own messages use (ADR 0016, amended 2026-11-13; the first text
   said "a test DID"). DCP authentication is covered by the DCP TCK and

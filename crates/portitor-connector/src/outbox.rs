@@ -421,8 +421,26 @@ fn worth_retrying(error: &str) -> bool {
     // status back from the text `HttpError` writes (`HTTP 404 Not Found`)
     match answered_status(error) {
         None => true,
-        Some(code) => asks_to_try_later(code),
+        Some(code) => asks_to_try_later(code) || tck_retries(code),
     }
+}
+
+/// The TCK build also tries a 404 again. The DSP TCK v1.0.2 registers the
+/// handler for a message only once it has seen the state before it (for
+/// example `thenWaitForState(SUSPENDED)` before `expectTerminationMessage`
+/// in `TP_C:02-03`), so a message sent right after the previous one gets
+/// 404, and the TCK then waits for it with no time limit. Before 0.11 the
+/// outbox tried every refusal again, which hid this. Never in release
+/// images (R-08).
+#[cfg(feature = "tck")]
+fn tck_retries(status: u16) -> bool {
+    status == 404
+}
+
+/// See the TCK build's version: a release build never tries a 404 again.
+#[cfg(not(feature = "tck"))]
+fn tck_retries(_status: u16) -> bool {
+    false
 }
 
 #[cfg(test)]
@@ -666,7 +684,6 @@ mod tests {
             "HTTP 400 Bad Request",
             "HTTP 401 Unauthorized",
             "HTTP 403 Forbidden",
-            "HTTP 404 Not Found",
             "HTTP 409 Conflict",
             "HTTP 302 Found",
         ] {
@@ -678,10 +695,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_404_is_tried_again_only_in_the_tck_build() {
+        let sender = Fails::new("HTTP 404 Not Found");
+        let outcome = attempt_through(Arc::clone(&sender), "", false).await;
+        assert!(matches!(outcome, Outcome::Unreachable));
+        let expected = if cfg!(feature = "tck") { 3 } else { 1 };
+        assert_eq!(sender.posts(), expected);
+    }
+
+    #[tokio::test]
     async fn the_tries_stop_at_the_first_answer_that_may_not_be_retried() {
         // after a failure that is tried again, a refusal still ends the
         // tries (ROADMAP 0.11, exit)
-        let sender = Fails::then("HTTP 503 Service Unavailable", &["HTTP 404 Not Found"]);
+        let sender = Fails::then("HTTP 503 Service Unavailable", &["HTTP 400 Bad Request"]);
         let outcome = attempt_through(Arc::clone(&sender), "", false).await;
         assert!(matches!(outcome, Outcome::Unreachable));
         assert_eq!(sender.posts(), 2);
