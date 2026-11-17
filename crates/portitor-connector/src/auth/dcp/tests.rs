@@ -1790,6 +1790,24 @@ async fn a_revocation_is_seen_once_the_cached_list_is_stale() {
 }
 
 #[tokio::test]
+async fn a_stale_list_that_cannot_be_fetched_again_refuses_the_caller() {
+    let mut ds = dataspace().await;
+    let offset = ds.cache_status_lists(300);
+    ds.answer_member(&ds.status_entry("5"));
+    ds.publish_status_list(&ds.issuer, &[]);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    // the list is gone: the cached copy serves while it is fresh
+    ds.world.lock().unwrap().status_lists.clear();
+    move_clock(&offset, 299);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    // once stale, the failed fetch refuses the caller: a stale copy is
+    // never used instead (fail closed)
+    move_clock(&offset, 300);
+    let err = ds.refusal().await;
+    assert!(err.contains("HTTP 404"), "{err}");
+}
+
+#[tokio::test]
 async fn a_cached_status_list_serves_only_its_own_issuer() {
     let mut ds = dataspace().await;
     let _offset = ds.cache_status_lists(300);

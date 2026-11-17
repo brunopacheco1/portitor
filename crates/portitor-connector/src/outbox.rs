@@ -571,17 +571,25 @@ mod tests {
         assert!(!log.contains("message rules"), "{log}");
     }
 
-    /// Fails every POST with `error` and counts them; answers every GET
-    /// (the counter-party's state) with `null`.
+    /// Fails every POST and counts them: the first with `error`, the next
+    /// ones with each of `then` in turn, and the last error again once
+    /// they run out. Answers every GET (the counter-party's state) with
+    /// `null`.
     struct Fails {
-        error: &'static str,
+        errors: Vec<&'static str>,
         posts: std::sync::atomic::AtomicUsize,
     }
 
     impl Fails {
         fn new(error: &'static str) -> Arc<Self> {
+            Self::then(error, &[])
+        }
+
+        fn then(error: &'static str, then: &[&'static str]) -> Arc<Self> {
+            let mut errors = vec![error];
+            errors.extend_from_slice(then);
             Arc::new(Self {
-                error,
+                errors,
                 posts: std::sync::atomic::AtomicUsize::new(0),
             })
         }
@@ -593,8 +601,9 @@ mod tests {
 
     impl Sender for Fails {
         fn post<'a>(&'a self, _: &'a str, _: &'a Value) -> BoxFuture<'a, Result<Value, String>> {
-            self.posts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Box::pin(async { Err(self.error.to_owned()) })
+            let post = self.posts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let error = self.errors[post.min(self.errors.len() - 1)];
+            Box::pin(async move { Err(error.to_owned()) })
         }
 
         fn get<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<Value, String>> {
@@ -658,6 +667,16 @@ mod tests {
             assert!(matches!(outcome, Outcome::Unreachable), "{error}");
             assert_eq!(sender.posts(), 1, "{error}");
         }
+    }
+
+    #[tokio::test]
+    async fn the_tries_stop_at_the_first_answer_that_may_not_be_retried() {
+        // after a failure that is tried again, a refusal still ends the
+        // tries (ROADMAP 0.11, exit)
+        let sender = Fails::then("HTTP 503 Service Unavailable", &["HTTP 404 Not Found"]);
+        let outcome = attempt_through(Arc::clone(&sender), "", false).await;
+        assert!(matches!(outcome, Outcome::Unreachable));
+        assert_eq!(sender.posts(), 2);
     }
 
     #[tokio::test]

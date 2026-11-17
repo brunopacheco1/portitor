@@ -797,7 +797,7 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
 - **Why it matters.** A participant that removes a leaked key from its
   DID document is still accepted with that key by Portitor verifiers for
   up to 5 minutes.
-- **Current state: Open.** DEPLOYING ("Key rotation") says verifiers
+- **Current state: Open.** DEPLOYING ("Rotating a key") says verifiers
   cache the document 5 minutes.
 - **Next.** Decide with the retired keys work of 0.11 (TD-05) whether
   the cache time becomes a setting; say the limit in SECURITY-ASSURANCE.

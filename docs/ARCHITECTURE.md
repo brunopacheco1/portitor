@@ -337,7 +337,8 @@ image keeps its state in its own SQLite file under `/data`.
                                                  did:web resolver, API key,
                                                  logging, shutdown, traces
                                                  and metrics (OpenTelemetry),
-                                                 health checks)
+                                                 health checks, request
+                                                 size limits)
    portitor-dps       --> portitor-dsp          (DataAddress)
    portitor-dsp, portitor-dcp --> portitor-time
    portitor-shacl     --> oxrdf, oxttl, oxjsonld (Oxigraph's RDF crates)

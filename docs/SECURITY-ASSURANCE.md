@@ -312,6 +312,11 @@ and F-04 (the DID document cache).
   crosses a DSP call; the health tests (`tests/health.rs` in the
   connector and the identity, and the issuer's `tests/issuer.rs`) check
   that the checks are open while the management API keeps its key.
+  From 0.11, tests check the request size limits of every limited port
+  and route, the status list cache (a stale list is fetched again, and
+  a failed fetch refuses the caller), and that a key change with the
+  old key retired leaves no verification gap (TESTING, "Unit and
+  integration tests").
 - **Static analysis:** Clippy pedantic with warnings as errors; CodeQL and
   SonarQube Cloud quality gate on every pull request.
 - **Supply chain:** pinned workflow actions, least-privilege workflow

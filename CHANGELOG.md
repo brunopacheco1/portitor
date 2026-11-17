@@ -72,7 +72,8 @@ versions may change behaviour and configuration.
   or the answer was 408, 429 or 5xx; any other answer (400, 404, 409,
   ...) ends the tries at once (TD-30, ADR 0007 amended). The state check
   after a failed send is unchanged. The issuer's delivery outbox already
-  worked this way and is not changed.
+  stopped at a refusal (it also retries 401 and a holder not found) and
+  is not changed.
 
 ### Documentation
 
