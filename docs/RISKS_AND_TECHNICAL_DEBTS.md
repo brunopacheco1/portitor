@@ -93,6 +93,11 @@ checks this file:
 | [R-38](#r-38) | No specification names an S3 data address | Interoperability | plan after 0.13 (maintainer, 2026-11-15) | Open | 1.1 |
 | [R-39](#r-39) | No specification defines agreements that depend on an upstream agreement | Interoperability | plan after 0.13 (maintainer, 2026-11-15) | Open | 1.3 |
 | [R-40](#r-40) | No shared list of EHDS purposes | Interoperability | plan after 0.13 (maintainer, 2026-11-15) | Open | 1.2 |
+| [R-41](#r-41) | A key removed from a DID document is still trusted for up to 5 minutes | Security | 0.11 threat model review (F-04, 2026-11-17) | Open | — |
+| [R-42](#r-42) | The STS shares the identity's public port | Security | 0.11 threat model review (F-05, 2026-11-17) | Open | — |
+| [R-43](#r-43) | Negative credential constraints can be met with another credential | Security | 0.11 threat model review (F-07, 2026-11-17) | Open | — |
+| [R-44](#r-44) | One slow holder delays every issuer delivery | Security | 0.11 threat model review (F-09, 2026-11-17) | Open | — |
+| [R-45](#r-45) | No request limit per partner | Security | 0.11 threat model review (F-10, 2026-11-17) | Open | — |
 | [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | 0.7 (maintainer, 2026-11-14) | Open | research, with TD-03 |
 | [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | research; code 1.5 |
 | [TD-03](#td-03) | A provider in several data spaces, each with its own rules | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | research, before the 0.13 freeze |
@@ -123,9 +128,10 @@ checks this file:
 | [TD-28](#td-28) | No trace across participants | Technical debt | 0.9 (ADR 0023, 2026-11-15) | Accepted | — |
 | [TD-29](#td-29) | No OTLP logs export, no gRPC, no compression | Technical debt | 0.9 (ADR 0023, DEPLOYING, 2026-11-15) | Open | Later |
 | [TD-30](#td-30) | The outbox resends a message the counter-party refused | Technical debt | 0.9 (outbox metrics, 2026-11-15) | Open | 0.11 |
+| [TD-31](#td-31) | No audit trail of data pulls and management actions | Technical debt | 0.11 threat model review (F-02, 2026-11-17) | Open | research with TD-04 (0.12) |
 
-Totals: 40 risks (Open 9, Mitigated 18, Accepted 4, Addressed 9);
-30 technical debts (Open 19, Accepted 5, Addressed 6).
+Totals: 45 risks (Open 14, Mitigated 18, Accepted 4, Addressed 9);
+31 technical debts (Open 20, Accepted 5, Addressed 6).
 
 ## Risks
 
@@ -449,7 +455,12 @@ Totals: 40 risks (Open 9, Mitigated 18, Accepted 4, Addressed 9);
 
 - **What.** The connector POSTs to the partner's `callbackAddress` and
   fetches DID documents and credential services the caller chooses
-  (ADR 0016).
+  (ADR 0016). The 0.11 threat model review (SECURITY-ASSURANCE, F-01 and
+  F-06) found two more: the issuer POSTs credentials to the credential
+  service that a registered holder's DID document names
+  (`crates/portitor-issuer/src/delivery.rs`), and the identity resolves
+  the DID of any caller of its presentation API before checking the
+  caller's `aud` and access token.
 - **Why it matters.** A partner could make the connector call an internal
   service.
 - **Current state: Mitigated.** Only `https://` (unless
@@ -458,7 +469,10 @@ Totals: 40 risks (Open 9, Mitigated 18, Accepted 4, Addressed 9);
   DEPLOYING asks for an egress firewall. Internal addresses are not
   blocked (checked: no such check in the code).
 - **Next.** Block internal addresses with an operator allow list (ADR
-  0016, "roadmap, later"); not in the roadmap's lists yet.
+  0016, "roadmap, later"); not in the roadmap's lists yet. The 0.11
+  review proposes that the maintainer names a release, before the 0.13
+  freeze if the block is on by default (F-01), and that the identity
+  checks `aud` and the access token before it resolves a caller (F-06).
 
 <a id="r-18"></a>
 ### R-18 No request size limit of Portitor's own on the public ports
@@ -757,6 +771,80 @@ Totals: 40 risks (Open 9, Mitigated 18, Accepted 4, Addressed 9);
 - **Next.** ROADMAP 1.2: purposes as Data Privacy Vocabulary (DPV) IRIs,
   as HealthDCAT-AP does; check how they map to Article 53.
 
+<a id="r-41"></a>
+### R-41 A key removed from a DID document is still trusted for up to 5 minutes
+
+- **What.** Every component caches each resolved DID document for 5
+  minutes (`DEFAULT_TTL` in `crates/portitor-runtime/src/did.rs`). There
+  is no setting, although ADR 0016 says "default 5 minutes". The cache
+  holds at most 1,000 documents and keeps no failed lookups
+  (SECURITY-ASSURANCE, 0.11 review, F-04).
+- **Why it matters.** A participant that removes a leaked key from its
+  DID document is still accepted with that key by Portitor verifiers for
+  up to 5 minutes.
+- **Current state: Open.** DEPLOYING ("Key rotation") says verifiers
+  cache the document 5 minutes.
+- **Next.** Decide with the retired keys work of 0.11 (TD-05) whether
+  the cache time becomes a setting; say the limit in SECURITY-ASSURANCE.
+
+<a id="r-42"></a>
+### R-42 The STS shares the identity's public port
+
+- **What.** `/sts/token` is a route of the identity's public router
+  (`crates/portitor-identity/src/lib.rs`), next to the DID document and
+  the credential service. DEPLOYING says to route it on the internal
+  network only, never through the public proxy (0.11 review, F-05).
+- **Why it matters.** A proxy that forwards every path exposes the STS
+  to the internet. The client secret (at least 32 characters, compared
+  in constant time) still protects it, so the risk is low.
+- **Current state: Open.**
+- **Next.** A separate listen address for the STS, or a deployment check
+  that the proxy does not route it; to decide before the 0.13 freeze,
+  as it adds a setting.
+
+<a id="r-43"></a>
+### R-43 Negative credential constraints can be met with another credential
+
+- **What.** A credential constraint holds if at least one valid
+  credential of the type has the claim and the comparison is true
+  ([ADR 0019](adr/0019-credential-constraints.md)). For `neq` and
+  `isNoneOf` this means a holder with two credentials of the type, one
+  with the excluded value and one without, meets the constraint. The
+  holder also chooses what its credential service presents (0.11
+  review, F-07).
+- **Why it matters.** An operator may read `neq` as "refuse holders
+  with this value". It is not.
+- **Current state: Open.**
+- **Next.** Say in ADR 0019 and DEPLOYING that negative operators are not
+  deny lists.
+
+<a id="r-44"></a>
+### R-44 One slow holder delays every issuer delivery
+
+- **What.** The issuer's outbox sends due deliveries one after the
+  other (`send_due_at` in `crates/portitor-issuer/src/delivery.rs`), and
+  each call may take 10 s. A registered holder whose credential service
+  hangs delays the deliveries of every other holder (0.11 review, F-09).
+- **Why it matters.** New members wait for their credentials.
+- **Current state: Open.** Bounded: a holder has at most
+  `PORTITOR_ISSUER_MAX_ACTIVE_PER_HOLDER` active credentials per
+  definition, rejections are not delivered, and retries wait longer
+  each time (R-33).
+- **Next.** Send to different holders side by side, a few at a time.
+
+<a id="r-45"></a>
+### R-45 No request limit per partner
+
+- **What.** The public ports limit requests in all (256 at once, 60 s
+  each, `crates/portitor-runtime/src/serve.rs`), not per partner. A
+  download is not limited once its answer has started (0.11 review,
+  F-10).
+- **Why it matters.** One authenticated partner can take the capacity
+  that the others need.
+- **Current state: Open.** DEPLOYING says nothing about rate limits.
+- **Next.** Document rate limits per client at the reverse proxy; a
+  limit in Portitor only if measurements show the need.
+
 ## Technical debt
 
 <a id="td-01"></a>
@@ -840,6 +928,12 @@ space's rulebook); how a caller's data space is known (its credentials or
 the catalog it asks); how EHDS and other data spaces publish their
 schemas; how short-lived data spaces are joined and left. Standards
 check and an ADR before any code.
+
+Next: [ADR 0024](adr/0024-several-data-spaces.md) (Proposed, 2026-11-17)
+compares the options with what EDC, Simpl-Open, DSP, DCP and Gaia-X do;
+the maintainer decides before the 0.13 freeze. It also covers the
+0.11 threat model finding F-08: today any trusted issuer is trusted for
+every credential type.
 
 <a id="td-04"></a>
 ### TD-04 User to system authentication and authorisation, governed per data space
@@ -1231,3 +1325,25 @@ a signer port with an OpenBao adapter in ROADMAP 1.4.
   ([ADR 0007](adr/0007-outbox-and-proof-of-delivery.md)); not changed in 0.9.
 - **Next.** ROADMAP 0.11 (maintainer, 2026-11-15): retry only on network errors, 408,
   429 and 5xx; give up at once on other 4xx.
+
+<a id="td-31"></a>
+### TD-31 No audit trail of data pulls and management actions
+
+- **What.** Found in the 0.11 threat model review (SECURITY-ASSURANCE,
+  F-02). The connector logs every state change of a negotiation or
+  transfer with its process ids (`crates/portitor-connector/src/state_events.rs`)
+  and keeps each agreement with the counter-party's DID. It does not log
+  a successful data pull (`data_plane.rs` logs only a failed upstream
+  fetch), does not keep the caller's token or presentation with an
+  agreement, and does not log failed management API key checks or some
+  management changes (for example the identity's
+  `DELETE /v1/credentials/{id}`). A management call has no person
+  behind it: one key per component ([TD-04](#td-04)).
+- **Why it matters.** A provider cannot show who pulled which data and
+  when, and an operator's action cannot be traced. Health data spaces
+  are likely to require this (EHDS; not checked which article).
+- **Current state: Open.**
+- **Next.** Research with the TD-04 ADR (ROADMAP 0.12): what an audit
+  record holds, where it goes and how long it is kept. DSP 2025-1 does
+  not sign its messages, so evidence between participants rests on the
+  DCP tokens and on each side's own records.

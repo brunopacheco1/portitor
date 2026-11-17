@@ -14,6 +14,19 @@ versions may change behaviour and configuration.
 
 ### Documentation
 
+- Threat model review 0.11 in SECURITY-ASSURANCE: a STRIDE pass over
+  each trust boundary, checked against the code of 0.11.0, with ten
+  findings (no high; medium: internal addresses not blocked with no
+  release named, no audit trail, one management key). New items in
+  RISKS_AND_TECHNICAL_DEBTS: R-41 to R-45 and TD-31; R-17 names the
+  issuer's and the identity's partner-chosen URLs too. The threat table
+  gets a row "Evidence of who did what".
+- ADR 0024 (Proposed): a provider in several data spaces (TD-03).
+  Compares one connector per data space, EDC's dataspace profiles and
+  EDC's participant contexts with DSP 2025-1, DCP v1.0.1, Gaia-X and
+  Simpl-Open; proposes one connector per data space for 1.0, EDC-style
+  profiles after 1.0, and trusted issuers by credential type. TD-03
+  points to it.
 - ADR 0022: says which Gaia-X documents were checked for how a
   compliance credential is bound to its holder (none defines it), and
   that "Gaia-X Trust Protocol" is a section of the Architecture Document
