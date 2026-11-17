@@ -151,8 +151,9 @@ The 0.11 engineering review found that every failed check answered 401,
 also when a service the check needs was down. From 0.11 a partner's
 outbox takes a 401 as final (ADR 0007, amended in 0.11), so a short
 outage at the partner's issuer would end a negotiation. The review
-recommended this change to the maintainer; it is built so that it can
-be reversed. It changes "Which requests need a token" above:
+recommended this change, and the maintainer chose it on 2026-11-17
+over two other options (retry a 401 in the outbox, or keep 401 final).
+It changes "Which requests need a token" above:
 
 - The check answers HTTP 503 with a problem body, and no reason, when it
   could not finish: a fetch it needs got no answer (connection failed,

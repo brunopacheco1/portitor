@@ -77,8 +77,8 @@ versions may change behaviour and configuration.
   issuer's DID document or status list, our STS), or took longer than
   20 s. A partner's outbox then tries again, where a 401 ends the tries.
   Real refusals (bad token, revoked credential, untrusted issuer, a 404
-  from the caller's server) still answer 401. ADR 0016 is amended; the
-  maintainer has still to confirm it.
+  from the caller's server) still answer 401. ADR 0016 is amended
+  (maintainer's choice, 2026-11-17).
 - The connector's outbox retries a DSP message only when no answer came,
   or the answer was 408, 429 or 5xx; any other answer (400, 404, 409,
   ...) ends the tries at once (TD-30, ADR 0007 amended). The state check
