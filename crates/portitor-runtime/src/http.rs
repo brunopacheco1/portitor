@@ -31,9 +31,38 @@ pub enum HttpError {
     /// [`HttpSender::post_text`] reads it: a Gaia-X compliance service
     /// explains there why it refused a participant.
     StatusWithBody(u16, String),
-    /// No usable answer: the URL is not allowed, the connection failed,
-    /// no answer came in time, or the answer could not be read.
+    /// No answer: the connection failed, no answer came in time, or the
+    /// answer broke off while it was read.
     NoAnswer(String),
+    /// The request was not sent: the URL is not allowed, or there are no
+    /// CA certificates to check an `https://` server.
+    NotSent(String),
+    /// A 2xx answer that cannot be used: larger than the limit, or not
+    /// UTF-8 text where text was asked for.
+    BadAnswer(String),
+}
+
+impl HttpError {
+    /// Whether the failure may go away when the request is sent again
+    /// later: no answer came ([`HttpError::NoAnswer`]), or the answer was
+    /// 408, 429 or 5xx ([`asks_to_try_later`]). A request that was not
+    /// sent, an unusable answer and any other status are final.
+    #[must_use]
+    pub fn is_temporary(&self) -> bool {
+        match self {
+            Self::Status(code) | Self::StatusWithBody(code, _) => asks_to_try_later(*code),
+            Self::NoAnswer(_) => true,
+            Self::NotSent(_) | Self::BadAnswer(_) => false,
+        }
+    }
+}
+
+/// Whether an answer with HTTP `status` asks to try again later: `408
+/// Request Timeout`, `429 Too Many Requests`, or a server error (5xx).
+/// Any other status is the server's final answer to this request.
+#[must_use]
+pub fn asks_to_try_later(status: u16) -> bool {
+    status == 408 || status == 429 || (500..600).contains(&status)
 }
 
 /// The text of the error: `HTTP 404 Not Found` for a status (the form
@@ -47,7 +76,9 @@ impl std::fmt::Display for HttpError {
                 write_status(f, *code)?;
                 write!(f, ": {body}")
             }
-            Self::NoAnswer(reason) => f.write_str(reason),
+            Self::NoAnswer(reason) | Self::NotSent(reason) | Self::BadAnswer(reason) => {
+                f.write_str(reason)
+            }
         }
     }
 }
@@ -318,7 +349,7 @@ impl HttpSender {
     ///
     /// # Errors
     ///
-    /// The URL is not allowed or the request failed
+    /// The URL is not allowed ([`HttpError::NotSent`]), the request failed
     /// ([`HttpError::NoAnswer`]), or the answer is not HTTP 2xx
     /// ([`HttpError::Status`]).
     pub async fn post_for_location(
@@ -327,7 +358,7 @@ impl HttpSender {
         body: &Value,
         authorization: &str,
     ) -> Result<Option<String>, HttpError> {
-        let request = json_post(url, body, Some(authorization)).map_err(HttpError::NoAnswer)?;
+        let request = json_post(url, body, Some(authorization)).map_err(HttpError::NotSent)?;
         let (headers, _body) = self.call_with_headers(url, request, MAX_ANSWER).await?;
         let location = headers
             .get(hyper::header::LOCATION)
@@ -343,22 +374,50 @@ impl HttpSender {
     /// # Errors
     ///
     /// The URL is not allowed, the request failed, the answer is not HTTP
-    /// 2xx, larger than `max_bytes`, or not UTF-8.
+    /// 2xx, larger than `max_bytes`, or not UTF-8. [`HttpError::is_temporary`]
+    /// tells whether trying again later may help.
     pub async fn get_text(
         &self,
         url: &str,
         accept: &str,
         max_bytes: usize,
-    ) -> Result<String, String> {
+    ) -> Result<String, HttpError> {
         let request = hyper::Request::get(url)
             .header(hyper::header::ACCEPT, accept)
             .body(Full::new(Bytes::new()))
-            .map_err(|e| e.to_string())?;
-        let bytes = self
-            .call(url, request, max_bytes)
-            .await
-            .map_err(|e| e.to_string())?;
-        String::from_utf8(bytes.to_vec()).map_err(|_| "the answer is not UTF-8 text".to_owned())
+            .map_err(|e| HttpError::NotSent(e.to_string()))?;
+        let bytes = self.call(url, request, max_bytes).await?;
+        String::from_utf8(bytes.to_vec())
+            .map_err(|_| HttpError::BadAnswer("the answer is not UTF-8 text".to_owned()))
+    }
+
+    /// GETs `url` asking for JSON, and reads the answer as
+    /// [`Sender::get`] does, but keeps the error's kind: a caller that
+    /// must tell a temporary failure from a refusal
+    /// ([`HttpError::is_temporary`]) uses this.
+    ///
+    /// # Errors
+    ///
+    /// As [`HttpSender::get_text`].
+    pub async fn get_json(&self, url: &str) -> Result<Value, HttpError> {
+        let request = json_get(url, None).map_err(HttpError::NotSent)?;
+        self.json_answer(request, url).await
+    }
+
+    /// Like [`Sender::post_authorized`], but keeps the error's kind, as
+    /// [`HttpSender::get_json`] does.
+    ///
+    /// # Errors
+    ///
+    /// As [`HttpSender::get_text`].
+    pub async fn post_json_authorized(
+        &self,
+        url: &str,
+        body: &Value,
+        authorization: &str,
+    ) -> Result<Value, HttpError> {
+        let request = json_post(url, body, Some(authorization)).map_err(HttpError::NotSent)?;
+        self.json_answer(request, url).await
     }
 
     /// POSTs `body` (text, for example a `vp+jwt`) with the media type
@@ -369,8 +428,9 @@ impl HttpSender {
     ///
     /// # Errors
     ///
-    /// The URL is not allowed or the request failed
-    /// ([`HttpError::NoAnswer`]), or the answer is not HTTP 2xx
+    /// The URL is not allowed ([`HttpError::NotSent`]), the request failed
+    /// ([`HttpError::NoAnswer`]), the answer is too large or not text
+    /// ([`HttpError::BadAnswer`]), or the answer is not HTTP 2xx
     /// ([`HttpError::StatusWithBody`], with the start of the answer).
     /// Redirects are not followed: a `3xx` is a status error.
     pub async fn post_text(
@@ -384,7 +444,7 @@ impl HttpSender {
         let request = hyper::Request::post(url)
             .header(hyper::header::CONTENT_TYPE, content_type)
             .body(Full::new(Bytes::from(body)))
-            .map_err(|e| HttpError::NoAnswer(e.to_string()))?;
+            .map_err(|e| HttpError::NotSent(e.to_string()))?;
         let limits = Limits {
             max_bytes,
             timeout,
@@ -392,17 +452,25 @@ impl HttpSender {
         };
         let (_headers, bytes) = self.call_within(url, request, limits).await?;
         String::from_utf8(bytes.to_vec())
-            .map_err(|_| HttpError::NoAnswer("the answer is not UTF-8 text".to_owned()))
+            .map_err(|_| HttpError::BadAnswer("the answer is not UTF-8 text".to_owned()))
+    }
+
+    /// Like [`HttpSender::json_answer`], with the error as text, as the
+    /// [`Sender`] port carries it.
+    async fn json(&self, request: hyper::Request<Full<Bytes>>, url: &str) -> Result<Value, String> {
+        self.json_answer(request, url)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Sends `request` and reads the answer as JSON (`Value::Null` when it
-    /// is empty or not JSON), up to [`MAX_ANSWER`] bytes. The error is
-    /// text, as the [`Sender`] port carries it.
-    async fn json(&self, request: hyper::Request<Full<Bytes>>, url: &str) -> Result<Value, String> {
-        let bytes = self
-            .call(url, request, MAX_ANSWER)
-            .await
-            .map_err(|e| e.to_string())?;
+    /// is empty or not JSON), up to [`MAX_ANSWER`] bytes.
+    async fn json_answer(
+        &self,
+        request: hyper::Request<Full<Bytes>>,
+        url: &str,
+    ) -> Result<Value, HttpError> {
+        let bytes = self.call(url, request, MAX_ANSWER).await?;
         Ok(serde_json::from_slice(&bytes).unwrap_or(Value::Null))
     }
 
@@ -443,10 +511,10 @@ impl HttpSender {
         // the text names callbacks, the first use of this rule; it now
         // covers every outbound URL, and tests look for this text
         if !outbound_url_allowed(url, self.allow_http) {
-            return Err(HttpError::NoAnswer(format!("refused callback URL {url}")));
+            return Err(HttpError::NotSent(format!("refused callback URL {url}")));
         }
         if !self.has_ca_certificates && url.to_ascii_lowercase().starts_with("https://") {
-            return Err(HttpError::NoAnswer(
+            return Err(HttpError::NotSent(
                 "no CA certificates to verify the counter-party; mount the system bundle"
                     .to_owned(),
             ));
@@ -504,7 +572,13 @@ impl HttpSender {
             Err(e) => {
                 // a 2xx status without its body is a failed call
                 call.body_not_read();
-                return Err(HttpError::NoAnswer(format!("answer not read: {e}")));
+                let reason = format!("answer not read: {e}");
+                // too large: the same answer would come again; otherwise
+                // the answer broke off, which may not happen next time
+                if e.is::<http_body_util::LengthLimitError>() {
+                    return Err(HttpError::BadAnswer(reason));
+                }
+                return Err(HttpError::NoAnswer(reason));
             }
         };
         Ok((parts.headers, body))
@@ -644,6 +718,24 @@ mod tests {
         assert_eq!(answered_status("HTTP 4040 x"), None);
         assert_eq!(answered_status("HTTP abc"), None);
         assert_eq!(answered_status("HTTP 999 x"), None);
+    }
+
+    #[test]
+    fn temporary_failures_are_no_answer_408_429_and_5xx() {
+        let no_answer = HttpError::NoAnswer("no answer within 10s".to_owned());
+        assert!(no_answer.is_temporary());
+        for code in [408, 429, 500, 502, 503, 504] {
+            assert!(HttpError::Status(code).is_temporary(), "{code}");
+            let with_body = HttpError::StatusWithBody(code, String::new());
+            assert!(with_body.is_temporary(), "{code}");
+        }
+        for code in [302, 400, 401, 403, 404, 409, 410] {
+            assert!(!HttpError::Status(code).is_temporary(), "{code}");
+        }
+        let not_sent = HttpError::NotSent("refused callback URL http://x".to_owned());
+        assert!(!not_sent.is_temporary());
+        let too_large = HttpError::BadAnswer("answer not read: length limit exceeded".to_owned());
+        assert!(!too_large.is_temporary());
     }
 
     #[test]
@@ -796,7 +888,7 @@ mod tests {
                 Duration::from_secs(5),
             )
             .await;
-        assert!(matches!(too_long, Err(HttpError::NoAnswer(_))));
+        assert!(matches!(too_long, Err(HttpError::BadAnswer(_))));
     }
 
     #[tokio::test]
@@ -862,7 +954,9 @@ mod tests {
                     answered_status(&error.to_string()),
                     match error {
                         HttpError::Status(code) | HttpError::StatusWithBody(code, _) => Some(code),
-                        HttpError::NoAnswer(_) => None,
+                        HttpError::NoAnswer(_)
+                        | HttpError::NotSent(_)
+                        | HttpError::BadAnswer(_) => None,
                     }
                 );
                 error
@@ -871,12 +965,12 @@ mod tests {
         assert_eq!(status_of("/bad").await, HttpError::Status(400));
         assert_eq!(status_of("/down").await, HttpError::Status(503));
         assert_eq!(status_of("/bad").await.to_string(), "HTTP 400 Bad Request");
-        // no answer at all: a refused URL, or nobody listening
+        // no answer at all: a refused URL (not sent), or nobody listening
         let refused = sender
             .post_for_location("ftp://example.com/x", &body, "t")
             .await
             .unwrap_err();
-        assert!(matches!(refused, HttpError::NoAnswer(_)), "{refused}");
+        assert!(matches!(refused, HttpError::NotSent(_)), "{refused}");
         assert_eq!(answered_status(&refused.to_string()), None);
         let unreachable = sender
             .post_for_location("http://127.0.0.1:9/x", &body, "t")

@@ -42,6 +42,8 @@ tracing-subscriber.workspace = true
 utoipa.workspace = true
 
 [dev-dependencies]
+# x509::p256_public_key_pem for the retired key tests of did_document.rs
+portitor-dcp = { path = "../portitor-dcp", features = ["test-support"] }
 # decode what the fake OTLP receiver of tests/telemetry_export.rs gets; both are already in
 # the tree through opentelemetry-otlp
 opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic-messages", "trace", "metrics"] }
@@ -52,9 +54,10 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
 
 [features]
-# telemetry::testing: in-memory traces and a traceparent recorder, and
-# request_size::testing: the size limit check, for the tests of this crate
-# and the binaries; switched on only by their [dev-dependencies]
+# telemetry::testing: in-memory traces and a traceparent recorder,
+# request_size::testing: the size limit check, and testing: settings from a
+# list and a temporary directory, for the tests of this crate and the
+# binaries; switched on only by their [dev-dependencies]
 test-support = ["dep:tower"]
 
 [lints]

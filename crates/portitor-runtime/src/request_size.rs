@@ -10,8 +10,16 @@
 //! A route with a fixed limit is behind its port's limit too, so the
 //! lower of the two applies. Only request bodies are limited: the data
 //! plane streams its answers, and they are not touched.
+//!
+//! No body is read here. A body with a declared length over the limit
+//! is refused at once; any other body is only wrapped, and the limit
+//! applies while the handler reads it, after the DSP caller check. That
+//! check runs before the handler, so a caller that is not authenticated
+//! never gets its body read.
 
 use std::ffi::OsString;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::Router;
 use axum::body::Body;
@@ -23,6 +31,7 @@ use axum::routing::MethodRouter;
 use http_body_util::{BodyExt as _, LengthLimitError, Limited};
 
 use crate::api_key::problem;
+use crate::settings::bounded_number;
 
 /// The limit of each port unless its setting says otherwise: 2 MiB,
 /// the limit axum applied to every parsed body before 0.11.
@@ -61,35 +70,13 @@ impl Default for RequestLimits {
     }
 }
 
-/// A limit setting is not a whole number from 1 to
-/// [`HIGHEST_MAX_REQUEST_BYTES`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LimitError {
-    /// The environment variable.
-    pub name: &'static str,
-    /// Its value.
-    pub value: String,
-}
-
-impl std::fmt::Display for LimitError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} has an invalid value {:?}: it must be a whole number of bytes from 1 to {HIGHEST_MAX_REQUEST_BYTES}",
-            self.name, self.value
-        )
-    }
-}
-
-impl std::error::Error for LimitError {}
-
 impl RequestLimits {
     /// Reads `PORTITOR_MAX_REQUEST_BYTES` and
     /// `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` from the environment.
     ///
     /// # Errors
     /// See [`RequestLimits::from_vars`].
-    pub fn from_env() -> Result<Self, LimitError> {
+    pub fn from_env() -> Result<Self, String> {
         Self::from_vars(|name| std::env::var_os(name))
     }
 
@@ -99,31 +86,40 @@ impl RequestLimits {
     ///
     /// # Errors
     /// A value is not a whole number from 1 to
-    /// [`HIGHEST_MAX_REQUEST_BYTES`].
-    pub fn from_vars(var: impl Fn(&str) -> Option<OsString>) -> Result<Self, LimitError> {
+    /// [`HIGHEST_MAX_REQUEST_BYTES`]. The text names the setting.
+    pub fn from_vars(var: impl Fn(&str) -> Option<OsString>) -> Result<Self, String> {
         Ok(Self {
             public: bytes_setting(&var, PUBLIC_SETTING)?,
             management: bytes_setting(&var, MANAGEMENT_SETTING)?,
         })
     }
+
+    /// The public port's `router` with its limit ([`limit_port`]). Each
+    /// binary's `main.rs` and its tests call this, so the tests check
+    /// the setting that the binary uses.
+    pub fn on_public_port(&self, router: Router) -> Router {
+        limit_port(router, self.public)
+    }
+
+    /// The management port's `router` with its limit, as
+    /// [`RequestLimits::on_public_port`].
+    pub fn on_management_port(&self, router: Router) -> Router {
+        limit_port(router, self.management)
+    }
 }
 
-/// Reads one limit setting.
-fn bytes_setting(
-    var: &impl Fn(&str) -> Option<OsString>,
-    name: &'static str,
-) -> Result<usize, LimitError> {
-    let value = match var(name) {
-        Some(value) => value.to_string_lossy().trim().to_owned(),
-        None => return Ok(DEFAULT_MAX_REQUEST_BYTES),
-    };
-    if value.is_empty() {
-        return Ok(DEFAULT_MAX_REQUEST_BYTES);
-    }
-    match value.parse::<usize>() {
-        Ok(bytes) if (1..=HIGHEST_MAX_REQUEST_BYTES).contains(&bytes) => Ok(bytes),
-        _ => Err(LimitError { name, value }),
-    }
+/// Reads one limit setting ([`bounded_number`]).
+fn bytes_setting(var: &impl Fn(&str) -> Option<OsString>, name: &str) -> Result<usize, String> {
+    let value = var(name).map(|value| value.to_string_lossy().into_owned());
+    let range = 1..=HIGHEST_MAX_REQUEST_BYTES as u64;
+    let bytes = bounded_number(
+        name,
+        value.as_deref(),
+        range,
+        DEFAULT_MAX_REQUEST_BYTES as u64,
+    )?;
+    // at most HIGHEST_MAX_REQUEST_BYTES, so it fits a `usize`
+    Ok(usize::try_from(bytes).unwrap_or(HIGHEST_MAX_REQUEST_BYTES))
 }
 
 /// `router` with a limit of `max_bytes` on every request body: the
@@ -156,29 +152,43 @@ where
 /// A request that declares its length (`Content-Length`) is refused at
 /// once when that is over the limit, and otherwise passed on unread: the
 /// body cannot be longer than it declares. A request without a declared
-/// length (chunked) is read here, up to the limit, and refused as soon
-/// as it goes over.
+/// length (chunked) is passed on unread too, with its body wrapped so
+/// that reading it fails once it goes over the limit
+/// ([`limited_body`]). The handler then answers as it does for a body
+/// it cannot read (often 400), and this middleware replaces that answer
+/// with 413.
 async fn refuse_too_large(
     State(max_bytes): State<usize>,
     request: Request,
     next: Next,
 ) -> Response {
-    match declared_length(&request) {
-        Some(length) if length > max_bytes => return too_large(&request, max_bytes),
-        Some(_) => return next.run(request).await,
-        None => {}
+    if let Some(length) = declared_length(&request) {
+        if length > max_bytes {
+            return too_large(request.uri().path(), max_bytes);
+        }
+        return next.run(request).await;
     }
+    let path = request.uri().path().to_owned();
     let (parts, body) = request.into_parts();
-    match Limited::new(body, max_bytes).collect().await {
-        Ok(collected) => {
-            let body = Body::from(collected.to_bytes());
-            next.run(Request::from_parts(parts, body)).await
-        }
-        Err(error) if error.is::<LengthLimitError>() => {
-            too_large(&Request::from_parts(parts, ()), max_bytes)
-        }
-        Err(_) => problem(StatusCode::BAD_REQUEST, "the request body cannot be read"),
+    let went_over = Arc::new(AtomicBool::new(false));
+    let body = limited_body(body, max_bytes, Arc::clone(&went_over));
+    let response = next.run(Request::from_parts(parts, body)).await;
+    if went_over.load(Ordering::SeqCst) {
+        return too_large(&path, max_bytes);
     }
+    response
+}
+
+/// `body`, unread, limited to `max_bytes`: reading past that fails with
+/// a [`LengthLimitError`], and sets `went_over`.
+fn limited_body(body: Body, max_bytes: usize, went_over: Arc<AtomicBool>) -> Body {
+    let limited = Limited::new(body, max_bytes).map_err(move |error| {
+        if error.is::<LengthLimitError>() {
+            went_over.store(true, Ordering::SeqCst);
+        }
+        error
+    });
+    Body::new(limited)
 }
 
 /// The request's `Content-Length`, if it has a valid one. A length too
@@ -190,8 +200,7 @@ fn declared_length<B>(request: &Request<B>) -> Option<usize> {
 }
 
 /// HTTP 413 with a problem body, and a log line.
-fn too_large<B>(request: &Request<B>, max_bytes: usize) -> Response {
-    let path = request.uri().path();
+fn too_large(path: &str, max_bytes: usize) -> Response {
     tracing::info!(%path, max_bytes, "request body too large");
     problem(
         StatusCode::PAYLOAD_TOO_LARGE,
@@ -247,10 +256,10 @@ pub mod testing {
             Ok(request) => request,
             Err(error) => panic!("the test request cannot be built: {error}"),
         };
-        match app.clone().oneshot(request).await {
-            Ok(response) => response.status(),
-            Err(error) => match error {},
-        }
+        // a router never fails: its error type has no values
+        // (`Infallible`), so the `Err` case cannot happen and is left out
+        let Ok(response) = app.clone().oneshot(request).await;
+        response.status()
     }
 }
 
@@ -261,15 +270,11 @@ mod tests {
     use super::*;
     use axum::body::Bytes;
     use axum::http::Request;
+    use axum::response::IntoResponse as _;
     use axum::routing::post;
 
-    fn read(pairs: &[(&str, &str)]) -> Result<RequestLimits, LimitError> {
-        RequestLimits::from_vars(|name| {
-            pairs
-                .iter()
-                .find(|(n, _)| *n == name)
-                .map(|(_, value)| OsString::from(value))
-        })
+    fn read(pairs: &[(&str, &str)]) -> Result<RequestLimits, String> {
+        RequestLimits::from_vars(crate::testing::vars(pairs))
     }
 
     #[test]
@@ -285,8 +290,7 @@ mod tests {
         );
         for bad in ["0", "-1", "1.5", "2MB", "67108865"] {
             let error = read(&[(MANAGEMENT_SETTING, bad)]).unwrap_err();
-            assert_eq!(error.name, MANAGEMENT_SETTING);
-            assert!(error.to_string().starts_with(MANAGEMENT_SETTING), "{error}");
+            assert!(error.starts_with(MANAGEMENT_SETTING), "{error}");
         }
     }
 
@@ -311,6 +315,67 @@ mod tests {
         let app = app(DEFAULT_MAX_REQUEST_BYTES);
         assert_size_limit(&app, post_to("/big"), DEFAULT_MAX_REQUEST_BYTES).await;
         assert_size_limit(&app, post_to("/small"), SMALL_MESSAGE_MAX_BYTES).await;
+    }
+
+    /// A handler that answers 400 for any body it cannot read, as the
+    /// DSP handlers do for a `JsonRejection`: an over-limit body still
+    /// gets 413.
+    #[tokio::test]
+    async fn a_handler_that_answers_400_for_an_unread_body_still_gives_413() {
+        async fn strict(
+            body: Result<Bytes, axum::extract::rejection::BytesRejection>,
+        ) -> StatusCode {
+            match body {
+                Ok(_) => StatusCode::OK,
+                Err(_) => StatusCode::BAD_REQUEST,
+            }
+        }
+        let router = Router::new().route("/strict", post(strict));
+        let app = limit_port(router, 1000);
+        assert_size_limit(&app, post_to("/strict"), 1000).await;
+    }
+
+    /// A body without a declared length is not read before the route
+    /// runs: a middleware that refuses first (as the DSP caller check
+    /// does) leaves it unread.
+    #[tokio::test]
+    async fn a_body_is_not_read_before_the_handler() {
+        use std::pin::Pin;
+        use std::task::{Context, Poll};
+
+        /// An empty body that records whether it was read.
+        struct Watched(Arc<AtomicBool>);
+
+        impl hyper::body::Body for Watched {
+            type Data = Bytes;
+            type Error = std::convert::Infallible;
+
+            fn poll_frame(
+                self: Pin<&mut Self>,
+                _: &mut Context<'_>,
+            ) -> Poll<Option<Result<hyper::body::Frame<Bytes>, Self::Error>>> {
+                self.0.store(true, Ordering::SeqCst);
+                Poll::Ready(None)
+            }
+        }
+
+        async fn refuse(_: axum::extract::Request, _: Next) -> Response {
+            StatusCode::UNAUTHORIZED.into_response()
+        }
+        let router = Router::new()
+            .route(
+                "/big",
+                post(|body: Bytes| async move { body.len().to_string() }),
+            )
+            .route_layer(axum::middleware::from_fn(refuse));
+        let app = limit_port(router, 1000);
+        let read = Arc::new(AtomicBool::new(false));
+        let request = Request::post("/big")
+            .body(Body::new(Watched(Arc::clone(&read))))
+            .unwrap();
+        let response = tower::ServiceExt::oneshot(app, request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(!read.load(Ordering::SeqCst), "the body was read");
     }
 
     #[tokio::test]

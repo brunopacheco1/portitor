@@ -50,7 +50,12 @@ impl WebDirectory {
 
 impl Directory for WebDirectory {
     fn did_document<'a>(&'a self, did: &'a str) -> BoxFuture<'a, Result<Arc<DidDocument>, String>> {
-        Box::pin(self.resolver.resolve(did))
+        Box::pin(async move {
+            // the error as text: this port does not tell temporary
+            // failures apart
+            let doc = self.resolver.resolve(did).await?;
+            Ok(doc)
+        })
     }
 
     fn json<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Value, String>> {

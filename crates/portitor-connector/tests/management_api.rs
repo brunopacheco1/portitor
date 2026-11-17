@@ -6,7 +6,6 @@
 //! transfers as consumer, and the generated `OpenAPI` description.
 #![allow(clippy::unwrap_used, missing_docs)]
 
-use std::ffi::OsString;
 use std::sync::Arc;
 
 use axum::Router;
@@ -272,14 +271,7 @@ fn keys_and_configuration() {
     assert!(ApiKey::read(&dir.join("missing")).is_err());
     std::fs::remove_dir_all(&dir).unwrap();
 
-    let vars = |pairs: &'static [(&'static str, &'static str)]| {
-        move |k: &str| {
-            pairs
-                .iter()
-                .find(|(n, _)| *n == k)
-                .map(|(_, v)| OsString::from(v))
-        }
-    };
+    let vars = portitor_runtime::testing::vars;
     // no key file: the port is still bound, for the health checks
     let c = ManagementConfig::from_vars(DEFAULT_MANAGEMENT_BIND, vars(&[]));
     assert_eq!(c.bind, "127.0.0.1:8081");

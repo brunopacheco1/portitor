@@ -28,7 +28,7 @@ use serde_json::Value;
 use tracing::Instrument as _;
 
 use crate::auth::Prover;
-use crate::http_client::{Sender, answered_status};
+use crate::http_client::{Sender, answered_status, asks_to_try_later};
 use crate::ports::{Ports, Retry};
 
 /// What every adapter needs to send: the client, the source of our
@@ -406,14 +406,22 @@ async fn send(
 /// 0007, amended in 0.11; TD-30): no answer at all (connection refused,
 /// timeout, an answer that could not be read), or the answers 408
 /// (Request Timeout), 429 (Too Many Requests) and 5xx. Any other answer,
-/// such as 400, 404 or 409, means the counter-party will not take this
-/// message, so it is not sent again.
+/// such as 400, 401, 404 or 409, means the counter-party will not take
+/// this message, so it is not sent again. A partner's Portitor answers
+/// 503, not 401, when it could not check our credentials because a
+/// service was down (ADR 0016, amended in 0.11), so that case is tried
+/// again.
+///
+/// An error without a status is tried again too, even when it came from
+/// our side (a URL our client refuses, no CA certificates): the text does
+/// not say which side it came from. Sending again is safe: proof of
+/// delivery (ADR 0007) makes a message that did arrive count once.
 fn worth_retrying(error: &str) -> bool {
     // the `Sender` port's errors are text; `answered_status` reads the
     // status back from the text `HttpError` writes (`HTTP 404 Not Found`)
     match answered_status(error) {
-        None | Some(408 | 429) => true,
-        Some(code) => (500..600).contains(&code),
+        None => true,
+        Some(code) => asks_to_try_later(code),
     }
 }
 

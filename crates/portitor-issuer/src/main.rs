@@ -16,7 +16,7 @@ use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::health;
 use portitor_runtime::http::HttpSender;
 use portitor_runtime::management::management_port;
-use portitor_runtime::request_size::{RequestLimits, limit_port};
+use portitor_runtime::request_size::RequestLimits;
 use portitor_runtime::serve::{
     MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, run_component, serve, with_limits,
 };
@@ -115,7 +115,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     let management = (
         management_listener,
-        limit_port(management_app, limits.management),
+        limits.on_management_port(management_app),
     );
     tracing::info!(
         bind = %config.bind,
@@ -129,7 +129,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(portitor_issuer::delivery::run_outbox(Arc::clone(&issuer)));
     // the public routes: anyone can call them. The size limit is inside
     // the time limit, so a slow body counts against the time too
-    let app = limit_port(portitor_issuer::router(issuer), limits.public);
+    let app = limits.on_public_port(portitor_issuer::router(issuer));
     let app = with_limits(app, REQUEST_TIMEOUT, MAX_CONCURRENT_REQUESTS);
     serve((listener, app), Some(management)).await?;
     Ok(())

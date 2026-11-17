@@ -145,6 +145,28 @@ The maintainer decided to amend this ADR, not to write a new one
 - The demos, the EDC interop test and the TCK runs set `0`, so their
   revocation steps see a revocation at once.
 
+### Amended in 0.11: a check that could not finish answers 503 (2026-11-17)
+
+The 0.11 engineering review found that every failed check answered 401,
+also when a service the check needs was down. From 0.11 a partner's
+outbox takes a 401 as final (ADR 0007, amended in 0.11), so a short
+outage at the partner's issuer would end a negotiation. The review
+recommended this change to the maintainer; it is built so that it can
+be reversed. It changes "Which requests need a token" above:
+
+- The check answers HTTP 503 with a problem body, and no reason, when it
+  could not finish: a fetch it needs got no answer (connection failed,
+  timeout), or the answer 408, 429 or 5xx. The fetches are the caller's
+  DID document and Credential Service, the issuer's DID document and
+  status lists, and our own STS. A check that takes longer than its
+  deadline (20 s) answers 503 too.
+- Every other failure still answers 401: no token or a bad one, a
+  replayed token, wrong audience, an untrusted issuer, a revoked or
+  invalid credential, and also a 404 or an invalid document from the
+  caller's or the issuer's server. Those do not change when sent again.
+- The log line for a 503 is `DSP request not checked: a service the
+  check needs is unavailable; answered 503` (WARN), with the reason.
+
 ## Consequences
 
 - Running a connector now needs an identity component (or a compatible

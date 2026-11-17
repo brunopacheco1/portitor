@@ -146,7 +146,9 @@ pub fn public_key_pem(pem: &str) -> Result<Jwk, X509Error> {
 /// The DER bytes that start the `SubjectPublicKeyInfo` of every P-256
 /// key (RFC 5480, section 2): `SEQUENCE` (89 bytes) { `SEQUENCE` {
 /// `id-ecPublicKey`, `secp256r1` }, `BIT STRING` (66 bytes, 0 unused bits)
-/// }. The 65-byte point `04 || x || y` follows.
+/// }. The 65-byte point `04 || x || y` follows. Only
+/// [`p256_public_key_pem`] writes it, so it exists in test builds only.
+#[cfg(any(test, feature = "test-support"))]
 const P256_SPKI_PREFIX: &[u8] = &[
     0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01, 0x06, 0x08, 0x2A,
     0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00,
@@ -154,10 +156,12 @@ const P256_SPKI_PREFIX: &[u8] = &[
 
 /// The PEM text of a P-256 public key (`-----BEGIN PUBLIC KEY-----`), as
 /// `openssl pkey -pubout` writes it: the reverse of [`public_key_pem`].
-/// Tests use it to write a retired key file.
+/// Tests use it to write a retired key file, so it exists only in test
+/// builds (feature `test-support`).
 ///
 /// # Errors
 /// Not a P-256 key, or its coordinates are not 32 bytes of base64url.
+#[cfg(any(test, feature = "test-support"))]
 pub fn p256_public_key_pem(key: &Jwk) -> Result<String, X509Error> {
     let Jwk::EC { crv, x, y } = key else {
         return Err(X509Error::NotP256);

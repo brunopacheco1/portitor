@@ -893,7 +893,9 @@ is the key's thumbprint, so a new key file gives a new key id.
   credential once its reissued one arrives (section 4). Credentials from
   other issuers are skipped. When refused it
   answers HTTP 401 with a DSP error that says only "unauthorized"; the
-  reason is in the log. Each negotiation and transfer is bound to the DID
+  reason is in the log. When the check cannot finish because a server
+  it fetches from does not answer, or answers 408, 429 or 5xx, it
+  answers HTTP 503 instead, so the partner tries again later. Each negotiation and transfer is bound to the DID
   that started it: another caller is told it does not exist. As
   consumer, an agreement must name your participant id as `assignee`.
   Only `/.well-known/dspace-version`, `/health` and the data plane are
@@ -926,7 +928,8 @@ is the key's thumbprint, so a new key file gives a new key id.
   A larger body gets HTTP 413 with a problem body (log `request body too
   large`, INFO). A request that declares its length (`Content-Length`)
   is refused before its body is read; a body without a declared length
-  is read up to the limit. Data plane answers are streamed and have no
+  is read by the handler, after the DSP caller check, and refused once
+  it goes over the limit. Data plane answers are streamed and have no
   size limit.
 - **Trusted issuers.** Whoever controls a DID in
   `PORTITOR_TRUSTED_ISSUERS` can admit any participant. List only your
@@ -1066,6 +1069,7 @@ is the key's thumbprint, so a new key file gives a new key id.
 | `no CA certificates: https calls will fail` (WARN, at start) | The CA bundle was not found (for example `SSL_CERT_DIR` points to an empty folder) | Fix the mount or the variable |
 | `negotiation store failed` (ERROR) | The SQLite file could not be read or written; partners get HTTP 500 | Check disk space and the `/data` volume |
 | `DSP request refused: caller not authenticated` (WARN) | A DSP request got HTTP 401; `reason` says why (token, presentation, credential or status list) | If a partner should be admitted: check its credential, its issuer against `PORTITOR_TRUSTED_ISSUERS`, and clock skew (60 s allowed) |
+| `DSP request not checked: a service the check needs is unavailable; answered 503` (WARN) | A server the check fetches from (the partner's DID document or Credential Service, its issuer's DID document or status list, your STS) did not answer, or answered 408, 429 or 5xx; `reason` names it. The partner tries again | If it repeats: check your STS, then ask the partner about its services |
 | `no token: ...` in a send failure (WARN) | The STS did not give a token for an outgoing DSP request | Check the identity component, `PORTITOR_STS_URL` and the shared secret |
 | `own identity checked: DID document and STS agree` (INFO, at start) | The connector's DID document resolves and the STS signs for it | Nothing |
 | `portitor-connector stopped` (ERROR) | The process could not start or stopped with an error; the message says why | Fix the cause; the container restarts |

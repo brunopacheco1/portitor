@@ -17,7 +17,7 @@ use portitor_connector::management::{DEFAULT_MANAGEMENT_BIND, ManagementConfig};
 use portitor_runtime::directory::{Directory, WebDirectory};
 use portitor_runtime::health;
 use portitor_runtime::management::management_port;
-use portitor_runtime::request_size::{RequestLimits, limit_port};
+use portitor_runtime::request_size::RequestLimits;
 use portitor_runtime::serve::{
     MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, run_component, serve, with_limits,
 };
@@ -125,7 +125,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         portitor_connector::management::router(negotiator.clone(), key)
     })
     .await?;
-    let management_app = limit_port(management_app, limits.management);
+    let management_app = limits.on_management_port(management_app);
     tracing::info!(
         %bind,
         datasets = negotiator.catalog_size(),
@@ -134,7 +134,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     // the public routes: anyone can call them. The size limit is inside
     // the time limit, so a slow body counts against the time too
-    let app = limit_port(app, limits.public);
+    let app = limits.on_public_port(app);
     let app = with_limits(app, REQUEST_TIMEOUT, MAX_CONCURRENT_REQUESTS);
     serve((listener, app), Some((management_listener, management_app))).await?;
     Ok(())

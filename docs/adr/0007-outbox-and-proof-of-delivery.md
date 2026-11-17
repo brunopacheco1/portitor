@@ -95,6 +95,12 @@ What follows a failed send does not change: the partner's state is
 still read, and a message it shows as arrived still counts as
 delivered ("Lost answers" above).
 
+A 401 is final because a Portitor partner answers 503, not 401, when it
+could not check our credentials because a service was down (ADR 0016,
+amended in 0.11). A failure without a status is tried again, also one
+from our own side such as a refused URL; proof of delivery makes a
+message that did arrive count once.
+
 ## Consequences
 
 - The 3 second wait is gone; messages that race their acknowledgement are

@@ -71,6 +71,12 @@ pub enum CredentialError {
 }
 ```
 
+The connector's DCP verifier uses this to sort its failures
+(`portitor-connector/src/auth.rs`, `VerifyError`): `?` on a text error
+gives `VerifyError::Rejected` (HTTP 401), and `?` on a failed DID
+resolution gives `Unavailable` (HTTP 503) when the server did not
+answer. Other fetches say which one they are with `fetch_failed`.
+
 ### A function name in `map_err`
 
 ```rust
@@ -173,6 +179,15 @@ while let Some(row) = rows.next()? {
 `while let` repeats while the pattern fits: here, "while there is
 another row" (`portitor-identity/src/store.rs`). `JtiCache` uses it with a
 let chain to drop expired token ids from the front of a sorted set.
+
+```rust
+let Ok(response) = app.clone().oneshot(request).await;
+```
+
+A `let` with a pattern and no `else`: allowed only when the pattern
+always fits. An axum router never fails, so its error type,
+`Infallible`, has no values, and `Ok` is the only case
+(`portitor-runtime/src/request_size.rs`, `testing`).
 
 ## Building values
 

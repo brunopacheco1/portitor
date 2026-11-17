@@ -497,8 +497,20 @@ impl Dataspace {
         )
     }
 
+    /// The check of `header`; the error as text, for the reason.
     async fn verify(&self, header: &str) -> Result<Caller, String> {
-        self.verifier.verify(Some(header)).await
+        self.verifier
+            .verify(Some(header))
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    /// The error a fresh header of the holder gets, with its kind.
+    async fn verify_error(&self) -> VerifyError {
+        self.verifier
+            .verify(Some(&self.header()))
+            .await
+            .unwrap_err()
     }
 
     /// The reason a fresh header of the holder is refused.
@@ -619,7 +631,8 @@ async fn tokens_are_checked() {
         ),
     ];
     let err = ds.verifier.verify(None).await.unwrap_err();
-    assert!(err.contains("no Authorization header"), "{err}");
+    assert!(err.reason().contains("no Authorization header"), "{err}");
+    assert!(!err.is_temporary());
     for (header, reason) in refused {
         let err = ds.verify(&header).await.unwrap_err();
         assert!(err.contains(reason), "{reason}: {err}");
@@ -753,6 +766,62 @@ async fn presentations_and_credentials_are_checked() {
         ],
     )]);
     assert!(ds.verify(&header()).await.is_ok());
+}
+
+/// A revoked credential, and a server of the caller or its issuer that
+/// answers 404, refuse the caller (HTTP 401). A server that does not
+/// answer is a temporary failure (HTTP 503): the caller may be fine.
+#[tokio::test]
+async fn unreachable_services_are_temporary_and_refusals_are_not() {
+    let ds = dataspace().await;
+    // nobody listens on port 9 (discard)
+    let down = "http://127.0.0.1:9";
+
+    // revoked: a refusal
+    ds.answer_member(&ds.status_entry("5"));
+    ds.publish_status_list(&ds.issuer, &[5]);
+    let revoked = ds.verify_error().await;
+    assert!(!revoked.is_temporary(), "{revoked}");
+    assert!(revoked.reason().contains("revoked"), "{revoked}");
+
+    // the status list's host does not answer: temporary
+    let mut entry = ds.entry("1", "BitstringStatusListEntry", "revocation", "5");
+    entry["statusListCredential"] = Value::from(format!("{down}/status/1"));
+    ds.answer_member(&json!({"credentialStatus": entry}));
+    let unreachable = ds.verify_error().await;
+    assert!(unreachable.is_temporary(), "{unreachable}");
+
+    // the status list is not there (404): a refusal
+    ds.answer_member(
+        &json!({"credentialStatus": ds.entry("1", "BitstringStatusListEntry", "revocation", "9")}),
+    );
+    ds.world.lock().unwrap().status_lists.clear();
+    let missing = ds.verify_error().await;
+    assert!(!missing.is_temporary(), "{missing}");
+
+    // the holder's DID document is cached now, so the last two cases
+    // use callers not seen before
+    let token_of = |caller: &Party| {
+        let jti = portitor_runtime::system::new_uuid();
+        format!("Bearer {}", caller.id_token(&ds.me_did, Some("a"), &jti))
+    };
+
+    // the caller's Credential Service does not answer: temporary
+    let moved = Party::new(&ds.base, "moved");
+    ds.world
+        .lock()
+        .unwrap()
+        .documents
+        .insert("moved".into(), moved.document(down, true));
+    let no_service = ds.verifier.verify(Some(&token_of(&moved))).await;
+    let no_service = no_service.unwrap_err();
+    assert!(no_service.is_temporary(), "{no_service}");
+
+    // the caller's DID document is not there (404): a refusal
+    let unknown = Party::new(&ds.base, "unknown");
+    let no_document = ds.verifier.verify(Some(&token_of(&unknown))).await;
+    let no_document = no_document.unwrap_err();
+    assert!(!no_document.is_temporary(), "{no_document}");
 }
 
 #[tokio::test]

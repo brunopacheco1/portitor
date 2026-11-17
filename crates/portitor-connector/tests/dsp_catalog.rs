@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
 mod common;
-use common::{CONSUMER, PROVIDER, authenticating, from};
+use common::{CONSUMER, NoSender, PROVIDER, authenticating, from};
 
 const SCHEMAS: &[(&str, &str)] = &[
     (
@@ -95,19 +95,6 @@ fn provider_config(datasets_file: Option<&str>) -> portitor_connector::Config {
         db_file: "unused.db".into(),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
-    }
-}
-
-/// The catalog tests never send anything.
-struct NoSender;
-
-impl portitor_connector::http_client::Sender for NoSender {
-    fn post<'a>(
-        &'a self,
-        _: &'a str,
-        _: &'a Value,
-    ) -> portitor_runtime::BoxFuture<'a, Result<serde_json::Value, String>> {
-        Box::pin(async { Err("not in this test".to_owned()) })
     }
 }
 
@@ -455,16 +442,8 @@ async fn unreadable_or_malformed_files_leave_an_empty_catalog() {
 
 #[test]
 fn config_from_variables() {
-    use std::collections::HashMap;
-    use std::ffi::OsString;
+    use portitor_runtime::testing::vars;
     let file = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/datasets.json");
-    let vars = |pairs: &[(&str, &str)]| {
-        let map: HashMap<String, OsString> = pairs
-            .iter()
-            .map(|(k, v)| ((*k).to_owned(), OsString::from(v)))
-            .collect();
-        move |k: &str| map.get(k).cloned()
-    };
 
     let defaults = portitor_connector::Config::from_vars(vars(&[])).unwrap();
     assert_eq!(defaults.participant_id, "did:web:localhost%3A8080");

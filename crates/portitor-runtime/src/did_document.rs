@@ -298,19 +298,11 @@ mod tests {
 
     #[test]
     fn retired_key_files_hold_one_public_key_each() {
-        let dir = std::env::temp_dir().join(format!(
-            "portitor-retired-{}",
-            crate::system::new_uuid().trim_start_matches("urn:uuid:")
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testing::TempDir::new("retired");
         let current = SigningKey::generate().unwrap();
         let old = SigningKey::generate().unwrap();
         let older = SigningKey::generate().unwrap();
-        let write = |name: &str, text: &str| {
-            let path = dir.join(name);
-            std::fs::write(&path, text).unwrap();
-            path
-        };
+        let write = |name: &str, text: &str| dir.write(name, text);
         let public_pem =
             |key: &SigningKey| portitor_dcp::x509::p256_public_key_pem(&key.public_jwk()).unwrap();
         let old_file = write("old.pem", &public_pem(&old));
@@ -333,13 +325,12 @@ mod tests {
             (vec![current_file], "is the current key"),
             (vec![old_file.clone(), old_file.clone()], "listed twice"),
             (vec![private_file], "a private key"),
-            (vec![dir.join("missing.pem")], "cannot read"),
+            (vec![dir.path().join("missing.pem")], "cannot read"),
         ];
         for (files, reason) in refusals {
             let error = read(&files).unwrap_err();
             assert!(error.starts_with(setting), "{error}");
             assert!(error.contains(reason), "{error}");
         }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

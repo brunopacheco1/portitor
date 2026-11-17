@@ -26,7 +26,8 @@ versions may change behaviour and configuration.
   callbacks), the identity's `POST /sts/token` and the issuer's
   `POST <issuer service>/credentials`. A larger body gets HTTP 413 with
   a problem body; a declared `Content-Length` over the limit is refused
-  before the body is read. Data plane answers are still streamed.
+  before the body is read, and a body without one is not read before
+  the DSP caller check. Data plane answers are still streamed.
 
 - Every parser of input from outside the process has a fuzz target
   (roadmap 0.11). New targets: `dcp_x509` (X.509 chains), `dps_messages`
@@ -46,8 +47,8 @@ versions may change behaviour and configuration.
 
 - Status list cache in the connector's DCP verifier (TD-06, ADR 0016
   amended): `PORTITOR_STATUS_LIST_CACHE_SECONDS`, default 300, at most
-  3600 (a larger value stops the start), `0` fetches the list on every
-  check. Only lists that were fetched and verified are kept, by URL, in
+  3600 (a larger value stops the start; empty counts as not set), `0`
+  fetches the list on every check. Only lists that were fetched and verified are kept, by URL, in
   memory, never past the list's own `validUntil` or `exp`. A revocation
   now takes up to that long to be seen (DEPLOYING, "Status list
   cache"). The Compose demo, `scripts/demo.sh`, the EDC interop test
@@ -68,6 +69,14 @@ versions may change behaviour and configuration.
 
 ### Changed
 
+- The connector's DCP check answers HTTP 503, not 401, when it could not
+  finish because a server it fetches from did not answer or answered
+  408, 429 or 5xx (the caller's DID document or Credential Service, an
+  issuer's DID document or status list, our STS), or took longer than
+  20 s. A partner's outbox then tries again, where a 401 ends the tries.
+  Real refusals (bad token, revoked credential, untrusted issuer, a 404
+  from the caller's server) still answer 401. ADR 0016 is amended; the
+  maintainer has still to confirm it.
 - The connector's outbox retries a DSP message only when no answer came,
   or the answer was 408, 429 or 5xx; any other answer (400, 404, 409,
   ...) ends the tries at once (TD-30, ADR 0007 amended). The state check

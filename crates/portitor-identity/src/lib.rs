@@ -225,14 +225,12 @@ impl Identity {
         &self.kid
     }
 
-    /// The ids of the retired keys listed in its DID document.
+    /// The retired public keys listed in its DID document (the same
+    /// shape as the issuer's `Issuer::retired_keys`). The id of each is
+    /// [`key_id`] of our DID and the key.
     #[must_use]
-    pub fn retired_kids(&self) -> Vec<String> {
-        let mut kids = Vec::new();
-        for retired in &self.retired_keys {
-            kids.push(key_id(&self.participant_id, retired));
-        }
-        kids
+    pub fn retired_keys(&self) -> &[Jwk] {
+        &self.retired_keys
     }
 
     /// The public key of this participant that signed `token`, named by

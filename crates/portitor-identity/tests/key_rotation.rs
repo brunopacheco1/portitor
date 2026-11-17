@@ -23,12 +23,13 @@ use portitor_dcp::{
 };
 use portitor_identity::config::Config;
 use portitor_identity::store::{IdentityStore, SqliteStore};
-use portitor_runtime::system::{new_uuid, now_secs};
+use portitor_runtime::system::now_secs;
+use portitor_runtime::testing::TempDir;
 use serde_json::json;
 
 #[tokio::test]
 async fn a_key_change_with_the_old_key_retired_leaves_no_gap() {
-    let dir = TempDir::new();
+    let dir = TempDir::new("identity-keys");
     let old_key = SigningKey::generate().unwrap();
     let new_key = SigningKey::generate().unwrap();
 
@@ -48,10 +49,7 @@ async fn a_key_change_with_the_old_key_retired_leaves_no_gap() {
     let retired_file = dir.write("old-key.pub.pem", &public_pem(&old_key));
     let after = start(&with_retired(vec![retired_file]), &new_key);
     assert_ne!(after.identity.kid(), old_kid);
-    assert_eq!(
-        after.identity.retired_kids(),
-        std::slice::from_ref(&old_kid)
-    );
+    assert_eq!(after.identity.retired_keys(), [old_key.public_jwk()]);
     let document = did_document(&after).await;
     assert!(token_verifies(&old_token, &document));
     assert!(presentation_verifies(&old_presentation, &document));
@@ -81,7 +79,7 @@ async fn a_key_change_with_the_old_key_retired_leaves_no_gap() {
 /// API, valid 30 days), both signed with the old key before the change.
 #[tokio::test]
 async fn access_tokens_signed_before_a_key_change_stay_usable_while_listed() {
-    let dir = TempDir::new();
+    let dir = TempDir::new("identity-keys");
     let old_key = SigningKey::generate().unwrap();
     let new_key = SigningKey::generate().unwrap();
     let store: Arc<dyn IdentityStore> = Arc::new(SqliteStore::in_memory().unwrap());
@@ -114,7 +112,7 @@ async fn access_tokens_signed_before_a_key_change_stay_usable_while_listed() {
 
 #[test]
 fn the_identity_does_not_start_with_a_wrong_retired_key_file() {
-    let dir = TempDir::new();
+    let dir = TempDir::new("identity-keys");
     let key = SigningKey::generate().unwrap();
     let old = SigningKey::generate().unwrap();
     let current_file = dir.write("current.pub.pem", &public_pem(&key));
@@ -127,7 +125,7 @@ fn the_identity_does_not_start_with_a_wrong_retired_key_file() {
         (vec![current_file], "is the current key"),
         (vec![old_file.clone(), old_file], "listed twice"),
         (vec![private_file], "a private key"),
-        (vec![dir.0.join("missing.pem")], "cannot read"),
+        (vec![dir.path().join("missing.pem")], "cannot read"),
     ];
     for (files, reason) in refusals {
         let error = World::try_with(
@@ -297,31 +295,4 @@ async fn did_document(world: &World) -> DidDocument {
     .await;
     assert_eq!(status, StatusCode::OK);
     serde_json::from_value(json).unwrap()
-}
-
-/// A temporary directory, removed when dropped.
-struct TempDir(PathBuf);
-
-impl TempDir {
-    fn new() -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "portitor-identity-keys-{}",
-            new_uuid().trim_start_matches("urn:uuid:")
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        Self(dir)
-    }
-
-    /// Writes `text` to the file `name` in the directory.
-    fn write(&self, name: &str, text: &str) -> PathBuf {
-        let path = self.0.join(name);
-        std::fs::write(&path, text).unwrap();
-        path
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
 }

@@ -18,7 +18,7 @@ use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::health;
 use portitor_runtime::management::management_port;
-use portitor_runtime::request_size::{RequestLimits, limit_port};
+use portitor_runtime::request_size::RequestLimits;
 use portitor_runtime::serve::{
     MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, run_component, serve_with_trusted_routes, with_limits,
 };
@@ -70,8 +70,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         compliance,
     };
     let identity = Arc::new(Identity::new(&config, key, sts_client_secret, ports)?);
-    for retired in identity.retired_kids() {
-        tracing::info!(kid = %retired, "retired key listed in the DID document; it does not sign");
+    for retired in identity.retired_keys() {
+        let kid = portitor_runtime::did_document::key_id(identity.participant_id(), retired);
+        tracing::info!(kid = %kid, "retired key listed in the DID document; it does not sign");
     }
     if let Some(chain) = identity.certificate_chain() {
         tokio::spawn(portitor_identity::certificate::watch(chain));
@@ -97,7 +98,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     let management = (
         management_listener,
-        limit_port(management_app, limits.management),
+        limits.on_management_port(management_app),
     );
     tracing::info!(
         bind = %config.bind,
@@ -108,7 +109,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     // the public routes: anyone can call them. The size limit is inside
     // the time limit, so a slow body counts against the time too
-    let app = limit_port(portitor_identity::router(identity), limits.public);
+    let app = limits.on_public_port(portitor_identity::router(identity));
     let app = with_limits(app, REQUEST_TIMEOUT, MAX_CONCURRENT_REQUESTS);
     // only the STS is called from inside the participant (by its own
     // connector), so only its caller's trace context is taken

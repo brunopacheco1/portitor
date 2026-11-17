@@ -32,6 +32,7 @@ use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::directory::Directory;
 use portitor_runtime::http::Sender;
 use portitor_runtime::system::{new_uuid, now_secs};
+use portitor_runtime::testing::TempDir;
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
@@ -972,30 +973,10 @@ async fn a_holder_may_hold_a_limited_number_of_active_credentials() {
     assert_eq!(world.ask("h-4", &["membership-vc20"]).await, "ISSUED");
 }
 
-/// A temporary directory, removed when dropped.
-struct TempDir(std::path::PathBuf);
-
-impl TempDir {
-    fn new() -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "portitor-issuer-test-{}",
-            new_uuid().trim_start_matches("urn:uuid:")
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        Self(dir)
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
 #[tokio::test]
 async fn a_full_status_list_rejects_the_request() {
-    let dir = TempDir::new();
-    let path = dir.0.join("issuer.db");
+    let dir = TempDir::new("issuer-test");
+    let path = dir.path().join("issuer.db");
     let world = World::with(Setup::on_file(&path, &SigningKey::generate().unwrap()));
     // every position of the vc11 list is taken, by other holders
     let mut conn = rusqlite::Connection::open(&path).unwrap();
@@ -1037,8 +1018,8 @@ async fn a_full_status_list_rejects_the_request() {
 
 #[tokio::test]
 async fn after_a_restart_waiting_work_is_done_and_revocations_kept() {
-    let dir = TempDir::new();
-    let path = dir.0.join("issuer.db");
+    let dir = TempDir::new("issuer-test");
+    let path = dir.path().join("issuer.db");
     let key = SigningKey::generate().unwrap();
 
     // before the restart: one credential delivered and revoked, one
@@ -1110,8 +1091,8 @@ async fn after_a_restart_waiting_work_is_done_and_revocations_kept() {
 /// removed from the list, what it signed no longer verifies.
 #[tokio::test]
 async fn a_key_change_with_the_old_key_retired_leaves_no_gap() {
-    let dir = TempDir::new();
-    let path = dir.0.join("issuer.db");
+    let dir = TempDir::new("issuer-test");
+    let path = dir.path().join("issuer.db");
     let old_key = SigningKey::generate().unwrap();
     let new_key = SigningKey::generate().unwrap();
 
@@ -1139,9 +1120,8 @@ async fn a_key_change_with_the_old_key_retired_leaves_no_gap() {
     drop(before);
 
     // after: the new key signs, the old public key is listed as retired
-    let retired_file = dir.0.join("old-key.pub.pem");
     let old_public = p256_public_key_pem(&old_key.public_jwk()).unwrap();
-    std::fs::write(&retired_file, old_public).unwrap();
+    let retired_file = dir.write("old-key.pub.pem", &old_public);
     let after = World::with(Setup {
         retired_key_files: vec![retired_file],
         ..Setup::on_file(&path, &new_key)
@@ -1178,14 +1158,10 @@ async fn a_key_change_with_the_old_key_retired_leaves_no_gap() {
 
 #[test]
 fn the_issuer_does_not_start_with_its_own_key_as_retired() {
-    let dir = TempDir::new();
+    let dir = TempDir::new("issuer-test");
     let key = SigningKey::generate().unwrap();
-    let current_file = dir.0.join("current.pub.pem");
-    std::fs::write(
-        &current_file,
-        p256_public_key_pem(&key.public_jwk()).unwrap(),
-    )
-    .unwrap();
+    let current_public = p256_public_key_pem(&key.public_jwk()).unwrap();
+    let current_file = dir.write("current.pub.pem", &current_public);
     let config = Config {
         participant_id: ISSUER.to_owned(),
         key_file: "unused".into(),
@@ -1406,8 +1382,8 @@ fn write_management_description() {
 #[tokio::test]
 async fn health_checks_its_own_dependencies_without_the_key() {
     use portitor_runtime::health::management_app;
-    let dir = TempDir::new();
-    let path = dir.0.join("issuer.db");
+    let dir = TempDir::new("issuer-test");
+    let path = dir.path().join("issuer.db");
     let world = World::with(Setup::on_file(&path, &SigningKey::generate().unwrap()));
     let checks = Arc::new(portitor_issuer::health::readiness_checks(
         &world.issuer,
@@ -1445,7 +1421,7 @@ async fn health_checks_its_own_dependencies_without_the_key() {
         StatusCode::NOT_FOUND
     );
     // the file is gone: not ready, and the answer says which check failed
-    std::fs::remove_dir_all(&dir.0).unwrap();
+    std::fs::remove_dir_all(dir.path()).unwrap();
     let (status, body) = call(&checks_only, get("/api/check/health")).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["isSystemHealthy"], false);
@@ -1477,17 +1453,23 @@ fn unknown_arguments_exit_with_2() {
 async fn request_bodies_over_the_limits_get_413() {
     use portitor_runtime::request_size::testing::assert_size_limit;
     use portitor_runtime::request_size::{
-        DEFAULT_MAX_REQUEST_BYTES, SMALL_MESSAGE_MAX_BYTES, limit_port,
+        MANAGEMENT_SETTING, PUBLIC_SETTING, RequestLimits, SMALL_MESSAGE_MAX_BYTES,
+    };
+    use portitor_runtime::testing::vars;
+    // the limits as `main.rs` reads and applies them
+    let limits = |public: &str| {
+        let settings = vars(&[(PUBLIC_SETTING, public), (MANAGEMENT_SETTING, "100000")]);
+        RequestLimits::from_vars(settings).unwrap()
     };
     let world = World::new();
     let credentials =
         || Request::post("/issuer/credentials").header(header::CONTENT_TYPE, "application/json");
-    let public = limit_port(world.app.clone(), DEFAULT_MAX_REQUEST_BYTES);
+    let public = limits("").on_public_port(world.app.clone());
     assert_size_limit(&public, credentials, SMALL_MESSAGE_MAX_BYTES).await;
-    let public = limit_port(world.app.clone(), 1_000);
+    let public = limits("1000").on_public_port(world.app.clone());
     assert_size_limit(&public, credentials, 1_000).await;
 
-    let management = limit_port(world.management.clone(), 100_000);
+    let management = limits("").on_management_port(world.management.clone());
     let participants = || {
         authed(Request::post("/v1/participants")).header(header::CONTENT_TYPE, "application/json")
     };
