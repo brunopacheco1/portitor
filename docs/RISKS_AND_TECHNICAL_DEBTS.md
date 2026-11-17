@@ -122,7 +122,7 @@ checks this file:
 | [TD-27](#td-27) | The domain crates' I/O check named too few crates | Technical debt | 0.5 review (ADR 0004, 2026-11-14) | Addressed | done 2026-11-14 |
 | [TD-28](#td-28) | No trace across participants | Technical debt | 0.9 (ADR 0023, 2026-11-15) | Accepted | — |
 | [TD-29](#td-29) | No OTLP logs export, no gRPC, no compression | Technical debt | 0.9 (ADR 0023, DEPLOYING, 2026-11-15) | Open | Later |
-| [TD-30](#td-30) | The outbox resends a message the counter-party refused | Technical debt | 0.9 (outbox metrics, 2026-11-15) | Open | 0.11 |
+| [TD-30](#td-30) | The outbox resends a message the counter-party refused | Technical debt | 0.9 (outbox metrics, 2026-11-15) | Addressed | done in 0.11 |
 
 Totals: 40 risks (Open 9, Mitigated 18, Accepted 4, Addressed 9);
 30 technical debts (Open 19, Accepted 5, Addressed 6).
@@ -1222,16 +1222,22 @@ a signer port with an OpenBao adapter in ROADMAP 1.4.
 <a id="td-30"></a>
 ### TD-30 The outbox resends a message the counter-party refused
 
-- **What.** The connector's outbox retries a DSP message on any error,
-  also when the counter-party answered with a 4xx status (for example
-  400, a message it will never take). With the default settings it
-  sends the message three more times, then gives up
+- **What.** Until 0.11 the connector's outbox retried a DSP message on
+  any error, also when the counter-party answered with a 4xx status (for
+  example 400, a message it will never take). With the default settings
+  it sent the message three more times, then gave up
   (`crates/portitor-connector/src/outbox.rs`, `send`). Seen in 0.9 with
   the new `portitor.outbox.message.resent` metric during the Compose demo.
 - **Why it matters.** Wasted calls and a later failure: the process
   ends only after the last retry instead of at once, and the partner
   sees the same bad request several times.
-- **Current state: Open.** Behaviour since the outbox
-  ([ADR 0007](adr/0007-outbox-and-proof-of-delivery.md)); not changed in 0.9.
-- **Next.** ROADMAP 0.11 (maintainer, 2026-11-15): retry only on network errors, 408,
-  429 and 5xx; give up at once on other 4xx.
+- **Current state: Addressed** in 0.11, as planned (ROADMAP 0.11,
+  maintainer, 2026-11-15): the outbox retries only when no answer came,
+  or on 408, 429 and 5xx; any other answer ends the tries at once
+  (`worth_retrying` in `outbox.rs`, tested per class). The state check
+  after a failed send is unchanged; ADR 0007 has a dated note. The
+  issuer's delivery outbox already gave up at once on a 4xx other than
+  401, 408 and 429 (`is_permanent` in
+  `crates/portitor-issuer/src/delivery.rs`, since 0.6), so it is not
+  changed.
+- **Next.** None.

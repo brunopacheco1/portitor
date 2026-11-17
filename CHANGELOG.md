@@ -23,6 +23,14 @@ versions may change behaviour and configuration.
   cache"). The Compose demo, `scripts/demo.sh`, the EDC interop test
   and the DCP TCK run set `0`.
 
+### Changed
+
+- The connector's outbox retries a DSP message only when no answer came,
+  or the answer was 408, 429 or 5xx; any other answer (400, 404, 409,
+  ...) ends the tries at once (TD-30, ADR 0007 amended). The state check
+  after a failed send is unchanged. The issuer's delivery outbox already
+  worked this way and is not changed.
+
 ### Documentation
 
 - ADR 0022: says which Gaia-X documents were checked for how a

@@ -83,6 +83,18 @@ the store adapters only keep `pending` and `version`; the HTTP adapter
 sends, checks the partner's state and resumes. SQLite schema version 3
 adds the two columns to both tables.
 
+### Amended in 0.11: which failures are retried (2026-11-17)
+
+Until 0.11 a send was retried on any failure, also when the partner
+answered with a 4xx status, a message it will never take
+([TD-30](../RISKS_AND_TECHNICAL_DEBTS.md#td-30)). The maintainer decided
+(ROADMAP 0.11, 2026-11-15): a send is retried only when no answer came
+(connection failed, timeout, an answer that could not be read) or the
+answer was 408, 429 or 5xx. Any other answer ends the tries at once.
+What follows a failed send does not change: the partner's state is
+still read, and a message it shows as arrived still counts as
+delivered ("Lost answers" above).
+
 ## Consequences
 
 - The 3 second wait is gone; messages that race their acknowledgement are
