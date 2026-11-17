@@ -24,7 +24,9 @@ fn check_key(key: &Result<Jwk, X509Error>) {
                 assert_eq!(x.len(), 43);
                 assert_eq!(y.len(), 43);
             }
-            other => panic!("not an EC key: {other:?}"),
+            // the key is not printed: a log of key material is flagged by
+            // CodeQL, and the input that found it is saved by the fuzzer
+            _ => panic!("not an EC key"),
         }
     }
 }
@@ -45,7 +47,7 @@ fuzz_target!(|data: &[u8]| {
     // the same bytes in a PEM block give the same answer
     let from_pem = x509::first_certificate_key(&as_pem_block(data));
     check_key(&from_pem);
-    assert_eq!(from_der, from_pem);
+    assert!(from_der == from_pem, "DER and PEM paths disagree");
     // any text as a PEM chain
     if let Ok(text) = std::str::from_utf8(data) {
         if let Ok(certificates) = x509::pem_certificates(text) {
