@@ -119,8 +119,9 @@ Configuration (environment variables):
 
 As provider, the connector agrees to a request for an offer in its
 catalog, then finalizes once the consumer verifies. It sends its messages
-to the consumer's `callbackAddress` and retries 3 times; if the consumer
-cannot be reached, it terminates the negotiation.
+to the consumer's `callbackAddress`. It tries again up to 3 times when no
+answer came, or the answer was 408, 429 or 5xx; any other answer ends the
+tries. If the message did not arrive, it terminates the negotiation.
 
 As consumer, the connector accepts the provider's offer and verifies its
 agreement. Providers send their messages to the callback endpoints above.

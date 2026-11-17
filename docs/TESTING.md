@@ -196,6 +196,24 @@ Where the tests are:
   share the trace, no trace context crosses a DSP-like call, and no
   secret or `Authorization` value appears in any export.
   `cargo test -p portitor-runtime --test telemetry_export`.
+- **Request size limits** (R-18): `crates/portitor-runtime/src/request_size.rs`
+  tests the settings and their bounds, and the lower of the port's and
+  the route's limit. `tests/request_size.rs` in the connector and the
+  identity, and `request_bodies_over_the_limits_get_413` in the issuer's
+  `tests/issuer.rs`, send each limited route a body at its limit and one
+  byte over, with and without `Content-Length`.
+- **Status list cache** (ADR 0016, amended): the unit tests in
+  `crates/portitor-connector/src/auth/dcp/status_list_cache.rs`, and the
+  verifier tests in `src/auth/dcp/tests.rs` (at 0 and 300 seconds, a
+  list that ends sooner, a failed fetch, a revocation seen once the list
+  is stale). `cargo test -p portitor-connector --lib auth::dcp`.
+- **Retired keys** (TD-05): `crates/portitor-identity/tests/key_rotation.rs`,
+  and `a_key_change_with_the_old_key_retired_leaves_no_gap` in the
+  issuer's `tests/issuer.rs`: what the old key signed verifies while it
+  is listed, and stops once it is removed.
+- **Outbox retries** (ADR 0007, amended): `src/outbox.rs` in the
+  connector checks which failures are tried again and that any other
+  answer ends the tries. `cargo test -p portitor-connector --lib outbox`.
 
 Rules for new tests:
 
