@@ -1350,3 +1350,28 @@ fn unknown_arguments_exit_with_2() {
         assert!(stderr.contains("takes no arguments"), "{stderr}");
     }
 }
+
+/// Request size limits (R-18): a body one byte over the limit gets 413,
+/// a body at the limit is not refused for its size. A credential request
+/// has the fixed limit of small messages, or the public port's limit
+/// when that is lower.
+#[tokio::test]
+async fn request_bodies_over_the_limits_get_413() {
+    use portitor_runtime::request_size::testing::assert_size_limit;
+    use portitor_runtime::request_size::{
+        DEFAULT_MAX_REQUEST_BYTES, SMALL_MESSAGE_MAX_BYTES, limit_port,
+    };
+    let world = World::new();
+    let credentials =
+        || Request::post("/issuer/credentials").header(header::CONTENT_TYPE, "application/json");
+    let public = limit_port(world.app.clone(), DEFAULT_MAX_REQUEST_BYTES);
+    assert_size_limit(&public, credentials, SMALL_MESSAGE_MAX_BYTES).await;
+    let public = limit_port(world.app.clone(), 1_000);
+    assert_size_limit(&public, credentials, 1_000).await;
+
+    let management = limit_port(world.management.clone(), 100_000);
+    let participants = || {
+        authed(Request::post("/v1/participants")).header(header::CONTENT_TYPE, "application/json")
+    };
+    assert_size_limit(&management, participants, 100_000).await;
+}

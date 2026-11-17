@@ -33,6 +33,9 @@ rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+# drives a router in memory in request_size::testing (feature test-support only); already in
+# the tree through axum
+tower = { version = "0.5", features = ["util"], optional = true }
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
@@ -49,10 +52,10 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
 
 [features]
-# telemetry::testing: in-memory traces and a traceparent recorder for the
-# tests of this crate and the binaries; switched on only by their
-# [dev-dependencies]
-test-support = []
+# telemetry::testing: in-memory traces and a traceparent recorder, and
+# request_size::testing: the size limit check, for the tests of this crate
+# and the binaries; switched on only by their [dev-dependencies]
+test-support = ["dep:tower"]
 
 [lints]
 workspace = true

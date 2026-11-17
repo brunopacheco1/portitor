@@ -32,6 +32,7 @@ use portitor_dcp::message::IssuerMetadata;
 use portitor_dcp::{JtiCache, Jwk, SigningKey};
 use portitor_runtime::directory::Directory;
 use portitor_runtime::http::Sender;
+use portitor_runtime::request_size::small_message;
 
 pub mod bundle_build;
 pub mod bundles;
@@ -186,6 +187,11 @@ impl Issuer {
 /// `PORTITOR_ISSUER_SERVICE_URL` the DCP issuer service and the status
 /// lists, and, with `PORTITOR_ISSUER_BUNDLE_DIR`, the built bundles at
 /// `/bundles/{version}/{path}` and `/bundles/latest.json`.
+///
+/// A credential request (DCP v1.0.1, section 6.4) names only the holder's
+/// request id and credential ids, so its route has the fixed size limit
+/// of small messages ([`small_message`], R-18). The other public routes
+/// take no body.
 pub fn router(issuer: Arc<Issuer>) -> Router {
     let service = issuer.service_path.clone();
     let mut router = Router::new();
@@ -198,7 +204,10 @@ pub fn router(issuer: Arc<Issuer>) -> Router {
     router
         .route(&issuer.did_path, get(did_document::serve))
         .route(&format!("{service}/metadata"), get(requests::metadata))
-        .route(&format!("{service}/credentials"), post(requests::create))
+        .route(
+            &format!("{service}/credentials"),
+            small_message(post(requests::create)),
+        )
         .route(
             &format!("{service}/requests/{{issuer_pid}}"),
             get(requests::status),

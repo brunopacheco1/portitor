@@ -116,6 +116,8 @@ All configuration is by environment variable. The full table is in the
 | `PORTITOR_BIND` | leave the default, `0.0.0.0:8080` |
 | `PORTITOR_MANAGEMENT_API_KEY_FILE` | path of the mounted key file, or unset (management API off; the management port then serves only the [health checks](#health-and-logs)). The value is trimmed; an empty value counts as unset |
 | `PORTITOR_MANAGEMENT_BIND` | `0.0.0.0:8081` in a container (publish it only on an internal interface); the default `127.0.0.1:8081` is unreachable from outside a container. The port is always bound: it serves the [health checks](#health-and-logs), with or without the key |
+| `PORTITOR_MAX_REQUEST_BYTES` | leave the default, `2097152` (2 MiB): the largest request body the public port takes; a larger one gets HTTP 413. Some routes have a lower fixed limit ([section 5](#5-security)). A value that is not a whole number from `1` to `67108864` (64 MiB) stops the start |
+| `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | leave the default, `2097152` (2 MiB): the same for the management port |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | **unset** (never `true` in production) |
 | `PORTITOR_DATA_TOKEN_SECONDS` | leave the default, `3600`, unless consumers need longer to fetch; at most `31536000` (one year) |
 | `PORTITOR_STS_URL` | **required**: your identity's STS token endpoint, `<identity base URL>/sts/token` |
@@ -506,6 +508,8 @@ participant.
 | `PORTITOR_DB_FILE` | `/data/portitor-identity.db` | leave the default |
 | `PORTITOR_MANAGEMENT_API_KEY_FILE` | unset (management API off; the port serves only the health checks; an empty value counts as unset) | path of the mounted key file |
 | `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8091` | `0.0.0.0:8091` in a container, published only on an internal interface. Always bound, for the health checks |
+| `PORTITOR_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | leave the default; the largest request body the public port takes (HTTP 413 above it; `POST /sts/token` has a lower fixed limit, [section 5](#5-security)). From `1` to `67108864` (64 MiB), or the start stops |
+| `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | leave the default; the same for the management port |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (no traces or metrics) | your OTLP receiver's base URL, if you collect them ([Traces and metrics](#traces-and-metrics)) |
 | `PORTITOR_SCOPE_TYPE_ALIASES` | `org.eclipse.edc.vc.type` | comma-separated scope aliases that mean "credentials of this type", besides DCP's `org.eclipse.dspace.dcp.vc.type` |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | unset | **unset** (`true` allows plain-HTTP DIDs and URLs, tests only) |
@@ -879,6 +883,27 @@ DID, so usually not).
   after 20 s. On the public ports each request gets 60 s and at most 256
   are worked on at once; the others wait, and a request over time gets
   HTTP 503 (log `request took too long or waited too long`, WARN).
+- **Request size limits (R-18).** Each port takes request bodies up to
+  its setting, `PORTITOR_MAX_REQUEST_BYTES` (public port) and
+  `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` (management port), 2 MiB by
+  default. These routes, whose messages are small by specification, have
+  a fixed limit of 64 KiB, or the port's limit when that is lower:
+  - connector: `POST /dsp/2025-1/catalog/request`; `POST
+    /dsp/2025-1/negotiations/{providerPid}/events`,
+    `/agreement/verification` and `/termination`; `POST
+    /dsp/2025-1/transfers/{providerPid}/suspension`, `/completion` and
+    `/termination`; and the same messages on the consumer callbacks
+    (`/dsp/2025-1/callback/negotiations/{consumerPid}/events` and
+    `/termination`, `/dsp/2025-1/callback/transfers/{consumerPid}/suspension`,
+    `/completion` and `/termination`);
+  - identity: `POST /sts/token`;
+  - issuer: `POST <issuer service>/credentials`.
+
+  A larger body gets HTTP 413 with a problem body (log `request body too
+  large`, INFO). A request that declares its length (`Content-Length`)
+  is refused before its body is read; a body without a declared length
+  is read up to the limit. Data plane answers are streamed and have no
+  size limit.
 - **Trusted issuers.** Whoever controls a DID in
   `PORTITOR_TRUSTED_ISSUERS` can admit any participant. List only your
   dataspace's issuers.
@@ -1428,6 +1453,8 @@ DID.
 | `PORTITOR_DB_FILE` | `/data/portitor-issuer.db` | keep the image default |
 | `PORTITOR_MANAGEMENT_API_KEY_FILE` | unset (management API off; the port serves only the health checks; an empty value counts as unset) | path of the mounted key file |
 | `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8071` | `0.0.0.0:8071` in a container, published only on an internal interface. Always bound, for the health checks |
+| `PORTITOR_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | keep; the largest request body the public port takes (HTTP 413 above it; credential requests have a lower fixed limit, [section 5](#5-security)). From `1` to `67108864` (64 MiB), or the start stops |
+| `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | keep; the same for the management port |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (no traces or metrics) | your OTLP receiver's base URL, if you collect them ([Traces and metrics](#traces-and-metrics)) |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | unset | **unset**; `true` only for local tests with plain-HTTP DIDs |
 | `PORTITOR_ISSUER_BUNDLE_KEY_FILE` | unset | with a bundle: the **public** bundle key as a JWK (as `bundle build` prints it), so the private key stays offline; a PKCS#8 PEM is accepted too. Listed in the DID document as `<did>#bundle-key` under `assertionMethod`. The start fails if it is the credential key |

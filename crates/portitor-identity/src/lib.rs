@@ -28,6 +28,7 @@ use axum::routing::{get, post};
 use portitor_dcp::{JtiCache, SigningKey};
 use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::directory::Directory;
+use portitor_runtime::request_size::small_message;
 
 mod caller;
 pub mod certificate;
@@ -241,13 +242,19 @@ pub const STS_ROUTE: &str = "/sts/token";
 /// service (under the path of `PORTITOR_CREDENTIAL_SERVICE_URL`), the
 /// certificate chain and the public Gaia-X credentials (under the DID's
 /// path, see [`gaiax::public_path`]).
+///
+/// The STS takes a form of a few short fields, so it has the fixed size
+/// limit of small messages ([`small_message`], R-18). The credential
+/// service's messages can carry credentials and presentation
+/// definitions, so they take the port's limit
+/// (`PORTITOR_MAX_REQUEST_BYTES`), which the binary sets.
 pub fn router(identity: Arc<Identity>) -> Router {
     let service = identity.service_path.clone();
     // below the DID's path, where the x5u and credential ids point
     let public = identity.public_path.clone();
     Router::new()
         .route(&identity.did_path, get(did_document::serve))
-        .route(STS_ROUTE, post(sts::token))
+        .route(STS_ROUTE, small_message(post(sts::token)))
         .route(
             &format!("{service}/presentations/query"),
             post(presentation::query),

@@ -16,6 +16,7 @@ use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::health;
 use portitor_runtime::http::HttpSender;
 use portitor_runtime::management::management_port;
+use portitor_runtime::request_size::{RequestLimits, limit_port};
 use portitor_runtime::serve::{
     MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, run_component, serve, with_limits,
 };
@@ -65,6 +66,7 @@ async fn serve_issuer() -> ExitCode {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_env()?;
+    let limits = RequestLimits::from_env()?;
     if config.allow_http {
         tracing::warn!("plain-http DIDs and URLs allowed (PORTITOR_ALLOW_HTTP_CALLBACKS)");
     }
@@ -99,10 +101,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         &issuer,
         config.db_file.clone(),
     ));
-    let management = management_port(&config.management, checks, |key| {
-        portitor_issuer::management::router(Arc::clone(&issuer), key)
-    })
-    .await?;
+    let (management_listener, management_app) =
+        management_port(&config.management, checks, |key| {
+            portitor_issuer::management::router(Arc::clone(&issuer), key)
+        })
+        .await?;
+    let management = (
+        management_listener,
+        limit_port(management_app, limits.management),
+    );
     tracing::info!(
         bind = %config.bind,
         did = %issuer.did(),
@@ -113,12 +120,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     // the outbox runs until the process stops
     tokio::spawn(portitor_issuer::delivery::run_outbox(Arc::clone(&issuer)));
-    // the public routes: anyone can call them
-    let app = with_limits(
-        portitor_issuer::router(issuer),
-        REQUEST_TIMEOUT,
-        MAX_CONCURRENT_REQUESTS,
-    );
+    // the public routes: anyone can call them. The size limit is inside
+    // the time limit, so a slow body counts against the time too
+    let app = limit_port(portitor_issuer::router(issuer), limits.public);
+    let app = with_limits(app, REQUEST_TIMEOUT, MAX_CONCURRENT_REQUESTS);
     serve((listener, app), Some(management)).await?;
     Ok(())
 }
