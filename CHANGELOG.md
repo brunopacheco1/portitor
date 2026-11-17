@@ -12,6 +12,12 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Changed
+
+- Release workflow: the SBOM attestation uses `actions/attest` v4.2.2
+  instead of `actions/attest-sbom`, which GitHub deprecated. The
+  attestation and `gh attestation verify` stay the same.
+
 ### Documentation
 
 - Close-out of 0.11: the roadmap and the website mark 0.11 released and
