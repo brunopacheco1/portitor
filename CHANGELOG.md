@@ -12,6 +12,11 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Documentation
+
+- Close-out of 0.11: the roadmap and the website mark 0.11 released and
+  0.12 as the current release; the website quickstart clones v0.11.0.
+
 ## [0.11.0] - 2026-11-17
 
 ### Security

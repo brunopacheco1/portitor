@@ -456,7 +456,7 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
   not filed (Gaia-X, no GitLab account), 1 on hold (R-10), 1 dropped
   (already filed by a third party).
 
-## 0.11 Security hardening
+## 0.11 Security hardening (released 2026-11-17 as v0.11.0)
 
 - Threat model review; fuzzing on every parser (ClusterFuzzLite).
 - Explicit request size limits per port and route, set by Portitor
