@@ -97,7 +97,7 @@ checks this file:
 | [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | research; code 1.5 |
 | [TD-03](#td-03) | A provider in several data spaces, each with its own rules | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | research, before the 0.13 freeze |
 | [TD-04](#td-04) | User to system authentication and authorisation, governed per data space | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | research before the 0.13 freeze; code 1.5 |
-| [TD-05](#td-05) | Key custody and key rotation | Technical debt | 0.5 (ADR 0015); 0.7 close-out (maintainer, 2026-11-15) | Open | 0.11 (two keys listed); 1.4 (OpenBao) |
+| [TD-05](#td-05) | Key custody and key rotation | Technical debt | 0.5 (ADR 0015); 0.7 close-out (maintainer, 2026-11-15) | Open | two keys listed done in 0.11; 1.4 (OpenBao) |
 | [TD-06](#td-06) | Status lists are not cached in the connector's DCP verifier | Technical debt | 0.6 (maintainer, 2026-11-14) | Open | 0.11 |
 | [TD-07](#td-07) | STS tokens and presentations are not cached | Technical debt | 0.5 (ADR 0016) | Open | 1.4, if 0.11 measurements need it |
 | [TD-08](#td-08) | One replica per SQLite file; no PostgreSQL adapter | Technical debt | 0.3 (ADR 0006, maintainer, 2026-11-12) | Accepted | Later |
@@ -907,6 +907,21 @@ several verification methods), how EDC IdentityHub rotates keys, and
 whether the change itself lands in 0.11 or later. Plan after 0.13
 (maintainer, 2026-11-15): two keys listed in each DID document in 0.11;
 a signer port with an OpenBao adapter in ROADMAP 1.4.
+
+Update (2026-11-17, 0.11): the rotation gap is closed for the identity
+and the issuer. `PORTITOR_IDENTITY_RETIRED_KEY_FILES` and
+`PORTITOR_ISSUER_RETIRED_KEY_FILES` list old public keys (PEM, never a
+private key) as their own verification methods, in the same
+relationships as the current key, so what the old key signed keeps
+verifying until the operator removes it; the old private key can be
+destroyed at once, as EDC IdentityHub does (ADR 0015 and ADR 0018,
+"Amended in 0.11: retired keys"; DEPLOYING, "Rotating a key"). Tested:
+`crates/portitor-identity/tests/key_rotation.rs` and
+`a_key_change_with_the_old_key_retired_leaves_no_gap` in
+`crates/portitor-issuer/tests/issuer.rs`. Still open: key custody (the
+private key is a PEM file; OpenBao in ROADMAP 1.4), the bundle key's
+rotation (one key, ROADMAP "Later", TD-16), and with Gaia-X a new
+certificate and compliance run at each key change (ADR 0021).
 
 <a id="td-06"></a>
 ### TD-06 Status lists are not cached in the connector's DCP verifier

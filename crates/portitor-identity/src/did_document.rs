@@ -2,32 +2,41 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! The participant's DID document (W3C `did:web`, "Create"): one
-//! verification method, the P-256 key, in `authentication` (it signs
-//! presentations, DCP 5.4.3), `assertionMethod` and `capabilityInvocation`
-//! (it signs self-issued tokens, DCP 4.3), and the `CredentialService`
-//! entry (DCP 5.2) that tells verifiers where to send presentation
-//! queries.
+//! The participant's DID document (W3C `did:web`, "Create"): the P-256
+//! key in `authentication` (it signs presentations, DCP 5.4.3),
+//! `assertionMethod` and `capabilityInvocation` (it signs self-issued
+//! tokens, DCP 4.3), each retired public key in the same three
+//! (`PORTITOR_IDENTITY_RETIRED_KEY_FILES`, TD-05), and the
+//! `CredentialService` entry (DCP 5.2) that tells verifiers where to send
+//! presentation queries.
 
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
-use portitor_dcp::{Purpose, SigningKey};
+use portitor_dcp::{Jwk, Purpose, SigningKey};
 use portitor_runtime::did_document::OwnDocument;
 pub use portitor_runtime::did_document::{DID_CONTEXT, path};
 use serde_json::Value;
 
 use crate::Identity;
 
-/// The DID document of `did`, with `key` known as `kid`, and the
-/// credential service at `credential_service_url`.
+/// The DID document of `did`, with `key` known as `kid`, the public
+/// `retired_keys` that no longer sign, and the credential service at
+/// `credential_service_url`.
 #[must_use]
-pub fn build(did: &str, kid: &str, key: &SigningKey, credential_service_url: &str) -> Value {
+pub fn build(
+    did: &str,
+    kid: &str,
+    key: &SigningKey,
+    retired_keys: &[Jwk],
+    credential_service_url: &str,
+) -> Value {
     portitor_runtime::did_document::build(&OwnDocument {
         did,
         kid,
         key,
+        retired_keys,
         purposes: &[
             Purpose::Authentication,
             Purpose::AssertionMethod,
@@ -55,7 +64,7 @@ mod tests {
         let key = SigningKey::generate().unwrap();
         let did = "did:web:identity.example";
         let kid = format!("{did}#key-1");
-        let json = build(did, &kid, &key, "https://identity.example/cs");
+        let json = build(did, &kid, &key, &[], "https://identity.example/cs");
         assert_eq!(json["@context"][0], DID_CONTEXT);
         let document: DidDocument = serde_json::from_value(json).unwrap();
         for purpose in [

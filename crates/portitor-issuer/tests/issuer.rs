@@ -18,8 +18,9 @@ use portitor_dcp::credential::Credential;
 use portitor_dcp::issuance::STATUS_LIST_ENTRIES;
 use portitor_dcp::message::RequestStatus;
 use portitor_dcp::status_list::{Status, check, list_in};
+use portitor_dcp::x509::p256_public_key_pem;
 use portitor_dcp::{
-    Claims, DidDocument, JtiCache, Relationship, Service, SigningKey, VerificationMethod,
+    Claims, DidDocument, JtiCache, Jws, Relationship, Service, SigningKey, VerificationMethod,
     validate_self_issued,
 };
 use portitor_issuer::config::Config;
@@ -224,6 +225,8 @@ struct Setup {
     max_active_per_holder: u64,
     /// `PORTITOR_ISSUER_BUNDLE_DIR`.
     bundle_dir: Option<PathBuf>,
+    /// `PORTITOR_ISSUER_RETIRED_KEY_FILES`.
+    retired_key_files: Vec<PathBuf>,
 }
 
 impl Setup {
@@ -233,6 +236,7 @@ impl Setup {
             key: SigningKey::generate().unwrap(),
             max_active_per_holder: 10,
             bundle_dir: None,
+            retired_key_files: Vec::new(),
         }
     }
 
@@ -244,6 +248,7 @@ impl Setup {
             key: SigningKey::from_pkcs8(key.pkcs8()).unwrap(),
             max_active_per_holder: 10,
             bundle_dir: None,
+            retired_key_files: Vec::new(),
         }
     }
 }
@@ -264,6 +269,7 @@ impl World {
         let config = Config {
             participant_id: ISSUER.to_owned(),
             key_file: "unused".into(),
+            retired_key_files: setup.retired_key_files,
             credentials_file: "unused".into(),
             issuer_service_url: SERVICE.to_owned(),
             bind: "unused".to_owned(),
@@ -1095,6 +1101,118 @@ async fn after_a_restart_waiting_work_is_done_and_revocations_kept() {
     for jwt in after.delivered(0).iter().chain(&after.delivered(1)) {
         assert_eq!(after.status_in_list(jwt).await, Status::Clear);
     }
+}
+
+/// A key change with the old public key listed as retired
+/// (`PORTITOR_ISSUER_RETIRED_KEY_FILES`, TD-05): the credentials and
+/// status lists the old key signed keep verifying while it is listed;
+/// the new key signs the lists from the restart on; once the old key is
+/// removed from the list, what it signed no longer verifies.
+#[tokio::test]
+async fn a_key_change_with_the_old_key_retired_leaves_no_gap() {
+    let dir = TempDir::new();
+    let path = dir.0.join("issuer.db");
+    let old_key = SigningKey::generate().unwrap();
+    let new_key = SigningKey::generate().unwrap();
+
+    // before the change: one credential per profile, and both status
+    // lists, signed with the old key
+    let before = World::with(Setup::on_file(&path, &old_key));
+    let old_kid = before.issuer.kid().to_owned();
+    before.register(HOLDER, json!({})).await;
+    assert_eq!(
+        before
+            .ask("h-1", &["membership-vc11", "membership-vc20"])
+            .await,
+        "ISSUED"
+    );
+    delivery::send_due(&before.issuer).await;
+    let credentials = before.delivered(0);
+    assert_eq!(credentials.len(), 2);
+    let mut old_signed = credentials.clone();
+    for name in ["vc11", "vc20"] {
+        old_signed.push(before.status_list(name).await);
+    }
+    for jwt in &old_signed {
+        assert_eq!(Jws::parse(jwt).unwrap().kid(), Some(old_kid.as_str()));
+    }
+    drop(before);
+
+    // after: the new key signs, the old public key is listed as retired
+    let retired_file = dir.0.join("old-key.pub.pem");
+    let old_public = p256_public_key_pem(&old_key.public_jwk()).unwrap();
+    std::fs::write(&retired_file, old_public).unwrap();
+    let after = World::with(Setup {
+        retired_key_files: vec![retired_file],
+        ..Setup::on_file(&path, &new_key)
+    });
+    assert_ne!(after.issuer.kid(), old_kid);
+    let document = after.did_document().await;
+    for jwt in &old_signed {
+        let credential = Credential::parse(jwt).unwrap();
+        credential.verify(&document, now_secs(), 5).unwrap();
+    }
+    // the lists are signed again at start, with the new key; a credential
+    // of the old key is checked against them, and can still be revoked
+    for name in ["vc11", "vc20"] {
+        let list = after.status_list(name).await;
+        assert_eq!(Jws::parse(&list).unwrap().kid(), Some(after.issuer.kid()));
+    }
+    let revoked_id = Credential::parse(&credentials[0]).unwrap().id.unwrap();
+    assert_eq!(after.revoke(&revoked_id).await, StatusCode::NO_CONTENT);
+    assert_eq!(after.status_in_list(&credentials[0]).await, Status::Set);
+    assert_eq!(after.status_in_list(&credentials[1]).await, Status::Clear);
+    drop(after);
+
+    // the operator removes the old key from the list: what it signed no
+    // longer verifies; the lists the new key signed still do
+    let removed = World::with(Setup::on_file(&path, &new_key));
+    let document = removed.did_document().await;
+    assert_eq!(document.verification_method.len(), 1);
+    for jwt in &old_signed {
+        let credential = Credential::parse(jwt).unwrap();
+        assert!(credential.verify(&document, now_secs(), 5).is_err());
+    }
+    assert_eq!(removed.status_in_list(&credentials[0]).await, Status::Set);
+}
+
+#[test]
+fn the_issuer_does_not_start_with_its_own_key_as_retired() {
+    let dir = TempDir::new();
+    let key = SigningKey::generate().unwrap();
+    let current_file = dir.0.join("current.pub.pem");
+    std::fs::write(
+        &current_file,
+        p256_public_key_pem(&key.public_jwk()).unwrap(),
+    )
+    .unwrap();
+    let config = Config {
+        participant_id: ISSUER.to_owned(),
+        key_file: "unused".into(),
+        retired_key_files: vec![current_file],
+        credentials_file: "unused".into(),
+        issuer_service_url: SERVICE.to_owned(),
+        bind: "unused".to_owned(),
+        db_file: "unused".into(),
+        management: portitor_issuer::config::ManagementConfig::health_only(
+            portitor_issuer::config::DEFAULT_MANAGEMENT_BIND,
+        ),
+        allow_http: false,
+        max_active_per_holder: 10,
+        bundle_key_file: None,
+        bundle_dir: None,
+    };
+    let ports = Ports {
+        store: Arc::new(SqliteStore::in_memory().unwrap()),
+        directory: Arc::new(FakeDirectory::default()),
+        sender: Arc::new(FakeSender::default()),
+    };
+    let error = Issuer::new(&config, key, Vec::new(), ports).err().unwrap();
+    assert!(
+        error.starts_with("PORTITOR_ISSUER_RETIRED_KEY_FILES: "),
+        "{error}"
+    );
+    assert!(error.contains("is the current key"), "{error}");
 }
 
 #[tokio::test]

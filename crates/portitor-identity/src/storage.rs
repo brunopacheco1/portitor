@@ -200,15 +200,19 @@ fn check_access_token(
     }
 }
 
-/// `token`, checked: signed by this participant, for `issuer`, valid now.
+/// `token`, checked: signed by this participant (its current key, or a
+/// retired key still listed), for `issuer`, valid now.
 fn verify_access_token(
     identity: &Identity,
     token: &str,
     issuer: &str,
 ) -> Result<AccessToken, String> {
+    let key = identity
+        .own_key_for(token)
+        .map_err(|e| format!("access token: {e}"))?;
     AccessToken::verify(
         token,
-        &identity.key.public_jwk(),
+        &key,
         &identity.participant_id,
         issuer,
         now_secs(),

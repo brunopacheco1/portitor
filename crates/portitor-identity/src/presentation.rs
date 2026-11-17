@@ -54,7 +54,11 @@ pub(crate) async fn query(
         return refused("no access token in the ID token");
     };
     let now = now_secs();
-    let public_key = identity.key.public_jwk();
+    // the current key, or a retired key still listed (TD-05)
+    let public_key = match identity.own_key_for(token) {
+        Ok(key) => key,
+        Err(e) => return refused(&format!("access token: {e}")),
+    };
     let access = match AccessToken::verify(
         token,
         &public_key,
