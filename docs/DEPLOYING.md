@@ -128,8 +128,32 @@ All configuration is by environment variable. The full table is in the
 | `PORTITOR_DCP_SCOPES` | leave the default, `org.eclipse.dspace.dcp.vc.type:MembershipCredential` (comma-separated). Each must be a DCP scope (`org.eclipse.dspace.dcp.vc.type:<Type>[:access]` or `org.eclipse.dspace.dcp.vc.id:<id>`); the type `VerifiableCredential` is refused, as it would let a partner read every credential. The connector does not start otherwise |
 | `PORTITOR_POLICY_CREDENTIALS` | unset, unless your offers constrain credential claims: the credential types they use, comma-separated, each `Type` or `Type=<scope>` (see [Credential constraints](#credential-constraints)) |
 | `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` | unset, unless your offers require Gaia-X compliance: comma-separated `did:web` DIDs of the compliance services you trust (see [Gaia-X compliance](#gaia-x-compliance)) |
+| `PORTITOR_STATUS_LIST_CACHE_SECONDS` | leave the default, `300` (5 minutes): how long a status list credential is reused; `0` fetches it on every check. At most `3600` (one hour); a larger value, or one that is not a whole number, stops the start. See [Status list cache](#status-list-cache) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (no traces or metrics), or your OTLP receiver's base URL; see [Traces and metrics](#traces-and-metrics) for this and the other `OTEL_*` variables |
 | `RUST_LOG` | `info` (default); `debug` only while diagnosing |
+
+### Status list cache
+
+The connector checks each partner's credentials against the issuer's
+status list on every DSP request. It reuses a status list credential it
+fetched for `PORTITOR_STATUS_LIST_CACHE_SECONDS` (default 300 seconds),
+by the list's URL, in memory.
+
+- **The trade-off.** A revocation or suspension takes up to that long to
+  be seen: a partner whose credential was just revoked is still admitted
+  until the cached list is fetched again. With `0` it is seen on the
+  next request, at the cost of one fetch per credential status on every
+  request. Eclipse EDC 1.0.0-RC7 reuses status lists for 15 minutes by
+  default (`edc.iam.credential.revocation.cache.validity`).
+- Only a list that was fetched and verified (signed by the credential's
+  issuer, valid now) is reused. A failed fetch or check is not: it is
+  tried again on the next request.
+- A list is never reused past its own end (`validUntil`, or the JWT's
+  `exp`), even if that comes before the configured time.
+- The cache is per process: a restart empties it. Presentations and
+  tokens are not cached; they are checked on every request (ADR 0016).
+- The Compose demo, `scripts/demo.sh`, the EDC interop test and the DCP
+  TCK run set `0`, so their revocation steps see a revocation at once.
 
 ### Credential constraints
 
@@ -860,7 +884,9 @@ DID, so usually not).
   credential service for its presentations, and accepts the caller only
   with a valid `MembershipCredential` from a DID in
   `PORTITOR_TRUSTED_ISSUERS` whose subject is the caller, not revoked or
-  suspended (the status list must be signed by the same issuer). One
+  suspended (the status list must be signed by the same issuer; a
+  verified list is reused for `PORTITOR_STATUS_LIST_CACHE_SECONDS`, see
+  [Status list cache](#status-list-cache)). One
   credential from a trusted issuer that fails its checks (revoked,
   expired, bad signature, status list not readable, about someone else)
   makes its presentation invalid and refuses the caller, even next to a
@@ -1031,13 +1057,13 @@ DID, so usually not).
 
 | Log message (level) | Meaning | What to do |
 |---|---|---|
-| `counter-party not reachable; terminating` (WARN) | A message to a partner failed after 4 tries (0.5 s, 1 s, 2 s apart) and the partner's state does not show it arrived; the negotiation or transfer is terminated | Check the partner's address, DNS, TLS trust and your egress rules |
+| `counter-party not reachable; terminating` (WARN) | A message to a partner failed and the partner's state does not show it arrived; the negotiation or transfer is terminated. The message is tried up to 4 times (0.5 s, 1 s, 2 s apart) when no answer came, or the answer was 408, 429 or 5xx; any other answer (400, 404, 409, ...) is final after one try, and `error` shows it | No answer: check the partner's address, DNS, TLS trust and your egress rules. An HTTP status: the partner refused the message; its logs say why |
 | `message breaks the dataspace's message rules; not sent, terminating` (WARN) | With bundle message shapes: our own message failed them (`error` lists the SHACL reasons), so it was not sent and the negotiation or transfer is terminated; `..., process not started` for a consumer's first request, `termination breaks ...; not sent` for a termination | Check the offer or policy against the authority's rules |
 | `outbound DSP message breaks the dataspace's message rules; not sent` (WARN) | The same breach, logged by the check itself with `message_type` and `reasons` | As above |
 | `inbound DSP message breaks the dataspace's message rules; answered 400` (INFO) | A partner's negotiation or transfer message failed the bundle's message shapes; it got HTTP 400 and nothing changed | Nothing, unless the partner asks |
 | `message had arrived before` (INFO) | A send failed, but the partner's state shows it had received the message (a lost answer, or a resend after a restart); the negotiation goes on | Nothing |
 | `sending pending negotiation messages again` (INFO, at start) | Messages saved but not acknowledged before the last stop are being sent | Nothing |
-| `counter-party not reachable; process not started` (WARN) | The first request of a negotiation or transfer we started as consumer failed after 4 tries; it ends without a message, as the provider never knew it | Same as above |
+| `counter-party not reachable; process not started` (WARN) | The first request of a negotiation or transfer we started as consumer failed (tried as above); it ends without a message, as the provider never knew it | Same as above |
 | `termination not acknowledged` (WARN) | The partner did not take a termination; DSP allows this, the negotiation is terminated anyway | Nothing, unless it repeats for one partner |
 | `no CA certificates: https calls will fail` (WARN, at start) | The CA bundle was not found (for example `SSL_CERT_DIR` points to an empty folder) | Fix the mount or the variable |
 | `negotiation store failed` (ERROR) | The SQLite file could not be read or written; partners get HTTP 500 | Check disk space and the `/data` volume |
@@ -1611,6 +1637,9 @@ known risk and technical debt, with its status and target release):
   schemas (`credentialSchema`) are not checked.
 - STS tokens are not cached: each DSP request costs one STS call, and each
   incoming one a presentation query.
+- Status lists are reused for up to `PORTITOR_STATUS_LIST_CACHE_SECONDS`
+  (default 300 seconds), so a revocation takes up to that long to be
+  seen ([Status list cache](#status-list-cache)).
 - One replica per database file; no PostgreSQL adapter yet.
 - Internal callback addresses are not blocked.
 - Policies: only `dateTime` and credential claims are understood;

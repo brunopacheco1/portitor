@@ -28,6 +28,25 @@ versions may change behaviour and configuration.
   a problem body; a declared `Content-Length` over the limit is refused
   before the body is read. Data plane answers are still streamed.
 
+### Added
+
+- Status list cache in the connector's DCP verifier (TD-06, ADR 0016
+  amended): `PORTITOR_STATUS_LIST_CACHE_SECONDS`, default 300, at most
+  3600 (a larger value stops the start), `0` fetches the list on every
+  check. Only lists that were fetched and verified are kept, by URL, in
+  memory, never past the list's own `validUntil` or `exp`. A revocation
+  now takes up to that long to be seen (DEPLOYING, "Status list
+  cache"). The Compose demo, `scripts/demo.sh`, the EDC interop test
+  and the DCP TCK run set `0`.
+
+### Changed
+
+- The connector's outbox retries a DSP message only when no answer came,
+  or the answer was 408, 429 or 5xx; any other answer (400, 404, 409,
+  ...) ends the tries at once (TD-30, ADR 0007 amended). The state check
+  after a failed send is unchanged. The issuer's delivery outbox already
+  worked this way and is not changed.
+
 ### Documentation
 
 - Threat model review 0.11 in SECURITY-ASSURANCE: a STRIDE pass over

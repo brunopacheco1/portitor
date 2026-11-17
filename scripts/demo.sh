@@ -108,14 +108,17 @@ request_credentials consumer "$CONSUMER_IDENTITY_MANAGEMENT" membership-vc20 dat
 step "Start the provider on $PROVIDER and the consumer on $CONSUMER"
 openssl rand -hex 32 >"$WORK/consumer/management.key"
 openssl rand -hex 32 >"$WORK/provider/management.key"
-# both list the credential type of the offer for EU processors (ADR 0019);
+# both list the credential type of the offer for EU processors (ADR 0019),
+# and fetch status lists on every check, so the revocation step is seen at once;
 # the provider follows the newest bundle the issuer serves (ADR 0005)
 start_connector provider "$PROVIDER_ID" "$PROVIDER" "$PROVIDER_IDENTITY" \
+  PORTITOR_STATUS_LIST_CACHE_SECONDS=0 \
   PORTITOR_DATASETS_FILE="$WORK/datasets.json" PORTITOR_POLICY_CREDENTIALS=DataProcessorCredential \
   PORTITOR_BUNDLE_URL="http://$ISSUER_ADDRESS/bundles/" PORTITOR_BUNDLE_AUTHORITY="$AUTHORITY" \
   PORTITOR_MANAGEMENT_BIND="$PROVIDER_MANAGEMENT" \
   PORTITOR_MANAGEMENT_API_KEY_FILE="$WORK/provider/management.key"
 start_connector consumer "$CONSUMER_ID" "$CONSUMER" "$CONSUMER_IDENTITY" \
+  PORTITOR_STATUS_LIST_CACHE_SECONDS=0 \
   PORTITOR_POLICY_CREDENTIALS=DataProcessorCredential \
   PORTITOR_MANAGEMENT_BIND="$CONSUMER_MANAGEMENT" \
   PORTITOR_MANAGEMENT_API_KEY_FILE="$WORK/consumer/management.key"

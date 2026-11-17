@@ -138,6 +138,9 @@ services:
       PORTITOR_STS_URL: http://portitor-identity:8090/sts/token
       PORTITOR_STS_CLIENT_SECRET_FILE: /config/sts-client-secret
       PORTITOR_TRUSTED_ISSUERS: did:web:issuer%3A8070
+      # status lists fetched on every check, so the revocation step sees a
+      # revocation at once (docs/DEPLOYING.md)
+      PORTITOR_STATUS_LIST_CACHE_SECONDS: "0"
       # the same scope as the EDC control plane's (config/edc-controlplane.properties)
       PORTITOR_DCP_SCOPES: org.eclipse.dspace.dcp.vc.type:MembershipCredential:read
       # the data space's HealthDCAT-AP bundle, from the issuer

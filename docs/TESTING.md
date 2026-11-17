@@ -446,7 +446,8 @@ EDC v1.0.0-RC7 sources):
 - **Status lists.** EDC needs an `id` on every `credentialStatus`, and
   reads status lists again after one second here
   (`edc.iam.credential.revocation.cache.validity`), so the revocation
-  check sees a new list at once.
+  check sees a new list at once. Portitor's connector fetches them on
+  every check here (`PORTITOR_STATUS_LIST_CACHE_SECONDS=0`).
 - **Data plane.** EDC 1.0 has no data plane of its own; the test's is
   built with the Eclipse Data Plane SDK 1.2.1 (`runtimes/dataplane`), and
   serves one file. Control plane and data plane register with each other

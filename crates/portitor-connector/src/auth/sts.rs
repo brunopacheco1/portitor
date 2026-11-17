@@ -220,6 +220,7 @@ mod tests {
             gaiax_compliance_issuers: Vec::new(),
             scopes: vec!["org.eclipse.dspace.dcp.vc.type:MembershipCredential".into()],
             allow_http: true,
+            status_list_cache_seconds: 0,
         }
     }
 

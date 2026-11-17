@@ -9,7 +9,8 @@
 //! share:
 //!
 //! 1. Send the message with a fresh token for the counter-party (ADR
-//!    0016), retrying as [`Retry`] says.
+//!    0016), retrying as [`Retry`] says, but only when a retry may help
+//!    ([`worth_retrying`]: no answer, 408, 429 or 5xx).
 //! 2. Acknowledged: record it, and send whatever follows.
 //! 3. Refused or unanswered: ask the counter-party for its state. If it
 //!    already shows where our message leads, the message had arrived
@@ -27,7 +28,7 @@ use serde_json::Value;
 use tracing::Instrument as _;
 
 use crate::auth::Prover;
-use crate::http_client::Sender;
+use crate::http_client::{Sender, answered_status};
 use crate::ports::{Ports, Retry};
 
 /// What every adapter needs to send: the client, the source of our
@@ -358,8 +359,9 @@ pub(crate) async fn arrived(
 }
 
 /// Checks the message's body with the guard, then POSTs it, retrying as
-/// the link's retry policy says. Each try gets a new token, which also
-/// grants `scopes`: a token is good for one request only. Returns the
+/// the link's retry policy says while a retry may help
+/// ([`worth_retrying`]). Each try gets a new token, which also grants
+/// `scopes`: a token is good for one request only. Returns the
 /// counter-party's answer.
 async fn send(
     link: &Link,
@@ -392,10 +394,27 @@ async fn send(
         };
         match link.sender.post_authorized(url, body, &authorization).await {
             Ok(answer) => return Ok(answer),
-            Err(e) => last = e,
+            Err(e) if worth_retrying(&e) => last = e,
+            // the counter-party answered and will not take this message
+            Err(e) => return Err(SendFailure::Failed(e)),
         }
     }
     Err(SendFailure::Failed(last))
+}
+
+/// Whether a send that failed with `error` is worth another try (ADR
+/// 0007, amended in 0.11; TD-30): no answer at all (connection refused,
+/// timeout, an answer that could not be read), or the answers 408
+/// (Request Timeout), 429 (Too Many Requests) and 5xx. Any other answer,
+/// such as 400, 404 or 409, means the counter-party will not take this
+/// message, so it is not sent again.
+fn worth_retrying(error: &str) -> bool {
+    // the `Sender` port's errors are text; `answered_status` reads the
+    // status back from the text `HttpError` writes (`HTTP 404 Not Found`)
+    match answered_status(error) {
+        None | Some(408 | 429) => true,
+        Some(code) => (500..600).contains(&code),
+    }
 }
 
 #[cfg(test)]
@@ -550,5 +569,106 @@ mod tests {
             "{log}"
         );
         assert!(!log.contains("message rules"), "{log}");
+    }
+
+    /// Fails every POST with `error` and counts them; answers every GET
+    /// (the counter-party's state) with `null`.
+    struct Fails {
+        error: &'static str,
+        posts: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Fails {
+        fn new(error: &'static str) -> Arc<Self> {
+            Arc::new(Self {
+                error,
+                posts: std::sync::atomic::AtomicUsize::new(0),
+            })
+        }
+
+        fn posts(&self) -> usize {
+            self.posts.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl Sender for Fails {
+        fn post<'a>(&'a self, _: &'a str, _: &'a Value) -> BoxFuture<'a, Result<Value, String>> {
+            self.posts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async { Err(self.error.to_owned()) })
+        }
+
+        fn get<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<Value, String>> {
+            Box::pin(async { Ok(Value::Null) })
+        }
+    }
+
+    /// Sends one message (not a first one) through `sender`, which may
+    /// try 3 times, at once. Its state is read at `status_url` (empty:
+    /// unknown), and `reached` says whether the state shows it arrived.
+    async fn attempt_through(sender: Arc<Fails>, status_url: &str, reached: bool) -> Outcome {
+        let mut ports = Ports::new(sender);
+        ports.prover = Arc::new(FixedToken);
+        ports.guard = Arc::new(portitor_dsp::guard::AllowAll);
+        ports.retry = Retry {
+            attempts: 3,
+            first_delay: std::time::Duration::from_millis(1),
+        };
+        let link = Link::new(&ports);
+        let body = serde_json::json!({"@type": "ContractAgreementMessage"});
+        let msg = Message::new(
+            "urn:uuid:1",
+            "https://c.example/negotiations/1/agreement",
+            &body,
+            status_url,
+            "did:web:c.example",
+        );
+        let kind = metrics::Outbox::Negotiation(metrics::Role::Provider);
+        attempt(&link, kind, &msg, &[], |_| reached).await
+    }
+
+    #[tokio::test]
+    async fn no_answer_408_429_and_5xx_are_tried_again() {
+        for error in [
+            "connection refused",
+            "no answer within 10 s",
+            "HTTP 408 Request Timeout",
+            "HTTP 429 Too Many Requests",
+            "HTTP 500 Internal Server Error",
+            "HTTP 503 Service Unavailable",
+        ] {
+            let sender = Fails::new(error);
+            let outcome = attempt_through(Arc::clone(&sender), "", false).await;
+            assert!(matches!(outcome, Outcome::Unreachable), "{error}");
+            assert_eq!(sender.posts(), 3, "{error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn any_other_answer_is_not_sent_again() {
+        for error in [
+            "HTTP 400 Bad Request",
+            "HTTP 401 Unauthorized",
+            "HTTP 403 Forbidden",
+            "HTTP 404 Not Found",
+            "HTTP 409 Conflict",
+            "HTTP 302 Found",
+        ] {
+            let sender = Fails::new(error);
+            let outcome = attempt_through(Arc::clone(&sender), "", false).await;
+            assert!(matches!(outcome, Outcome::Unreachable), "{error}");
+            assert_eq!(sender.posts(), 1, "{error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refused_message_still_counts_as_delivered_when_its_state_shows_it() {
+        // ADR 0007, proof of delivery: a counter-party that already took
+        // the message (a resend after a restart) may refuse it; its state
+        // then shows that the message arrived
+        let sender = Fails::new("HTTP 409 Conflict");
+        let status_url = "https://c.example/negotiations/1";
+        let outcome = attempt_through(Arc::clone(&sender), status_url, true).await;
+        assert!(matches!(outcome, Outcome::ArrivedBefore));
+        assert_eq!(sender.posts(), 1);
     }
 }
