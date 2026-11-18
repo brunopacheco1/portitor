@@ -735,6 +735,7 @@ rejects. It runs beside the releases.
 | Agreements that depend on an upstream agreement | 1.3 |
 | Consent | 1.5 |
 | How schemas are published ([TD-01](RISKS_AND_TECHNICAL_DEBTS.md#td-01)) | with TD-03 |
+| A data space's policy rules as SHACL shapes in the bundle (maintainer, 2026-11-18; [TD-32](RISKS_AND_TECHNICAL_DEBTS.md#td-32)) | 1.2 |
 
 ### The health data space demo
 

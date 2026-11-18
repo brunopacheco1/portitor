@@ -1458,6 +1458,16 @@ certificate and compliance run at each key change (ADR 0021).
     before SHACL sees the data.
 - **Next.** ROADMAP 0.12. How EDC treats such an offer is checked
   first.
+- **Second layer, research (maintainer, 2026-11-18).** The bundle could
+  also carry shapes for policies, so a data space can say which
+  actions, left operands and values its offers may use. This adds to
+  the check above and does not replace it: a bundle is optional, and a
+  misspelled key never reaches SHACL. To find out before any code
+  (ROADMAP "Research before code", needed by 1.2): whether published
+  ODRL shapes exist to reuse; whether shapes in a bundle already reach
+  the policy inside a dataset and inside a message; and which SHACL
+  core parts `portitor-shacl` must add, as it refuses `sh:in` and
+  `sh:closed` today, the two a list of allowed terms needs.
 
 <a id="td-33"></a>
 ### TD-33 The issuer's metadata does not pass the DCP JSON schema
