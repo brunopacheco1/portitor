@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0
 This file collects every risk and technical debt raised so far, from
 release 0.0 on, in one place: the ADRs, the spikes, the roadmap, the
 security case, DEPLOYING, TESTING, the changelog, the commit messages,
-and what the maintainer said in the project chat. For each item it says
+the [reviews](reviews/), and what the maintainer said in the project chat. For each item it says
 whether it is still open, and what is in place today.
 
 Two kinds:
@@ -129,6 +129,18 @@ checks this file:
 | [TD-29](#td-29) | No OTLP logs export, no gRPC, no compression | Technical debt | 0.9 (ADR 0023, DEPLOYING, 2026-11-15) | Open | Later |
 | [TD-30](#td-30) | The outbox resends a message the counter-party refused | Technical debt | 0.9 (outbox metrics, 2026-11-15) | Addressed | done in 0.11 |
 | [TD-31](#td-31) | No audit trail of data pulls and management actions | Technical debt | 0.11 threat model review (F-02, 2026-11-17) | Open | research with TD-04 (0.12) |
+| [TD-32](#td-32) | Policy terms that are not understood are dropped without an error | Technical debt, security | 2026-11-18 review (D1) | Open | 0.12 |
+| [TD-33](#td-33) | The issuer's metadata does not pass the DCP JSON schema | Technical debt, interoperability | 2026-11-18 review (C1) | Open | 0.12 |
+| [TD-34](#td-34) | A repeated transfer request starts a second transfer | Technical debt, interoperability | 2026-11-18 review (D3) | Open | 0.12 |
+| [TD-35](#td-35) | No negotiation started by the provider | Technical debt, interoperability | 2026-11-18 review (D2) | Open | 0.13, if not expensive |
+| [TD-36](#td-36) | DSP details: who may terminate, 401 or 404, agreement timestamp, `consumerPid` check, no catalog pages | Technical debt, interoperability | 2026-11-18 review (D4, D5) | Open | 0.12 |
+| [TD-37](#td-37) | DCP details: `token` claim required, presentations as JWT strings only, no `/.well-known/dspace-trust` | Technical debt, interoperability | 2026-11-18 review (C2) | Open | 0.12 |
+| [TD-38](#td-38) | No management call to read a provider's catalog | Technical debt, usability | 2026-11-18 review (Q1) | Open | 0.13 |
+| [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | 2026-11-18 review (Q2, Q7) | Open | 0.13 |
+| [TD-40](#td-40) | Database calls block the async runtime | Technical debt | 2026-11-18 review (Q3) | Open | 0.12 (measure) |
+| [TD-41](#td-41) | A panic stops the whole process (`panic = "abort"`) | Technical debt, security | 2026-11-18 review (Q4) | Open | 0.12 (decision) |
+| [TD-42](#td-42) | Four near-copies of the negotiation and transfer logic | Technical debt | 2026-11-18 review (Q5) | Open | — |
+| [TD-43](#td-43) | The Gaia-X documents name several versions of the rules | Technical debt | 2026-11-18 review (G1) | Open | 0.13 |
 
 Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
 31 technical debts (Open 18, Accepted 5, Addressed 8).
@@ -151,7 +163,13 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
   pedantic as errors, small crates, no `unsafe`. Build time is measured
   (ADR 0002, section 7).
 - **Next.** Keep the review in every release; add each new idiom to
-  RUST-IDIOMS.
+  RUST-IDIOMS. From the [review](reviews/2026-11-18-specifications-and-code-quality.md) (Q6, 2026-11-18): services with four type
+  parameters (`ProviderService<S, D, C, E>`), four macros that write
+  types (RUST-IDIOMS covers them in one paragraph), five files above
+  1,000 lines, and `Negotiator`, which also handles transfers and the
+  harvest. ROADMAP 0.13: a "read the code in this order" page that
+  follows one request from the route to the store; see also
+  [TD-42](#td-42).
 
 <a id="r-02"></a>
 ### R-02 One maintainer: no two-person review
@@ -1200,6 +1218,17 @@ certificate and compliance run at each key change (ADR 0021).
   0.x), behind the Signaling ports (R-06).
 - **Next.** Split it out as an optional component once Data Plane
   Signaling is released, or when measured load needs it.
+- **Update (2026-11-18, [review](reviews/2026-11-18-specifications-and-code-quality.md), S1).** The Signaling messages match the
+  v1.0-RC4 schemas, but the ports are Rust traits inside the process:
+  no Signaling endpoint is served over HTTP (`/dataflows/...`,
+  `/transfers/{id}/dataflow/...`, `PUT /dataplanes`). So no outside
+  data plane can be plugged in, and Portitor's data plane cannot serve
+  another control plane. The profile name
+  `https://w3id.org/dspace-sig/profile/http-pull` was not confirmed
+  against a registry. Decision (maintainer, 2026-11-18): Signaling
+  over HTTP before 1.0 if it is not expensive. ROADMAP 0.13: estimate
+  it first, with the state of the Signaling specification (R-06); build
+  it if the estimate is small, otherwise state it as not in 1.0.
 
 <a id="td-18"></a>
 ### TD-18 Operations: no metrics, traces or readiness check
@@ -1250,7 +1279,9 @@ certificate and compliance run at each key change (ADR 0021).
   OpenID4VP (R-14); label levels 1 to 3; calling the registration number
   notary (the operator gets that credential by hand); trust anchors and
   compliance issuers read from the Gaia-X Registry; Gaia-X with EDC
-  (R-10).
+  (R-10). Also not built ([review](reviews/2026-11-18-specifications-and-code-quality.md), G2, 2026-11-18): a legal person
+  credential signed by another signer the participant chooses; the
+  identity always signs it itself.
 - **Current state: Open.**
 - **Next.** ROADMAP "Later", Gaia-X beyond 0.8 (maintainer, 2026-11-15).
 
@@ -1392,3 +1423,235 @@ certificate and compliance run at each key change (ADR 0021).
   record holds, where it goes and how long it is kept. DSP 2025-1 does
   not sign its messages, so evidence between participants rests on the
   DCP tokens and on each side's own records.
+
+<a id="td-32"></a>
+### TD-32 Policy terms that are not understood are dropped without an error
+
+- **What.** `Offer`, `Rule` and `AtomicConstraint`
+  (`crates/portitor-dsp/src/lib.rs`) keep only the fields they know. A
+  field they do not know is dropped when the JSON is read: a `duty`
+  inside a permission, `assigner` or `assignee` on a rule, `unit` on a
+  constraint, `uid`. A test in the [review](reviews/2026-11-18-specifications-and-code-quality.md) (D1) showed it. `same_terms`
+  (`crates/portitor-dsp/src/policy.rs`) then compares what is left.
+  Unknown left operands are refused ([TD-12](#td-12)); unknown fields
+  are not.
+- **Why it matters.** As consumer, Portitor can agree to an offer whose
+  permission carries a duty it never saw. In the datasets file, a typing
+  error or a term Portitor does not support vanishes instead of stopping
+  the harvest. Both go against the fail closed rule of ADR 0009.
+- **Current state: Open.** DEPLOYING "Known limits" names it.
+- **Decision (maintainer, 2026-11-18).** Strict: a policy term that is
+  not understood stops the harvest of that dataset, as the other
+  harvest checks do (ADR 0020). The same strict reading is planned for
+  a partner's offer or agreement: the message is refused.
+- **The SHACL shapes do not catch it** (checked 2026-11-18), so the
+  check belongs in Portitor's own policy reader:
+  - shapes are there only with a bundle, and the HealthDCAT-AP shapes
+    only ask that `odrl:hasPolicy` points to an `odrl:Policy`; the
+    example bundle has no message shapes;
+  - SHACL lets extra properties pass unless a shape is closed, and
+    `portitor-shacl` refuses a shape that uses `sh:closed` (ADR 0005);
+  - a `duty` is a valid ODRL term, so a data space's shape would allow
+    it: the problem is what Portitor understands, not what the data
+    space allows;
+  - a misspelled JSON key is not in the JSON-LD context, so it is gone
+    before SHACL sees the data.
+- **Next.** ROADMAP 0.12. How EDC treats such an offer is checked
+  first.
+
+<a id="td-33"></a>
+### TD-33 The issuer's metadata does not pass the DCP JSON schema
+
+- **What.** DCP v1.0.1 `issuer-metadata-schema.json` requires
+  `credentialType`, `credentialSchema`, `offerReason`, `bindingMethods`
+  and `profile` for each credential (issuance, 6.7). `metadata()`
+  (`crates/portitor-issuer/src/definitions.rs`) leaves out
+  `credentialSchema` and `offerReason`; validating Portitor's answer
+  against the schema reports both ([review](reviews/2026-11-18-specifications-and-code-quality.md), C1). The schema test
+  (`crates/portitor-dcp/tests/spec.rs`) checks the specification's
+  example, not Portitor's answer. The DCP TCK passes.
+- **Why it matters.** A holder that validates the metadata can refuse
+  it.
+- **Current state: Open.**
+- **Next.** ROADMAP 0.12: answer the schema, and test Portitor's own
+  answer against it. Which value `credentialSchema` gets while schemas
+  are not supported ([TD-14](#td-14)) is taken from what EDC's issuer
+  sends, not invented.
+
+<a id="td-34"></a>
+### TD-34 A repeated transfer request starts a second transfer
+
+- **What.** DSP 2025-1, transfer process: "Providers SHOULD implement
+  idempotent behavior" for a request with the same `consumerPid`. The
+  provider (`crates/portitor-dsp/src/transfer/provider.rs`, `request`)
+  does not look a transfer up by `consumerPid`; the table's key is the
+  `providerPid` ([review](reviews/2026-11-18-specifications-and-code-quality.md), D3).
+- **Why it matters.** A consumer that sends the request again after a
+  timeout gets a second transfer and a second data access token.
+- **Current state: Open.**
+- **Next.** ROADMAP 0.12.
+
+<a id="td-35"></a>
+### TD-35 No negotiation started by the provider
+
+- **What.** DSP 2025-1 lets a provider start a negotiation with an
+  offer; the consumer serves `POST /negotiations/offers` for it
+  (negotiation HTTPS binding, "Contract Offer Endpoint"). Portitor's
+  consumer callbacks have only the paths with a `consumerPid`
+  (`crates/portitor-connector/src/lib.rs`), and Portitor as provider
+  never starts with an offer ([review](reviews/2026-11-18-specifications-and-code-quality.md), D2). The DSP TCK passes in the
+  build used ([R-08](#r-08)).
+- **Why it matters.** A provider that works this way cannot negotiate
+  with Portitor. EDC starts negotiations from the consumer, so the risk
+  today is small.
+- **Current state: Open.** DEPLOYING "Known limits" names it.
+- **Decision (maintainer, 2026-11-18).** Before 1.0 if it is not
+  expensive.
+- **Next.** ROADMAP 0.13, before the API freeze: estimate it first;
+  build it if the estimate is small, otherwise state it as not in 1.0.
+
+<a id="td-36"></a>
+### TD-36 DSP details: who may terminate, 401 or 404, agreement timestamp, `consumerPid` check, no catalog pages
+
+- **What.** Five small points from the [review](reviews/2026-11-18-specifications-and-code-quality.md) (D4, D5):
+  - The state machine figure of DSP 2025-1 lets only the provider
+    terminate from ACCEPTED and VERIFIED, and only the consumer from
+    AGREED; the text says the message "MAY be sent at any state".
+    Portitor accepts either party in every state that is not final
+    (`crates/portitor-dsp/src/negotiation.rs`, `next_state`), while a
+    test comment says it follows the figure.
+  - A call without valid credentials gets 401. The negotiation and
+    transfer bindings say a client that is not authorized gets 404.
+    What EDC answers is not checked.
+  - As consumer, an agreement without `timestamp` is accepted; the
+    schema requires it.
+  - A new request on a running negotiation is not checked against the
+    stored `consumerPid`.
+  - The catalog goes out in one answer: no pages (`Link` header, a MAY),
+    and EDC's `limit` and `offset` are ignored.
+- **Why it matters.** None breaks a test today; each is a place where
+  another connector may behave differently, and the catalog answer grows
+  with the number of datasets.
+- **Current state: Open.**
+- **Next.** ROADMAP 0.12, with the EDC tests: see what EDC does, then
+  fix or record each choice in the ADR it belongs to. Catalog pages only
+  if the benchmarks show the need.
+
+<a id="td-37"></a>
+### TD-37 DCP details: `token` claim required, presentations as JWT strings only, no `/.well-known/dspace-trust`
+
+- **What.** From the [review](reviews/2026-11-18-specifications-and-code-quality.md) (C2):
+  - The verifier refuses a caller whose ID token has no `token` claim
+    (`crates/portitor-connector/src/auth/dcp.rs`, `check_token`); in
+    DCP v1.0.1 the claim is optional.
+  - A presentation answer is read only when each presentation is a JWT
+    string; the schema also allows objects. Both profiles Portitor
+    supports use JWT.
+  - `/.well-known/dspace-trust` of the DCP profile for DSP is not
+    served.
+  - Not checked: that the issuer's base URL equals the `issuer` of the
+    credentials it signs.
+- **Why it matters.** Refusing is the safe side, but the choices are not
+  written down, and the last point is unknown.
+- **Current state: Open.**
+- **Next.** ROADMAP 0.12: check the last point; record the others in
+  ADR 0016, or change them if EDC needs it.
+
+<a id="td-38"></a>
+### TD-38 No management call to read a provider's catalog
+
+- **What.** To see what a provider offers, the operator asks the STS
+  for a token with the client secret, calls the provider's catalog with
+  curl and copies the offer into the negotiation request by hand
+  (`scripts/demo-steps.sh`; [review](reviews/2026-11-18-specifications-and-code-quality.md), Q1).
+- **Why it matters.** It is the first step of every new user and the
+  hardest one; it also puts the STS secret in the operator's hands.
+- **Current state: Open.**
+- **Next.** ROADMAP 0.13, before the API freeze: a management call that
+  takes the provider's address and returns its catalog. The request
+  shape follows EDC's management API, not a new one.
+
+<a id="td-39"></a>
+### TD-39 DEPLOYING is not in deployment order; the docs are long
+
+- **What.** DEPLOYING explains the connector first (sections 1 to 3),
+  the identity in section 4 and the issuer in section 7; only "Order",
+  near the end, says the issuer and the identity come first. Its
+  configuration section sends the reader to the README for the full
+  table. The docs are about 10,700 lines; this file alone lists more
+  than 80 items without saying which few matter most ([review](reviews/2026-11-18-specifications-and-code-quality.md), Q2, Q7).
+  There is a Compose example and no Helm chart.
+- **Why it matters.** The learning curve to deploy and troubleshoot
+  should be as small as possible (maintainer, 2026-11-18).
+- **Current state: Open.**
+- **Next.** ROADMAP 0.13, documentation review: a short "first
+  deployment" path at the top of DEPLOYING, sections in deployment
+  order, a "top risks" box here.
+- **Decision (maintainer, 2026-11-18).** DEPLOYING is written for an
+  operations team; running the demo on a laptop belongs in TESTING
+  (it has the Compose demo already), so DEPLOYING loses what only the
+  demo needs.
+
+<a id="td-40"></a>
+### TD-40 Database calls block the async runtime
+
+- **What.** Each store is one SQLite connection behind one lock, with
+  `synchronous=FULL` (`crates/portitor-runtime/src/sqlite.rs`), and the
+  HTTP handlers call it directly. Only the harvest and the health checks
+  run on blocking threads ([review](reviews/2026-11-18-specifications-and-code-quality.md), Q3).
+- **Why it matters.** Under load every request thread can wait for one
+  write to reach the disk. It shows as "slow, no error", which is hard
+  to troubleshoot. Related: [TD-08](#td-08).
+- **Current state: Open.** Not measured. DEPLOYING "Known limits" names
+  it.
+- **Next.** ROADMAP 0.12: the benchmarks measure it; move the calls to
+  blocking threads only if the numbers show the need, otherwise record
+  the limit with its number.
+
+<a id="td-41"></a>
+### TD-41 A panic stops the whole process (`panic = "abort"`)
+
+- **What.** The release profile sets `panic = "abort"` (`Cargo.toml`).
+  A panic in one request ends the process and every request in flight;
+  the code that recovers a poisoned lock never runs in a release build.
+  `unwrap` is denied by Clippy and the parsers are fuzzed (0.11), so a
+  panic should be rare ([review](reviews/2026-11-18-specifications-and-code-quality.md), Q4).
+- **Why it matters.** One request that finds a panic is a denial of
+  service until the container is started again. The outbox is durable,
+  so no message is lost.
+- **Current state: Open.** The choice was not written down. DEPLOYING
+  runs the containers with `--restart unless-stopped` and now says why
+  in "Known limits".
+- **Next.** ROADMAP 0.12: decide to keep it (and say so in
+  SECURITY-ASSURANCE) or to drop the setting.
+
+<a id="td-42"></a>
+### TD-42 Four near-copies of the negotiation and transfer logic
+
+- **What.** Negotiation and transfer, each as provider and as consumer,
+  have the same shape (receive, check, store, outbox, deliver, abort) in
+  four services of about 770 lines each (`crates/portitor-dsp/src/negotiation/`,
+  `crates/portitor-dsp/src/transfer/`) and four adapters in the
+  connector. The in-memory stores live in production code ([review](reviews/2026-11-18-specifications-and-code-quality.md), Q5).
+- **Why it matters.** A fix in one may be needed in the other three.
+- **Current state: Open.**
+- **Next.** No merge planned before 1.0. ROADMAP 0.13: TESTING gets a
+  note, "changed one, check the other three". Merge only if bugs show
+  the copies drifting apart.
+
+<a id="td-43"></a>
+### TD-43 The Gaia-X documents name several versions of the rules
+
+- **What.** ADR 0021 cites Compliance Document 3.1.0 and links 25.10
+  pages; ADR 0022 cites 4.0.0; AGENTS, the roadmap and ADR 0011 say
+  "Trust Framework (Danube)"; ADR 0002 says "Danube, 3.0". The newest
+  Compliance Document is 4.0.0 (2026-10-01). Its changelog adds
+  criteria for digital services; the participant criterion and the
+  onboarding steps Portitor uses did not change ([review](reviews/2026-11-18-specifications-and-code-quality.md), G1; checked
+  2026-11-18).
+- **Why it matters.** A reader cannot tell which version Portitor was
+  checked against.
+- **Current state: Open.** ADR 0021 has an update note (2026-11-18).
+- **Next.** ROADMAP 0.13, documentation review: one place that says
+  which Compliance Document and ICAM version were checked, and the same
+  name everywhere.

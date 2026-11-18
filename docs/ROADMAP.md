@@ -535,9 +535,28 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
 - Interoperability tests against Eclipse EDC, without Gaia-X: EDC
   1.0.0-RC7 refuses the Gaia-X compliance credential (ADR 0022). Simpl-Open
   stays under "Later" until a sandbox exists (ADR 0017).
-- Benchmarks published.
+- Benchmarks published. They also measure the database calls that
+  block the async runtime ([TD-40](RISKS_AND_TECHNICAL_DEBTS.md#td-40)); the calls move to blocking threads
+  only if the numbers show the need.
+- Findings of the
+  [2026-11-18 review](reviews/2026-11-18-specifications-and-code-quality.md)
+  that touch interoperability or what a partner can make Portitor do:
+  - A policy term that is not understood stops the harvest of that
+    dataset, and a partner's message that carries one is refused
+    (maintainer, 2026-11-18: strict;
+    [TD-32](RISKS_AND_TECHNICAL_DEBTS.md#td-32)). The check is in
+    Portitor's policy reader: the SHACL shapes do not catch it.
+  - The issuer's metadata passes the DCP JSON schema, and a test checks
+    Portitor's own answer ([TD-33](RISKS_AND_TECHNICAL_DEBTS.md#td-33)).
+  - A repeated transfer request with the same `consumerPid` gets the
+    same transfer ([TD-34](RISKS_AND_TECHNICAL_DEBTS.md#td-34)).
+  - The small DSP and DCP points ([TD-36](RISKS_AND_TECHNICAL_DEBTS.md#td-36), [TD-37](RISKS_AND_TECHNICAL_DEBTS.md#td-37)): see what EDC
+    does, then fix each or record the choice in its ADR.
+  - Decide whether `panic = "abort"` stays ([TD-41](RISKS_AND_TECHNICAL_DEBTS.md#td-41)).
 - Exit: the EDC interop test passes against the newest EDC release;
-  the benchmarks are published in `docs/`.
+  the benchmarks are published in `docs/`; TD-32, TD-33 and TD-34 are
+  addressed, and TD-36, TD-37, TD-40 and TD-41 are fixed or recorded as
+  accepted.
 - Main risk: EDC changing under us.
 
 ## 0.13 Release candidate for 1.0
@@ -564,8 +583,33 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
   candidate only if what is built until 0.13 can be shown and used): a
   new user runs the website quickstart on a clean machine, and the docs
   say what 1.0 does and does not do (for example pull transfers only).
+- From the
+  [2026-11-18 review](reviews/2026-11-18-specifications-and-code-quality.md),
+  before the freeze:
+  - A management call that reads a provider's catalog, shaped as in
+    EDC's management API ([TD-38](RISKS_AND_TECHNICAL_DEBTS.md#td-38)), so the quickstart needs no
+    hand-made STS call.
+  - Negotiation started by the provider
+    ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)) and Data Plane
+    Signaling over HTTP ([TD-17](RISKS_AND_TECHNICAL_DEBTS.md#td-17)):
+    before 1.0 if not expensive (maintainer, 2026-11-18). Estimate each
+    first; build it if the estimate is small, otherwise the docs say it
+    is not in 1.0.
+- From the same review, in the documentation review:
+  - DEPLOYING in deployment order (issuer, identity, connector) with a
+    short "first deployment" path at the top, and a "top risks" box in
+    the risks list ([TD-39](RISKS_AND_TECHNICAL_DEBTS.md#td-39)).
+    DEPLOYING is for an operations team; running the demo on a laptop
+    is in TESTING (maintainer, 2026-11-18).
+  - A "read the code in this order" page
+    ([R-01](RISKS_AND_TECHNICAL_DEBTS.md#r-01)), and a note in TESTING for the four near-copies
+    of the negotiation and transfer logic ([TD-42](RISKS_AND_TECHNICAL_DEBTS.md#td-42)).
+  - One place that says which Gaia-X Compliance Document and ICAM
+    version Portitor was checked against ([TD-43](RISKS_AND_TECHNICAL_DEBTS.md#td-43)).
 - Exit: Scorecard at least 8/10; no open high findings in Sonar or
-  CodeQL; the quickstart runs on a clean machine; R-25 done.
+  CodeQL; the quickstart runs on a clean machine; R-25 done; TD-35 and
+  Signaling over HTTP built or stated as not in 1.0; TD-38, TD-39 and
+  TD-43 addressed.
 - Main risk: freezing too early or too late.
 
 ## After 0.13 (plan approved by the maintainer, 2026-11-15)
@@ -754,7 +798,8 @@ applies from March 2029.
   when its wallet flow ships; label levels 1 to 3; calling the
   registration number notary; trust anchors and compliance issuers read
   from the Gaia-X Registry; asking EDC how it would accept Gaia-X
-  compliance credentials.
+  compliance credentials; a legal person credential signed by another
+  signer the participant chooses ([TD-21](RISKS_AND_TECHNICAL_DEBTS.md#td-21), 2026-11-18 review).
 - Explore Simpl-Open features that are not part of DSP, DCP, Data Plane
   Signaling or EDC, but add security or complete what a data space
   participant can do (maintainer, 2026-11-15). First candidates:

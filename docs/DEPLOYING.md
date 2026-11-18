@@ -1700,13 +1700,34 @@ known risk and technical debt, with its status and target release):
   (ADR 0009). As consumer, the connector does not accept a provider's
   offer (DSP `OFFERED`) that has credential constraints; requests it
   sends itself are not affected.
+- Policy terms the connector does not know are dropped without an
+  error when a policy is read, from your datasets file or from a
+  partner's offer: for example a `duty` inside a permission, or `unit`
+  on a constraint. Check each offer in your own catalog after a harvest,
+  and read a partner's offer in its catalog answer before you request it
+  ([TD-32](RISKS_AND_TECHNICAL_DEBTS.md#td-32)).
+- Negotiations start from the consumer only; a provider cannot start
+  one with an offer ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)). A
+  transfer request sent twice starts two transfers
+  ([TD-34](RISKS_AND_TECHNICAL_DEBTS.md#td-34)).
+- To read a provider's catalog you call it yourself with an STS token;
+  the management API has no call for it yet
+  ([TD-38](RISKS_AND_TECHNICAL_DEBTS.md#td-38)).
+- A panic (a bug) stops the whole process, so run each container with a
+  restart policy, as the `docker run` examples do
+  ([TD-41](RISKS_AND_TECHNICAL_DEBTS.md#td-41)).
+- Every request waits for its database write to reach the disk, one
+  write at a time per database file; the limit under load is not
+  measured yet ([TD-40](RISKS_AND_TECHNICAL_DEBTS.md#td-40)).
 - No metrics scrape endpoint: metrics and traces are pushed over OTLP
   ([Traces and metrics](#traces-and-metrics)).
 - Gaia-X: tested against a local Gaia-X compliance service in test mode
   (gx-compliance v2.16.0), not the Gaia-X Lab or a production clearing
   house. You get the registration number credential from a notary
   yourself; label levels 1 to 3, service offering credentials and
-  OpenID4VC are not supported. A Gaia-X compliance credential is checked
+  OpenID4VC are not supported. The identity signs the legal person
+  credential itself; another signer cannot be named. A Gaia-X compliance
+  credential is checked
   between Portitor connectors only; EDC does not accept it (ADR 0022).
 - Datasets come only from the datasets file; no other harvest source yet.
   No API writes datasets or policies.
