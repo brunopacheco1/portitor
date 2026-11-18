@@ -22,6 +22,14 @@ versions may change behaviour and configuration.
 
 - Close-out of 0.11: the roadmap and the website mark 0.11 released and
   0.12 as the current release; the website quickstart clones v0.11.0.
+- Review of 2026-11-18 against DSP 2025-1, DCP v1.0.1, Data Plane
+  Signaling v1.0-RC4 and the Gaia-X rules, and of code quality: the
+  report is in `docs/reviews/`; its findings are TD-32 to TD-43 in the
+  risks list, planned in the roadmap for 0.12 and 0.13, and named in
+  DEPLOYING "Known limits". The hand-written OpenAPI files (DSP, issuer)
+  say where the answer differs from the specification (TD-32 to TD-36),
+  and the website no longer claims strict parsing or a Gaia-X
+  conformance kit. No code changed.
 
 ## [0.11.0] - 2026-11-17
 

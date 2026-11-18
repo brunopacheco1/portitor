@@ -25,6 +25,12 @@ SPDX-License-Identifier: Apache-2.0
   certificate names one key, and the identity refuses a chain for
   another key. So a key change still needs a certificate for the new
   key and a new compliance run (DEPLOYING, "Rotating a key").
+- Update (2026-11-18): this ADR was written against Compliance Document
+  3.1.0. The newest is 4.0.0 (2026-10-01); its changelog adds criteria
+  for digital services and leaves the participant criterion and the
+  process steps used here as they were (checked 2026-11-18,
+  [review](../reviews/2026-11-18-specifications-and-code-quality.md),
+  [TD-43](../RISKS_AND_TECHNICAL_DEBTS.md#td-43)).
 
 ## Context
 

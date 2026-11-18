@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "description": "HTTP interface of portitor-connector. The DSP endpoints follow the DSP 2025-1 HTTPS bindings; the message schemas are the official DSP 2025-1 JSON Schemas (copied unchanged in crates/portitor-dsp/tests/schemas). DSP itself publishes no OpenAPI file; this one is written by hand and a test checks that every path in it is served. As consumer, the connector sends callbackAddress = public URL + /dsp/2025-1/callback, so providers call the callback paths below. Every DSP endpoint except /.well-known/dspace-version needs a DCP self-issued ID token (ADR 0016), and the caller's credential service must present a valid MembershipCredential from a trusted issuer, in presentations whose every credential passes its checks (DCP v1.0.1, 5.4.3); otherwise the answer is 401 with the endpoint's DSP error, reason \"unauthorized\". /health and the data plane (/data, its own tokens) are open."
+    "description": "HTTP interface of portitor-connector. The DSP endpoints follow the DSP 2025-1 HTTPS bindings; the message schemas are the official DSP 2025-1 JSON Schemas (copied unchanged in crates/portitor-dsp/tests/schemas). DSP itself publishes no OpenAPI file; this one is written by hand and a test checks that every path in it is served. As consumer, the connector sends callbackAddress = public URL + /dsp/2025-1/callback, so providers call the callback paths below. Every DSP endpoint except /.well-known/dspace-version needs a DCP self-issued ID token (ADR 0016), and the caller's credential service must present a valid MembershipCredential from a trusted issuer, in presentations whose every credential passes its checks (DCP v1.0.1, 5.4.3); otherwise the answer is 401 with the endpoint's DSP error, reason \"unauthorized\". /health and the data plane (/data, its own tokens) are open. Known limits (docs/RISKS_AND_TECHNICAL_DEBTS.md): a negotiation starts from the consumer only, so the DSP consumer endpoint POST /dsp/2025-1/callback/negotiations/offers, with which a provider starts one, is not served (TD-35); a policy field this connector does not know is dropped when an offer or agreement is read (TD-32)."
   },
   "servers": [
     {
@@ -83,7 +83,8 @@
           {
             "dcp": []
           }
-        ]
+        ],
+        "description": "The whole catalog comes in one answer: there are no pages and no Link header. A filter that is empty, or an EDC QuerySpec with only paging and sorting (offset, limit, sortOrder, sortField), gets the whole catalog; paging and sorting are ignored. Any other filter is refused with 400 (TD-36)."
       }
     },
     "/dsp/2025-1/catalog/datasets/{id}": {
@@ -512,7 +513,8 @@
           {
             "dcp": []
           }
-        ]
+        ],
+        "description": "Accepted from the counter-party in every state that is not final (DSP 2025-1: the message \"MAY be sent at any state\"; the state machine figure is narrower, TD-36)."
       }
     },
     "/dsp/2025-1/transfers/request": {
@@ -521,7 +523,7 @@
           "Transfer process (provider)"
         ],
         "summary": "Request a transfer",
-        "description": "The consumer asks for a dataset under a finalized agreement it holds, in a format the dataset offers (ADR 0013). Only pull transfers (format HttpData-PULL) are supported. The provider answers with its acknowledgement, then sends a TransferStartMessage with the data address (or a termination) to the consumer's callbackAddress. An agreement with credential constraints (ADR 0019) is checked again with fresh credentials, so a revoked credential ends the transfer.",
+        "description": "The consumer asks for a dataset under a finalized agreement it holds, in a format the dataset offers (ADR 0013). Only pull transfers (format HttpData-PULL) are supported. The provider answers with its acknowledgement, then sends a TransferStartMessage with the data address (or a termination) to the consumer's callbackAddress. An agreement with credential constraints (ADR 0019) is checked again with fresh credentials, so a revoked credential ends the transfer. A request sent again with the same consumerPid is not recognised: it creates another transfer (TD-34).",
         "operationId": "transferRequest",
         "requestBody": {
           "required": true,
@@ -1262,7 +1264,8 @@
           {
             "dcp": []
           }
-        ]
+        ],
+        "description": "Accepted from the counter-party in every state that is not final (DSP 2025-1: the message \"MAY be sent at any state\"; the state machine figure is narrower, TD-36)."
       }
     },
     "/dsp/2025-1/callback/transfers/{consumerPid}": {
