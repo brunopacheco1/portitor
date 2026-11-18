@@ -75,10 +75,10 @@ so visitors' browsers never contact third-party services.
       <div class="wrap">
         <h2>Objectives</h2>
         <ul class="cards">
-          <li><h3>Standards first</h3><p>Behaviour comes from the specifications (DSP 2025-1, DCP v1.0.1, Gaia-X Danube), checked against their official conformance kits.</p></li>
+          <li><h3>Standards first</h3><p>Behaviour comes from the specifications (DSP 2025-1, DCP v1.0.1, Gaia-X Trust Framework). DSP and DCP are checked against their official conformance kits, Gaia-X against a local Gaia-X compliance service.</p></li>
           <li><h3>Interoperable</h3><p>Talks to Eclipse EDC connectors, tested in CI; Simpl-Open is planned. Interoperability is tested, not assumed.</p></li>
           <li><h3>Small and predictable</h3><p>Static binaries in empty images of a few megabytes, starting in milliseconds and using a few megabytes of memory.</p></li>
-          <li><h3>Secure by default</h3><p>Strict message parsing, a short list of signature algorithms, keys kept out of the internet-facing service, signed releases.</p></li>
+          <li><h3>Secure by default</h3><p>Policies that fail closed, fuzzed parsers and request limits, a short list of signature algorithms, the participant's signing key held by the identity component and not by the connector, signed releases.</p></li>
           <li><h3>Simple to run</h3><p>Few components, one version for all of them, configuration through environment variables.</p></li>
           <li><h3>Open</h3><p>Apache-2.0, decisions recorded in the open, and a public security assurance case.</p></li>
         </ul>
@@ -171,8 +171,8 @@ rm -rf examples/compose/run</code></pre>
           <li class="done"><span>0.9</span> Operations: health checks, traces and metrics (OpenTelemetry), a quickstart</li>
           <li class="done"><span>0.10</span> Supply chain: cargo-vet, website trust values, upstream reports</li>
           <li class="done"><span>0.11</span> Security hardening: threat model, fuzzing every parser, request limits, status list cache</li>
-          <li class="now"><span>0.12</span> Interoperability with EDC and published benchmarks</li>
-          <li><span>0.13</span> Release candidate for 1.0: freeze, OpenSSF silver, Baseline level 1 self-assessment</li>
+          <li class="now"><span>0.12</span> Interoperability with EDC, published benchmarks, and the fixes of the <a href="https://github.com/brunopacheco1/portitor/blob/main/docs/reviews/2026-11-18-specifications-and-code-quality.md">specification review</a> (policy terms that are not understood are refused)</li>
+          <li><span>0.13</span> Release candidate for 1.0: freeze, reading a provider's catalog from the management API, a deployment guide for operations teams, OpenSSF silver, Baseline level 1 self-assessment</li>
           <li><span>1.0</span> Stable: the 0.13 release candidate, with no new features</li>
           <li><span>1.1</span> Push to S3-compatible object storage; health data space demo, step 1</li>
           <li><span>1.2</span> Purpose and data permit in policies; demo, step 2</li>
