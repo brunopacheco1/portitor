@@ -393,7 +393,9 @@ adapters in `auth/dcp.rs` and `auth/sts.rs`:
 - `CallerVerifier`, run by a middleware on every DSP route (provider
   endpoints and consumer callbacks; not `/.well-known/dspace-version`,
   `/health` or the data plane). The DCP adapter reads the
-  `Authorization: Bearer` ID token, resolves the caller's `did:web` DID,
+  `Authorization: Bearer` ID token, resolves the caller's `did:web` DID
+  (a DID document is reused for `PORTITOR_DID_CACHE_SECONDS`, in every
+  component, from 0.12),
   validates the token (`portitor_dcp::validate_self_issued`: key with
   `capabilityInvocation`, `aud` = our DID, `iss` = `sub`, `exp`/`iat`/`nbf`,
   `jti` not replayed), then sends a `PresentationQueryMessage` for
@@ -404,7 +406,8 @@ adapters in `auth/dcp.rs` and `auth/sts.rs`:
   a verified list is reused for `PORTITOR_STATUS_LIST_CACHE_SECONDS`, from
   0.11),
   and requires a `MembershipCredential` from a trusted issuer about the
-  caller. One credential that fails its checks makes its presentation
+  caller (each credential signed with a key of its issuer's own DID,
+  DCP v1.0.1, 5.4.3, step 4). One credential that fails its checks makes its presentation
   invalid and refuses the caller (DCP v1.0.1, 5.4.3, step 8). The verified DID and credentials go to the handler as `Caller`;
   a refusal is HTTP 401 with a DSP error and no detail. When an offer or
   agreement has credential constraints (ADR 0019), the provider's handler

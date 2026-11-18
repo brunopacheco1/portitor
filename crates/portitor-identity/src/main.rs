@@ -63,9 +63,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         None => None,
     };
+    // how long another party's DID document is reused (R-41)
+    let did_cache_seconds = portitor_runtime::did::cache_seconds_from_env()?;
     let ports = Ports {
         store: Arc::new(store),
-        directory: Arc::new(WebDirectory::new(config.allow_http)?),
+        directory: Arc::new(WebDirectory::new(config.allow_http, did_cache_seconds)?),
         issuers: Arc::new(HttpIssuerClient::new(config.allow_http)?),
         compliance,
     };

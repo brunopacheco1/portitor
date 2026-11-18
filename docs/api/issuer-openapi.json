@@ -58,7 +58,7 @@
       ],
       "get": {
         "summary": "Issuer Metadata API (DCP 6.7)",
-        "description": "One CredentialObject per credential definition (PORTITOR_ISSUER_CREDENTIALS_FILE); its id is the definition's, stable across restarts. Open to anyone. Known limit: credentialSchema and offerReason are left out, although the DCP v1.0.1 schema requires them, so the answer does not pass that schema yet (TD-33).",
+        "description": "One CredentialObject per credential definition (PORTITOR_ISSUER_CREDENTIALS_FILE); its id is the definition's, stable across restarts. Open to anyone. Each object has credentialType, credentialSchema (the URL from the definition; the issuer publishes it and does not fetch it), offerReason (always reissue, as the schema requires the property), bindingMethods (did:web) and profile, so the answer passes the DCP v1.0.1 schema. issuancePolicy is left out (TD-14).",
         "operationId": "issuerMetadata",
         "responses": {
           "200": {

@@ -123,7 +123,7 @@ impl Authority {
         };
         let ports = Ports {
             store: Arc::new(SqliteStore::in_memory().unwrap()),
-            directory: Arc::new(WebDirectory::new(true).unwrap()),
+            directory: Arc::new(WebDirectory::new(true, 300).unwrap()),
             sender: Arc::new(HttpSender::new(true).unwrap()),
         };
         let mut issuer =
@@ -201,7 +201,7 @@ fn build_options(did: &str, output: &Path) -> Options {
 
 /// The source for `settings`, resolving DIDs over plain HTTP.
 fn source(settings: &BundleConfig) -> Arc<dyn BundleSource> {
-    source_for(settings, Arc::new(WebDirectory::new(true).unwrap())).unwrap()
+    source_for(settings, Arc::new(WebDirectory::new(true, 300).unwrap())).unwrap()
 }
 
 /// A connector start: the bundle harvester takes the version.

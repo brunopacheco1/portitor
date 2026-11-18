@@ -159,7 +159,12 @@ async fn start_bundle_harvest(
     else {
         return Ok(None);
     };
-    let directory: Arc<dyn Directory> = Arc::new(WebDirectory::new(bundle_config.allow_http)?);
+    // the authority's DID document, reused as long as every other one
+    let did_cache_seconds = portitor_runtime::did::cache_seconds_from_env()?;
+    let directory: Arc<dyn Directory> = Arc::new(WebDirectory::new(
+        bundle_config.allow_http,
+        did_cache_seconds,
+    )?);
     let source = source_for(&bundle_config, directory)?;
     let store = Arc::new(CacheFolder::new(&bundle_config.cache_dir));
     let started = BundleHarvester::start(bundle_config, source, store).await?;

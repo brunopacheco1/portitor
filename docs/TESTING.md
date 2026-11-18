@@ -207,6 +207,17 @@ Where the tests are:
   verifier tests in `src/auth/dcp/tests.rs` (at 0 and 300 seconds, a
   list that ends sooner, a failed fetch, a revocation seen once the list
   is stale). `cargo test -p portitor-connector --lib auth::dcp`.
+- **DID document cache** (ADR 0016, amended in 0.12): the unit tests in
+  `crates/portitor-runtime/src/did.rs` (at 0 and 300 seconds, the bounds
+  of `PORTITOR_DID_CACHE_SECONDS`) and
+  `the_did_cache_setting_is_bounded` in the connector's `src/auth.rs`.
+  `cargo test -p portitor-runtime --lib did`.
+- **Issuer metadata and offers against the DCP schemas** (TD-33):
+  `the_metadata_answer_passes_the_dcp_schema`,
+  `the_definitions_files_of_the_repository_are_valid` and the offer
+  tests in the issuer's `tests/issuer.rs` check what the issuer itself
+  answers and sends, with the schema copies in
+  `crates/portitor-dcp/tests/schemas/`.
 - **Retired keys** (TD-05): `crates/portitor-identity/tests/key_rotation.rs`,
   and `a_key_change_with_the_old_key_retired_leaves_no_gap` in the
   issuer's `tests/issuer.rs`: what the old key signed verifies while it

@@ -250,6 +250,69 @@ fn credential_signed_by_someone_else_is_refused() {
     );
 }
 
+/// DCP 5.4.3, step 4: the DID of the credential's verification method
+/// must be the credential's issuer. The issuer's DID document here lists
+/// a key of another DID (Bob's) under `assertionMethod`; a credential
+/// that names the issuer but is signed with that key is refused, in both
+/// profiles and by both verify functions.
+#[test]
+fn a_key_of_another_did_in_the_issuers_document_is_refused() {
+    let mut issuer = Party::new(ISSUER);
+    let bob = Party::new(BOB);
+    let bobs_method = bob.doc.verification_method[0].clone();
+    issuer
+        .doc
+        .assertion_method
+        .push(Relationship::Reference(bobs_method.id.clone()));
+    issuer.doc.verification_method.push(bobs_method);
+
+    // signed by Bob's key, under Bob's key id, in the issuer's name
+    let forged_by = Party {
+        did: BOB,
+        key: bob.key,
+        doc: issuer.doc.clone(),
+    };
+    let mut vc11_claims: Value = json!({
+        "iss": ISSUER, "sub": ALICE, "jti": "c-1",
+        "nbf": NOW - 60, "iat": NOW - 60, "exp": NOW + 300,
+        "vc": {
+            "@context": [VC1_CONTEXT],
+            "type": ["VerifiableCredential", "MembershipCredential"],
+            "issuer": ISSUER,
+            "issuanceDate": "2026-11-13T16:59:00Z",
+            "credentialSubject": {"id": ALICE}
+        }
+    });
+    let credential = Credential::parse(&forged_by.sign("JWT", &vc11_claims)).unwrap();
+    assert_eq!(credential.issuer, ISSUER);
+    let expected =
+        CredentialError::Invalid("the signing key belongs to another DID than the issuer");
+    assert_eq!(
+        credential.verify(&issuer.doc, NOW, 0),
+        Err(expected.clone())
+    );
+    assert_eq!(
+        credential.verify_stated_dates(&issuer.doc, NOW, 0),
+        Err(expected)
+    );
+
+    // the same credential signed with the issuer's own key passes
+    vc11_claims["jti"] = json!("c-2");
+    let credential = Credential::parse(&issuer.sign("JWT", &vc11_claims)).unwrap();
+    credential.verify(&issuer.doc, NOW, 0).unwrap();
+}
+
+#[test]
+fn verification_methods_belong_to_their_did() {
+    assert!(is_method_of("did:web:issuer.example#key-1", ISSUER));
+    // relative to the document it stands in
+    assert!(is_method_of("#key-1", ISSUER));
+    assert!(!is_method_of("did:web:bob.example#key-1", ISSUER));
+    // a longer DID that only starts the same
+    assert!(!is_method_of("did:web:issuer.example:other#key-1", ISSUER));
+    assert!(!is_method_of("did:web:issuer.example", ISSUER));
+}
+
 #[test]
 fn issuer_key_needs_assertion_method() {
     let mut issuer = Party::new(ISSUER);
