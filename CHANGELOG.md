@@ -52,9 +52,12 @@ Interoperability and performance. Read "From 0.11 to 0.12" in
   running negotiation must name the stored `consumerPid` (TD-36; ADR
   0006 amended).
 - A panic no longer stops the process (TD-41; `panic = "abort"` is
-  gone). The request that met it gets HTTP 500 and the others go on;
-  background tasks are watched and start again, and the process stops
-  if the management server ends. The release binaries are about 13%
+  gone). The request that met it gets HTTP 500 and the others go on.
+  Background tasks are watched: a schedule starts again after a pause
+  (5 seconds, doubling up to 5 minutes), a DSP message whose delivery
+  panicked is sent again the same way, a credential request whose
+  decision panicked no longer blocks the issuer's outbox, and the
+  process stops if the management server ends. The release binaries are about 13%
   larger (connector 12.9 to 14.7 MB; ADR 0002 amended).
 - The connector's database gets three indexes (schema version 11): the
   lookup of a repeated transfer request, and the agreement id on both

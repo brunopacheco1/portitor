@@ -1714,14 +1714,18 @@ certificate and compliance run at each key change (ADR 0021).
   `portitor.http.request.panicked` counts it
   (`crates/portitor-runtime/src/panics.rs`; SECURITY-ASSURANCE, "What a
   panic does"). Background tasks are watched: schedules start again
-  after 5 seconds, and the process stops if the management server ends
+  after a pause (5 seconds, doubling up to 5 minutes while they keep
+  panicking), and the process stops if the management server ends
   (`portitor.task.panicked`). The code that recovers a poisoned lock now
   runs in release builds and has a test per store.
 - **Cost.** The release binaries are about 13% larger (connector 12.9 to
   14.7 MB; ADR 0002, amended in 0.12).
-- **Left.** If the task that delivers one DSP message panics, the
-  message stays stored and is sent again only at the next start. A
-  restart policy is still advised (DEPLOYING, "Known limits").
+- **Left.** A message or a credential request that meets the same bug
+  on every try is tried again for as long as the process runs: a DSP
+  message after a pause (5 seconds, doubling up to 5 minutes), a
+  credential request on each round of the issuer's outbox. Each try is
+  logged and counted, and the other work goes on. A restart policy is
+  still advised (DEPLOYING, "Known limits").
 
 <a id="td-42"></a>
 ### TD-42 Four near-copies of the negotiation and transfer logic
