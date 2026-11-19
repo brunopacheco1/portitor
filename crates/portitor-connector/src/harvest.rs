@@ -29,6 +29,7 @@ use portitor_dsp::Dataset;
 /// same `SQLite` file as the negotiations, so it reuses their store error
 /// (named after negotiations, but it means "the store failed").
 pub use portitor_dsp::negotiation::provider::StoreError;
+use portitor_runtime::panics::spawn_supervised;
 use portitor_runtime::telemetry::metrics;
 
 mod check;
@@ -576,24 +577,32 @@ impl DatasetHarvester {
             return None;
         }
         let harvester = Arc::clone(self);
-        Some(tokio::spawn(async move {
-            let first = tokio::time::Instant::now() + every;
-            let mut ticks = tokio::time::interval_at(first, every);
-            // a tick missed while a run was going on is skipped, not made up
-            ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                ticks.tick().await;
-                let runner = Arc::clone(&harvester);
-                // the run reads a file and writes SQLite: blocking work
-                let ran = tokio::task::spawn_blocking(move || runner.run(Trigger::Interval));
-                // a run that panicked: logged and counted; the schedule
-                // goes on with the next tick
-                if let Err(e) = ran.await {
-                    tracing::error!(error = %e, "harvest run stopped unexpectedly");
-                    metrics::task_panicked("dataset_harvest");
+        // supervised, as every task that runs as long as the process
+        // (the closure makes the task anew after a panic, with its own
+        // pointer to the harvester). A run that panics does not end the
+        // schedule at all: it runs on its own thread, see below
+        let schedule = move || {
+            let harvester = Arc::clone(&harvester);
+            async move {
+                let first = tokio::time::Instant::now() + every;
+                let mut ticks = tokio::time::interval_at(first, every);
+                // a tick missed while a run was going on is skipped, not made up
+                ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    ticks.tick().await;
+                    let runner = Arc::clone(&harvester);
+                    // the run reads a file and writes SQLite: blocking work
+                    let ran = tokio::task::spawn_blocking(move || runner.run(Trigger::Interval));
+                    // a run that panicked: logged and counted; the schedule
+                    // goes on with the next tick
+                    if let Err(e) = ran.await {
+                        tracing::error!(error = %e, "harvest run stopped unexpectedly");
+                        metrics::task_panicked("dataset_harvest");
+                    }
                 }
             }
-        }))
+        };
+        Some(spawn_supervised("dataset_harvest", schedule))
     }
 
     /// Loads the copy from the store into memory.

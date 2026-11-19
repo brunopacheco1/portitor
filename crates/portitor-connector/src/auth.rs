@@ -343,12 +343,13 @@ pub async fn require_caller(
         Err(error) => {
             let path = request.uri().path();
             let reason = error.reason();
-            let status = refusal_status(path).as_u16();
+            let protocol = protocol_of(path);
+            let status = refusal_status(protocol).as_u16();
             // the caller sees 404 on most routes, which looks like a
             // missing process: this line is where an operator finds why
             tracing::warn!(%path, %reason, status, "DSP request refused: caller not authenticated");
             metrics::dsp_request_refused(Refusal::Unauthenticated);
-            unauthorized(path)
+            unauthorized(protocol)
         }
     }
 }
@@ -377,24 +378,37 @@ enum Protocol {
 /// the caller's text, and may hold any word. Anything else is taken as
 /// the catalog, whose answer tells the least.
 fn protocol_of(path: &str) -> Protocol {
-    // the callback prefix first: it starts with the DSP prefix
-    let below_prefix = path
-        .strip_prefix(crate::CALLBACK_PATH)
-        .or_else(|| path.strip_prefix(crate::DSP_PATH))
-        .unwrap_or(path);
-    let first_segment = below_prefix
-        .trim_start_matches('/')
-        .split('/')
-        .next()
-        .unwrap_or_default();
-    match first_segment {
+    match first_segment_below_prefix(path) {
         "negotiations" => Protocol::Negotiation,
         "transfers" => Protocol::Transfer,
         _ => Protocol::Catalog,
     }
 }
 
-/// The HTTP status for a caller that is refused at `path`:
+/// The first path segment of `path` after the DSP prefix, or after the
+/// callback prefix for the consumer's endpoints:
+/// `/dsp/2025-1/callback/transfers/x/start` gives `transfers`. A path
+/// with neither prefix is read from its start. Empty when nothing
+/// follows the prefix.
+fn first_segment_below_prefix(path: &str) -> &str {
+    // the callback prefix first: it starts with the DSP prefix
+    let below_prefix = if let Some(rest) = path.strip_prefix(crate::CALLBACK_PATH) {
+        rest
+    } else if let Some(rest) = path.strip_prefix(crate::DSP_PATH) {
+        rest
+    } else {
+        path
+    };
+    let segments = below_prefix.trim_start_matches('/');
+    // up to the next `/`, or all of it when there is none
+    match segments.split_once('/') {
+        Some((first, _later_segments)) => first,
+        None => segments,
+    }
+}
+
+/// The HTTP status for a caller that is refused at an endpoint of
+/// `protocol`:
 ///
 /// - negotiation and transfer routes, also the consumer's callbacks: 404.
 ///   DSP 2025-1, "Contract Negotiation HTTPS Binding" and "Transfer
@@ -406,23 +420,22 @@ fn protocol_of(path: &str) -> Protocol {
 ///
 /// Eclipse EDC 1.0.0-RC7 does the same (`DspRequestHandlerImpl`,
 /// `unauthorizedStatus`). ADR 0016, amended in 0.12.
-fn refusal_status(path: &str) -> StatusCode {
-    match protocol_of(path) {
+fn refusal_status(protocol: Protocol) -> StatusCode {
+    match protocol {
         Protocol::Catalog => StatusCode::UNAUTHORIZED,
         Protocol::Negotiation | Protocol::Transfer => StatusCode::NOT_FOUND,
     }
 }
 
 /// The answer to a refused caller: the status [`refusal_status`] gives,
-/// with the DSP error type of the endpoint at `path` (DSP 2025-1:
-/// `CatalogError`, `ContractNegotiationError`, `TransferError`). The
-/// error's `code` is the HTTP status. No process ids: the caller is
-/// unknown.
-fn unauthorized(path: &str) -> Response {
+/// with the DSP error type of `protocol` (DSP 2025-1: `CatalogError`,
+/// `ContractNegotiationError`, `TransferError`). The error's `code` is
+/// the HTTP status. No process ids: the caller is unknown.
+fn unauthorized(protocol: Protocol) -> Response {
     const REASON: &str = "unauthorized";
-    let status = refusal_status(path);
+    let status = refusal_status(protocol);
     let code = status.as_str();
-    match protocol_of(path) {
+    match protocol {
         Protocol::Catalog => (status, Json(CatalogError::new(code, REASON))).into_response(),
         Protocol::Negotiation => {
             let error = ContractNegotiationError::new("", "", code, REASON);
@@ -1203,7 +1216,7 @@ mod tests {
                 not_found,
             ),
         ] {
-            let response = unauthorized(path);
+            let response = unauthorized(protocol_of(path));
             assert_eq!(response.status(), status, "{path}");
             let body = axum::body::to_bytes(response.into_body(), 4096)
                 .await

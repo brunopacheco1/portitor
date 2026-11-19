@@ -335,7 +335,10 @@ where
     /// implement idempotent behavior for Transfer Request Messages based
     /// on the value of `consumerPid`"; ADR 0013, amended in 0.12). The
     /// request is checked first, then looked up, the order Eclipse EDC
-    /// uses (`TransferProcessProtocolServiceImpl.requestedAction`).
+    /// uses (`TransferProcessProtocolServiceImpl.requestedAction`). So a
+    /// repeated request gets 400, not the transfer it already has, once
+    /// the agreement's permissions no longer hold or the dataset is no
+    /// longer offered in the asked format.
     ///
     /// # Errors
     ///

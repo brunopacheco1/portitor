@@ -24,7 +24,7 @@ use serde_json::{Map, Value};
 
 use self::json::{Body, agree, date, first_context, number, payload_of, text, types};
 use crate::status_list::StatusEntry;
-use crate::{DidDocument, Error, Jws, Purpose};
+use crate::{DidDocument, Error, Jws, Purpose, VerificationMethod};
 
 /// The VC Data Model 1.1 context.
 pub const VC1_CONTEXT: &str = "https://www.w3.org/2018/credentials/v1";
@@ -362,14 +362,12 @@ impl Credential {
         if issuer.id != self.issuer {
             return Err(CredentialError::Invalid("DID document is not the issuer's"));
         }
-        let jws = Jws::parse(&self.jwt)?;
-        let key = issuer.key_for(jws.kid(), Purpose::AssertionMethod)?;
+        let key = verify_signature(&self.jwt, issuer, Purpose::AssertionMethod)?;
         if !is_method_of(&key.id, &self.issuer) {
             return Err(CredentialError::Invalid(
                 "the signing key belongs to another DID than the issuer",
             ));
         }
-        jws.verify(&key.public_key_jwk)?;
         Ok(())
     }
 }
@@ -573,11 +571,19 @@ fn credential_jwt(entry: &Value, profile: Profile) -> Result<&str, CredentialErr
     }
 }
 
-fn verify_signature(jwt: &str, doc: &DidDocument, purpose: Purpose) -> Result<(), CredentialError> {
+/// Checks the signature of `jwt` with the key of `doc` that its `kid`
+/// names and that has the relationship `purpose`. Returns that
+/// verification method, for a caller that also checks whose key it is
+/// (`verify_issuer_signature`).
+fn verify_signature<'a>(
+    jwt: &str,
+    doc: &'a DidDocument,
+    purpose: Purpose,
+) -> Result<&'a VerificationMethod, CredentialError> {
     let jws = Jws::parse(jwt)?;
     let key = doc.key_for(jws.kid(), purpose)?;
     jws.verify(&key.public_key_jwk)?;
-    Ok(())
+    Ok(key)
 }
 
 mod json;

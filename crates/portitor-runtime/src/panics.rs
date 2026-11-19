@@ -12,9 +12,12 @@
 //!   the other requests go on;
 //! - a background task that runs for as long as the process
 //!   ([`spawn_supervised`]): logged, counted (`portitor.task.panicked`)
-//!   and started again after [`RESTART_PAUSE`];
-//! - a background task that does one piece of work ([`report_panic`]):
-//!   logged and counted; the work is left as it was saved;
+//!   and started again after a pause: [`RESTART_PAUSE`] the first time,
+//!   twice as long after each further panic in a row, at most
+//!   [`MAX_RESTART_PAUSE`] ([`next_pause`]);
+//! - a background task that does one piece of work ([`report_panic`];
+//!   [`report_sync_panic`] for work that is not async): logged and
+//!   counted; the work is left as it was saved;
 //! - every panic, wherever it happens: one JSON log line with the place
 //!   in the code ([`log_panics`]).
 //!
@@ -36,9 +39,37 @@ use axum::response::Response;
 use crate::api_key::problem;
 use crate::telemetry::metrics;
 
-/// How long a supervised task waits before it starts again after a
-/// panic, so that a bug that panics every time does not fill the log.
+/// How long a supervised task waits before it starts again after its
+/// first panic, so that a bug that panics every time does not fill the
+/// log.
 pub const RESTART_PAUSE: Duration = Duration::from_secs(5);
+
+/// The longest pause between two starts of a task that panics every
+/// time. A task that ran longer than this before it panicked counts as
+/// healthy again: its next pause is [`RESTART_PAUSE`].
+pub const MAX_RESTART_PAUSE: Duration = Duration::from_secs(300);
+
+/// How long to wait before work that just panicked is started again.
+/// `previous` is the pause before the run that panicked (`None`: it was
+/// the first run, or the first after a success), `ran_for` how long
+/// that run lasted.
+///
+/// The pause starts at [`RESTART_PAUSE`] and doubles after each panic in
+/// a row (5 s, 10 s, 20 s, ... ), up to [`MAX_RESTART_PAUSE`]. So work
+/// that panics every time, and that calls another service on each run
+/// (the Gaia-X schedule), calls it every 5 minutes, not every 5 seconds.
+/// A run that lasted longer than [`MAX_RESTART_PAUSE`] was not such a
+/// loop: the pause starts at [`RESTART_PAUSE`] again.
+#[must_use]
+pub fn next_pause(previous: Option<Duration>, ran_for: Duration) -> Duration {
+    let Some(previous) = previous else {
+        return RESTART_PAUSE;
+    };
+    if ran_for > MAX_RESTART_PAUSE {
+        return RESTART_PAUSE;
+    }
+    previous.saturating_mul(2).min(MAX_RESTART_PAUSE)
+}
 
 /// The work panicked. Carries nothing: the panic's message is not kept
 /// (see the module text).
@@ -68,6 +99,21 @@ pub async fn catch_panic<F: Future>(work: F) -> Result<F::Output, Panicked> {
         }
     })
     .await
+}
+
+/// [`catch_panic`] for work that is not async: runs `work` and gives its
+/// result, or [`Panicked`] if it panicked. No steps here: the closure
+/// runs from start to end inside one `catch_unwind`. `AssertUnwindSafe`
+/// for the same reason as in [`catch_panic`]: what `work` was changing
+/// sits behind locks that recover and in transactions that roll back.
+///
+/// # Errors
+/// [`Panicked`]: `work` panicked.
+pub fn catch_sync_panic<T>(work: impl FnOnce() -> T) -> Result<T, Panicked> {
+    match std::panic::catch_unwind(AssertUnwindSafe(work)) {
+        Ok(output) => Ok(output),
+        Err(_message) => Err(Panicked),
+    }
 }
 
 /// `router` whose handlers answer HTTP 500 when they panic, instead of
@@ -110,10 +156,17 @@ async fn catch_handler_panic(request: Request, next: Next) -> Response {
 
 /// Starts a background task that runs for as long as the process (a
 /// schedule, an outbox). `start` makes the task; it is called once now,
-/// and again [`RESTART_PAUSE`] after each panic, so the task never stays
-/// dead while the process lives. A task that returns is finished and is
+/// and again after each panic, so the task never stays dead while the
+/// process lives. The pause before a restart is [`next_pause`]: 5
+/// seconds after the first panic, twice as long after each further one
+/// in a row, at most 5 minutes. A task that returns is finished and is
 /// not started again. `name` is a fixed text for the log and the
 /// `portitor.task.name` attribute.
+///
+/// A restarted task starts from nothing: what the old one kept in
+/// memory (its own retry counter, for example) is gone. The growing
+/// pause is what keeps a task that panics on every run from calling
+/// other services every few seconds.
 ///
 /// Aborting the returned handle stops the task for good.
 pub fn spawn_supervised<S, F>(name: &'static str, start: S) -> tokio::task::JoinHandle<()>
@@ -123,23 +176,34 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     tokio::spawn(async move {
-        while catch_panic(start()).await.is_err() {
+        // the pause before the current run; none before the first
+        let mut pause: Option<Duration> = None;
+        loop {
+            let started = tokio::time::Instant::now();
+            if catch_panic(start()).await.is_ok() {
+                // the task returned: it is finished
+                return;
+            }
+            let wait = next_pause(pause, started.elapsed());
             tracing::error!(
                 task = name,
-                restart_in_seconds = RESTART_PAUSE.as_secs(),
+                restart_in_seconds = wait.as_secs(),
                 "a background task panicked; it starts again"
             );
             metrics::task_panicked(name);
-            tokio::time::sleep(RESTART_PAUSE).await;
+            tokio::time::sleep(wait).await;
+            pause = Some(wait);
         }
     })
 }
 
-/// `work`, a background task that does one piece of work (sending one
-/// saved message, deciding one request), with a panic in it logged and
-/// counted instead of ending the task unseen. The work is not tried
-/// again here: what it had saved stays, and the caller's own recovery
-/// (the next round, or the resend at the next start) picks it up.
+/// `work`, a background task that does one piece of work (deciding one
+/// request, one Gaia-X run), with a panic in it logged and counted
+/// instead of ending the task unseen. The work is not tried again here:
+/// what it had saved stays, and the caller's own recovery (the next
+/// round of its schedule or outbox) picks it up. The connector's DSP
+/// outbox does not use this: it sends the message again itself
+/// (`portitor-connector/src/outbox.rs`).
 pub async fn report_panic<F>(name: &'static str, work: F)
 where
     F: Future<Output = ()>,
@@ -151,6 +215,26 @@ where
         );
         metrics::task_panicked(name);
     }
+}
+
+/// [`report_panic`] for work that is not async (deciding one request
+/// inside a loop over many): runs `work` here and now; a panic in it is
+/// logged and counted, and the caller goes on. The work is not tried
+/// again here.
+///
+/// # Errors
+/// [`Panicked`]: `work` panicked, so that the caller can log which piece
+/// of work it was.
+pub fn report_sync_panic(name: &'static str, work: impl FnOnce()) -> Result<(), Panicked> {
+    let outcome = catch_sync_panic(work);
+    if outcome.is_err() {
+        tracing::error!(
+            task = name,
+            "a background task panicked; its work is left as saved"
+        );
+        metrics::task_panicked(name);
+    }
+    outcome
 }
 
 /// From now on every panic in this process is one JSON log line at error
@@ -239,20 +323,51 @@ mod tests {
         assert_eq!(catch_panic(panicking).await, Err::<(), _>(Panicked));
     }
 
-    /// A paused clock: the restart pause passes at once.
+    /// A paused clock: the restart pauses pass at once, and the test
+    /// reads how long they were.
     #[tokio::test(start_paused = true)]
     async fn a_supervised_task_starts_again_after_a_panic() {
         let starts = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&starts);
+        let begun = tokio::time::Instant::now();
         let task = spawn_supervised("test", move || {
             let nth = counted.fetch_add(1, Ordering::SeqCst) + 1;
             async move {
-                // the first two runs panic, the third finishes
-                assert!(nth >= 3, "run {nth} panics");
+                // the first three runs panic, the fourth finishes
+                assert!(nth >= 4, "run {nth} panics");
             }
         });
         task.await.unwrap();
-        assert_eq!(starts.load(Ordering::SeqCst), 3);
+        assert_eq!(starts.load(Ordering::SeqCst), 4);
+        // pauses of 5, 10 and 20 seconds
+        assert_eq!(begun.elapsed(), Duration::from_secs(35));
+    }
+
+    #[test]
+    fn the_pause_doubles_up_to_five_minutes_and_starts_over_after_a_long_run() {
+        let at_once = Duration::ZERO;
+        assert_eq!(next_pause(None, at_once), RESTART_PAUSE);
+        let mut pause = RESTART_PAUSE;
+        let mut pauses = Vec::new();
+        for _ in 0..8 {
+            pause = next_pause(Some(pause), at_once);
+            pauses.push(pause.as_secs());
+        }
+        assert_eq!(pauses, [10, 20, 40, 80, 160, 300, 300, 300]);
+        // a run as long as the cap is still "in a row", a longer one is not
+        assert_eq!(
+            next_pause(Some(MAX_RESTART_PAUSE), MAX_RESTART_PAUSE),
+            MAX_RESTART_PAUSE
+        );
+        let long_run = MAX_RESTART_PAUSE + Duration::from_secs(1);
+        assert_eq!(next_pause(Some(MAX_RESTART_PAUSE), long_run), RESTART_PAUSE);
+    }
+
+    #[test]
+    fn sync_work_that_panics_is_reported_and_the_caller_goes_on() {
+        assert_eq!(catch_sync_panic(|| 7), Ok(7));
+        assert_eq!(report_sync_panic("test", || panic!("no")), Err(Panicked));
+        assert_eq!(report_sync_panic("test", || {}), Ok(()));
     }
 
     #[tokio::test]

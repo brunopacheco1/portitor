@@ -1105,7 +1105,7 @@ is the key's thumbprint, so a new key file gives a new key id.
 | `own identity checked: DID document and STS agree` (INFO, at start) | The connector's DID document resolves and the STS signs for it | Nothing |
 | `panic` (ERROR) | A bug: code stopped at `place` (file, line and column). One of the next two lines follows | Report it with `place` and the version |
 | `a request handler panicked; answered 500` (ERROR) | The request on `route` got HTTP 500; the other requests went on | Report it; if it repeats for one partner, its message triggers the bug |
-| `a background task panicked; it starts again` / `...; its work is left as saved` (ERROR) | The task `task` stopped at a bug. A task that runs all the time starts again after 5 seconds; a single piece of work (one DSP message, one credential decision) stays saved, and a DSP message is sent again at the next start | Report it; restart the component to send a stuck DSP message again |
+| `a background task panicked; it starts again` / `...; its message is sent again` / `...; its work is left as saved` (ERROR) | The task `task` stopped at a bug. A task that runs all the time starts again after a pause (`restart_in_seconds`): 5 seconds, twice as long after each further panic in a row, at most 5 minutes. A DSP message whose sending panicked (`outbox_delivery`) is sent again after the same pauses (`again_in_seconds`). A credential decision stays saved and is tried again on the issuer's next outbox round (at most a minute); the other requests and deliveries go on | Report it. A line that repeats for the same `pid` or `issuer_pid` is a message or request that meets the bug every time: it stays as it is until a fixed version runs |
 | `portitor-connector stopped` (ERROR) | The process could not start or stopped with an error; the message says why | Fix the cause; the container restarts |
 | `harvesting datasets` (INFO, at start) | The datasets file and the interval in use | Nothing |
 | `no datasets file (PORTITOR_DATASETS_FILE): the catalog is empty` (INFO) | No datasets file is set | Set it, if you offer datasets |
@@ -1273,8 +1273,9 @@ dots into underscores and adds the unit, for example
 | `portitor.task.panicked` | counter, `{task}` | `portitor.task.name`: `outbox_delivery`, `dataset_harvest`, `bundle_harvest`, `identity_check` (connector), `certificate_watch`, `gaiax_schedule`, `gaiax_run` (identity), `issuer_outbox`, `credential_decision` (issuer) | all |
 | `portitor.bundle.in_use` | gauge, `{bundle}` | `portitor.bundle.version`: 1 for the version in force, 0 for one replaced since the start | connector, with a bundle |
 
-A resend is a retry of a message, or a message saved before a restart
-and sent again; a give-up is a message the outbox stopped trying (the
+A resend is a retry of a message, a message saved before a restart
+and sent again, or a DSP message sent again after its sending
+panicked; a give-up is a message the outbox stopped trying (the
 negotiation or transfer is then terminated or not started, as the log
 says; for the issuer, the delivery is `FAILED`). Every service also
 reports its `service.name`, `service.version` and the SDK's resource
@@ -1836,13 +1837,14 @@ known risk and technical debt, with its status and target release):
   the management API has no call for it yet
   ([TD-38](RISKS_AND_TECHNICAL_DEBTS.md#td-38)).
 - A panic (a bug) no longer stops the process (from 0.12): the request
-  it happened in gets HTTP 500, a background task starts again after 5
-  seconds, and both are logged at ERROR and counted
+  it happened in gets HTTP 500, a background task starts again after a
+  pause (5 seconds, doubling up to 5 minutes while it keeps
+  panicking), a DSP message whose sending panicked is sent again after
+  the same pauses, and all are logged at ERROR and counted
   (`portitor.http.request.panicked`, `portitor.task.panicked`). Alert on
   these counts. Still run each container with a restart policy, as the
   `docker run` examples do: a failed start, a stopped management server
-  and a kill for lack of memory end the process, and a DSP message
-  whose sending panicked is only sent again at the next start
+  and a kill for lack of memory end the process
   ([SECURITY-ASSURANCE](SECURITY-ASSURANCE.md#what-a-panic-does),
   [TD-41](RISKS_AND_TECHNICAL_DEBTS.md#td-41)).
 - Every request waits for its database write to reach the disk, one

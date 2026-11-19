@@ -62,7 +62,9 @@ pub fn is_permanent(error: &str) -> bool {
 /// The outbox: on each round, decides the requests still `RECEIVED`
 /// (left by a restart, or whose decision failed), then sends the due
 /// deliveries, until the process stops. Woken at once when a request is
-/// issued, otherwise at the next due delivery or after a minute.
+/// issued, otherwise at the next due delivery or after a minute. A
+/// decision that panics is logged and counted, and the round goes on
+/// with the next request and the deliveries (`issue::decide_waiting`).
 pub async fn run_outbox(issuer: Arc<Issuer>) {
     loop {
         issue::decide_waiting(&issuer);
