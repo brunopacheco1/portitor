@@ -208,9 +208,11 @@ Where the tests are:
   list that ends sooner, a failed fetch, a revocation seen once the list
   is stale). `cargo test -p portitor-connector --lib auth::dcp`.
 - **DID document cache** (ADR 0016, amended in 0.12): the unit tests in
-  `crates/portitor-runtime/src/did.rs` (at 0 and 300 seconds, the bounds
-  of `PORTITOR_DID_CACHE_SECONDS`) and
-  `the_did_cache_setting_is_bounded` in the connector's `src/auth.rs`.
+  `crates/portitor-runtime/src/did.rs` (at 0, 300 and 3600 seconds, the
+  bounds of `PORTITOR_DID_CACHE_SECONDS`),
+  `the_did_cache_setting_is_bounded` in the connector's `src/auth.rs`
+  and the verifier tests in `src/auth/dcp/tests.rs` (a removed key is
+  refused at once only at 0).
   `cargo test -p portitor-runtime --lib did`.
 - **Issuer metadata and offers against the DCP schemas** (TD-33):
   `the_metadata_answer_passes_the_dcp_schema`,
@@ -218,6 +220,57 @@ Where the tests are:
   tests in the issuer's `tests/issuer.rs` check what the issuer itself
   answers and sends, with the schema copies in
   `crates/portitor-dcp/tests/schemas/`.
+- **Strict policy reader** (TD-32):
+  `crates/portitor-dsp/src/policy/strict_tests.rs` reads offers and
+  agreements with an unknown field, action, operand or operator at each
+  level, a field given twice, `null`, one object in place of a list and
+  other values of `@type`. `src/harvest/tests.rs` in the connector checks
+  that only the dataset with such an offer is left out; the unknown-term
+  tests in `tests/dsp_negotiation.rs` and `tests/dsp_consumer.rs` check
+  the 400 answer that names the term.
+  `cargo test -p portitor-dsp --lib policy`.
+- **Repeated transfer request** (TD-34):
+  `crates/portitor-dsp/src/transfer/provider/tests.rs` (the same request
+  again, one that differs in agreement, format or callback, another
+  caller, two copies at once, a repeat after the transfer ended), the
+  `repeated_request` tests in the connector's `tests/dsp_transfer.rs`
+  (one transfer and one token, also in the SQLite store) and the
+  migration tests in `src/store.rs`.
+- **Refused callers and DSP details** (TD-36): `every_dsp_route_refuses_a_caller_without_a_token`
+  and `every_dsp_route_answers_503_while_the_callers_check_cannot_finish`
+  in the connector's `tests/dsp_transfer.rs` go through the list
+  `DSP_ROUTES` (404 on negotiation and transfer routes and callbacks,
+  401 on the catalog). A new DSP route must be added to that list. The
+  agreement timestamp is tested in
+  `crates/portitor-dsp/src/negotiation/consumer/tests.rs` and
+  `tests/dsp_consumer.rs`, the `consumerPid` of a counter-request in
+  `tests/dsp_negotiation.rs`.
+- **Keys of another DID** (DCP 5.4.3): `crates/portitor-dcp/src/credential/tests.rs`
+  and `a_credential_signed_with_another_dids_key_refuses_the_caller` in
+  the connector's `src/auth/dcp/tests.rs`; for the holder side,
+  `an_answer_signed_with_another_dids_key_is_refused_and_nothing_is_stored`
+  in the identity's `tests/gaiax.rs`.
+- **Panics** (TD-41): `crates/portitor-runtime/src/panics.rs` (a 500
+  answer as `application/problem+json`, other requests go on, supervised
+  tasks start again after the pause) and `src/serve.rs` (both servers
+  over real sockets). `panics_are_counted_and_logged_without_their_message`
+  in `tests/telemetry_export.rs` checks the two metrics. The background
+  tasks have their own tests: `src/health.rs`, `src/harvest/tests.rs`
+  and the outbox test in `tests/dsp_negotiation.rs` in the connector,
+  `a_run_that_panics_does_not_block_the_next_run` in the identity's
+  `tests/gaiax.rs`. A store keeps working after a panic that held its
+  lock: `src/store/poison_tests.rs` in the connector, the identity and
+  the issuer.
+- **Database migrations**: `crates/portitor-connector/src/store.rs` opens
+  a file as 0.11 wrote it, with data, and checks the indexes of 0.12
+  (migrations 9 to 11) and that the lookups use them.
+- **Settings that stop the start**: `tests/health.rs` in the identity and
+  `tests/issuer.rs` in the issuer run the binary with a
+  `PORTITOR_DID_CACHE_SECONDS` out of bounds; the issuer also with a
+  definitions file without a valid `credentialSchema`.
+- **Tests marked `#[ignore = "bug: ..."]`** describe a behaviour the code
+  does not have yet; the reason names it. Remove the mark with the fix.
+  `grep -rn 'ignore = "bug' crates` lists them.
 - **Retired keys** (TD-05): `crates/portitor-identity/tests/key_rotation.rs`,
   and `a_key_change_with_the_old_key_retired_leaves_no_gap` in the
   issuer's `tests/issuer.rs`: what the old key signed verifies while it

@@ -344,6 +344,52 @@ mod tests {
         assert_eq!(check.check().await.unwrap_err(), "STS: connection refused");
     }
 
+    /// A check with a bug: its first run panics. Later runs pass.
+    struct PanicsFirst {
+        runs: AtomicUsize,
+    }
+
+    impl Check for PanicsFirst {
+        fn check(&self) -> BoxFuture<'_, Result<(), String>> {
+            let earlier_runs = self.runs.fetch_add(1, Ordering::SeqCst);
+            assert!(earlier_runs > 0, "a bug in the first run");
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    /// The refresh is supervised (TD-41): after a panic it starts again,
+    /// [`portitor_runtime::panics::RESTART_PAUSE`] later, so readiness
+    /// never keeps reading a result that is no longer renewed.
+    #[tokio::test(start_paused = true)]
+    async fn the_background_task_starts_again_after_a_panic() {
+        use portitor_runtime::panics::RESTART_PAUSE;
+
+        let source = Arc::new(PanicsFirst {
+            runs: AtomicUsize::new(0),
+        });
+        let check = Arc::new(OwnIdentityCheck::from_source(
+            Arc::clone(&source) as _,
+            IDENTITY_TIMEOUT,
+        ));
+        let task = check.spawn_refresh();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(
+            source.runs.load(Ordering::SeqCst),
+            1,
+            "the run that panicked"
+        );
+        assert!(check.check().await.is_err(), "no result yet");
+        assert!(!task.is_finished(), "the task is still there");
+
+        tokio::time::sleep(RESTART_PAUSE).await;
+        assert_eq!(source.runs.load(Ordering::SeqCst), 2, "started again");
+        assert_eq!(check.check().await, Ok(()));
+        // and it keeps its rhythm
+        tokio::time::sleep(IDENTITY_REFRESH).await;
+        assert_eq!(source.runs.load(Ordering::SeqCst), 3);
+        task.abort();
+    }
+
     #[tokio::test(start_paused = true)]
     async fn the_background_task_refreshes_every_ten_seconds() {
         let source = Scripted::new(vec![Ok(()), down(), down(), Ok(())]);

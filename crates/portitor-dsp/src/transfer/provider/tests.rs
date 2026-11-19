@@ -385,6 +385,55 @@ fn a_repeated_request_with_other_content_is_refused() {
     assert_eq!(flows.calls(), ["start urn:uuid:1"]);
 }
 
+/// What makes a repeat the same request: the agreement, the format and
+/// the callback address, each compared as text. One other value and the
+/// repeat is refused (ADR 0013, amended in 0.12).
+#[test]
+fn a_repeat_is_the_same_request_only_if_agreement_format_and_callback_match() {
+    let (store, flows) = (Store::default(), Flows::default());
+    started(&store, &flows);
+    let existing = store.0.borrow()[PID].clone();
+
+    let same = request("a1", "HttpData-PULL");
+    let (ack, out) = answer_again(&existing, &same).unwrap();
+    assert_eq!(ack.provider_pid, PID);
+    assert_eq!(out, None);
+
+    let mut other_callback = same.clone();
+    // the same address written another way is another address
+    other_callback.callback_address = "https://consumer.example/cb/".to_owned();
+    for other in [
+        request("a-members", "HttpData-PULL"),
+        request("a1", "HttpData-PUSH"),
+        request("a1", "httpdata-pull"),
+        other_callback,
+    ] {
+        let failure = answer_again(&existing, &other).unwrap_err();
+        assert!(matches!(failure, Failure::BadRequest(_)), "{other:?}");
+        assert!(reason(&failure).contains("already used"), "{other:?}");
+    }
+}
+
+/// A `consumerPid` stays taken when its transfer has ended: the request
+/// sent again gets the ended transfer as it is, and starts no data flow.
+#[test]
+fn a_repeated_request_after_the_transfer_ended_gets_the_ended_transfer() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = started(&store, &flows);
+    s.terminate(PID, IDS, CONSUMER).unwrap();
+    let calls_before = flows.calls();
+
+    let msg = request("a1", "HttpData-PULL");
+    let (again, out) = s
+        .request(&msg, CONSUMER, &CallerCredentials::default())
+        .unwrap();
+    assert_eq!(again.provider_pid, PID);
+    assert_eq!(again.state, TransferState::Terminated);
+    assert_eq!(out, None);
+    assert_eq!(store.0.borrow().len(), 1);
+    assert_eq!(flows.calls(), calls_before, "no new data flow");
+}
+
 /// A `consumerPid` is only unique for one consumer: another participant
 /// that uses the same value must not get, or learn of, the first one's
 /// transfer.

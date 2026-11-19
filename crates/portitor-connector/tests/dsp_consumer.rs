@@ -579,8 +579,57 @@ async fn pending_messages_are_sent_after_a_restart() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// Invalid provider messages get a `ContractNegotiationError` and leave
-/// the state unchanged (TCK `CN_C:03-*`).
+/// An agreement whose `timestamp` is there but is not an `xsd:dateTime`
+/// (DSP 2025-1, "Contract Agreement Message") gets HTTP 400, and nothing
+/// changes: the negotiation stays REQUESTED, holds no agreement, and no
+/// verification is sent.
+#[tokio::test]
+async fn an_agreement_with_an_invalid_timestamp_is_refused_and_changes_nothing() {
+    let c = connector();
+    let cpid = started(&c, "d1").await;
+    let uri = format!("{CALLBACK}/{cpid}/agreement");
+    let not_a_date_time = "the agreement's timestamp is not an XSD dateTime";
+    for (timestamp, reason) in [
+        (json!("yesterday"), not_a_date_time),
+        (json!(""), not_a_date_time),
+        // a date alone, and a time in another form
+        (json!("2026-11-12"), not_a_date_time),
+        (json!("2026-11-12 12:00:00Z"), not_a_date_time),
+        (json!("Thu, 12 Nov 2026 12:00:00 GMT"), not_a_date_time),
+        // `null` is no timestamp
+        (Value::Null, "the agreement has no timestamp"),
+        // seconds since 1970 as a number: not a text at all
+        (json!(1_794_484_800), "invalid type"),
+    ] {
+        let mut msg = agreement_msg(&cpid, "d1");
+        msg["agreement"]["timestamp"] = timestamp.clone();
+        let (status, error) = call(&c.app, post(&uri, &msg)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{timestamp}: {error}");
+        assert_eq!(error["@type"], "ContractNegotiationError", "{timestamp}");
+        assert_eq!(error["code"], "400", "{timestamp}");
+        let said = error["reason"][0].as_str().unwrap();
+        assert!(said.contains(reason), "{timestamp}: {said}");
+        assert_eq!(state(&c.app, &cpid).await, "REQUESTED", "{timestamp}");
+    }
+    assert!(c.negotiator.get(&cpid).unwrap().agreement.is_none());
+    assert_eq!(c.provider.count(), 1, "only our first request was sent");
+}
+
+/// `xsd:dateTime` lets the time zone be left out, and may carry a
+/// fraction of a second: such an agreement is taken, and kept as sent.
+#[tokio::test]
+async fn an_agreement_whose_timestamp_has_no_time_zone_is_accepted() {
+    let c = connector();
+    let cpid = started(&c, "d1").await;
+    let mut msg = agreement_msg(&cpid, "d1");
+    msg["agreement"]["timestamp"] = json!("2026-11-12T12:00:00.250");
+    let uri = format!("{CALLBACK}/{cpid}/agreement");
+    let (status, ack) = call(&c.app, post(&uri, &msg)).await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    let held = c.negotiator.get(&cpid).unwrap().agreement.unwrap();
+    assert_eq!(held.timestamp.as_deref(), Some("2026-11-12T12:00:00.250"));
+}
+
 /// DSP 2025-1, "Contract Agreement Message": "An Agreement MUST contain a
 /// `timestamp` property defined as an XSD `DateTime` type" (TD-36).
 #[tokio::test]
@@ -599,6 +648,8 @@ async fn an_agreement_without_a_timestamp_is_refused() {
     assert_eq!(state(&c.app, &cpid).await, "REQUESTED");
 }
 
+/// Invalid provider messages get a `ContractNegotiationError` and leave
+/// the state unchanged (TCK `CN_C:03-*`).
 #[tokio::test]
 async fn invalid_messages_are_refused() {
     let c = connector();

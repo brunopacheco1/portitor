@@ -168,3 +168,53 @@ fn unknown_arguments_exit_with_2() {
         assert!(stderr.contains("takes no arguments"), "{stderr}");
     }
 }
+
+/// The identity reads `PORTITOR_DID_CACHE_SECONDS` at start (it resolves
+/// the DIDs of issuers and verifiers): a value out of bounds stops the
+/// process before it listens, and the log names the setting.
+#[test]
+fn a_did_cache_time_out_of_bounds_stops_the_start() {
+    use portitor_runtime::testing::TempDir;
+
+    let dir = TempDir::new("identity-start");
+    let key = include_str!("fixtures/test-only-identity-key.pem");
+    let key_file = dir.write("test-only-key.pem", key);
+    let secret_file = dir.write("sts-secret", STS_SECRET);
+    for value in ["3601", "-1", "5m"] {
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_portitor-identity"))
+            // nothing of the test machine's own settings
+            .env_clear()
+            .env("PORTITOR_PARTICIPANT_ID", HOLDER)
+            .env(
+                "PORTITOR_CREDENTIAL_SERVICE_URL",
+                "https://holder.example/credentials",
+            )
+            .env("PORTITOR_TRUSTED_ISSUERS", ISSUER)
+            .env("PORTITOR_IDENTITY_KEY_FILE", &key_file)
+            .env("PORTITOR_STS_CLIENT_SECRET_FILE", &secret_file)
+            .env("PORTITOR_DB_FILE", dir.path().join("identity.db"))
+            .env("PORTITOR_BIND", "127.0.0.1:0")
+            .env("PORTITOR_DID_CACHE_SECONDS", value)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        // the setting must stop it; a process still there after 30 s fails
+        let started = std::time::Instant::now();
+        while child.try_wait().unwrap().is_none() {
+            if started.elapsed() > std::time::Duration::from_secs(30) {
+                child.kill().unwrap();
+                panic!("{value}: the identity started instead of stopping");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let output = child.wait_with_output().unwrap();
+        let mut logged = String::from_utf8_lossy(&output.stdout).into_owned();
+        logged.push_str(&String::from_utf8_lossy(&output.stderr));
+        assert!(!output.status.success(), "{value}: {logged}");
+        assert!(
+            logged.contains("PORTITOR_DID_CACHE_SECONDS has an invalid value"),
+            "{value}: {logged}"
+        );
+    }
+}

@@ -281,6 +281,69 @@ mod tests {
         assert!(parse(&plain_http).is_ok());
     }
 
+    /// A definitions file of one entry whose `credentialSchema` is the
+    /// JSON `value`.
+    fn file_with_schema(value: &str) -> String {
+        format!(
+            r#"[{{"id": "m", "credentialType": "MembershipCredential",
+                 "profile": "vc20-bssl/jwt", "validityDays": 1, "credentialSchema": {value}}}]"#
+        )
+    }
+
+    /// `credentialSchema` is one URL as text (DCP 6.6.2): any other JSON
+    /// type, a list of URLs included, stops the issuer, and so does a URL
+    /// with a space around it.
+    #[test]
+    fn a_credential_schema_that_is_not_one_url_as_text_is_refused() {
+        assert!(parse(&file_with_schema(r#""https://example.com/m.json""#)).is_ok());
+        for value in [
+            "true",
+            "1.5",
+            r#"["https://example.com/m.json"]"#,
+            r#"{"id": "https://example.com/m.json", "type": "JsonSchema"}"#,
+            r#"" https://example.com/m.json""#,
+            r#""https://example.com/m.json ""#,
+            r#""https:example.com/m.json""#,
+            r#""//example.com/m.json""#,
+            r#""urn:example:schema""#,
+        ] {
+            assert!(parse(&file_with_schema(value)).is_err(), "{value}");
+        }
+    }
+
+    /// A field written twice in one entry is refused by name: one of the
+    /// two values would be dropped unseen.
+    #[test]
+    fn a_field_given_twice_in_an_entry_is_refused() {
+        let twice = file_with_schema(
+            r#""https://example.com/a.json", "credentialSchema": "https://example.com/b.json""#,
+        );
+        let error = parse(&twice).unwrap_err().to_string();
+        assert!(
+            error.contains("duplicate field `credentialSchema`"),
+            "{error}"
+        );
+    }
+
+    /// Each entry is checked on its own: one entry without
+    /// `credentialSchema` among good ones stops the issuer, and the
+    /// message names that entry.
+    #[test]
+    fn one_entry_without_credential_schema_among_good_ones_is_named() {
+        let mixed = r#"[
+          {"id": "first", "credentialType": "A", "profile": "vc20-bssl/jwt", "validityDays": 1,
+           "credentialSchema": "https://example.com/a.json"},
+          {"id": "second", "credentialType": "B", "profile": "vc20-bssl/jwt", "validityDays": 1},
+          {"id": "third", "credentialType": "C", "profile": "vc20-bssl/jwt", "validityDays": 1,
+           "credentialSchema": "https://example.com/c.json"}
+        ]"#;
+        let error = parse(mixed).unwrap_err().to_string();
+        assert!(
+            error.contains("\"second\": credentialSchema is required"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn metadata_lists_every_definition_fully() {
         let metadata = metadata("did:web:issuer.example", &parse(EXAMPLE).unwrap());

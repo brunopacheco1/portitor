@@ -37,8 +37,13 @@ use prost::Message as _;
 use tracing::Instrument as _;
 
 /// Set in the child's environment: run the child's work, in this mode
-/// (`normal` or `failing`).
+/// (`normal`, `failing` or `panics`).
 const CHILD_MARKER: &str = "PORTITOR_TELEMETRY_TEST_CHILD";
+
+/// The message of every panic of the `panics` child. A panic's message
+/// can quote a value from a request, so it must appear nowhere: not in
+/// the log, not in an answer, not in an export.
+const PANIC_MESSAGE: &str = "pan1c-message-with-a-value";
 
 /// A secret the child sends; it must never be exported.
 const SECRET: &str = "s3cret-t0ken-value";
@@ -124,6 +129,11 @@ async fn serve_in_background(app: Router) -> String {
 /// Runs the child in `mode` with the `endpoints` (variable name and
 /// value) set, returns its standard output (the JSON log lines).
 async fn run_child(mode: &str, endpoints: &[(&str, String)]) -> String {
+    run_child_output(mode, endpoints).await.0
+}
+
+/// [`run_child`], and the child's standard error as well.
+async fn run_child_output(mode: &str, endpoints: &[(&str, String)]) -> (String, String) {
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
         .args(["child", "--exact", "--nocapture", "--test-threads=1"])
@@ -145,12 +155,9 @@ async fn run_child(mode: &str, endpoints: &[(&str, String)]) -> String {
         .unwrap()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    assert!(
-        output.status.success(),
-        "child failed: {stdout}\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    stdout
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(output.status.success(), "child failed: {stdout}\n{stderr}");
+    (stdout, stderr)
 }
 
 /// The value of the attribute `key`, as text.
@@ -446,6 +453,116 @@ async fn a_failing_receiver_does_not_stop_the_process() {
     }
 }
 
+/// TD-41, ADR 0023: a handler that panics is answered with 500 and
+/// counted in `portitor.http.request.panicked` under its route template;
+/// a background task that panics is counted in `portitor.task.panicked`
+/// under its fixed name. Each panic is one log line with the place in
+/// the code. The panic's message appears nowhere (the child checks the
+/// answers and that it keeps serving, see `panicking_work`).
+#[tokio::test(flavor = "multi_thread")]
+async fn panics_are_counted_and_logged_without_their_message() {
+    let received = Received::default();
+    let endpoint = receiver(Arc::clone(&received)).await;
+    let endpoints = [("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint)];
+    let (stdout, stderr) = run_child_output("panics", &endpoints).await;
+    let received = received.lock().unwrap().clone();
+    let (spans, points) = decode(&received);
+
+    // the attributes of each data point of the metric `name`
+    let points_of = |name: &str| -> Vec<&Vec<KeyValue>> {
+        let named = points.iter().filter(|(metric, _)| metric == name);
+        named.map(|(_, attributes)| attributes).collect()
+    };
+    let requests = points_of("portitor.http.request.panicked");
+    assert!(!requests.is_empty(), "{points:?}");
+    for attributes in requests {
+        // the route template, never the path with its id
+        assert_eq!(
+            text(attributes, "http.route").as_deref(),
+            Some("/panics/{id}")
+        );
+    }
+    let tasks = points_of("portitor.task.panicked");
+    for task in ["test_single_work", "test_schedule"] {
+        let counted = tasks
+            .iter()
+            .any(|attributes| text(attributes, "portitor.task.name").as_deref() == Some(task));
+        assert!(counted, "{task} in {points:?}");
+    }
+
+    // the request's span and duration measure show the 500
+    let panicked: Vec<&Span> = spans
+        .iter()
+        .filter(|span| span.name == "GET /panics/{id}")
+        .collect();
+    assert_eq!(panicked.len(), 2, "{spans:?}");
+    for span in panicked {
+        assert_eq!(
+            text(&span.attributes, "http.response.status_code").as_deref(),
+            Some("500")
+        );
+    }
+    let measured_500 = points_of("http.server.request.duration")
+        .iter()
+        .any(|attributes| text(attributes, "http.response.status_code").as_deref() == Some("500"));
+    assert!(measured_500, "{points:?}");
+
+    // the log: one JSON line per panic with the place in the code, and
+    // one per answer and per task; the message in none, also not on
+    // standard error or in an export
+    let panic_lines: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.contains("\"message\":\"panic\""))
+        .collect();
+    assert_eq!(panic_lines.len(), 4, "{stdout}");
+    for line in panic_lines {
+        assert!(line.contains("telemetry_export.rs:"), "{line}");
+        assert!(line.contains("\"level\":\"ERROR\""), "{line}");
+    }
+    assert!(stdout.contains("a request handler panicked; answered 500"));
+    assert!(stdout.contains("a background task panicked; it starts again"));
+    assert!(stdout.contains("a background task panicked; its work is left as saved"));
+    assert!(!stdout.contains(PANIC_MESSAGE), "{stdout}");
+    assert!(!stderr.contains(PANIC_MESSAGE), "{stderr}");
+    for (path, _, body) in &received {
+        let as_text = String::from_utf8_lossy(body);
+        assert!(!as_text.contains(PANIC_MESSAGE), "{path}");
+    }
+}
+
+/// `/panics/{id}` of the `panics` child: a handler with a bug.
+async fn panicking_answer() -> &'static str {
+    panic!("{PANIC_MESSAGE}")
+}
+
+/// The work of the `panics` child: a server set up as
+/// `portitor_runtime::serve` sets it up, two requests whose handler
+/// panics, one that works, and two background tasks that panic.
+async fn panicking_work() {
+    use portitor_runtime::panics::{answer_500_on_panic, report_panic, spawn_supervised};
+    use portitor_runtime::telemetry::http::observe_requests;
+
+    let app = Router::new()
+        .route("/panics/{id}", get(panicking_answer))
+        .route("/items/{id}", get(item_answer));
+    let base = serve_in_background(observe_requests(answer_500_on_panic(app), &[])).await;
+    let get_status = |path: &str| {
+        let request = hyper::Request::get(format!("{base}{path}"))
+            .body(http_body_util::Full::default())
+            .unwrap();
+        send_raw(request)
+    };
+    assert_eq!(get_status("/panics/42").await, 500);
+    assert_eq!(get_status("/panics/43").await, 500);
+    assert_eq!(get_status("/items/1").await, 200, "the server goes on");
+
+    report_panic("test_single_work", async { panic!("{PANIC_MESSAGE}") }).await;
+    let schedule = spawn_supervised("test_schedule", || async { panic!("{PANIC_MESSAGE}") });
+    // the panic is counted at once; the restart would come after the pause
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    schedule.abort();
+}
+
 /// The routes of the child: `/items/{id}` answers with the
 /// `traceparent` it got, if any.
 async fn item_answer(headers: HeaderMap) -> String {
@@ -500,6 +617,11 @@ async fn child() {
     };
     let telemetry = telemetry::init("portitor-telemetry-test");
     let base = child_server().await;
+    if mode == "panics" {
+        panicking_work().await;
+        telemetry.shutdown().await;
+        return;
+    }
     if mode == "failing" {
         failing_work(&base).await;
         let started = Instant::now();
