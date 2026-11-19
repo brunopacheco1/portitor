@@ -342,6 +342,14 @@ async fn counter_offer_on_an_existing_negotiation() {
     let (s, err) = call(&app, post(&format!("{BASE}/{pid}/request"), &again)).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
     assert!(err["reason"][0].as_str().unwrap().contains("path"));
+    // and the consumer pid must be the one the negotiation started with
+    let mut other_consumer_pid = request(CALLBACK);
+    other_consumer_pid["providerPid"] = json!(pid);
+    other_consumer_pid["consumerPid"] = json!("urn:uuid:consumer-2");
+    let uri = format!("{BASE}/{pid}/request");
+    let (s, err) = call(&app, post(&uri, &other_consumer_pid)).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert_eq!(err["reason"][0], "process ids do not match");
 }
 
 #[tokio::test]
@@ -524,9 +532,11 @@ async fn only_the_consumer_that_started_a_negotiation_sees_it() {
     let uri = format!("{BASE}/{pid}");
     let anonymous = Request::get(&uri).body(Body::empty()).unwrap();
     let (s, err) = call(&app, anonymous).await;
-    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    // DSP 2025-1, "Contract Negotiation HTTPS Binding", "Unauthorized
+    // Access": a client that is not authorized gets 404
+    assert_eq!(s, StatusCode::NOT_FOUND);
     assert_eq!(err["@type"], "ContractNegotiationError");
-    assert_eq!(err["code"], "401");
+    assert_eq!(err["code"], "404");
     let stranger = from(Request::get(&uri), "did:web:stranger.example");
     let (s, _) = call(&app, stranger.body(Body::empty()).unwrap()).await;
     assert_eq!(s, StatusCode::NOT_FOUND);

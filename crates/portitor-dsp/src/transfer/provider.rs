@@ -91,12 +91,31 @@ pub trait TransferStore {
     /// The store cannot be read.
     fn get(&self, provider_pid: &str) -> Result<Option<Transfer>, StoreError>;
 
-    /// Adds a new transfer.
+    /// The transfer that the consumer `counter_party` asked for with its
+    /// process id `consumer_pid`, if there is one: how a repeated
+    /// `TransferRequestMessage` is recognised (DSP 2025-1, "Transfer
+    /// Request Message": idempotent behavior based on `consumerPid`).
+    /// Another consumer's transfer with the same `consumerPid` is never
+    /// returned. If a store written before 0.12 holds several, the oldest.
     ///
     /// # Errors
     ///
-    /// The store cannot be written, or the id is taken.
-    fn insert(&self, transfer: &Transfer) -> Result<(), StoreError>;
+    /// The store cannot be read.
+    fn requested(
+        &self,
+        counter_party: &str,
+        consumer_pid: &str,
+    ) -> Result<Option<Transfer>, StoreError>;
+
+    /// Adds a new transfer, unless its consumer (`counter_party`) already
+    /// has one with the same `consumer_pid`: then nothing is written and
+    /// the answer is `false`. Both happen in one step, so two copies of
+    /// one request that arrive together cannot both be added.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be written, or the provider's id is taken.
+    fn insert(&self, transfer: &Transfer) -> Result<bool, StoreError>;
 
     /// Replaces a transfer only if its stored `version` is still
     /// `expected`, atomically. Returns `false` when another write came
@@ -310,9 +329,19 @@ where
     /// `credentials`, its verified credentials (ADR 0019), saves the new
     /// transfer and, if the decider says so, starts it.
     ///
+    /// A request that the same caller sends again with the same
+    /// `consumerPid` starts nothing: the answer is the transfer it already
+    /// has (DSP 2025-1, "Transfer Request Message": "Providers SHOULD
+    /// implement idempotent behavior for Transfer Request Messages based
+    /// on the value of `consumerPid`"; ADR 0013, amended in 0.12). The
+    /// request is checked first, then looked up, the order Eclipse EDC
+    /// uses (`TransferProcessProtocolServiceImpl.requestedAction`).
+    ///
     /// # Errors
     ///
-    /// The request breaks a rule of ADR 0013, or the store failed.
+    /// The request breaks a rule of ADR 0013, it uses the `consumerPid` of
+    /// the caller's earlier request with other content, or the store
+    /// failed.
     pub fn request(
         &self,
         msg: &TransferRequestMessage,
@@ -321,6 +350,9 @@ where
     ) -> Handled {
         let cpid = msg.consumer_pid.as_str();
         let agreement = self.check_request(msg, caller, credentials)?;
+        if let Some(existing) = self.requested_before(caller, cpid)? {
+            return answer_again(&existing, msg);
+        }
         let state = next_state(None, Transition::Request, Role::Consumer)
             .map_err(|e| bad("", cpid, &e.to_string()))?;
         let mut transfer = Transfer {
@@ -336,13 +368,44 @@ where
             version: 0,
         };
         transfer.pending = self.next(&transfer);
-        if let Err(e) = self.store.insert(&transfer) {
-            // the data flow may have started for a transfer that now does
-            // not exist: end it (best effort; the store error is reported)
-            let _ = self.flows.terminate(&transfer.provider_pid);
-            return Err(Failure::Store(e));
+        self.save_new(transfer, msg)
+    }
+
+    /// Saves the new `transfer` that the request `msg` asked for, and
+    /// returns the answer. If it cannot be saved, the data flow that may
+    /// have started for it is ended again (best effort).
+    fn save_new(&self, transfer: Transfer, msg: &TransferRequestMessage) -> Handled {
+        match self.store.insert(&transfer) {
+            Ok(true) => Ok((ack(&transfer), transfer.pending)),
+            Ok(false) => {
+                // a copy of this request was saved while this one was
+                // being checked: answer with the transfer that was saved
+                let _ = self.flows.terminate(&transfer.provider_pid);
+                let (caller, cpid) = (&transfer.counter_party, &transfer.consumer_pid);
+                match self.requested_before(caller, cpid)? {
+                    Some(existing) => answer_again(&existing, msg),
+                    None => Err(bad("", cpid, "the request was sent twice; retry")),
+                }
+            }
+            Err(e) => {
+                // the store error is reported, not the data plane's
+                let _ = self.flows.terminate(&transfer.provider_pid);
+                Err(Failure::Store(e))
+            }
         }
-        Ok((ack(&transfer), transfer.pending))
+    }
+
+    /// The transfer `caller` already asked for with `consumer_pid`, if
+    /// any. Only the caller's own transfers are searched, so another
+    /// participant that uses the same `consumerPid` finds nothing.
+    fn requested_before(
+        &self,
+        caller: &str,
+        consumer_pid: &str,
+    ) -> Result<Option<Transfer>, Failure> {
+        self.store
+            .requested(caller, consumer_pid)
+            .map_err(Failure::Store)
     }
 
     /// The rules of ADR 0013 for a new request. Returns the agreement.
@@ -619,6 +682,31 @@ where
             }
         })
     }
+}
+
+/// The answer to a `TransferRequestMessage` that the consumer of
+/// `existing` sent again with the same `consumerPid`: the transfer as it
+/// is now, and nothing to send. No new data flow and no new token: the
+/// start message of the first request carries the only one.
+///
+/// DSP 2025-1 does not say what to answer when the second request is not
+/// the first one again. Eclipse EDC answers with the existing transfer
+/// whatever the message holds. Portitor refuses it (HTTP 400) when the
+/// agreement, the format or the callback address differ, as it refuses
+/// other mismatched ids: the consumer would otherwise take the answer for
+/// a transfer it did not ask for.
+fn answer_again(existing: &Transfer, msg: &TransferRequestMessage) -> Handled {
+    let same_request = existing.agreement_id == msg.agreement_id
+        && existing.format == msg.format
+        && existing.callback_address == msg.callback_address;
+    if !same_request {
+        return Err(bad(
+            "",
+            &msg.consumer_pid,
+            "consumerPid is already used by another transfer request of this consumer",
+        ));
+    }
+    Ok((ack(existing), None))
 }
 
 fn ack(transfer: &Transfer) -> TransferProcess {

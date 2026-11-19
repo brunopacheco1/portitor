@@ -130,6 +130,56 @@ control plane and data plane; that value stays inside Portitor. The EDC
 interop test (0.5) confirms the choice. Reported upstream:
 https://github.com/eclipse-dataplane-signaling/profiles/issues/8
 
+### Amended in 0.12: a repeated transfer request starts nothing new (2026-11-18)
+
+The 2026-11-18 review of specifications and code quality (D3,
+[TD-34](../RISKS_AND_TECHNICAL_DEBTS.md#td-34)) found that a
+`TransferRequestMessage` sent again, for example after a timeout, started
+a second transfer with a second data token. The maintainer decided the
+change on 2026-11-18. DSP 2025-1, "Transfer Request Message": "Providers
+SHOULD implement idempotent behavior for Transfer Request Messages based
+on the value of `consumerPid`."
+
+- The provider looks a request up by the **caller's verified DID and the
+  `consumerPid`**. If that caller already has a transfer with that
+  `consumerPid`, the answer is that transfer as it is now (HTTP 201 with
+  the `TransferProcess`: the same `providerPid`, its current state).
+  Nothing else happens: no data flow, no token, no message.
+- The request is checked first (agreement held by the caller, policy,
+  format), then looked up. Eclipse EDC 1.0.0-RC7 uses this order and
+  this answer (`TransferProcessProtocolServiceImpl.requestedAction`,
+  `findForCorrelationId`).
+- DSP adds that the provider "SHOULD respond with an appropriate
+  Transfer Start Message". Portitor does not send the start message a
+  second time, and neither does EDC: only the token's hash is kept, so
+  the first data address cannot be sent again, and a new one would be the
+  second token this change avoids. A start message that was never
+  acknowledged is still in the outbox and is sent again by its own rules
+  (ADR 0007).
+- **A `consumerPid` belongs to one consumer.** Another participant that
+  uses the same value never gets, or learns of, the first one's transfer:
+  with its own agreement it gets a transfer of its own, and with the
+  first consumer's agreement it is refused as before (400, "no finalized
+  agreement with this id for the caller").
+- **A repeat must be the same request.** If the same caller sends the
+  same `consumerPid` with another `agreementId`, `format` or
+  `callbackAddress`, the request is refused with HTTP 400. DSP does not
+  cover this case. EDC answers with the existing transfer whatever the
+  message holds; Portitor refuses, as it refuses other mismatched ids, so
+  that a consumer never takes the answer for a transfer it did not ask
+  for.
+- There is no time limit: a `consumerPid` is recognised as long as the
+  transfer is stored, also after it ended (DSP: providers "MAY choose to
+  implement idempotent behavior for a certain period of time").
+- Storage: SQLite schema version 9 adds an index on
+  (`counter_party`, `consumer_pid`) to the `transfer` table. It is not a
+  UNIQUE index, because a file written before 0.12 may already hold
+  several transfers for one repeated request and must still open; for
+  such a file the transfer stored first answers. New rows are kept unique
+  by the insert itself (one statement that adds the row only if there is
+  none for that consumer and `consumerPid`), so two copies of a request
+  that arrive together give one transfer.
+
 ## Consequences
 
 - No transfer without a finalized agreement held by the caller; once DCP

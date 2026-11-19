@@ -95,12 +95,42 @@ impl TransferStore for SqliteNegotiations {
         Ok(found.into_iter().next())
     }
 
-    fn insert(&self, transfer: &Transfer) -> Result<(), StoreError> {
+    fn requested(
+        &self,
+        counter_party: &str,
+        consumer_pid: &str,
+    ) -> Result<Option<Transfer>, StoreError> {
+        // served by the index `transfer_request` (migration 9). `rowid`
+        // grows with each insert, so a file from before 0.12 that holds
+        // several transfers for one request gives the first one.
+        let sql = format!(
+            "SELECT {TRANSFER_COLUMNS} FROM transfer
+             WHERE counter_party = ?1 AND consumer_pid = ?2
+             ORDER BY rowid LIMIT 1"
+        );
+        let found = self.query(
+            &sql,
+            params![counter_party, consumer_pid],
+            transfer_from_row,
+        )?;
+        Ok(found.into_iter().next())
+    }
+
+    fn insert(&self, transfer: &Transfer) -> Result<bool, StoreError> {
+        // one statement, so it is atomic: the row is added only if this
+        // consumer has no transfer with this consumer pid yet (DSP 2025-1,
+        // "Transfer Request Message": idempotent on `consumerPid`). Not a
+        // UNIQUE index, because files from before 0.12 may hold repeated
+        // requests and must still open.
         let sql = format!(
             "INSERT INTO transfer ({TRANSFER_COLUMNS})
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM transfer WHERE counter_party = ?5 AND consumer_pid = ?2
+             )"
         );
-        self.conn()
+        let inserted = self
+            .conn()
             .execute(
                 &sql,
                 params![
@@ -117,7 +147,7 @@ impl TransferStore for SqliteNegotiations {
                 ],
             )
             .map_err(err)?;
-        Ok(())
+        Ok(inserted == 1)
     }
 
     fn replace_if(&self, transfer: &Transfer, expected: u64) -> Result<bool, StoreError> {
@@ -210,10 +240,12 @@ mod tests {
             counter_party: "did:web:c".to_owned(),
         };
         let t = stored_transfer(Some(start));
-        db.insert(&t).unwrap();
+        assert!(db.insert(&t).unwrap());
         assert_eq!(db.get("urn:uuid:p").unwrap(), Some(t.clone()));
         assert_eq!(db.pending().unwrap(), std::slice::from_ref(&t));
-        assert!(db.insert(&t).is_err(), "the id is taken");
+        let mut same_id = t.clone();
+        same_id.consumer_pid = "urn:uuid:c2".to_owned();
+        assert!(db.insert(&same_id).is_err(), "the id is taken");
 
         let mut started = t.clone();
         started.state = TransferState::Started;
@@ -223,6 +255,36 @@ mod tests {
         assert!(!db.replace_if(&started, 0).unwrap(), "version 0 is gone");
         assert_eq!(db.get("urn:uuid:p").unwrap(), Some(started));
         assert!(db.pending().unwrap().is_empty());
+    }
+
+    /// DSP 2025-1, "Transfer Request Message": idempotent on
+    /// `consumerPid`, for the same consumer.
+    #[test]
+    fn a_request_is_stored_once_for_each_consumer() {
+        let file = SqliteNegotiations::in_memory().unwrap();
+        let db: &dyn TransferStore = &file;
+        let first = stored_transfer(None);
+        assert!(db.insert(&first).unwrap());
+
+        // the same consumer and consumer pid again: nothing is written
+        let mut again = first.clone();
+        again.provider_pid = "urn:uuid:p2".to_owned();
+        assert!(!db.insert(&again).unwrap());
+        assert_eq!(db.get("urn:uuid:p2").unwrap(), None);
+        let found = db.requested("did:web:c", "urn:uuid:c").unwrap();
+        assert_eq!(found, Some(first.clone()));
+
+        // another consumer with the same consumer pid: its own transfer
+        assert_eq!(db.requested("did:web:other", "urn:uuid:c").unwrap(), None);
+        let mut others = first.clone();
+        others.provider_pid = "urn:uuid:p3".to_owned();
+        others.counter_party = "did:web:other".to_owned();
+        assert!(db.insert(&others).unwrap());
+        let found = db.requested("did:web:other", "urn:uuid:c").unwrap();
+        assert_eq!(found, Some(others));
+        let found = db.requested("did:web:c", "urn:uuid:c").unwrap();
+        assert_eq!(found, Some(first));
+        assert_eq!(db.requested("did:web:c", "urn:uuid:unknown").unwrap(), None);
     }
 
     #[test]

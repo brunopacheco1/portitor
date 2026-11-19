@@ -101,6 +101,14 @@ amended in 0.11). A failure without a status is tried again, also one
 from our own side such as a refused URL; proof of delivery makes a
 message that did arrive count once.
 
+From 0.12 a Portitor partner answers 404, not 401, on the negotiation
+and transfer routes when it refuses our credentials (ADR 0016, amended
+in 0.12; Eclipse EDC does the same). The rule above already covers it:
+a 404 is final after one try, the partner's state is then read (which a
+partner that refuses us answers with 404 too), and the process ends. Our
+log shows `HTTP 404`; only the partner's log says whether it refused us
+or did not know the process.
+
 ## Consequences
 
 - The 3 second wait is gone; messages that race their acknowledgement are

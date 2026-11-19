@@ -151,7 +151,8 @@ impl Role {
 /// Why a DSP request was refused before the protocol handled it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
-    /// The caller is not authenticated (no valid DCP token): HTTP 401.
+    /// The caller is not authenticated (no valid DCP token): HTTP 404
+    /// on the negotiation and transfer routes, 401 on the catalog routes.
     Unauthenticated,
     /// The body is not the message the endpoint takes (not JSON, a field
     /// missing or of the wrong type): HTTP 400.

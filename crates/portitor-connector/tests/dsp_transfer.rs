@@ -307,6 +307,54 @@ async fn request_starts_and_the_consumer_suspends_restarts_and_completes() {
     assert_eq!(error["@type"], "TransferError");
 }
 
+/// DSP 2025-1, "Transfer Request Message": "Providers SHOULD implement
+/// idempotent behavior for Transfer Request Messages based on the value of
+/// `consumerPid`" (TD-34).
+#[tokio::test]
+async fn a_repeated_request_gets_the_same_transfer_and_one_token() {
+    let (sender, flows) = (
+        Arc::new(FakeSender::default()),
+        Arc::new(FakeFlows::default()),
+    );
+    let app = portitor_connector::router(&config(), ports(&sender, &flows)).unwrap();
+    let uri = format!("{BASE}/request");
+
+    let (status, first) = call(&app, post(&uri, &request("a1"))).await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    let pid = first["providerPid"].as_str().unwrap().to_owned();
+    sent(&sender, 1).await;
+    wait_for(&app, &pid, "STARTED").await;
+
+    // the consumer sends its request again, for example after a timeout
+    let (status, again) = call(&app, post(&uri, &request("a1"))).await;
+    assert_eq!(status, StatusCode::CREATED, "{again}");
+    assert_eq!(again["@type"], "TransferProcess");
+    assert_eq!(again["providerPid"], pid.as_str());
+    assert_eq!(again["consumerPid"], CONSUMER_PID);
+    assert_eq!(again["state"], "STARTED", "the transfer as it is now");
+
+    // give a second start message the time to go out, if there were one
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(sender.sent().len(), 1, "one start message, so one token");
+    assert_eq!(flows.calls(), ["start CAT0101"], "one data flow");
+
+    // the same consumer pid with another callback address is not the same
+    // request: refused, and nothing is started
+    let mut other = request("a1");
+    other["callbackAddress"] = json!("https://elsewhere.example/cb");
+    let (status, error) = call(&app, post(&uri, &other)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(error["@type"], "TransferError");
+
+    // another participant with the same consumer pid learns nothing of
+    // the transfer: it is refused as for any agreement that is not its own
+    let stranger = post_as(&uri, &request("a1"), "did:web:stranger.example");
+    let (status, error) = call(&app, stranger).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert!(!error.to_string().contains(&pid), "{error}");
+    assert_eq!(flows.calls(), ["start CAT0101"]);
+}
+
 #[tokio::test]
 async fn requests_without_a_held_agreement_are_refused() {
     let (sender, flows) = (
@@ -356,10 +404,12 @@ async fn only_the_assignee_may_use_an_agreement() {
         .body(Body::from(request("a1").to_string()))
         .unwrap();
     let (status, error) = call(&app, anonymous).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // DSP 2025-1, "Transfer Process HTTPS Binding", "Unauthorized Access":
+    // a client that is not authorized gets 404
+    assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(
         (error["@type"].as_str(), error["code"].as_str()),
-        (Some("TransferError"), Some("401"))
+        (Some("TransferError"), Some("404"))
     );
     assert!(flows.calls().is_empty());
 }

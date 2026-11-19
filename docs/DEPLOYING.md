@@ -892,8 +892,11 @@ is the key's thumbprint, so a new key file gives a new key id.
   it (`credential refused`, INFO). So a participant must delete a revoked
   credential once its reissued one arrives (section 4). Credentials from
   other issuers are skipped. When refused it
-  answers HTTP 401 with a DSP error that says only "unauthorized"; the
-  reason is in the log. When the check cannot finish because a server
+  answers with a DSP error that says only "unauthorized": HTTP 404 on
+  the negotiation and transfer routes (DSP 2025-1 HTTPS bindings,
+  "Unauthorized Access"; Eclipse EDC does the same), HTTP 401 on the
+  catalog routes. The reason is in the log (`DSP request refused: caller
+  not authenticated`, WARN). When the check cannot finish because a server
   it fetches from does not answer, or answers 408, 429 or 5xx, it
   answers HTTP 503 instead, so the partner tries again later. Each negotiation and transfer is bound to the DID
   that started it: another caller is told it does not exist. As
@@ -1068,7 +1071,9 @@ is the key's thumbprint, so a new key file gives a new key id.
 | `termination not acknowledged` (WARN) | The partner did not take a termination; DSP allows this, the negotiation is terminated anyway | Nothing, unless it repeats for one partner |
 | `no CA certificates: https calls will fail` (WARN, at start) | The CA bundle was not found (for example `SSL_CERT_DIR` points to an empty folder) | Fix the mount or the variable |
 | `negotiation store failed` (ERROR) | The SQLite file could not be read or written; partners get HTTP 500 | Check disk space and the `/data` volume |
-| `DSP request refused: caller not authenticated` (WARN) | A DSP request got HTTP 401; `reason` says why (token, presentation, credential or status list) | If a partner should be admitted: check its credential, its issuer against `PORTITOR_TRUSTED_ISSUERS`, and clock skew (60 s allowed) |
+| `DSP request refused: caller not authenticated` (WARN) | A DSP request was refused: the caller got HTTP 404 on a negotiation or transfer route, HTTP 401 on a catalog route (`status` says which). `reason` says why (token, presentation, credential or status list); the caller is not told | If a partner should be admitted: check its credential, its issuer against `PORTITOR_TRUSTED_ISSUERS`, and clock skew (60 s allowed) |
+| A partner says a negotiation or transfer call got HTTP 404 `unauthorized`, or its side ended with `no such negotiation` although the process exists | From 0.12 a caller that is not authenticated gets 404 on the negotiation and transfer routes, as DSP 2025-1 asks (Eclipse EDC does the same). The 404 does not say why | Look in **your** log for `DSP request refused: caller not authenticated` at that time: its `reason` names the failed check. A 404 with reason `no such negotiation` or `no such transfer` and no such log line means the process id is unknown, or belongs to another participant |
+| `counter-party not reachable; terminating` (WARN) with `HTTP 404` in `error` | The partner answered 404 to your message: it does not know the process, or it refused your credentials (a Portitor from 0.12 and Eclipse EDC answer 404 for both). The message is not sent again | Ask the partner for the reason in its log; check that your credential is valid and not revoked, and that the partner trusts its issuer |
 | `DSP request not checked: a service the check needs is unavailable; answered 503` (WARN) | A server the check fetches from (the partner's DID document or Credential Service, its issuer's DID document or status list, your STS) did not answer, or answered 408, 429 or 5xx; `reason` names it. The partner tries again | If it repeats: check your STS, then ask the partner about its services |
 | `no token: ...` in a send failure (WARN) | The STS did not give a token for an outgoing DSP request | Check the identity component, `PORTITOR_STS_URL` and the shared secret |
 | `own identity checked: DID document and STS agree` (INFO, at start) | The connector's DID document resolves and the STS signs for it | Nothing |
@@ -1230,7 +1235,7 @@ dots into underscores and adds the unit, for example
 | `http.client.request.duration` | histogram, `s` | `http.request.method`, `server.address` and `server.port` (only for calls inside the participant: the own STS and data sources), `http.response.status_code` (when answered), `error.type` (4xx, 5xx, `timeout` or `_OTHER` when unanswered, or when the body of a 2xx answer cannot be read) | all |
 | `portitor.negotiation.ended` | counter, `{negotiation}` | `portitor.dsp.role` (`provider`, `consumer`), `portitor.dsp.state` (`FINALIZED`, `TERMINATED`) | connector |
 | `portitor.transfer.ended` | counter, `{transfer}` | `portitor.dsp.role`, `portitor.dsp.state` (`COMPLETED`, `TERMINATED`) | connector |
-| `portitor.dsp.request.refused` | counter, `{request}` | `error.type`: `unauthenticated` (HTTP 401), `invalid_message` or `message_rules` (the bundle's message shapes; both HTTP 400) | connector |
+| `portitor.dsp.request.refused` | counter, `{request}` | `error.type`: `unauthenticated` (HTTP 404, or 401 on the catalog routes), `invalid_message` or `message_rules` (the bundle's message shapes; both HTTP 400) | connector |
 | `portitor.outbox.message.resent` | counter, `{message}` | `portitor.outbox.name` (`dsp`, `credential_delivery`), and for `dsp` `portitor.dsp.process` (`negotiation`, `transfer`) and `portitor.dsp.role` | connector, issuer |
 | `portitor.outbox.message.given_up` | counter, `{message}` | as above | connector, issuer |
 | `portitor.harvest.run.ended` | counter, `{run}` | `portitor.harvest.kind` (`datasets`, `bundle`), `portitor.harvest.outcome` (`succeeded`, `partial`, `unchanged`, `failed`) | connector |

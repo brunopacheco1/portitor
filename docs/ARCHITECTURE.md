@@ -406,7 +406,9 @@ adapters in `auth/dcp.rs` and `auth/sts.rs`:
   and requires a `MembershipCredential` from a trusted issuer about the
   caller. One credential that fails its checks makes its presentation
   invalid and refuses the caller (DCP v1.0.1, 5.4.3, step 8). The verified DID and credentials go to the handler as `Caller`;
-  a refusal is HTTP 401 with a DSP error and no detail. When an offer or
+  a refusal is a DSP error with no detail: HTTP 404 on the negotiation
+  and transfer routes, HTTP 401 on the catalog routes (ADR 0016, amended
+  in 0.12). When an offer or
   agreement has credential constraints (ADR 0019), the provider's handler
   derives their scopes (`portitor_dsp::policy::credential_scopes`) and
   asks the verifier again (`CallerVerifier::credentials`): a second query,

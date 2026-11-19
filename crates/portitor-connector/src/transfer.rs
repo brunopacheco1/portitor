@@ -51,18 +51,43 @@ impl InMemoryTransfers {
     }
 }
 
+/// The transfer in `map` that the consumer `counter_party` asked for with
+/// its process id `consumer_pid`, if any.
+fn same_request<'a>(
+    map: &'a BTreeMap<String, Transfer>,
+    counter_party: &str,
+    consumer_pid: &str,
+) -> Option<&'a Transfer> {
+    map.values().find(|transfer| {
+        transfer.counter_party == counter_party && transfer.consumer_pid == consumer_pid
+    })
+}
+
 impl TransferStore for InMemoryTransfers {
     fn get(&self, provider_pid: &str) -> Result<Option<Transfer>, StoreError> {
         Ok(self.map().get(provider_pid).cloned())
     }
 
-    fn insert(&self, transfer: &Transfer) -> Result<(), StoreError> {
+    fn requested(
+        &self,
+        counter_party: &str,
+        consumer_pid: &str,
+    ) -> Result<Option<Transfer>, StoreError> {
+        Ok(same_request(&self.map(), counter_party, consumer_pid).cloned())
+    }
+
+    fn insert(&self, transfer: &Transfer) -> Result<bool, StoreError> {
+        // one lock for the lookup and the insert, so two copies of a
+        // request cannot both be added
         let mut map = self.map();
         if map.contains_key(&transfer.provider_pid) {
             return Err(StoreError(format!("{} exists", transfer.provider_pid)));
         }
+        if same_request(&map, &transfer.counter_party, &transfer.consumer_pid).is_some() {
+            return Ok(false);
+        }
         map.insert(transfer.provider_pid.clone(), transfer.clone());
-        Ok(())
+        Ok(true)
     }
 
     fn replace_if(&self, transfer: &Transfer, expected: u64) -> Result<bool, StoreError> {
