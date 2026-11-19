@@ -242,6 +242,14 @@ document and keeps it in a cache ([ADR 0005](adr/0005-schema-and-vocabulary-regi
 
 ![C4 Code: schema and vocabulary bundle](diagrams/c4-bundle-code.drawio.svg)
 
+One more C4 Code diagram is not a hexagon but a map of types: where an
+offer or an agreement enters Portitor, the types that read it strictly (a
+field they do not know is an error, never dropped), and the checks that
+rely on that
+([ADR 0009](adr/0009-minimal-odrl-policies.md), amendment of 2026-11-18).
+
+![C4 Code: strict policy reading](diagrams/c4-policy-code.drawio.svg)
+
 ## Who holds the credentials
 
 Every credential in Portitor is held by a **participant**: an

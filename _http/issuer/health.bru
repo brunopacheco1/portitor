@@ -1,0 +1,19 @@
+meta {
+  name: Health (public port)
+  type: http
+  seq: 15
+}
+
+get {
+  url: {{issuerUrl}}/health
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  The public port's plain liveness answer: 200 with the text "ok".
+}

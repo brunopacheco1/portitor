@@ -13,3 +13,8 @@ get {
 assert {
   res.status: eq 200
 }
+
+docs {
+  The public port's plain liveness answer: 200 with the text "ok". No token. The checks
+  with details are on the management port ("management/Liveness", "management/Readiness").
+}

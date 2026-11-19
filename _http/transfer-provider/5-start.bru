@@ -1,0 +1,35 @@
+meta {
+  name: 5. Start (consumer resumes)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{dsp}}/transfers/{{transferProviderPid}}/start
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+    "@type": "TransferStartMessage",
+    "providerPid": "{{transferProviderPid}}",
+    "consumerPid": "{{transferConsumerPid}}"
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body["@type"]: eq TransferProcess
+}
+
+docs {
+  DSP 2025-1 Transfer Process, HTTPS binding: POST /transfers/:providerPid/start.
+  The consumer starts a transfer it suspended again: 200 with the transfer (state
+  STARTED). 400 when the transfer is not SUSPENDED.
+}

@@ -1,0 +1,39 @@
+meta {
+  name: 2. Transfer request again (same consumerPid)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{dsp}}/transfers/request
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+    "@type": "TransferRequestMessage",
+    "consumerPid": "{{transferConsumerPid}}",
+    "agreementId": "{{agreementId}}",
+    "format": "HttpData-PULL",
+    "callbackAddress": "{{callbackAddress}}"
+  }
+}
+
+assert {
+  res.status: eq 201
+  res.body["@type"]: eq TransferProcess
+  res.body.providerPid: eq {{transferProviderPid}}
+}
+
+docs {
+  The same request once more (0.12, ADR 0013): the provider starts nothing new. The
+  answer is 201 with the transfer it already has (the same providerPid), in its current
+  state, and no second data address is sent. A request with this consumerPid and another
+  agreementId, format or callbackAddress gets 400.
+}

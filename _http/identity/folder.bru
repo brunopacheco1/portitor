@@ -12,7 +12,13 @@ auth:bearer {
 
 docs {
   Management API of a portitor-identity (docs/api/identity-management-openapi.json):
-  the provider's in the "single" environment, the consumer's in "two-connectors".
-  Put that identity's key (target/vscode-dcp/<provider or consumer>/identity-management.key)
-  in the environment's secret identityApiKey.
+  the provider's in the "single" environment, the consumer's in "two-connectors"
+  (identityMgmtUrl; its DID is identityDid). Put that identity's key
+  (target/vscode-dcp/<provider or consumer>/identity-management.key) in the
+  environment's secret identityApiKey.
+  "DID document" and "Health (public port)" call the same identity's public port
+  (identityUrl, docs/api/identity-openapi.json) and need no key. Its STS is in
+  "auth/STS token". The credential service (presentations/query, credentials, offers)
+  takes tokens of other participants, so it has no request here: the provider and the
+  issuer call it.
 }

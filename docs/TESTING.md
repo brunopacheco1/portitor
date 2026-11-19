@@ -979,11 +979,23 @@ The collection's folders:
 
 | Folder | Requests |
 |---|---|
-| `metadata`, `catalog`, `negotiation-provider` | DSP requests to the provider, each with a fresh DCP token |
-| `management` | the consumer's management API: start and read negotiations, start, read and complete transfers, harvest jobs, the OpenAPI description |
+| `metadata`, `catalog`, `negotiation-provider`, `transfer-provider` | DSP requests to the provider, each with a fresh DCP token; also a catalog request and a negotiation read without a valid token (401 and 404), a repeated transfer request (the same answer again) and the two negotiation messages the provider always refuses with 400 (it never sends an offer) |
+| `auth` | one token from the consumer's STS, to look at |
+| `management` | the consumer's management API, which is not DSP: start and read negotiations, start, read, complete and terminate transfers, harvest jobs, the health checks, the OpenAPI description |
 | `data` | fetch the data of a started transfer from the provider's data plane, with the token of its data address |
-| `identity` | an identity's management API: credentials, credential requests to the issuer, Gaia-X compliance runs |
-| `issuer` | the issuer's management API: participants and issued credentials |
+| `identity` | an identity's management API: credentials, credential requests to the issuer, offers, Gaia-X compliance runs, the health checks; and its public DID document |
+| `issuer` | the issuer's management API: participants, offers and issued credentials, the health checks; and its public DID document, metadata and status list |
+
+`transfer-provider` needs an agreement in the variable `agreementId`:
+`management/Get negotiation` saves it in `two-connectors`; its
+`folder.bru` says how to get one in `single`. Two requests need an id
+you copy by hand into the environment, because they destroy something:
+`credentialIdToDelete` (`identity/Delete credential`) and
+`credentialIdToRevoke` (`issuer/Revoke credential`). Not in the
+collection: the consumer's callback routes (only the provider of the
+negotiation or transfer may call them), the credential service and
+issuer service routes that need another participant's token, and the
+`tck` routes.
 
 A transfer in `two-connectors`: `Start negotiation`, `Get negotiation`
 (saves the agreement id), `Start transfer`, `Get transfer` (saves the

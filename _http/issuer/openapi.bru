@@ -1,0 +1,20 @@
+meta {
+  name: OpenAPI description (no key)
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{issuerMgmtUrl}}/v1/openapi.json
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  The issuer management API's OpenAPI description, generated from the code
+  (docs/api/issuer-management-openapi.json is a copy).
+}

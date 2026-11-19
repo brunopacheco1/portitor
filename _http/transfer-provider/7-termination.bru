@@ -1,0 +1,37 @@
+meta {
+  name: 7. Termination (consumer ends it)
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{dsp}}/transfers/{{transferProviderPid}}/termination
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+    "@type": "TransferTerminationMessage",
+    "providerPid": "{{transferProviderPid}}",
+    "consumerPid": "{{transferConsumerPid}}",
+    "code": "99",
+    "reason": ["Ended from Bruno"]
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body["@type"]: eq TransferProcess
+}
+
+docs {
+  DSP 2025-1 Transfer Process, HTTPS binding: POST /transfers/:providerPid/termination.
+  Use instead of step 6: 200 with the transfer (state TERMINATED). Allowed in every
+  state that is not final; after COMPLETED or TERMINATED the answer is 400.
+}

@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "description": "HTTP interface of portitor-connector. The DSP endpoints follow the DSP 2025-1 HTTPS bindings; the message schemas are the official DSP 2025-1 JSON Schemas (copied unchanged in crates/portitor-dsp/tests/schemas). DSP itself publishes no OpenAPI file; this one is written by hand and a test checks that every path in it is served. As consumer, the connector sends callbackAddress = public URL + /dsp/2025-1/callback, so providers call the callback paths below. Every DSP endpoint except /.well-known/dspace-version needs a DCP self-issued ID token (ADR 0016), and the caller's credential service must present a valid MembershipCredential from a trusted issuer, in presentations whose every credential passes its checks (DCP v1.0.1, 5.4.3); otherwise the answer is the endpoint's DSP error with reason \"unauthorized\": with HTTP 404 on the negotiation and transfer endpoints, callbacks included (DSP 2025-1 HTTPS bindings, \"Unauthorized Access\": a client that is not authorized gets 404; Eclipse EDC answers the same), and with HTTP 401 on the catalog endpoints (ADR 0016, amended in 0.12). The reason is in the connector's log. When the caller could not be checked because a service the check needs did not answer, the answer is 503. /health and the data plane (/data, its own tokens) are open. Known limits (docs/RISKS_AND_TECHNICAL_DEBTS.md): a negotiation starts from the consumer only, so the DSP consumer endpoint POST /dsp/2025-1/callback/negotiations/offers, with which a provider starts one, is not served (TD-35); a policy field this connector does not know is dropped when an offer or agreement is read (TD-32)."
+    "description": "HTTP interface of portitor-connector. The DSP endpoints follow the DSP 2025-1 HTTPS bindings; the message schemas are the official DSP 2025-1 JSON Schemas (copied unchanged in crates/portitor-dsp/tests/schemas). DSP itself publishes no OpenAPI file; this one is written by hand and a test checks that every path in it is served. As consumer, the connector sends callbackAddress = public URL + /dsp/2025-1/callback, so providers call the callback paths below. Every DSP endpoint except /.well-known/dspace-version needs a DCP self-issued ID token (ADR 0016), and the caller's credential service must present a valid MembershipCredential from a trusted issuer, in presentations whose every credential passes its checks (DCP v1.0.1, 5.4.3); otherwise the answer is the endpoint's DSP error with reason \"unauthorized\": with HTTP 404 on the negotiation and transfer endpoints, callbacks included (DSP 2025-1 HTTPS bindings, \"Unauthorized Access\": a client that is not authorized gets 404; Eclipse EDC answers the same), and with HTTP 401 on the catalog endpoints (ADR 0016, amended in 0.12). The reason is in the connector's log. When the caller could not be checked because a service the check needs did not answer, the answer is 503 with a problem document, so that a partner tries again. /health and the data plane (/data, its own tokens) are open. Known limits (docs/RISKS_AND_TECHNICAL_DEBTS.md): a negotiation starts from the consumer only, so the DSP consumer endpoint POST /dsp/2025-1/callback/negotiations/offers, with which a provider starts one, is not served (TD-35); Policies are read strictly (ADR 0009, amended 2026-11-18): an offer or agreement with a field this connector does not know is refused with 400, and the reason names the field. Three answers are the same on every route and are a problem document (application/problem+json), not a DSP error, because they are made outside the handlers: 413 when the request body is over the route's limit, 503 when the request took longer than 60 seconds, and 500 when a handler hit a bug (a panic; the server goes on, the error is logged and counted in portitor.http.request.panicked)."
   },
   "servers": [
     {
@@ -76,7 +76,23 @@
             }
           },
           "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
+            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\"",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/catalog-error-schema.json"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -115,6 +131,16 @@
               }
             }
           },
+          "401": {
+            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\"",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/catalog-error-schema.json"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Unknown dataset",
             "content": {
@@ -125,8 +151,11 @@
               }
             }
           },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -166,7 +195,7 @@
             }
           },
           "400": {
-            "description": "Invalid message, unknown offer or refused callback address",
+            "description": "Invalid message, unknown offer, refused callback address, a policy field that is not understood (the reason names it; ADR 0009), or an offer whose assigner or assignee is not this provider and the caller",
             "content": {
               "application/json": {
                 "schema": {
@@ -184,6 +213,27 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "500": {
+            "description": "The store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/contract-negotiation-error-schema.json"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -231,6 +281,24 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "The store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/contract-negotiation-error-schema.json"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -280,7 +348,7 @@
             }
           },
           "400": {
-            "description": "Invalid message or transition, or a consumerPid that is not the negotiation's",
+            "description": "Invalid message or transition, a consumerPid that is not the negotiation's, a policy field that is not understood, or an offer whose assigner or assignee is not this provider and the caller",
             "content": {
               "application/json": {
                 "schema": {
@@ -298,6 +366,27 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "500": {
+            "description": "The store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/contract-negotiation-error-schema.json"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -365,6 +454,27 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "500": {
+            "description": "The store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/contract-negotiation-error-schema.json"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -432,6 +542,27 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "500": {
+            "description": "The store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/contract-negotiation-error-schema.json"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -499,6 +630,27 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "500": {
+            "description": "The store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/contract-negotiation-error-schema.json"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -557,6 +709,27 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "500": {
+            "description": "The data plane or the store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/transfer-error-schema.json"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -604,6 +777,24 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "The data plane or the store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/transfer-error-schema.json"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -672,15 +863,26 @@
               }
             }
           },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "500": {
-            "description": "The data plane or the store failed",
+            "description": "The data plane or the store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "../../crates/portitor-dsp/tests/schemas/transfer-error-schema.json"
                 }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -749,15 +951,26 @@
               }
             }
           },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "500": {
-            "description": "The data plane or the store failed",
+            "description": "The data plane or the store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "../../crates/portitor-dsp/tests/schemas/transfer-error-schema.json"
                 }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -826,15 +1039,26 @@
               }
             }
           },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "500": {
-            "description": "The data plane or the store failed",
+            "description": "The data plane or the store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "../../crates/portitor-dsp/tests/schemas/transfer-error-schema.json"
                 }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -903,15 +1127,26 @@
               }
             }
           },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "500": {
-            "description": "The data plane or the store failed",
+            "description": "The data plane or the store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "../../crates/portitor-dsp/tests/schemas/transfer-error-schema.json"
                 }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -959,6 +1194,24 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "The store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/contract-negotiation-error-schema.json"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -1008,7 +1261,7 @@
             }
           },
           "400": {
-            "description": "Invalid message, or it does not fit the state",
+            "description": "Invalid message, a policy field that is not understood (the reason names it; ADR 0009), an offer whose assigner or assignee is not the negotiation's provider and this connector, or it does not fit the state",
             "content": {
               "application/json": {
                 "schema": {
@@ -1026,6 +1279,27 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "500": {
+            "description": "The store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/contract-negotiation-error-schema.json"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -1075,7 +1349,7 @@
             }
           },
           "400": {
-            "description": "Invalid message, an agreement without a timestamp (DSP 2025-1, Contract Agreement Message), or it does not fit the state",
+            "description": "Invalid message, a policy field that is not understood, an agreement without a timestamp (DSP 2025-1, Contract Agreement Message), or it does not fit the state",
             "content": {
               "application/json": {
                 "schema": {
@@ -1093,6 +1367,27 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "500": {
+            "description": "The store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/contract-negotiation-error-schema.json"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -1160,6 +1455,27 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "500": {
+            "description": "The store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/contract-negotiation-error-schema.json"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -1227,6 +1543,27 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "500": {
+            "description": "The store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/contract-negotiation-error-schema.json"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -1234,7 +1571,7 @@
             "dcp": []
           }
         ],
-        "description": "Accepted from the counter-party in every state that is not final (DSP 2025-1: the message \"MAY be sent at any state\"; the state machine figure is narrower, TD-36)."
+        "description": "Accepted from the counter-party in every state that is not final (DSP 2025-1: the message \"MAY be sent at any state\"; the state machine figure is narrower; ADR 0006, amended 2026-11-18)."
       }
     },
     "/dsp/2025-1/callback/transfers/{consumerPid}": {
@@ -1275,6 +1612,24 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "The store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/transfer-error-schema.json"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -1342,6 +1697,27 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "500": {
+            "description": "The store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/transfer-error-schema.json"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -1409,6 +1785,27 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "500": {
+            "description": "The store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/transfer-error-schema.json"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -1476,6 +1873,27 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "500": {
+            "description": "The store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/transfer-error-schema.json"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -1543,6 +1961,27 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "500": {
+            "description": "The store failed: the endpoint's DSP error with code \"500\" and reason \"internal error\". A bug in the handler (a panic) is answered with a problem document instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/transfer-error-schema.json"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         },
         "security": [
@@ -1578,10 +2017,13 @@
             "description": "No token, a wrong or expired token, or an unknown flow"
           },
           "500": {
-            "description": "The store could not be read"
+            "description": "The store could not be read (no body), or a bug in the handler (a problem document)"
           },
           "502": {
             "description": "The source did not answer with 2xx"
+          },
+          "503": {
+            "$ref": "#/components/responses/TookTooLong"
           }
         }
       }
@@ -1616,6 +2058,73 @@
         "scheme": "bearer",
         "bearerFormat": "JWT",
         "description": "DCP 1.0 self-issued ID token, signed by the caller's DID key, carrying an access token for its credential service in the token claim"
+      }
+    },
+    "schemas": {
+      "Problem": {
+        "type": "object",
+        "description": "An error, as RFC 9457 problem details.",
+        "required": [
+          "title",
+          "status",
+          "detail"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Short summary of the problem type."
+          },
+          "status": {
+            "type": "integer",
+            "description": "The HTTP status code."
+          },
+          "detail": {
+            "type": "string",
+            "description": "What went wrong in this case."
+          }
+        }
+      }
+    },
+    "responses": {
+      "PayloadTooLarge": {
+        "description": "The request body is over the route's limit: 64 KiB on the routes whose messages are small by specification (catalog request; negotiation event, verification and termination; transfer suspension, completion and termination), PORTITOR_MAX_REQUEST_BYTES (default 2 MiB) on the others",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "InternalError": {
+        "description": "A bug in the handler (a panic): the error is logged and counted (portitor.http.request.panicked), and the server goes on",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Unavailable": {
+        "description": "The caller could not be checked now, because a service the check needs (a DID document, a credential service, a status list, this connector's own STS) did not answer; or the request took longer than 60 seconds. Try again later",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "TookTooLong": {
+        "description": "The request took longer than 60 seconds, or waited that long for a free slot (256 requests are worked on at once)",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
       }
     }
   }

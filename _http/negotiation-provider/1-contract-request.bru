@@ -49,6 +49,9 @@ docs {
   DSP 2025-1 Contract Negotiation, HTTPS binding: POST /negotiations/request.
   The provider calls back {{callbackAddress}}; start the fake consumer from docs/TESTING.md (port 9000) first.
   The offer must have the catalog offer's terms exactly, or the provider terminates (ADR 0009).
+  A policy field the provider does not know (for example "duty" in a permission) is refused
+  with 400, and the reason names the field (0.12). assigner and assignee may be left out; if
+  sent, they must be the provider's and the caller's DID.
   A new consumerPid is generated on every run.
   Saves providerPid for the next requests.
 }

@@ -26,10 +26,13 @@ body:json {
 }
 
 assert {
-  res.status: lt 300
+  res.status: eq 200
+  res.body["@type"]: eq ContractNegotiation
 }
 
 docs {
   DSP 2025-1 Contract Negotiation, HTTPS binding: POST /negotiations/:providerPid/termination.
-  Use instead of step 3 to test the TERMINATED path.
+  Use instead of step 3 to test the TERMINATED path. The answer is 200 with the
+  negotiation (state TERMINATED). Allowed in every state that is not final (ADR 0006);
+  after FINALIZED or TERMINATED the answer is 400.
 }

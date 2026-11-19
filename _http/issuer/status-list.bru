@@ -1,0 +1,21 @@
+meta {
+  name: Status list
+  type: http
+  seq: 14
+}
+
+get {
+  url: {{issuerServiceUrl}}/status-lists/vc20
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  The signed Bitstring Status List credential (application/vc+jwt) of the profile
+  vc20-bssl/jwt; vc11 is the list of vc11-sl2021/jwt. Verifiers read it to see whether
+  a credential is revoked. 404 for any other name.
+}

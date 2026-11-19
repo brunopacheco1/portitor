@@ -32,6 +32,11 @@ assert {
 }
 
 docs {
+  The consumer's management API, not the DSP endpoint POST /transfers/request: the body
+  is a StartTransfer (agreementId, and format, default HttpData-PULL), not a
+  TransferRequestMessage. The connector sends the DSP message to the provider of that
+  agreement in the background. The answer is 201 with the transfer as the connector sees
+  it (consumerPid, state REQUESTED, agreementId, format).
   Use the "two-connectors" environment. Negotiate first ("Start negotiation"), then
   "Get negotiation" saves mgmtAgreementId. The weather-stations data is served by
   scripts/dev-identities.sh (portitor:source in examples/datasets.json).

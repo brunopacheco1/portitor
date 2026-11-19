@@ -26,7 +26,9 @@ assert {
 }
 
 docs {
+  The consumer's management API (GET /v1/transfers/{consumerPid}), not the DSP endpoint
+  GET /transfers/{providerPid}: the answer is a TransferView.
   Within a second the state is STARTED and the transfer holds the provider's data
-  address (DSP 2025-1 DataAddress). Saves dataEndpoint and dataAuthorization for
-  "data/Fetch data".
+  address (DSP 2025-1 DataAddress). Saves dataEndpoint and dataAuthorization ("Bearer "
+  and the value of the endpoint property "authorization") for "data/Fetch data".
 }

@@ -1,0 +1,35 @@
+meta {
+  name: Send credential offer
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{issuerMgmtUrl}}/v1/offers
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "participantDid": "{{identityDid}}",
+    "credentialIds": ["membership-vc20"],
+    "offerReason": "reissue"
+  }
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  The issuer sends a CredentialOfferMessage (DCP 6.6) to the credential service of a
+  registered participant: here the identity of the "identity" folder. 204 once that
+  service took it; see it with "identity/List credential offers". Without credentialIds
+  every definition is offered. 404 when the participant is not registered, 502 when its
+  credential service cannot be reached or refuses.
+}

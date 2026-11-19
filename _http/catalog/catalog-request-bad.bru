@@ -24,3 +24,7 @@ assert {
   res.status: eq 400
   res.body["@type"]: eq CatalogError
 }
+
+docs {
+  A body that is not a CatalogRequestMessage: 400 with a DSP CatalogError.
+}

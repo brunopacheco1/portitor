@@ -20,7 +20,8 @@ body:form-urlencoded {
 
 assert {
   res.status: eq 200
-  res.body.token_type: isDefined
+  res.body.token_type: eq Bearer
+  res.body.access_token: isDefined
 }
 
 docs {

@@ -1,0 +1,38 @@
+meta {
+  name: Request offered credentials
+  type: http
+  seq: 11
+}
+
+post {
+  url: {{identityMgmtUrl}}/v1/offers/request
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "issuerDid": "{{issuerDid}}"
+  }
+}
+
+script:post-response {
+  if (res.body && res.body.holderPid) {
+    bru.setVar("holderPid", res.body.holderPid);
+  }
+}
+
+assert {
+  res.status: eq 201
+}
+
+docs {
+  Run "issuer/Send credential offer" first. The identity asks the issuer for every
+  credential it offered, or only those in credentialIds. 201 with holderPid, as for
+  "Request credentials from the issuer". 404 when this issuer sent no such offer.
+  Saves holderPid; follow the request with "Get credential request".
+}

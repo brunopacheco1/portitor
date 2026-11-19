@@ -24,10 +24,12 @@ body:json {
 }
 
 assert {
-  res.status: lt 300
+  res.status: eq 200
+  res.body["@type"]: eq ContractNegotiation
 }
 
 docs {
   DSP 2025-1 Contract Negotiation, HTTPS binding: POST /negotiations/:providerPid/agreement/verification.
-  After this the provider sends the FINALIZED event; run "2. Negotiation state" again.
+  The answer is 200 with the negotiation (state VERIFIED). After this the provider sends
+  the FINALIZED event; run "2. Negotiation state" again.
 }
