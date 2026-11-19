@@ -858,3 +858,7 @@ mod tests {
         assert!(!TransferStore::insert(&store, &third).unwrap());
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod poison_tests;

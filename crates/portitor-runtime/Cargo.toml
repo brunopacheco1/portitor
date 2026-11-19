@@ -48,7 +48,8 @@ portitor-dcp = { path = "../portitor-dcp", features = ["test-support"] }
 # the tree through opentelemetry-otlp
 opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic-messages", "trace", "metrics"] }
 prost = { version = "0.14", default-features = false, features = ["std"] }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# test-util: a paused clock for the restart pause test (src/panics.rs)
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 # drives a router in memory in the serve.rs tests; already in the tree
 # (axum, and the connector's and identity's tests)
 tower = { version = "0.5", features = ["util"] }

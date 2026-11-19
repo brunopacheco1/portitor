@@ -40,6 +40,7 @@ use crate::shacl::BundleRules;
 use crate::system::now_secs;
 use portitor_bundle::source::{BundleConfig, BundleSource, BundleSourceError, VersionChoice};
 use portitor_bundle::store::{BundleStore, InUse};
+use portitor_runtime::panics::spawn_supervised;
 use portitor_runtime::telemetry::metrics;
 
 /// The rules of the bundle version in use, swapped when a new version is
@@ -381,6 +382,7 @@ impl BundleHarvester {
         .await;
         if let Err(e) = ran {
             tracing::error!(error = %e, "bundle harvest: the dataset check stopped unexpectedly");
+            metrics::task_panicked("bundle_harvest");
         }
         job
     }
@@ -396,16 +398,24 @@ impl BundleHarvester {
     ) -> Option<tokio::task::JoinHandle<()>> {
         let every: Duration = self.config.refresh_every()?;
         let harvester = Arc::clone(self);
-        Some(tokio::spawn(async move {
-            let first = tokio::time::Instant::now() + every;
-            let mut ticks = tokio::time::interval_at(first, every);
-            // a tick missed while a run was going on is skipped, not made up
-            ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                ticks.tick().await;
-                harvester.run(Trigger::Interval, &listener).await;
+        // supervised: a run that panics is logged, and the schedule
+        // starts again (the closure makes the task anew each time, with
+        // its own pointers to the harvester and the listener)
+        let schedule = move || {
+            let harvester = Arc::clone(&harvester);
+            let listener = Arc::clone(&listener);
+            async move {
+                let first = tokio::time::Instant::now() + every;
+                let mut ticks = tokio::time::interval_at(first, every);
+                // a tick missed while a run was going on is skipped, not made up
+                ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    ticks.tick().await;
+                    harvester.run(Trigger::Interval, &listener).await;
+                }
             }
-        }))
+        };
+        Some(spawn_supervised("bundle_harvest", schedule))
     }
 }
 

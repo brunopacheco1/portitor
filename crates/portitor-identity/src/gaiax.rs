@@ -417,12 +417,16 @@ pub fn start_run(identity: &Arc<Identity>) -> Result<GaiaxRun, StartError> {
         .start_gaiax_run(started_at)
         .map_err(StartError::Store)?;
     let background = Arc::clone(identity);
-    tokio::spawn(async move {
+    // a panic is logged and counted; it drops `guard`, so the next run
+    // can start, and this run stays `running` in the store until the
+    // next start marks it failed
+    let run = async move {
         finish_run(&background, id, guard).await;
         if let Some(onboarding) = &background.gaiax {
             onboarding.ran.notify_one();
         }
-    });
+    };
+    tokio::spawn(portitor_runtime::panics::report_panic("gaiax_run", run));
     Ok(GaiaxRun {
         id,
         started_at,

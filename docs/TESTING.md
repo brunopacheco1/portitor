@@ -1029,4 +1029,19 @@ TCK_CONNECTOR=/tmp/portitor-connector-tck \
   scripts/measure.sh target/release/portitor-connector
 ```
 
-The results of each release are in ADR 0002, section 7.
+The results of each release are in ADR 0002, section 7, and from 0.12
+in [BENCHMARKS](BENCHMARKS.md).
+
+`scripts/bench.sh` measures the reference load of BENCHMARKS: the data
+plane under many, large and long pulls, the stored history, the
+catalog, negotiations at one per second, and whether negotiations slow
+the data plane down. Its load tool is the `bench-load` example of the
+connector (a data source that makes its bytes up, contracts through a
+consumer's management API, timed pulls, timed catalog requests). Each
+part starts its own participants with empty databases; the whole run
+takes about 20 minutes and needs 2 GB of free memory.
+
+```sh
+scripts/bench.sh                     # every part
+BENCH_LARGE_GB=1 BENCH_HISTORY=500 BENCH_RUNS=1 scripts/bench.sh large history   # a quick look
+```

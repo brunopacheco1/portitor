@@ -45,6 +45,7 @@ Website: <https://bruno.pacheco.lu/portitor/> (objectives, minimum functionality
 - Reading the Rust code: [docs/RUST-IDIOMS.md](docs/RUST-IDIOMS.md)
 - HTTP interfaces: [docs/api/](docs/api/) (OpenAPI 3.1: connector, management, identity, issuer)
 - Security: [SECURITY.md](SECURITY.md), [docs/SECURITY-ASSURANCE.md](docs/SECURITY-ASSURANCE.md)
+- Measured numbers (data plane, stored history, catalog, cost of DCP): [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md), [GOVERNANCE.md](GOVERNANCE.md),
   [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 

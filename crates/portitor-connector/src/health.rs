@@ -26,6 +26,7 @@ use std::time::Duration;
 
 use portitor_runtime::BoxFuture;
 use portitor_runtime::health::{Check, HealthChecks, blocking, sqlite_file_answers};
+use portitor_runtime::panics::spawn_supervised;
 use tokio::task::JoinHandle;
 use tracing::Instrument as _;
 
@@ -182,14 +183,20 @@ impl OwnIdentityCheck {
     /// every [`IDENTITY_REFRESH`], until the process stops.
     pub fn spawn_refresh(self: &Arc<Self>) -> JoinHandle<()> {
         let check = Arc::clone(self);
-        let refreshing = async move {
-            loop {
-                check.refresh().await;
-                tokio::time::sleep(IDENTITY_REFRESH).await;
-            }
+        // supervised: after a panic the refresh starts again, so the
+        // probes never read a result that is no longer renewed
+        let refreshing = move || {
+            let check = Arc::clone(&check);
+            let rounds = async move {
+                loop {
+                    check.refresh().await;
+                    tokio::time::sleep(IDENTITY_REFRESH).await;
+                }
+            };
+            // no span: these runs belong to no request and start no trace
+            rounds.instrument(tracing::Span::none())
         };
-        // no span: these runs belong to no request and start no trace
-        tokio::spawn(refreshing.instrument(tracing::Span::none()))
+        spawn_supervised("identity_check", refreshing)
     }
 
     /// The status, also after a panic while it was held (the fields are

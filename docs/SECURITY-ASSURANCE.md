@@ -287,6 +287,54 @@ and F-04 (the DID document cache).
   needed (ADR 0003); CI tokens are read-only by default.
 - **Open design:** code, threat model and decisions are public.
 
+## What a panic does
+
+A panic is a bug caught at run time (an index out of range, a failed
+`expect`). `unwrap` is denied by Clippy and every parser is fuzzed, so
+it should be rare. Until 0.11 the release build set `panic = "abort"`:
+any panic ended the process and every request in flight, so one request
+that found such a bug was a denial of service until the container
+started again
+([TD-41](RISKS_AND_TECHNICAL_DEBTS.md#td-41)). From 0.12 the setting is
+gone (maintainer, 2026-11-18) and a panic ends only the work it
+happened in (`crates/portitor-runtime/src/panics.rs`):
+
+- **A request handler:** the caller gets HTTP 500 with the body
+  `internal error`; the other requests go on. This holds for every
+  HTTP server of the three components, public and management.
+- **A background task that runs for as long as the process** (the
+  bundle and identity checks of the connector, the certificate watch
+  and Gaia-X schedule of the identity, the issuer's outbox): it starts
+  again after 5 seconds. A dataset harvest run that panics is skipped;
+  the next one runs on schedule.
+- **A background task for one piece of work** (sending one DSP message,
+  deciding one credential request, one Gaia-X run): the work stays as
+  it was saved. A DSP message is sent again at the next start; a
+  credential request is decided on the issuer's next outbox round.
+- **The management server's task:** if it ends, the process stops with
+  an error, as a component without health checks must not go on.
+
+Every case is one log line at ERROR and a count
+(`portitor.http.request.panicked`, `portitor.task.panicked`;
+DEPLOYING, "Traces and metrics"). The panic's message is never logged
+or sent, only the place in the code: the message can quote the value
+that caused it, which may come from a request.
+
+Data stays consistent: a database write of several statements is one
+transaction, which `rusqlite` rolls back when the panic drops it, and
+every other write is one statement. A lock held during a panic is taken
+again (Rust marks it "poisoned"); each place says why that is safe, and
+each store has a test for it (`store/poison_tests.rs`). Two caches (DID
+documents, status lists) switch themselves off instead after a panic
+inside them, until the next start: slower, never wrong.
+
+What it costs: the release binaries are about 13% larger (the code that
+unwinds; [BENCHMARKS](BENCHMARKS.md), "Footprint"). What stays: a bug
+that panics on every start, or in a task that starts again, shows as
+repeated errors, so a restart policy and an alert on the two counts are
+still needed. A panic while a download's body is streamed closes that
+one connection.
+
 ## Common weaknesses countered
 
 | Weakness | How |

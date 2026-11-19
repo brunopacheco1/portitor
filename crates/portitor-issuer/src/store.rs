@@ -1246,3 +1246,7 @@ mod tests {
         assert_eq!(nth_free(&taken, 6, 3), None);
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod poison_tests;

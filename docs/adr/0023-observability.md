@@ -168,6 +168,22 @@ OTLP receiver.
   `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` switch export on too, each for
   its own signal; `OTEL_EXPORTER_OTLP_ENDPOINT` counts for both.
 
+### Amendment for 0.12 (2026-11-19): panics are counted
+
+With `panic = "abort"` gone (TD-41), a panic no longer ends the
+process, so it must be visible another way. Two counters, named by the
+rules of section 5 (`portitor.`, the thing, what happened to it; a
+`{thing}` unit; attribute values from fixed lists):
+
+- `portitor.http.request.panicked` (`{request}`), with `http.route`
+  (the route template, as on the HTTP histogram);
+- `portitor.task.panicked` (`{task}`), with `portitor.task.name`, a
+  fixed name in the code.
+
+Each panic is also one JSON log line at ERROR with the place in the
+code. The panic's message is on no log line, span or metric: it can
+quote input.
+
 ## Consequences
 
 - Release build against 0.8.0 (with the health checks): binaries +14%

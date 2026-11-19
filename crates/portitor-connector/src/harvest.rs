@@ -586,8 +586,11 @@ impl DatasetHarvester {
                 let runner = Arc::clone(&harvester);
                 // the run reads a file and writes SQLite: blocking work
                 let ran = tokio::task::spawn_blocking(move || runner.run(Trigger::Interval));
+                // a run that panicked: logged and counted; the schedule
+                // goes on with the next tick
                 if let Err(e) = ran.await {
                     tracing::error!(error = %e, "harvest run stopped unexpectedly");
+                    metrics::task_panicked("dataset_harvest");
                 }
             }
         }))
