@@ -640,6 +640,88 @@ async fn invalid_messages_are_refused() {
     assert_eq!(c.provider.count(), 1);
 }
 
+/// Policies are read strictly (ADR 0009, amendment of 2026-11-18): a
+/// provider's offer or agreement with a term Portitor does not read gets
+/// HTTP 400 with a `ContractNegotiationError` that names the field (DSP
+/// 2025-1, Contract Negotiation HTTPS binding, "Error responses"). The
+/// negotiation stays as it was and nothing is sent, so a duty that was
+/// never read cannot be agreed to.
+#[tokio::test]
+async fn a_provider_message_with_an_unknown_policy_term_is_refused_by_name() {
+    let c = connector();
+    let cpid = started(&c, "d1").await;
+
+    // an offer whose permission carries a duty
+    let mut offer_with_duty = offer_msg(&cpid, "d1");
+    offer_with_duty["offer"]["permission"][0]["duty"] = json!([{"action": "compensate"}]);
+    // an agreement with a field ODRL defines on a constraint
+    let mut agreement_with_unit = agreement_msg(&cpid, "d1");
+    agreement_with_unit["agreement"]["permission"][0]["constraint"] = json!([{
+        "leftOperand": "dateTime", "operator": "lteq", "rightOperand": "2030-12-31",
+        "unit": "http://example.com/unit"}]);
+    // an agreement whose permission carries a duty
+    let mut agreement_with_duty = agreement_msg(&cpid, "d1");
+    agreement_with_duty["agreement"]["permission"][0]["duty"] = json!([{"action": "compensate"}]);
+
+    let cases = [
+        ("offers", offer_with_duty, "duty"),
+        ("agreement", agreement_with_unit, "unit"),
+        ("agreement", agreement_with_duty, "duty"),
+    ];
+    for (path, message, field) in cases {
+        let uri = format!("{CALLBACK}/{cpid}/{path}");
+        let (status, error) = call(&c.app, post(&uri, &message)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path} {field}: {error}");
+        assert_eq!(error["@type"], "ContractNegotiationError");
+        assert_eq!(error["consumerPid"], cpid);
+        assert_eq!(error["providerPid"], PPID);
+        assert_eq!(error["code"], "400");
+        let reason = error["reason"][0].to_string();
+        assert!(
+            reason.contains(&format!("unknown field `{field}`")),
+            "{path} {field}: {reason}"
+        );
+    }
+    // no state change, and only our first request was ever sent
+    assert_eq!(state(&c.app, &cpid).await, "REQUESTED");
+    assert_eq!(c.provider.count(), 1);
+    assert!(c.negotiator.get(&cpid).unwrap().agreement.is_none());
+}
+
+/// An offer may name its parties (the DSP TCK sends both). Another
+/// provider or another consumer is refused; the right ones are accepted.
+#[tokio::test]
+async fn the_parties_a_provider_offer_names_are_checked() {
+    let c = connector();
+    let cpid = started(&c, "d1").await;
+    let uri = format!("{CALLBACK}/{cpid}/offers");
+
+    let mut other_provider = offer_msg(&cpid, "d1");
+    other_provider["offer"]["assigner"] = json!("did:web:someone-else.example");
+    let (status, error) = call(&c.app, post(&uri, &other_provider)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(
+        error["reason"][0],
+        "the offer's assigner is not the provider"
+    );
+
+    let mut other_consumer = offer_msg(&cpid, "d1");
+    other_consumer["offer"]["assignee"] = json!("did:web:someone-else.example");
+    let (status, error) = call(&c.app, post(&uri, &other_consumer)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(
+        error["reason"][0],
+        "the offer's assignee is not the consumer"
+    );
+    assert_eq!(state(&c.app, &cpid).await, "REQUESTED");
+
+    let mut named = offer_msg(&cpid, "d1");
+    named["offer"]["assigner"] = json!(PROVIDER_DID);
+    named["offer"]["assignee"] = json!(CONSUMER);
+    let (status, ack) = call(&c.app, post(&uri, &named)).await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+}
+
 /// Only the provider the negotiation was started with may send to its
 /// callback; anyone else is told it does not exist, for every callback,
 /// and nothing changes.

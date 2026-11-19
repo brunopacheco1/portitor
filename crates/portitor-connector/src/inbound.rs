@@ -55,10 +55,20 @@ pub(crate) fn read_message<T: DeserializeOwned, E>(
     }
     match serde_json::from_value(value) {
         Ok(message) => Ok(message),
-        Err(error) => Err(refused(
-            Refusal::InvalidMessage,
-            &other_pid,
-            &error.to_string(),
-        )),
+        Err(error) => {
+            // for example a policy term that is not understood (ADR 0009):
+            // the reason names the field, and the operator can see why a
+            // partner's message was refused
+            tracing::info!(
+                message_type,
+                reason = %error,
+                "inbound DSP message is not valid; answered 400"
+            );
+            Err(refused(
+                Refusal::InvalidMessage,
+                &other_pid,
+                &error.to_string(),
+            ))
+        }
     }
 }

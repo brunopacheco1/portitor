@@ -616,3 +616,65 @@ fn only_the_provider_it_was_started_with_may_answer() {
     assert_eq!(state(&store, &cpid), NegotiationState::Requested);
     assert!(svc.agreement(&cpid, &agreement_msg("p1", &cpid)).is_ok());
 }
+
+/// An offer that names its parties must name the provider of the
+/// negotiation and this consumer: when we start with it, and when the
+/// provider sends one.
+#[test]
+fn the_parties_an_offer_names_are_checked() {
+    let store = Store::default();
+    let svc = ConsumerService::new(
+        &store,
+        AcceptAndVerify,
+        Env::default(),
+        CB.to_owned(),
+        ME.to_owned(),
+    );
+    // our own start, with an offer for another provider or consumer
+    let mut other_provider = offer();
+    other_provider.assigner = Some("did:web:x".to_owned());
+    let failure = svc
+        .start(PROVIDER, "did:web:p", other_provider)
+        .unwrap_err();
+    assert_eq!(status(failure), "400");
+    let mut other_consumer = offer();
+    other_consumer.assignee = Some("did:web:x".to_owned());
+    let failure = svc
+        .start(PROVIDER, "did:web:p", other_consumer)
+        .unwrap_err();
+    assert_eq!(status(failure), "400");
+    assert!(store.0.borrow().is_empty());
+
+    // an offer naming the right parties starts, and the request carries them
+    let mut named = offer();
+    named.assigner = Some("did:web:p".to_owned());
+    named.assignee = Some(ME.to_owned());
+    let (n, req) = svc.start(PROVIDER, "did:web:p", named).unwrap();
+    let cpid = n.consumer_pid.clone();
+    assert_eq!(req.body["offer"]["assigner"], "did:web:p");
+    assert_eq!(req.body["offer"]["assignee"], ME);
+    svc.delivered(&req, Some(&ack("p1", &cpid))).unwrap();
+
+    // the provider's offer
+    for (field, reason) in [
+        ("assigner", "the offer's assigner is not the provider"),
+        ("assignee", "the offer's assignee is not the consumer"),
+    ] {
+        let mut wrong = offer_msg("p1", &cpid);
+        if field == "assigner" {
+            wrong.offer.assigner = Some("did:web:x".to_owned());
+        } else {
+            wrong.offer.assignee = Some("did:web:x".to_owned());
+        }
+        let Failure::BadRequest(error) = svc.offer(&cpid, &wrong).unwrap_err() else {
+            panic!("{field}: not a 400");
+        };
+        assert_eq!(error.reason, [json!(reason)], "{field}");
+        assert_eq!(state(&store, &cpid), NegotiationState::Requested);
+    }
+    let mut right = offer_msg("p1", &cpid);
+    right.offer.assigner = Some("did:web:p".to_owned());
+    right.offer.assignee = Some(ME.to_owned());
+    let (a, _) = svc.offer(&cpid, &right).unwrap();
+    assert_eq!(a.state, NegotiationState::Offered);
+}

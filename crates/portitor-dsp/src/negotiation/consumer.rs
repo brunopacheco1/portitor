@@ -224,8 +224,9 @@ impl<S: ConsumerStore, D: ConsumerDecider, E: Environment> ConsumerService<S, D,
     ///
     /// # Errors
     ///
-    /// The offer has no target, no permission and no prohibition, or the
-    /// store failed.
+    /// The offer has no target, no permission and no prohibition, names
+    /// other parties than this consumer and `provider_id`, or the store
+    /// failed.
     pub fn start(
         &self,
         provider_address: &str,
@@ -239,6 +240,10 @@ impl<S: ConsumerStore, D: ConsumerDecider, E: Environment> ConsumerService<S, D,
         // offer in a message has a permission or a prohibition
         if offer.permission.is_empty() && offer.prohibition.is_empty() {
             return Err(bad("", "", "the offer has no permission or prohibition"));
+        }
+        if let Err(reason) = crate::policy::check_parties(&offer, provider_id, &self.participant_id)
+        {
+            return Err(bad("", "", reason));
         }
         let state = next_state(None, Transition::Request, Role::Consumer)
             .map_err(|e| bad("", "", &e.to_string()))?;
@@ -338,6 +343,14 @@ impl<S: ConsumerStore, D: ConsumerDecider, E: Environment> ConsumerService<S, D,
     pub fn offer(&self, consumer_pid: &str, msg: &ContractOfferMessage) -> Handled {
         self.handle(consumer_pid, |negotiation| {
             check_ids(negotiation, &msg.provider_pid, msg.consumer_pid.as_deref())?;
+            // an offer that names its parties must name this provider and us
+            if let Err(reason) = crate::policy::check_parties(
+                &msg.offer,
+                &negotiation.provider_id,
+                &self.participant_id,
+            ) {
+                return Err(bad(&msg.provider_pid, &negotiation.consumer_pid, reason));
+            }
             receive(negotiation, Transition::Offer)?;
             negotiation.offer = msg.offer.clone();
             Ok(())

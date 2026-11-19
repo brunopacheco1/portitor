@@ -130,6 +130,8 @@ fn offer(target: Option<&str>) -> Offer {
         prohibition: vec![],
         obligation: vec![],
         target: target.map(str::to_owned),
+        assigner: None,
+        assignee: None,
         profile: None,
     }
 }
@@ -618,4 +620,52 @@ fn agrees_only_when_the_callers_credentials_meet_the_offer() {
             .unwrap();
         assert_eq!(out.unwrap().transition, expected, "{role}");
     }
+}
+
+/// An offer that names its parties (Eclipse EDC sends `assigner`, the DSP
+/// TCK both) must name this provider and the caller; the names are kept
+/// with the negotiation, not dropped.
+#[test]
+fn the_parties_an_offer_names_are_checked_and_kept() {
+    let store = Store::default();
+    let p = service(&store, AgreeToCatalogOffers);
+
+    let mut other_provider = request(None);
+    other_provider.offer.assigner = Some("did:web:someone-else".to_owned());
+    let failure = p
+        .request(None, other_provider, "did:web:consumer", &none())
+        .unwrap_err();
+    assert!(reason(&failure).contains("the offer's assigner is not the provider"));
+
+    let mut other_consumer = request(None);
+    other_consumer.offer.assignee = Some("did:web:someone-else".to_owned());
+    let failure = p
+        .request(None, other_consumer, "did:web:consumer", &none())
+        .unwrap_err();
+    assert!(reason(&failure).contains("the offer's assignee is not the consumer"));
+    assert!(store.0.borrow().is_empty());
+
+    let mut named = request(None);
+    named.offer.assigner = Some("did:web:provider".to_owned());
+    named.offer.assignee = Some("did:web:consumer".to_owned());
+    let (ack, out) = p.request(None, named, "did:web:consumer", &none()).unwrap();
+    let stored = store.0.borrow()[&ack.provider_pid].offer.clone();
+    assert_eq!(stored.assigner.as_deref(), Some("did:web:provider"));
+    assert_eq!(stored.assignee.as_deref(), Some("did:web:consumer"));
+    // the parties are not terms: the offer still equals the catalog's
+    assert_eq!(out.unwrap().transition, Transition::Agree);
+
+    // a counter-request is checked the same way
+    let waiting = Store::default();
+    let p = service(&waiting, Script(BTreeMap::new()));
+    let (ack, _) = p
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap();
+    let pid = ack.provider_pid;
+    let mut counter = request(Some(&pid));
+    counter.offer.assigner = Some("did:web:someone-else".to_owned());
+    let failure = p
+        .request(Some(&pid), counter, "did:web:consumer", &none())
+        .unwrap_err();
+    assert!(reason(&failure).contains("the offer's assigner is not the provider"));
 }

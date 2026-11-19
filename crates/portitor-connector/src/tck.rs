@@ -378,6 +378,8 @@ pub(crate) async fn initiate(
         prohibition: Vec::new(),
         obligation: Vec::new(),
         target: Some(req.dataset_id),
+        assigner: None,
+        assignee: None,
         profile: None,
     };
     match c.start(&req.connector_address, &req.provider_id, offer) {

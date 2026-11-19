@@ -577,3 +577,99 @@ async fn a_stranger_cannot_change_a_negotiation() {
         state(&app, &pid, "AGREED").await;
     }
 }
+
+/// Policies are read strictly (ADR 0009, amendment of 2026-11-18): a
+/// contract request whose offer has a term Portitor does not read gets
+/// HTTP 400 with a `ContractNegotiationError` that names the field (DSP
+/// 2025-1, Contract Negotiation HTTPS binding, "Error responses"), and
+/// nothing changes: no negotiation, no message sent.
+#[tokio::test]
+async fn a_request_with_an_unknown_policy_term_is_refused_by_name() {
+    let sender = Arc::new(FakeSender::default());
+    let app = app(ports(&sender));
+
+    // a duty inside the permission: a real ODRL term, not enforceable here
+    let mut with_duty = request(CALLBACK);
+    with_duty["offer"]["permission"][0]["duty"] = json!([{"action": "attribute"}]);
+    // a field ODRL defines on a constraint
+    let mut with_unit = request(CALLBACK);
+    with_unit["offer"]["permission"][0]["constraint"] = json!([{"leftOperand": "dateTime",
+        "operator": "lteq", "rightOperand": "2030-12-31", "unit": "http://example.com/unit"}]);
+    // a field of the offer itself
+    let mut with_uid = request(CALLBACK);
+    with_uid["offer"]["uid"] = json!("urn:offer:1");
+
+    for (message, field) in [(with_duty, "duty"), (with_unit, "unit"), (with_uid, "uid")] {
+        let (status, error) = call(&app, post(&format!("{BASE}/request"), &message)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{field}: {error}");
+        assert_eq!(error["@type"], "ContractNegotiationError");
+        assert_eq!(error["consumerPid"], "urn:uuid:consumer-1");
+        assert_eq!(error["code"], "400");
+        let reason = error["reason"][0].to_string();
+        assert!(
+            reason.contains(&format!("unknown field `{field}`")),
+            "{field}: {reason}"
+        );
+    }
+    assert_eq!(sender.count(), 0);
+
+    // the same on a negotiation that exists: its state and offer stay
+    let mut waiting = ports(&sender);
+    waiting.decider = Shared(Arc::new(WaitDecider));
+    let app = portitor_connector::router(&config(false), waiting).unwrap();
+    let pid = start(&app).await;
+    let mut counter = with(request(CALLBACK), &json!({"providerPid": pid}));
+    counter["offer"]["permission"][0]["duty"] = json!([{"action": "attribute"}]);
+    let (status, error) = call(&app, post(&format!("{BASE}/{pid}/request"), &counter)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(error["providerPid"], pid);
+    assert!(
+        error["reason"][0]
+            .to_string()
+            .contains("unknown field `duty`")
+    );
+    state(&app, &pid, "REQUESTED").await;
+    assert_eq!(sender.count(), 0);
+}
+
+/// An offer may name its parties (Eclipse EDC sends `assigner`, the DSP
+/// TCK both). They are read and checked: another provider or another
+/// consumer is refused with HTTP 400, and the right ones are accepted.
+#[tokio::test]
+async fn the_parties_an_offer_names_must_be_the_provider_and_the_caller() {
+    let sender = Arc::new(FakeSender::default());
+    let app = app(ports(&sender));
+
+    let mut other_provider = request(CALLBACK);
+    other_provider["offer"]["assigner"] = json!("did:web:someone-else.example");
+    let (status, error) = call(&app, post(&format!("{BASE}/request"), &other_provider)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(
+        error["reason"][0],
+        "the offer's assigner is not the provider"
+    );
+
+    let mut other_consumer = request(CALLBACK);
+    other_consumer["offer"]["assignee"] = json!("did:web:someone-else.example");
+    let (status, error) = call(&app, post(&format!("{BASE}/request"), &other_consumer)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(
+        error["reason"][0],
+        "the offer's assignee is not the consumer"
+    );
+    assert_eq!(sender.count(), 0);
+
+    // as Eclipse EDC sends it: empty rule lists, the assigner and the target
+    let mut named = request(CALLBACK);
+    named["offer"]["assigner"] = json!(PROVIDER);
+    named["offer"]["assignee"] = json!(CONSUMER);
+    named["offer"]["prohibition"] = json!([]);
+    named["offer"]["obligation"] = json!([]);
+    let (status, ack) = call(&app, post(&format!("{BASE}/request"), &named)).await;
+    assert_eq!(status, StatusCode::CREATED, "{ack}");
+    sent(&sender, 1).await;
+    let (url, agreement) = sender.get(0);
+    assert!(url.ends_with("/agreement"), "{url}");
+    assert_eq!(agreement["agreement"]["assigner"], PROVIDER);
+    assert_eq!(agreement["agreement"]["assignee"], CONSUMER);
+}

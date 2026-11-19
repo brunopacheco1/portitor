@@ -196,7 +196,13 @@ pub fn next_state(
 }
 
 /// An ODRL agreement: the terms both parties signed up to.
+///
+/// Read strictly, as [`Offer`]: its fields are those of `PolicyClass` and
+/// `Agreement` in the DSP 2025-1 JSON Schema
+/// (`negotiation/contract-schema.json`), and any other field is an error
+/// that names it (ADR 0009, amendment of 2026-11-18).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Agreement {
     /// Agreement identifier.
     #[serde(rename = "@id")]

@@ -128,6 +128,11 @@ pub enum DatasetDefinitionError {
     /// An offer in a catalog has a `target`; DSP 2025-1 forbids it there
     /// (the dataset is the target).
     OfferWithTarget(String),
+    /// An offer in a catalog has an `assigner` or an `assignee`. The DSP
+    /// 2025-1 JSON Schema defines neither for an offer in a catalog
+    /// (`contract-schema.json`, `Offer`), and the consumer is not known
+    /// yet; the provider is the catalog's `participantId`.
+    OfferWithParty(String),
     /// A distribution has an empty `format`.
     EmptyFormat(String),
     /// An offer has a constraint this version does not understand, so the
@@ -157,6 +162,10 @@ impl std::fmt::Display for DatasetDefinitionError {
             Self::OfferWithTarget(id) => {
                 write!(f, "dataset {id:?} has an offer with a target; leave it out")
             }
+            Self::OfferWithParty(id) => write!(
+                f,
+                "dataset {id:?} has an offer with an assigner or an assignee; leave them out"
+            ),
             Self::EmptyFormat(id) => write!(f, "dataset {id:?} has a distribution without format"),
             Self::UnsupportedPolicy { dataset, reason } => {
                 write!(f, "dataset {dataset:?} has an offer with an {reason}")
@@ -197,7 +206,7 @@ pub fn prepare_datasets(
 /// Checks one dataset definition against the DSP 2025-1 rules for a
 /// dataset in a catalog (a non-empty `@id`, at least one offer and one
 /// distribution, each distribution with a format, no offer with a
-/// target), checks that every offer's constraints are understood (ADR
+/// target, assigner or assignee), checks that every offer's constraints are understood (ADR
 /// 0009; credential constraints only on the credential types in `types`,
 /// ADR 0019), and makes every distribution point to this connector's data
 /// service, `service_id`.
@@ -224,6 +233,9 @@ pub fn prepare_dataset(
         return Err(DatasetDefinitionError::OfferWithTarget(id));
     }
     for offer in &dataset.has_policy {
+        if offer.assigner.is_some() || offer.assignee.is_some() {
+            return Err(DatasetDefinitionError::OfferWithParty(id));
+        }
         if let Err(e) = crate::policy::validate(offer, types) {
             return Err(DatasetDefinitionError::UnsupportedPolicy {
                 dataset: id,
@@ -334,6 +346,8 @@ mod tests {
                 prohibition: vec![],
                 obligation: vec![],
                 target: None,
+                assigner: None,
+                assignee: None,
                 profile: None,
             }],
             distribution: vec![Distribution {
