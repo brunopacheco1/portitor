@@ -1516,7 +1516,10 @@ move your probes back to `/health` first.
 
 #### From 0.11 to 0.12
 
-No database changes for the points below.
+Back up the connector's database file before the upgrade: 0.12 adds
+three indexes to it (schema version 11), and a 0.11 connector does not
+open a file of a newer version. The identity's and the issuer's files
+do not change.
 
 1. **Issuer, breaking: `credentialSchema` in the definitions file.**
    Before you upgrade the issuer, add `"credentialSchema": "<URL>"` to
@@ -1541,6 +1544,30 @@ No database changes for the points below.
    amended in 0.12). Credentials from `portitor-issuer` and from EDC
    IdentityHub are signed with a key of the issuer's own DID, so they
    are not affected.
+4. **Behaviour change, connector: policies are read strictly.** A
+   policy term the connector does not read is refused by name, where
+   0.11 dropped it without a word. At the first start of 0.12 every
+   stored dataset is checked again. A dataset whose offer has a field
+   the connector does not know (a `duty` inside a permission, a `unit`
+   on a constraint, a misspelled key, `assigner` or `assignee`) leaves
+   the catalog until its source is corrected; the harvest job says
+   which field, under the check `odrl`. Check your datasets before the
+   upgrade ([Known limits](#known-limits)). Agreements made before stay
+   valid.
+5. **Behaviour change, connector: 404 for a refused caller.** A caller
+   that cannot be authenticated gets HTTP 404, not 401, on the
+   negotiation and transfer routes; the catalog still answers 401, and
+   503 is unchanged. If you monitor 401 answers, also watch the log
+   line `DSP request refused: caller not authenticated` and its
+   `status` field.
+6. **Behaviour change, all three: a panic no longer stops the
+   process.** The request that met the bug gets HTTP 500 and the rest
+   go on. Watch the metrics `portitor.http.request.panicked` and
+   `portitor.task.panicked`: each count is a bug to report. Keep the
+   restart policy. The binaries are about 13% larger.
+7. **Faster, nothing to do:** a transfer start no longer slows down as
+   negotiations pile up, and small answers no longer wait 43 ms
+   ([BENCHMARKS](BENCHMARKS.md)).
 
 ## 7. Run the issuer (dataspace authority only)
 

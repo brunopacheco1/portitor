@@ -12,14 +12,108 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-19
+
+Interoperability and performance. Read "From 0.11 to 0.12" in
+`docs/DEPLOYING.md` before you upgrade: two changes need action.
+
 ### Changed
 
+- **Breaking, issuer configuration:** every entry of the definitions
+  file (`PORTITOR_ISSUER_CREDENTIALS_FILE`) needs `credentialSchema`,
+  the absolute `http(s)` URL of the credential's schema; the issuer
+  does not start without it. The issuer publishes the URL in its
+  metadata, together with `offerReason: reissue`, so the metadata now
+  passes DCP's `issuer-metadata-schema.json` (TD-33; ADR 0018 amended).
+  Offers carry `credentialSchema` too. Nothing fetches the URL.
+- **Behaviour, connector: policies are read strictly** (TD-32;
+  maintainer, 2026-11-18; ADR 0009 amended). A field of an offer, rule,
+  constraint or agreement that the connector does not read is refused
+  and named, where 0.11 dropped it silently. In the datasets file the
+  harvest of that dataset stops (check `odrl`); a partner's message
+  gets HTTP 400 with the DSP error and changes nothing. A `duty` inside
+  a permission is refused. An offer's `assigner` and `assignee` are
+  read in a message and must be the provider and the consumer; in the
+  datasets file they are refused. Stored datasets are checked again at
+  the first start. Eclipse EDC ignores unknown fields; Portitor is
+  stricter on purpose.
+- **Behaviour, connector: a refused caller gets HTTP 404** on the
+  negotiation and transfer routes, the consumer's callbacks included,
+  as the DSP bindings say and as Eclipse EDC answers; the catalog
+  routes still answer 401, and 503 stays when a service the check needs
+  is down (TD-36; ADR 0016 amended). The log line `DSP request refused:
+  caller not authenticated` has a new `status` field.
+- A repeated `TransferRequestMessage` with the `consumerPid` of a
+  transfer the same caller already asked for gets that transfer again:
+  no second data flow or token (TD-34; ADR 0013 amended). A repeat with
+  another agreement, format or callback address gets 400.
+- As consumer, an agreement without a `timestamp`, or with one that is
+  not an `xsd:dateTime`, is refused. As provider, a new request on a
+  running negotiation must name the stored `consumerPid` (TD-36; ADR
+  0006 amended).
+- A panic no longer stops the process (TD-41; `panic = "abort"` is
+  gone). The request that met it gets HTTP 500 and the others go on;
+  background tasks are watched and start again, and the process stops
+  if the management server ends. The release binaries are about 13%
+  larger (connector 12.9 to 14.7 MB; ADR 0002 amended).
+- The connector's database gets three indexes (schema version 11): the
+  lookup of a repeated transfer request, and the agreement id on both
+  negotiation tables. A 0.11 connector cannot open the file afterwards:
+  back it up first.
 - Release workflow: the SBOM attestation uses `actions/attest` v4.2.2
   instead of `actions/attest-sbom`, which GitHub deprecated. The
   attestation and `gh attestation verify` stay the same.
 
+### Added
+
+- `PORTITOR_DID_CACHE_SECONDS` in the connector, the identity and the
+  issuer: how long a resolved DID document is reused. Default 300, as
+  before; `0` turns the cache off; at most 3600 (R-41; ADR 0016
+  amended).
+- Metrics `portitor.http.request.panicked` and `portitor.task.panicked`,
+  and one ERROR log line per panic with the place in the code (ADR 0023
+  amended).
+- INFO log line `inbound DSP message is not valid; answered 400`, with
+  the message type and the reason. Before, such a refusal was only
+  counted.
+- `docs/BENCHMARKS.md`: data plane with 100 and 1,000 pulls at once, a
+  10 GiB pull, a pull that outlives its token, 10,000 stored
+  negotiations and transfers, catalogs up to 10,000 datasets, and the
+  cost of DCP measured again (R-29). `scripts/bench.sh` and the
+  `bench-load` example reproduce them. The reference load comes from
+  published reports of real platforms.
+
+### Fixed
+
+- A transfer start no longer slows down with stored history: the
+  provider read every negotiation to find the agreement (8 ms on an
+  empty file, 38 ms with 10,000 negotiations).
+- Small answers no longer wait: about 5% of small data pulls took 43 ms
+  because `TCP_NODELAY` was not set; now 0.4 ms.
+
+### Security
+
+- A credential is refused when the key that signed it is listed in its
+  issuer's DID document under the id of another DID (DCP v1.0.1, 5.4.3,
+  step 4; ADR 0016 amended). Credentials from `portitor-issuer` and
+  from EDC IdentityHub are not affected.
+
 ### Documentation
 
+- ADR 0025 (Proposed): users and roles, the answer to TD-04. Portitor
+  stays system to system in 1.0; it names four small points to settle
+  before the 0.13 freeze.
+- ADR 0016 records three DCP choices with their reasons (TD-37): the
+  `token` claim is required, presentations are JWT strings only, and
+  `/.well-known/dspace-trust` is not served.
+- The blocking database calls were measured and stay (TD-40): with 100
+  pulls running, the data plane's p99 time to first byte stays under 15
+  ms at any negotiation rate the test machine produced.
+- New technical debts from the benchmark: TD-44 (a transfer request
+  sent at once after the agreement can be refused) and TD-45 (memory
+  per running pull).
+- The HTTP collection names the saved process ids
+  `mgmtNegotiationConsumerPid` and `mgmtTransferConsumerPid`.
 - Close-out of 0.11: the roadmap and the website mark 0.11 released and
   0.12 as the current release; the website quickstart clones v0.11.0.
 - Review of 2026-11-18 against DSP 2025-1, DCP v1.0.1, Data Plane

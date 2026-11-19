@@ -530,7 +530,7 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
   a provider in several data spaces (Proposed). Not met: the quality gate
   and coverage badges, which wait for the SonarQube Cloud branch rename.
 
-## 0.12 Interoperability and performance
+## 0.12 Interoperability and performance (release pull request open, 2026-11-19)
 
 - Interoperability tests against Eclipse EDC, without Gaia-X: EDC
   1.0.0-RC7 refuses the Gaia-X compliance credential (ADR 0022). Simpl-Open
@@ -558,6 +558,35 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
   addressed, and TD-36, TD-37, TD-40 and TD-41 are fixed or recorded as
   accepted.
 - Main risk: EDC changing under us.
+- Decisions on the 0.12 plan (maintainer, 2026-11-18): the strict
+  reading of policies also holds for a partner's message; the issuer's
+  `credentialSchema` is a required URL in the definitions file, as in
+  EDC; a refused caller gets 404 on the negotiation and transfer routes
+  and 401 on the catalog, as the DSP bindings say and EDC answers;
+  `panic = "abort"` goes, unless the binaries grow more than 10% (they
+  grew 13%; asked again on 2026-11-19); the DID document cache time
+  becomes a setting; the TD-04 ADR is written in 0.12 as Proposed and
+  does not block the release. The reference load for the benchmarks
+  comes from published reports of real platforms: few negotiations, a
+  data plane that carries many and long pulls, and stored history that
+  grows (BENCHMARKS, "Reference load").
+- Result (2026-11-19): TD-32, TD-33, TD-34 and TD-37 addressed; TD-36
+  addressed but for catalog pages, which go with TD-38; TD-41 addressed
+  (a panic fails one request); TD-40 measured and accepted: with 100
+  pulls running, the data plane's p99 time to first byte stays under 15
+  ms at any negotiation rate the test machine produced.
+  [BENCHMARKS](BENCHMARKS.md) is published. The EDC interop test already
+  ran against EDC 1.0.0-RC7, still the newest release on 2026-11-18, so
+  0.12 only changed what the test expects (404 after a revocation). Also
+  in 0.12: `PORTITOR_DID_CACHE_SECONDS`
+  ([R-41](RISKS_AND_TECHNICAL_DEBTS.md#r-41)); a credential's key must
+  belong to its issuer's DID (DCP 5.4.3); two things the benchmark
+  found and 0.12 fixed (a transfer start that slowed with stored
+  history, and small answers that waited 43 ms); and
+  [ADR 0025](adr/0025-users-and-roles.md) on users and roles (Proposed).
+  The benchmark also raised
+  [TD-44](RISKS_AND_TECHNICAL_DEBTS.md#td-44) and
+  [TD-45](RISKS_AND_TECHNICAL_DEBTS.md#td-45).
 
 ## 0.13 Release candidate for 1.0
 
@@ -569,6 +598,15 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
   higher level ([R-05](RISKS_AND_TECHNICAL_DEBTS.md#r-05)).
 - The TD-03 and TD-04 ADRs decided; any API or configuration change
   they need is made before the freeze.
+  [ADR 0025](adr/0025-users-and-roles.md) (TD-04, Proposed in 0.12)
+  names four points to settle before the freeze: say that the
+  management key and the data token are opaque strings; document 403 on
+  the management routes; keep `dataAddress` optional in the transfer
+  view; and decide how a connector treats a bundle file whose role it
+  does not know.
+- From the 0.12 benchmark: decide how a transfer request that arrives
+  just before the provider records `FINALIZED` is treated
+  ([TD-44](RISKS_AND_TECHNICAL_DEBTS.md#td-44)); it touches ADR 0007.
 - Before 1.0 (maintainer, 2026-11-15): read the ODRL 2.2 `dateTime`
   definition and compare it with ADR 0009
   ([R-26](RISKS_AND_TECHNICAL_DEBTS.md#r-26)); decide in an ADR whether
