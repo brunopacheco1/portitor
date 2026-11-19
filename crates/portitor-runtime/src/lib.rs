@@ -6,7 +6,7 @@
 //! component and the issuer): outbound HTTP, `did:web` resolution and the
 //! directory of other parties' documents, the check of a DCP caller's
 //! token, the management API key and port, request size limits, health
-//! checks, logging and shutdown,
+//! checks, logging and shutdown, what happens on a panic,
 //! `SQLite` files, settings, the retry delay, and the system clock.
 //!
 //! The protocol crates (`portitor-dsp`, `portitor-dcp`) do no I/O; this
@@ -22,6 +22,7 @@ pub mod directory;
 pub mod health;
 pub mod http;
 pub mod management;
+pub mod panics;
 pub mod request_size;
 pub mod retry;
 pub mod serve;

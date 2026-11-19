@@ -51,6 +51,8 @@ struct Instruments {
     harvest_runs: Counter<u64>,
     datasets_rejected: Counter<u64>,
     bundle_in_use: Gauge<u64>,
+    http_requests_panicked: Counter<u64>,
+    tasks_panicked: Counter<u64>,
 }
 
 /// The instruments, made the first time a measure is recorded.
@@ -123,6 +125,16 @@ impl Instruments {
                 .with_description(
                     "1 for the bundle version in force, 0 for one no longer in force.",
                 )
+                .build(),
+            http_requests_panicked: meter
+                .u64_counter("portitor.http.request.panicked")
+                .with_unit("{request}")
+                .with_description("HTTP requests whose handler panicked; answered 500.")
+                .build(),
+            tasks_panicked: meter
+                .u64_counter("portitor.task.panicked")
+                .with_unit("{task}")
+                .with_description("Background tasks that panicked.")
                 .build(),
         }
     }
@@ -320,6 +332,25 @@ pub fn bundle_in_use(version: &str, in_use: bool) {
         .record(u64::from(in_use), &attributes);
 }
 
+/// A request handler panicked and the request was answered with HTTP 500
+/// ([`crate::panics::answer_500_on_panic`]). `route` is the route
+/// template, `None` when no route matched.
+pub(crate) fn http_request_panicked(route: Option<&str>) {
+    let mut attributes = Vec::new();
+    if let Some(route) = route {
+        attributes.push(KeyValue::new("http.route", route.to_owned()));
+    }
+    instruments().http_requests_panicked.add(1, &attributes);
+}
+
+/// The background task `name` panicked ([`crate::panics`]). `name` is one
+/// of the fixed task names in the code (`outbox_delivery`,
+/// `bundle_harvest`, ...).
+pub fn task_panicked(name: &'static str) {
+    let attributes = [KeyValue::new("portitor.task.name", name)];
+    instruments().tasks_panicked.add(1, &attributes);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,6 +394,8 @@ mod tests {
         harvest_run_ended("datasets", "succeeded");
         datasets_rejected("dsp", 2);
         bundle_in_use("1.0.0", true);
+        http_request_panicked(Some("/data/{flowId}"));
+        task_panicked("outbox_delivery");
         server_request(0.01, "GET", Some("/health"), 200, "1.1");
         client_request(0.01, &[]);
     }

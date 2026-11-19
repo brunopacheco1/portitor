@@ -208,6 +208,8 @@ where
 // `&'static str`: a text fixed in the program (a literal), which the
 // providers may keep for as long as the process runs
 pub fn init(service_name: &'static str) -> Telemetry {
+    // a panic becomes a JSON log line like every other error
+    crate::panics::log_panics();
     let wanted = Signals {
         traces: is_set(ENDPOINT_VARIABLE) || is_set(TRACES_ENDPOINT_VARIABLE),
         metrics: is_set(ENDPOINT_VARIABLE) || is_set(METRICS_ENDPOINT_VARIABLE),

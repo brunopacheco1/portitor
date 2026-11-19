@@ -205,7 +205,10 @@ pub(crate) fn deliver<O: Outbox>(outbox: Arc<O>, out: O::Out) -> impl Future<Out
         portitor.dsp.role = kind.role_name(),
         portitor.dsp.pid = O::message(&out).pid,
     );
-    send_until_counter_party_acts(outbox, out).instrument(span)
+    // a panic here would end the task unseen: it is logged and counted;
+    // the message stays saved and is sent again at the next start
+    let sending = send_until_counter_party_acts(outbox, out);
+    portitor_runtime::panics::report_panic("outbox_delivery", sending).instrument(span)
 }
 
 /// The work of [`deliver`]: sends `out`, then each message that follows

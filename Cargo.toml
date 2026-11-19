@@ -76,4 +76,3 @@ expect_used = "warn"
 lto = "thin"
 codegen-units = 1
 strip = true
-panic = "abort"

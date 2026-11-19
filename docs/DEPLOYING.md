@@ -1072,6 +1072,9 @@ is the key's thumbprint, so a new key file gives a new key id.
 | `DSP request not checked: a service the check needs is unavailable; answered 503` (WARN) | A server the check fetches from (the partner's DID document or Credential Service, its issuer's DID document or status list, your STS) did not answer, or answered 408, 429 or 5xx; `reason` names it. The partner tries again | If it repeats: check your STS, then ask the partner about its services |
 | `no token: ...` in a send failure (WARN) | The STS did not give a token for an outgoing DSP request | Check the identity component, `PORTITOR_STS_URL` and the shared secret |
 | `own identity checked: DID document and STS agree` (INFO, at start) | The connector's DID document resolves and the STS signs for it | Nothing |
+| `panic` (ERROR) | A bug: code stopped at `place` (file, line and column). One of the next two lines follows | Report it with `place` and the version |
+| `a request handler panicked; answered 500` (ERROR) | The request on `route` got HTTP 500; the other requests went on | Report it; if it repeats for one partner, its message triggers the bug |
+| `a background task panicked; it starts again` / `...; its work is left as saved` (ERROR) | The task `task` stopped at a bug. A task that runs all the time starts again after 5 seconds; a single piece of work (one DSP message, one credential decision) stays saved, and a DSP message is sent again at the next start | Report it; restart the component to send a stuck DSP message again |
 | `portitor-connector stopped` (ERROR) | The process could not start or stopped with an error; the message says why | Fix the cause; the container restarts |
 | `harvesting datasets` (INFO, at start) | The datasets file and the interval in use | Nothing |
 | `no datasets file (PORTITOR_DATASETS_FILE): the catalog is empty` (INFO) | No datasets file is set | Set it, if you offer datasets |
@@ -1235,6 +1238,8 @@ dots into underscores and adds the unit, for example
 | `portitor.outbox.message.given_up` | counter, `{message}` | as above | connector, issuer |
 | `portitor.harvest.run.ended` | counter, `{run}` | `portitor.harvest.kind` (`datasets`, `bundle`), `portitor.harvest.outcome` (`succeeded`, `partial`, `unchanged`, `failed`) | connector |
 | `portitor.harvest.dataset.rejected` | counter, `{dataset}` | `portitor.harvest.check` (the check of the job log) | connector |
+| `portitor.http.request.panicked` | counter, `{request}` | `http.route` (when a route matched). A request handler panicked (a bug); the request got HTTP 500 | all |
+| `portitor.task.panicked` | counter, `{task}` | `portitor.task.name`: `outbox_delivery`, `dataset_harvest`, `bundle_harvest`, `identity_check` (connector), `certificate_watch`, `gaiax_schedule`, `gaiax_run` (identity), `issuer_outbox`, `credential_decision` (issuer) | all |
 | `portitor.bundle.in_use` | gauge, `{bundle}` | `portitor.bundle.version`: 1 for the version in force, 0 for one replaced since the start | connector, with a bundle |
 
 A resend is a retry of a message, or a message saved before a restart
@@ -1713,12 +1718,27 @@ known risk and technical debt, with its status and target release):
 - To read a provider's catalog you call it yourself with an STS token;
   the management API has no call for it yet
   ([TD-38](RISKS_AND_TECHNICAL_DEBTS.md#td-38)).
-- A panic (a bug) stops the whole process, so run each container with a
-  restart policy, as the `docker run` examples do
-  ([TD-41](RISKS_AND_TECHNICAL_DEBTS.md#td-41)).
+- A panic (a bug) no longer stops the process (from 0.12): the request
+  it happened in gets HTTP 500, a background task starts again after 5
+  seconds, and both are logged at ERROR and counted
+  (`portitor.http.request.panicked`, `portitor.task.panicked`). Alert on
+  these counts. Still run each container with a restart policy, as the
+  `docker run` examples do: a failed start, a stopped management server
+  and a kill for lack of memory end the process, and a DSP message
+  whose sending panicked is only sent again at the next start
+  ([SECURITY-ASSURANCE](SECURITY-ASSURANCE.md#what-a-panic-does),
+  [TD-41](RISKS_AND_TECHNICAL_DEBTS.md#td-41)).
 - Every request waits for its database write to reach the disk, one
-  write at a time per database file; the limit under load is not
-  measured yet ([TD-40](RISKS_AND_TECHNICAL_DEBTS.md#td-40)).
+  write at a time per database file. Measured for 0.12: with 100 pulls
+  in flight, new negotiations did not slow the data plane beyond the
+  agreed limit, at one per second or as fast as they go
+  ([BENCHMARKS](BENCHMARKS.md#td-40-do-negotiations-slow-the-data-plane-down),
+  [TD-40](RISKS_AND_TECHNICAL_DEBTS.md#td-40)).
+- Each pull in flight uses memory in the connector and two connections
+  (one from the consumer, one to your data source); see
+  [BENCHMARKS](BENCHMARKS.md#data-plane) for the numbers before you
+  plan for hundreds of pulls at once, and raise the open files limit
+  (`ulimit -n`) above twice that number.
 - No metrics scrape endpoint: metrics and traces are pushed over OTLP
   ([Traces and metrics](#traces-and-metrics)).
 - Gaia-X: tested against a local Gaia-X compliance service in test mode

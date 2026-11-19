@@ -802,3 +802,7 @@ mod tests {
         assert_eq!(jobs[0].record.kind, crate::harvest::JobKind::Datasets);
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod poison_tests;

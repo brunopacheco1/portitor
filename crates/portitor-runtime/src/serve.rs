@@ -4,7 +4,8 @@
 
 //! Process plumbing every Portitor binary needs: serving the public and
 //! the management API (each request observed, see
-//! [`crate::telemetry::http`]), limits for the public server, and
+//! [`crate::telemetry::http`], and a handler's panic answered with HTTP
+//! 500, see [`crate::panics`]), limits for the public server, and
 //! stopping on Ctrl-C or SIGTERM. Logs, traces and metrics are started by
 //! [`crate::telemetry::init`].
 
@@ -21,6 +22,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 
 use crate::api_key::problem;
+use crate::panics::answer_500_on_panic;
 use crate::telemetry::http::observe_requests;
 
 /// How long the public server works on one request before it answers
@@ -142,8 +144,9 @@ pub async fn bind_management(bind: &str) -> std::io::Result<TcpListener> {
 
 /// Serves `public`, and `management` when it is on, until Ctrl-C or
 /// SIGTERM. One signal stops both servers; each finishes the requests it
-/// has started. Every request gets a span and a duration measure; no
-/// caller's trace context is taken (see [`serve_with_trusted_routes`]).
+/// has started. Every request gets a span and a duration measure, and
+/// HTTP 500 if its handler panics; no caller's trace context is taken
+/// (see [`serve_with_trusted_routes`]).
 ///
 /// # Errors
 /// A server fails, or the management server's task panicked.
@@ -169,27 +172,47 @@ pub async fn serve_with_trusted_routes(
 ) -> std::io::Result<()> {
     let (stop, stopped) = tokio::sync::watch::channel(false);
     let management = management.map(|(listener, app)| {
-        let app = observe_requests(app, &[]);
-        tokio::spawn(
+        // the panic layer is inside the observing one, so the span and
+        // the duration measure show the 500
+        let app = observe_requests(answer_500_on_panic(app), &[]);
+        let serving = tokio::spawn(
             axum::serve(listener, app)
                 .with_graceful_shutdown(wait(stopped.clone()))
                 .into_future(),
-        )
+        );
+        tokio::spawn(stop_all_when_ended(serving, stop.clone()))
     });
     tokio::spawn(async move {
         shutdown().await;
         let _ = stop.send(true);
     });
     let (listener, app) = public;
-    let app = observe_requests(app, trusted_routes);
+    let app = observe_requests(answer_500_on_panic(app), trusted_routes);
     axum::serve(listener, app)
         .with_graceful_shutdown(wait(stopped))
         .await?;
     if let Some(management) = management {
-        // the task's own result (it may have panicked), then the server's
+        // the watching task's own result, then the management server's
         management.await.map_err(std::io::Error::other)??;
     }
     Ok(())
+}
+
+/// Waits for the management server's task, then sends the stop signal,
+/// and gives the server's result. On Ctrl-C or SIGTERM the signal was
+/// sent already. If the management server ended on its own (it failed,
+/// or its task panicked), the public server stops too and the process
+/// exits with the error: a process without its health checks and
+/// management API must not go on unseen.
+async fn stop_all_when_ended(
+    serving: tokio::task::JoinHandle<std::io::Result<()>>,
+    stop: tokio::sync::watch::Sender<bool>,
+) -> std::io::Result<()> {
+    let ended = serving.await;
+    let _ = stop.send(true);
+    // `ended` is the task's result (an error if it panicked) around the
+    // server's own; the first `?` turns a panic into an I/O error
+    ended.map_err(std::io::Error::other)?
 }
 
 #[cfg(test)]

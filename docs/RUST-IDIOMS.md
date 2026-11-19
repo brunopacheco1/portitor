@@ -459,6 +459,42 @@ form. `write()` returns a guard; `*guard = value` replaces the value the
 guard protects, and the guard is dropped (the lock freed) at the end of
 the line (`DatasetCopy::replace`).
 
+## Panics
+
+A panic is Rust's answer to a bug it finds while running (an index out
+of range, `expect` on an error). It *unwinds*: the function stops, and
+so does its caller, and so on up, and every value on the way is dropped
+(locks are freed, an open `SQLite` transaction is rolled back). Portitor
+stops the unwinding at the edge of one piece of work
+(`portitor-runtime/src/panics.rs`):
+
+```rust
+match std::panic::catch_unwind(AssertUnwindSafe(|| work.as_mut().poll(context))) {
+    Ok(Poll::Ready(output)) => Poll::Ready(Ok(output)),
+    Ok(Poll::Pending) => Poll::Pending,
+    Err(_message) => Poll::Ready(Err(Panicked)),
+}
+```
+
+- `catch_unwind(closure)` runs the closure and returns `Err` if it
+  panicked, instead of letting the panic travel on.
+- `AssertUnwindSafe(...)` is a promise to the compiler: "data this code
+  was changing may be left half changed, and that is fine here". It is
+  fine because shared data sits behind locks that say how they recover
+  (the bullet on `PoisonError` above) and in `SQLite` transactions.
+- `poll` runs an async task up to its next wait. `catch_panic` wraps
+  each such step, so a task is covered from start to end.
+  `std::future::poll_fn(closure)` makes a task out of a closure that is
+  called for every step; `Poll::Ready(x)` is "done, with `x`",
+  `Poll::Pending` is "not yet".
+
+Use the three helpers, not `catch_unwind` itself:
+`answer_500_on_panic(router)` for HTTP handlers (already on every
+server, `serve.rs`), `spawn_supervised(name, || task())` instead of
+`tokio::spawn` for a task that runs as long as the process (the closure
+makes the task again after a panic), and `report_panic(name, task)`
+around a task that does one piece of work.
+
 ## `SQLite` transactions
 
 ```rust
