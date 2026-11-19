@@ -851,6 +851,69 @@ mod tests {
         }
     }
 
+    /// A file written by 0.11 (8 migrations) with negotiations in it, as
+    /// provider and as consumer, with and without an agreement:
+    /// migrations 10 and 11 add the agreement indexes, every row reads
+    /// back as it was, and the agreement lookups find the agreements.
+    #[test]
+    fn a_file_from_0_11_with_negotiations_gets_the_agreement_indexes() {
+        use portitor_dsp::transfer::consumer::HeldAgreements;
+        use portitor_dsp::transfer::provider::Agreements;
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..8]).unwrap();
+        let written_by_0_11 = SqliteNegotiations(Mutex::new(conn));
+        let mut finalized = sample("urn:uuid:p-finalized", NegotiationState::Finalized);
+        finalized.agreement = Some(agreement());
+        let requested = sample("urn:uuid:p-requested", NegotiationState::Requested);
+        NegotiationStore::insert(&written_by_0_11, &finalized).unwrap();
+        NegotiationStore::insert(&written_by_0_11, &requested).unwrap();
+        let mut held = consumer_sample(NegotiationState::Finalized);
+        held.agreement = Some(agreement());
+        let mut asked = consumer_sample(NegotiationState::Requested);
+        asked.consumer_pid = "urn:uuid:c-requested".into();
+        ConsumerStore::insert(&written_by_0_11, &held).unwrap();
+        ConsumerStore::insert(&written_by_0_11, &asked).unwrap();
+
+        // 0.12 opens the file
+        let store = setup(written_by_0_11.0.into_inner().unwrap()).unwrap();
+        let version: i64 = store
+            .conn()
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, i64::try_from(MIGRATIONS.len()).unwrap());
+        for (index, table) in [
+            ("negotiation_agreement", "negotiation"),
+            ("consumer_negotiation_agreement", "consumer_negotiation"),
+        ] {
+            let sql = "SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = ?1";
+            let indexed: String = store.conn().query_row(sql, [index], |r| r.get(0)).unwrap();
+            assert_eq!(indexed, table);
+        }
+
+        let get = |pid: &str| NegotiationStore::get(&store, pid).unwrap();
+        assert_eq!(get("urn:uuid:p-finalized"), Some(finalized));
+        assert_eq!(get("urn:uuid:p-requested"), Some(requested));
+        let get = |pid: &str| ConsumerStore::get(&store, pid).unwrap();
+        assert_eq!(get("urn:uuid:c"), Some(held));
+        assert_eq!(get("urn:uuid:c-requested"), Some(asked));
+
+        let found = Agreements::finalized(&store, "urn:uuid:a").unwrap();
+        assert_eq!(found, Some(agreement()));
+        assert_eq!(Agreements::finalized(&store, "urn:uuid:b").unwrap(), None);
+        let found = HeldAgreements::agreement(&store, "urn:uuid:a").unwrap();
+        assert_eq!(found, Some(agreement()));
+        let provider = HeldAgreements::provider_of(&store, "urn:uuid:a").unwrap();
+        assert_eq!(provider.unwrap().id, "did:web:p.example");
+        assert_eq!(
+            HeldAgreements::provider_of(&store, "urn:uuid:b").unwrap(),
+            None
+        );
+
+        // opening it once more applies no migration twice
+        assert!(setup(store.0.into_inner().unwrap()).is_ok());
+    }
+
     /// A file written by 0.11 (8 migrations) may hold two transfers for
     /// one repeated request (TD-34). Migration 9 must still apply: it adds
     /// the lookup index and keeps both rows; the first one answers.

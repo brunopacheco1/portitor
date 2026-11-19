@@ -313,6 +313,75 @@ fn verification_methods_belong_to_their_did() {
     assert!(!is_method_of("did:web:issuer.example", ISSUER));
 }
 
+/// An issuer whose DID document writes its key id as the fragment only
+/// (`#key-1`; W3C DID Core, "Relative DID URLs").
+fn issuer_with_a_fragment_only_key_id() -> Party {
+    let mut issuer = Party::new(ISSUER);
+    issuer.doc.verification_method[0].id = "#key-1".to_owned();
+    issuer.doc.assertion_method = vec![Relationship::Reference("#key-1".to_owned())];
+    issuer
+}
+
+/// The claims of a VC 1.1 credential by [`ISSUER`] about Alice.
+fn vc11_claims_by_the_issuer() -> Value {
+    json!({
+        "iss": ISSUER, "sub": ALICE, "jti": "c-1",
+        "nbf": NOW - 60, "iat": NOW - 60, "exp": NOW + 300,
+        "vc": {
+            "@context": [VC1_CONTEXT],
+            "type": ["VerifiableCredential", "MembershipCredential"],
+            "issuer": ISSUER,
+            "issuanceDate": "2026-11-13T16:59:00Z",
+            "credentialSubject": {"id": ALICE}
+        }
+    })
+}
+
+/// A key id written as the fragment only belongs to the DID of the
+/// document it stands in, so a credential signed with it is the
+/// issuer's own (DCP 5.4.3, step 4).
+#[test]
+fn a_fragment_only_key_id_is_the_issuers_own() {
+    let issuer = issuer_with_a_fragment_only_key_id();
+    let jwt = issuer
+        .key
+        .sign_json("#key-1", "JWT", &vc11_claims_by_the_issuer())
+        .unwrap();
+    let credential = Credential::parse(&jwt).unwrap();
+    credential.verify(&issuer.doc, NOW, 0).unwrap();
+    credential.verify_stated_dates(&issuer.doc, NOW, 0).unwrap();
+}
+
+/// The same document, and a credential whose `kid` is the full id
+/// (`did:web:issuer.example#key-1`), as Portitor's own issuer and Eclipse
+/// EDC write it: `#key-1` in the document of `did:web:issuer.example` is
+/// that same key (W3C DID Core, "Relative DID URLs").
+#[test]
+#[ignore = "bug: a full kid does not find a key whose id the DID document writes as #fragment"]
+fn a_full_key_id_finds_the_fragment_only_key_of_the_issuers_document() {
+    let issuer = issuer_with_a_fragment_only_key_id();
+    let jwt = issuer.sign("JWT", &vc11_claims_by_the_issuer());
+    let credential = Credential::parse(&jwt).unwrap();
+    assert_eq!(credential.verify(&issuer.doc, NOW, 0), Ok(()));
+}
+
+/// An id that only looks like the issuer's is another DID's: other
+/// letter case, a path or a query before the fragment, no fragment.
+#[test]
+fn a_key_id_that_only_resembles_the_issuers_did_is_not_its_own() {
+    for other in [
+        "DID:WEB:ISSUER.EXAMPLE#key-1",
+        "did:web:issuer.example/path#key-1",
+        "did:web:issuer.example?service=x#key-1",
+        "did:web:issuer.example.evil.example#key-1",
+        " did:web:issuer.example#key-1",
+        "key-1",
+        "",
+    ] {
+        assert!(!is_method_of(other, ISSUER), "{other:?}");
+    }
+}
+
 #[test]
 fn issuer_key_needs_assertion_method() {
     let mut issuer = Party::new(ISSUER);

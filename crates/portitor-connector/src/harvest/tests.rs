@@ -699,6 +699,83 @@ async fn the_schedule_runs_again_and_zero_means_only_at_start() {
     assert_eq!(jobs[0].record.outcome, JobOutcome::Unchanged);
 }
 
+/// A source with a bug: its next snapshot panics, once, when `.1` is
+/// set. Otherwise it is the source in `.0`.
+struct PanicsOnce(Arc<Source>, std::sync::atomic::AtomicBool);
+
+impl DatasetSource for PanicsOnce {
+    fn name(&self) -> String {
+        self.0.name()
+    }
+    fn snapshot(&self) -> Result<Snapshot, SourceError> {
+        let panic_now = self.1.swap(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(!panic_now, "a bug in the source");
+        self.0.snapshot()
+    }
+}
+
+/// A run that panics (TD-41) must not block the runs after it: the next
+/// run, by the schedule or from the management API, is done, not
+/// skipped as if the panicked run were still going on.
+#[test]
+#[ignore = "bug: after a run that panicked every later run is skipped as busy (poisoned lock)"]
+fn a_run_after_one_that_panicked_is_done() {
+    let store = memory();
+    let entries = Source::with(vec![entry("a")]);
+    let source = Arc::new(PanicsOnce(
+        Arc::clone(&entries),
+        std::sync::atomic::AtomicBool::new(false),
+    ));
+    let harvester = Arc::new(DatasetHarvester::new(source.clone(), dsp(), store.clone()));
+    harvester.start().unwrap();
+
+    source.1.store(true, std::sync::atomic::Ordering::SeqCst);
+    let runner = Arc::clone(&harvester);
+    // on another thread, as the schedule runs it
+    let panicked = std::thread::spawn(move || runner.run(Trigger::Interval)).join();
+    assert!(panicked.is_err());
+
+    entries.set(vec![entry("a"), entry("b")]);
+    let job = done(harvester.run(Trigger::Interval));
+    assert_eq!(job.record.counts.added, 1);
+    assert_eq!(ids(&harvester.copy()), ["a", "b"]);
+}
+
+/// A scheduled run that panics (TD-41) ends only that run: the catalog
+/// keeps what it served, and the run of the next interval works again
+/// and takes the source's changes.
+#[tokio::test(start_paused = true)]
+#[ignore = "bug: after a run that panicked every later run is skipped as busy (poisoned lock)"]
+async fn the_schedule_goes_on_after_a_run_that_panicked() {
+    let store = memory();
+    let entries = Source::with(vec![entry("a")]);
+    let source = Arc::new(PanicsOnce(
+        Arc::clone(&entries),
+        std::sync::atomic::AtomicBool::new(false),
+    ));
+    let harvester = Arc::new(DatasetHarvester::new(source.clone(), dsp(), store.clone()));
+    harvester.start().unwrap();
+    let copy = harvester.copy();
+    let job_count = || store.jobs(None, 10).unwrap().len();
+    assert_eq!(job_count(), 1, "the start run");
+
+    let schedule = harvester.schedule(Duration::from_secs(60)).unwrap();
+    entries.set(vec![entry("a"), entry("b")]);
+    source.1.store(true, std::sync::atomic::Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_secs(61)).await;
+    assert_eq!(
+        job_count(),
+        1,
+        "the run at 60 s panicked and stored nothing"
+    );
+    assert_eq!(ids(&copy), ["a"], "the catalog is as before");
+
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert_eq!(job_count(), 2, "the run at 120 s worked");
+    assert_eq!(ids(&copy), ["a", "b"]);
+    schedule.abort();
+}
+
 #[test]
 fn both_checks_add_conforms_to_without_losing_one_already_there() {
     let store = memory();
@@ -803,5 +880,97 @@ fn an_unknown_policy_term_stops_only_that_dataset() {
             CheckKind::Odrl,
             CheckKind::Dsp
         ]
+    );
+}
+
+/// The same at the first start, when there is no earlier good version:
+/// a dataset whose offer has a term Portitor does not read is not
+/// served, and the others are.
+#[test]
+fn an_unknown_policy_term_at_the_first_start_leaves_only_that_dataset_out() {
+    let mut duty = entry("b");
+    duty["hasPolicy"][0]["permission"][0]["duty"] = json!([{"action": "attribute"}]);
+    let mut party = entry("c");
+    party["hasPolicy"][0]["assignee"] = json!("did:web:c.example");
+
+    let store = memory();
+    let source = Source::with(vec![entry("a"), duty, party, entry("d")]);
+    let harvester = started(&source, &store, dsp());
+    assert_eq!(ids(&harvester.copy()), ["a", "d"]);
+
+    let (job, errors) = last_job(&store);
+    assert_eq!(job.record.trigger, Trigger::Start);
+    assert_eq!(job.record.outcome, JobOutcome::Partial);
+    assert_eq!(job.record.counts.added, 2);
+    assert_eq!(job.record.counts.rejected, 2);
+    let rejected: Vec<Option<&str>> = errors
+        .iter()
+        .map(|error| error.dataset_id.as_deref())
+        .collect();
+    assert_eq!(rejected, [Some("b"), Some("c")]);
+}
+
+/// The other forms of an offer that is not understood are `odrl`
+/// failures that name the offer too: an unknown field deep inside a
+/// logical constraint, `null` or one object in place of a list, and a
+/// policy type that is not `Offer`. When only the second offer of a
+/// dataset is at fault, the dataset still stops.
+#[test]
+fn each_form_of_an_offer_that_is_not_understood_is_an_odrl_failure() {
+    let constraint = json!({"leftOperand": "dateTime", "operator": "lteq",
+        "rightOperand": "2030-12-31"});
+    let mut unit_inside = constraint.clone();
+    unit_inside["unit"] = json!("http://example.com/unit");
+    let cases = [
+        (
+            "/hasPolicy/0/permission/0/constraint",
+            json!([{"and": [{"or": [unit_inside]}]}]),
+            "unknown field `unit`",
+        ),
+        (
+            "/hasPolicy/0/permission/0/constraint",
+            json!([{"and": [], "uid": "urn:c"}]),
+            "unknown field `uid` in a logical constraint",
+        ),
+        (
+            "/hasPolicy/0/permission/0/constraint",
+            constraint,
+            "expected a sequence",
+        ),
+        ("/hasPolicy/0/permission", Value::Null, "invalid type: null"),
+        ("/hasPolicy/0/@type", json!("Set"), "Offer"),
+    ];
+    let check = dsp();
+    for (pointer, value, reason) in cases {
+        let mut dataset = entry("a");
+        let (parent, field) = pointer.rsplit_once('/').unwrap();
+        dataset.pointer_mut(parent).unwrap()[field] = value;
+        let Err(failure) = check.check(&dataset) else {
+            panic!("{pointer}: the dataset passed");
+        };
+        assert_eq!(failure.kind, CheckKind::Odrl, "{pointer}");
+        let message = failure.message;
+        assert!(
+            message.starts_with("offer \"a:offer\" is not understood"),
+            "{message}"
+        );
+        assert!(message.contains(reason), "{pointer}: {message}");
+    }
+
+    let mut second_offer = entry("a");
+    second_offer["hasPolicy"] = json!([
+        {"@id": "a:first", "@type": "Offer", "permission": [{"action": "use"}]},
+        {"@id": "a:second", "@type": "Offer", "permission": [{"action": "use", "duty": []}]}
+    ]);
+    let Err(failure) = check.check(&second_offer) else {
+        panic!("the dataset passed");
+    };
+    assert_eq!(failure.kind, CheckKind::Odrl);
+    assert!(
+        failure
+            .message
+            .starts_with("offer \"a:second\" is not understood: unknown field `duty`"),
+        "{}",
+        failure.message
     );
 }

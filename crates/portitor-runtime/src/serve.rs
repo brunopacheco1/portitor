@@ -229,12 +229,137 @@ async fn stop_all_when_ended(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
     use axum::body::Body;
     use axum::routing::get;
     use tower::ServiceExt as _;
+
+    /// A listener on a free local port, and its address.
+    async fn local_listener() -> (TcpListener, std::net::SocketAddr) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        (listener, address)
+    }
+
+    /// `GET path` at `address` over TCP: the status, and the answer's
+    /// content type and body as one text.
+    async fn http_get(address: std::net::SocketAddr, path: &str) -> (u16, String) {
+        use http_body_util::BodyExt as _;
+        use hyper_util::client::legacy::Client;
+        use hyper_util::rt::TokioExecutor;
+        type NoBody = http_body_util::Empty<hyper::body::Bytes>;
+
+        let client = Client::builder(TokioExecutor::new()).build_http::<NoBody>();
+        let url = format!("http://{address}{path}");
+        let response = client.get(url.parse().unwrap()).await.unwrap();
+        let status = response.status().as_u16();
+        let content_type = match response.headers().get("content-type") {
+            Some(value) => value.to_str().unwrap().to_owned(),
+            None => String::new(),
+        };
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body = String::from_utf8_lossy(&body);
+        (status, format!("{content_type}\n{body}"))
+    }
+
+    /// A router with a handler that panics and one that works.
+    fn app_with_a_bug() -> Router {
+        async fn panics() -> &'static str {
+            panic!("secret-in-message")
+        }
+        Router::new()
+            .route("/panics/{id}", get(panics))
+            .route("/works", get(|| async { "fine" }))
+    }
+
+    /// [`serve`] as the binaries call it, over TCP: a handler that panics
+    /// answers 500 with a problem document on the public and on the
+    /// management server, and both go on serving (TD-41).
+    #[tokio::test]
+    async fn a_panicking_handler_answers_500_on_both_servers_and_they_go_on() {
+        let (public, public_address) = local_listener().await;
+        let (management, management_address) = local_listener().await;
+        let serving = tokio::spawn(serve(
+            (public, app_with_a_bug()),
+            Some((management, app_with_a_bug())),
+        ));
+        for address in [public_address, management_address] {
+            for _ in 0..3 {
+                let (status, answer) = http_get(address, "/panics/7").await;
+                assert_eq!(status, 500, "{answer}");
+                assert!(answer.starts_with("application/problem+json"), "{answer}");
+                assert!(answer.contains("internal error"), "{answer}");
+                assert!(!answer.contains("secret"), "the panic's message leaked");
+            }
+            let (status, answer) = http_get(address, "/works").await;
+            assert_eq!(status, 200, "{answer}");
+            assert!(answer.ends_with("fine"), "{answer}");
+        }
+        assert!(!serving.is_finished(), "the process is still serving");
+        serving.abort();
+    }
+
+    /// Without a management server the public one is covered the same.
+    #[tokio::test]
+    async fn a_panicking_handler_answers_500_without_a_management_server() {
+        let (public, address) = local_listener().await;
+        let serving = tokio::spawn(serve((public, app_with_a_bug()), None));
+        assert_eq!(http_get(address, "/panics/7").await.0, 500);
+        assert_eq!(http_get(address, "/works").await.0, 200);
+        serving.abort();
+    }
+
+    /// The management server's task ended on its own: with an error, or
+    /// by a panic. The stop signal is sent, so the public server stops
+    /// too, and the error is the process's result.
+    #[tokio::test]
+    async fn a_management_server_that_ends_on_its_own_stops_the_process() {
+        let failed = tokio::spawn(async { Err(std::io::Error::other("the listener broke")) });
+        let panicked: tokio::task::JoinHandle<std::io::Result<()>> =
+            tokio::spawn(async { panic!("a bug in the server") });
+        for (ended, reason) in [(failed, "the listener broke"), (panicked, "panicked")] {
+            let (stop, stopped) = tokio::sync::watch::channel(false);
+            let error = stop_all_when_ended(ended, stop).await.unwrap_err();
+            assert!(error.to_string().contains(reason), "{error}");
+            assert!(*stopped.borrow(), "{reason}: the stop signal was sent");
+        }
+    }
+
+    /// The management server ended because the process was told to stop:
+    /// no error.
+    #[tokio::test]
+    async fn a_management_server_that_stopped_normally_is_no_error() {
+        let (stop, stopped) = tokio::sync::watch::channel(false);
+        let ended = tokio::spawn(async { Ok(()) });
+        assert!(stop_all_when_ended(ended, stop).await.is_ok());
+        assert!(*stopped.borrow());
+    }
+
+    /// A management server whose listener fails ends the whole of
+    /// [`serve`] with that error, though the public server works: a
+    /// process without its health checks must not go on unseen.
+    #[tokio::test]
+    async fn serve_ends_with_an_error_when_the_management_server_is_lost() {
+        let (public, public_address) = local_listener().await;
+        let (stop, stopped) = tokio::sync::watch::channel(false);
+        let lost = tokio::spawn(async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Err(std::io::Error::other("the management listener broke"))
+        });
+        let watching = tokio::spawn(stop_all_when_ended(lost, stop));
+        let public_server = tokio::spawn(
+            axum::serve(without_delay(public), app_with_a_bug())
+                .with_graceful_shutdown(wait(stopped))
+                .into_future(),
+        );
+        assert_eq!(http_get(public_address, "/works").await.0, 200);
+        // the public server stops by itself once the signal is sent
+        let stopped_in_time = tokio::time::timeout(Duration::from_secs(10), public_server).await;
+        assert!(stopped_in_time.unwrap().unwrap().is_ok());
+        assert!(watching.await.unwrap().is_err());
+    }
 
     /// A router whose `/slow` answers after `delay`, and `/fast` at once.
     fn app(delay: Duration, timeout: Duration, max_concurrent: usize) -> Router {

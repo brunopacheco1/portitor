@@ -378,6 +378,12 @@ mod tests {
         other_service.distribution[0].access_service = "elsewhere".to_owned();
         let mut targeted = dataset("a");
         targeted.has_policy[0].target = Some("a".to_owned());
+        // a party on an offer in a catalog (0.12): the consumer is not
+        // known yet, and the provider is the catalog's `participantId`
+        let mut names_an_assigner = dataset("a");
+        names_an_assigner.has_policy[0].assigner = Some("did:web:provider".to_owned());
+        let mut names_the_receiver = dataset("a");
+        names_the_receiver.has_policy[0].assignee = Some("did:web:consumer".to_owned());
         let mut spatial = dataset("a");
         spatial.has_policy[0].permission[0].constraint = vec![
             serde_json::from_value(serde_json::json!(
@@ -406,6 +412,14 @@ mod tests {
             (
                 vec![targeted],
                 DatasetDefinitionError::OfferWithTarget("a".to_owned()),
+            ),
+            (
+                vec![names_an_assigner],
+                DatasetDefinitionError::OfferWithParty("a".to_owned()),
+            ),
+            (
+                vec![names_the_receiver],
+                DatasetDefinitionError::OfferWithParty("a".to_owned()),
             ),
             (
                 vec![spatial],

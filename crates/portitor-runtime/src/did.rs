@@ -344,6 +344,93 @@ mod tests {
         }
     }
 
+    /// The identity and the issuer resolve DIDs through a
+    /// [`crate::directory::WebDirectory`]: the cache time they read from
+    /// `PORTITOR_DID_CACHE_SECONDS` reaches its resolver.
+    #[tokio::test]
+    async fn the_cache_time_reaches_the_directory() {
+        use crate::directory::{Directory as _, WebDirectory};
+
+        for (seconds, expected_fetches) in [(0, 3), (300, 1)] {
+            let (did, hits) = serve(serde_json::json!({"verificationMethod": []})).await;
+            let directory = WebDirectory::new(true, seconds).unwrap();
+            for _ in 0..3 {
+                directory.did_document(&did).await.unwrap();
+            }
+            assert_eq!(
+                hits.load(Ordering::SeqCst),
+                expected_fetches,
+                "{seconds} seconds"
+            );
+        }
+    }
+
+    /// The longest cache time, one hour: a document is reused until it is
+    /// 3600 seconds old, then fetched again.
+    #[tokio::test]
+    async fn at_the_longest_cache_time_a_document_is_reused_for_an_hour() {
+        let (did, hits) = serve(serde_json::json!({"verificationMethod": []})).await;
+        let seconds = cache_seconds(Some("3600")).unwrap();
+        let resolver = DidWebResolver::new(true, Duration::from_secs(seconds)).unwrap();
+        resolver.resolve(&did).await.unwrap();
+        let make_older = |age_seconds: u64| {
+            let mut cache = resolver.cache.lock().unwrap();
+            let entry = cache.get_mut(&did).unwrap();
+            entry.fetched_at = Instant::now()
+                .checked_sub(Duration::from_secs(age_seconds))
+                .unwrap();
+        };
+        make_older(3_590);
+        resolver.resolve(&did).await.unwrap();
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "still fresh at 3590 s");
+        make_older(3_601);
+        resolver.resolve(&did).await.unwrap();
+        assert_eq!(hits.load(Ordering::SeqCst), 2, "fetched again after 3600 s");
+    }
+
+    /// Values at and around the bounds, and texts that are no whole
+    /// number of seconds.
+    #[test]
+    fn the_cache_setting_takes_only_whole_seconds_from_0_to_3600() {
+        for (accepted, seconds) in [("0", 0), ("1", 1), ("3599", 3599), ("3600", 3600)] {
+            assert_eq!(cache_seconds(Some(accepted)), Ok(seconds), "{accepted}");
+        }
+        for refused in [
+            "3601",
+            "86400",
+            "18446744073709551616",
+            "-0",
+            "300.0",
+            "3e2",
+            "0x10",
+            "300s",
+            "five",
+            "300 600",
+        ] {
+            assert!(cache_seconds(Some(refused)).is_err(), "{refused}");
+        }
+    }
+
+    /// A panic while the cache's lock was held (TD-41) leaves the
+    /// resolver working: it resolves without a cache, every time.
+    #[tokio::test]
+    async fn a_poisoned_cache_lock_means_no_cache_but_still_an_answer() {
+        let (did, hits) = serve(serde_json::json!({"verificationMethod": []})).await;
+        let resolver = Arc::new(DidWebResolver::new(true, DEFAULT_TTL).unwrap());
+        let held = Arc::clone(&resolver);
+        let panicked = std::thread::spawn(move || {
+            let _cache = held.cache.lock().unwrap();
+            panic!("while the lock is held");
+        })
+        .join();
+        assert!(panicked.is_err());
+        assert!(resolver.cache.is_poisoned());
+
+        resolver.resolve(&did).await.unwrap();
+        resolver.resolve(&did).await.unwrap();
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
+
     #[tokio::test]
     async fn the_cache_is_bounded_and_drops_the_oldest_first() {
         let (first, first_hits) = serve(serde_json::json!({"verificationMethod": []})).await;

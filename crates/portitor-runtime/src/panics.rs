@@ -255,6 +255,125 @@ mod tests {
         assert_eq!(starts.load(Ordering::SeqCst), 3);
     }
 
+    /// A request that is being worked on when another one panics is
+    /// still answered: the panic ends only its own request.
+    #[tokio::test]
+    async fn a_request_in_flight_is_answered_while_another_panics() {
+        let slow = || async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            "slow"
+        };
+        let router = Router::new()
+            .route("/panics", get(panics_at_once))
+            .route("/slow", get(slow));
+        let app = answer_500_on_panic(router);
+        let in_flight = {
+            let app = app.clone();
+            tokio::spawn(async move { call(&app, "/slow").await.status() })
+        };
+        tokio::task::yield_now().await;
+        for _ in 0..3 {
+            assert_eq!(
+                call(&app, "/panics").await.status(),
+                StatusCode::INTERNAL_SERVER_ERROR
+            );
+        }
+        assert_eq!(in_flight.await.unwrap(), StatusCode::OK);
+    }
+
+    /// A path no route matches is not a panic: 404 as before.
+    #[tokio::test]
+    async fn a_path_without_a_route_is_still_404() {
+        assert_eq!(
+            call(&app(), "/nowhere").await.status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    /// A paused clock shows the pause: each restart comes
+    /// [`RESTART_PAUSE`] after the panic, not at once.
+    #[tokio::test(start_paused = true)]
+    async fn a_supervised_task_waits_the_restart_pause_before_each_restart() {
+        let started_at = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&started_at);
+        let task = spawn_supervised("test", move || {
+            let mut starts = recorded.lock().unwrap();
+            starts.push(tokio::time::Instant::now());
+            let nth = starts.len();
+            async move {
+                assert!(nth >= 3, "run {nth} panics");
+            }
+        });
+        task.await.unwrap();
+        let starts = started_at.lock().unwrap();
+        assert_eq!(starts.len(), 3);
+        assert_eq!(starts[1] - starts[0], RESTART_PAUSE);
+        assert_eq!(starts[2] - starts[1], RESTART_PAUSE);
+    }
+
+    /// A task that returns is finished: it is not started again.
+    #[tokio::test(start_paused = true)]
+    async fn a_supervised_task_that_returns_is_not_started_again() {
+        let starts = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&starts);
+        let task = spawn_supervised("test", move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            async {}
+        });
+        task.await.unwrap();
+        tokio::time::sleep(RESTART_PAUSE * 3).await;
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+    }
+
+    /// A task that panics every time is started again every time, for as
+    /// long as the process lives; aborting its handle stops it for good.
+    #[tokio::test(start_paused = true)]
+    async fn a_task_that_always_panics_is_restarted_until_it_is_aborted() {
+        let starts = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&starts);
+        let task = spawn_supervised("test", move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            async { panic!("every time") }
+        });
+        tokio::time::sleep(RESTART_PAUSE * 10 + Duration::from_secs(1)).await;
+        assert_eq!(
+            starts.load(Ordering::SeqCst),
+            11,
+            "the first start and 10 more"
+        );
+        assert!(!task.is_finished(), "still supervised");
+
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        tokio::time::sleep(RESTART_PAUSE * 3).await;
+        assert_eq!(
+            starts.load(Ordering::SeqCst),
+            11,
+            "no start after the abort"
+        );
+    }
+
+    /// A panic in one supervised task leaves the others running.
+    #[tokio::test(start_paused = true)]
+    async fn a_panic_in_one_supervised_task_does_not_stop_another() {
+        let rounds = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&rounds);
+        let working = spawn_supervised("working", move || {
+            let counted = Arc::clone(&counted);
+            async move {
+                loop {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
+        });
+        let panicking = spawn_supervised("panicking", || async { panic!("every time") });
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        assert!(rounds.load(Ordering::SeqCst) >= 10, "the other task ran on");
+        working.abort();
+        panicking.abort();
+    }
+
     #[tokio::test]
     async fn report_panic_ends_quietly() {
         report_panic("test", async { panic!("no") }).await;

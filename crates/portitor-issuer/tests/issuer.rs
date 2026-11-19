@@ -1604,6 +1604,104 @@ fn unknown_arguments_exit_with_2() {
     }
 }
 
+/// A TEST ONLY P-256 key, for starting the binary.
+const TEST_KEY: &str =
+    include_str!("../../portitor-identity/tests/fixtures/test-only-identity-key.pem");
+
+/// Starts the `portitor-issuer` binary with `definitions` as its
+/// definitions file and `more_settings` in its environment, and waits
+/// until it stops: whether it ended well, and what it logged. Every
+/// start here is one that must stop before the issuer listens; a process
+/// that is still there after 30 seconds is stopped and fails the test.
+fn start_and_wait_for_the_stop(
+    definitions: &str,
+    more_settings: &[(&str, &str)],
+) -> (bool, String) {
+    let dir = TempDir::new("issuer-start");
+    let key_file = dir.write("test-only-key.pem", TEST_KEY);
+    let definitions_file = dir.write("credentials.json", definitions);
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_portitor-issuer"))
+        // nothing of the test machine's own settings
+        .env_clear()
+        .env("PORTITOR_PARTICIPANT_ID", ISSUER)
+        .env(
+            "PORTITOR_ISSUER_SERVICE_URL",
+            "https://issuer.example/issuer",
+        )
+        .env("PORTITOR_ISSUER_KEY_FILE", key_file)
+        .env("PORTITOR_ISSUER_CREDENTIALS_FILE", definitions_file)
+        .env("PORTITOR_DB_FILE", dir.path().join("issuer.db"))
+        .env("PORTITOR_BIND", "127.0.0.1:0")
+        .envs(more_settings.iter().copied())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let started = std::time::Instant::now();
+    while child.try_wait().unwrap().is_none() {
+        if started.elapsed() > Duration::from_secs(30) {
+            child.kill().unwrap();
+            panic!("the issuer started instead of stopping");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let output = child.wait_with_output().unwrap();
+    let mut logged = String::from_utf8_lossy(&output.stdout).into_owned();
+    logged.push_str(&String::from_utf8_lossy(&output.stderr));
+    (output.status.success(), logged)
+}
+
+/// From 0.12 every definition needs a `credentialSchema` (TD-33; DCP
+/// v1.0.1, section 6.7). A definitions file without one, as written for
+/// 0.11, or with one that is not an absolute URL as text, stops the
+/// issuer at start, and the log names the setting, the entry and the
+/// field.
+#[test]
+fn the_issuer_does_not_start_without_a_valid_credential_schema() {
+    let entry = |credential_schema: &str| {
+        format!(
+            r#"[{{"id": "membership-vc20", "credentialType": "MembershipCredential",
+                 "profile": "vc20-bssl/jwt", "validityDays": 365{credential_schema}}}]"#
+        )
+    };
+    let required = "\\\"membership-vc20\\\": credentialSchema is required";
+    let not_a_url = "\\\"membership-vc20\\\": credentialSchema must be an absolute http";
+    for (credential_schema, reason) in [
+        ("", required),
+        (r#", "credentialSchema": null"#, required),
+        (r#", "credentialSchema": """#, not_a_url),
+        (r#", "credentialSchema": "membership.json""#, not_a_url),
+        (
+            r#", "credentialSchema": ["https://example.com/m.json"]"#,
+            "invalid type",
+        ),
+    ] {
+        let (ended_well, logged) = start_and_wait_for_the_stop(&entry(credential_schema), &[]);
+        assert!(!ended_well, "{credential_schema}: {logged}");
+        assert!(
+            logged.contains("PORTITOR_ISSUER_CREDENTIALS_FILE"),
+            "{credential_schema}: {logged}"
+        );
+        assert!(logged.contains(reason), "{credential_schema}: {logged}");
+    }
+}
+
+/// The issuer reads `PORTITOR_DID_CACHE_SECONDS` at start (it resolves
+/// the holders' DIDs): a value out of bounds stops it, and the log names
+/// the setting.
+#[test]
+fn the_issuer_does_not_start_with_a_did_cache_time_out_of_bounds() {
+    for value in ["3601", "-1", "5m"] {
+        let settings = [("PORTITOR_DID_CACHE_SECONDS", value)];
+        let (ended_well, logged) = start_and_wait_for_the_stop(DEFINITIONS, &settings);
+        assert!(!ended_well, "{value}: {logged}");
+        assert!(
+            logged.contains("PORTITOR_DID_CACHE_SECONDS has an invalid value"),
+            "{value}: {logged}"
+        );
+    }
+}
+
 /// Request size limits (R-18): a body one byte over the limit gets 413,
 /// a body at the limit is not refused for its size. A credential request
 /// has the fixed limit of small messages, or the public port's limit

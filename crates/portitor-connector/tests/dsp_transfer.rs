@@ -14,6 +14,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
+use portitor_connector::auth::{Caller, CallerVerifier, VerifyError};
 use portitor_connector::harvest::FixedSource;
 use portitor_connector::http_client::Sender;
 use portitor_connector::ports::Retry;
@@ -21,6 +22,7 @@ use portitor_connector::ports::Shared;
 use portitor_connector::store::SqliteNegotiations;
 use portitor_connector::{Config, Ports};
 use portitor_dsp::negotiation::Agreement;
+use portitor_dsp::policy::HeldCredential;
 use portitor_dsp::transfer::provider::{Agreements, DataFlows, StoreError, Transfer};
 use portitor_dsp::transfer::{DataAddress, DataAddressType, EndpointProperty};
 use portitor_runtime::BoxFuture;
@@ -34,11 +36,14 @@ const BASE: &str = "/dsp/2025-1/transfers";
 const CALLBACK: &str = "https://consumer.example/cb";
 const CONSUMER_PID: &str = "urn:uuid:consumer-1";
 
-/// Records every POST and answers `Ok`, unless `fail` is set.
+/// Records every POST and answers `Ok`, unless `fail` is set (no answer
+/// at all) or `refuses_with` is (the consumer's answer, such as
+/// `HTTP 404 Not Found`).
 #[derive(Default)]
 struct FakeSender {
     sent: Mutex<Vec<(String, Value)>>,
     fail: bool,
+    refuses_with: Option<&'static str>,
 }
 
 impl Sender for FakeSender {
@@ -48,7 +53,9 @@ impl Sender for FakeSender {
             .unwrap()
             .push((url.to_owned(), body.clone()));
         Box::pin(async move {
-            if self.fail {
+            if let Some(refusal) = self.refuses_with {
+                Err(refusal.to_owned())
+            } else if self.fail {
                 Err("unreachable".to_owned())
             } else {
                 Ok(Value::Null)
@@ -353,6 +360,359 @@ async fn a_repeated_request_gets_the_same_transfer_and_one_token() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
     assert!(!error.to_string().contains(&pid), "{error}");
     assert_eq!(flows.calls(), ["start CAT0101"]);
+}
+
+/// A repeated request that is refused because it differs leaves the
+/// first transfer as it was: still STARTED, its data flow running, and
+/// nothing more sent to the consumer.
+#[tokio::test]
+async fn a_differing_repeated_request_leaves_the_first_transfer_as_it_was() {
+    let (sender, flows) = (
+        Arc::new(FakeSender::default()),
+        Arc::new(FakeFlows::default()),
+    );
+    let app = portitor_connector::router(&config(), ports(&sender, &flows)).unwrap();
+    let uri = format!("{BASE}/request");
+    let (_, first) = call(&app, post(&uri, &request("a1"))).await;
+    let pid = first["providerPid"].as_str().unwrap().to_owned();
+    wait_for(&app, &pid, "STARTED").await;
+
+    let mut other_callback = request("a1");
+    other_callback["callbackAddress"] = json!("https://elsewhere.example/cb");
+    let (status, error) = call(&app, post(&uri, &other_callback)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(error["code"], "400");
+    assert_eq!(error["consumerPid"], CONSUMER_PID);
+    assert_eq!(
+        error["reason"][0],
+        "consumerPid is already used by another transfer request of this consumer"
+    );
+    // the refusal does not name the transfer that exists
+    assert!(!error.to_string().contains(&pid), "{error}");
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(state(&app, &pid).await, "STARTED");
+    assert_eq!(flows.calls(), ["start CAT0101"]);
+    let out = sender.sent();
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].0.starts_with(CALLBACK), "sent to the first address");
+}
+
+/// A `consumerPid` stays taken once its transfer has ended: the request
+/// sent again gets the ended transfer, and no second transfer starts
+/// under it (DSP 2025-1, "Transfer Request Message": idempotent on
+/// `consumerPid`; ADR 0013, amended in 0.12).
+#[tokio::test]
+async fn a_repeated_request_after_the_transfer_ended_starts_nothing() {
+    let (sender, flows) = (
+        Arc::new(FakeSender::default()),
+        Arc::new(FakeFlows::default()),
+    );
+    let app = portitor_connector::router(&config(), ports(&sender, &flows)).unwrap();
+    let uri = format!("{BASE}/request");
+    let (_, first) = call(&app, post(&uri, &request("a1"))).await;
+    let pid = first["providerPid"].as_str().unwrap().to_owned();
+    wait_for(&app, &pid, "STARTED").await;
+    let complete = message("TransferCompletionMessage", &pid);
+    let (status, _) = call(&app, post(&format!("{BASE}/{pid}/completion"), &complete)).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, again) = call(&app, post(&uri, &request("a1"))).await;
+    assert_eq!(status, StatusCode::CREATED, "{again}");
+    assert_eq!(again["providerPid"], pid.as_str());
+    assert_eq!(again["state"], "COMPLETED");
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(flows.calls(), ["start CAT0101", "complete"]);
+    assert_eq!(sender.sent().len(), 1, "no second start message");
+}
+
+/// The repeated request with the `SQLite` store, as in production: the
+/// lookup and the insert are SQL there (`store/transfers.rs`).
+#[tokio::test]
+async fn a_repeated_request_is_one_transfer_in_the_sqlite_store() {
+    use portitor_dsp::transfer::provider::TransferStore as _;
+
+    let (sender, flows) = (
+        Arc::new(FakeSender::default()),
+        Arc::new(FakeFlows::default()),
+    );
+    let file = Arc::new(SqliteNegotiations::in_memory().unwrap());
+    let mut p = ports(&sender, &flows);
+    p.use_sqlite(&file);
+    // the agreement still comes from the test, not from a stored negotiation
+    p.transfers.agreements = Shared(Arc::new(OneAgreement));
+    let app = portitor_connector::router(&config(), p).unwrap();
+    let uri = format!("{BASE}/request");
+
+    let (status, first) = call(&app, post(&uri, &request("a1"))).await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    let pid = first["providerPid"].as_str().unwrap().to_owned();
+    wait_for(&app, &pid, "STARTED").await;
+    let (status, again) = call(&app, post(&uri, &request("a1"))).await;
+    assert_eq!(status, StatusCode::CREATED, "{again}");
+    assert_eq!(again["providerPid"], pid.as_str());
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(sender.sent().len(), 1, "one start message, so one token");
+    assert_eq!(flows.calls(), ["start CAT0101"]);
+    let stored = file.requested(CONSUMER, CONSUMER_PID).unwrap().unwrap();
+    assert_eq!(stored.provider_pid, pid);
+    assert!(file.pending().unwrap().is_empty(), "nothing left to send");
+}
+
+/// Every DSP route of the connector: method, path and DSP error type.
+/// The process ids do not exist; a caller that is refused never gets as
+/// far as the lookup.
+const DSP_ROUTES: &[(&str, &str, &str)] = &[
+    ("POST", "/dsp/2025-1/catalog/request", "CatalogError"),
+    (
+        "GET",
+        "/dsp/2025-1/catalog/datasets/CAT0101",
+        "CatalogError",
+    ),
+    (
+        "POST",
+        "/dsp/2025-1/negotiations/request",
+        "ContractNegotiationError",
+    ),
+    (
+        "GET",
+        "/dsp/2025-1/negotiations/p1",
+        "ContractNegotiationError",
+    ),
+    (
+        "POST",
+        "/dsp/2025-1/negotiations/p1/request",
+        "ContractNegotiationError",
+    ),
+    (
+        "POST",
+        "/dsp/2025-1/negotiations/p1/events",
+        "ContractNegotiationError",
+    ),
+    (
+        "POST",
+        "/dsp/2025-1/negotiations/p1/agreement/verification",
+        "ContractNegotiationError",
+    ),
+    (
+        "POST",
+        "/dsp/2025-1/negotiations/p1/termination",
+        "ContractNegotiationError",
+    ),
+    ("POST", "/dsp/2025-1/transfers/request", "TransferError"),
+    ("GET", "/dsp/2025-1/transfers/p1", "TransferError"),
+    ("POST", "/dsp/2025-1/transfers/p1/start", "TransferError"),
+    (
+        "POST",
+        "/dsp/2025-1/transfers/p1/suspension",
+        "TransferError",
+    ),
+    (
+        "POST",
+        "/dsp/2025-1/transfers/p1/completion",
+        "TransferError",
+    ),
+    (
+        "POST",
+        "/dsp/2025-1/transfers/p1/termination",
+        "TransferError",
+    ),
+    (
+        "GET",
+        "/dsp/2025-1/callback/negotiations/c1",
+        "ContractNegotiationError",
+    ),
+    (
+        "POST",
+        "/dsp/2025-1/callback/negotiations/c1/offers",
+        "ContractNegotiationError",
+    ),
+    (
+        "POST",
+        "/dsp/2025-1/callback/negotiations/c1/agreement",
+        "ContractNegotiationError",
+    ),
+    (
+        "POST",
+        "/dsp/2025-1/callback/negotiations/c1/events",
+        "ContractNegotiationError",
+    ),
+    (
+        "POST",
+        "/dsp/2025-1/callback/negotiations/c1/termination",
+        "ContractNegotiationError",
+    ),
+    ("GET", "/dsp/2025-1/callback/transfers/c1", "TransferError"),
+    (
+        "POST",
+        "/dsp/2025-1/callback/transfers/c1/start",
+        "TransferError",
+    ),
+    (
+        "POST",
+        "/dsp/2025-1/callback/transfers/c1/suspension",
+        "TransferError",
+    ),
+    (
+        "POST",
+        "/dsp/2025-1/callback/transfers/c1/completion",
+        "TransferError",
+    ),
+    (
+        "POST",
+        "/dsp/2025-1/callback/transfers/c1/termination",
+        "TransferError",
+    ),
+];
+
+/// A request to a route of [`DSP_ROUTES`] with an empty JSON body; with
+/// `caller`, sent by that participant, without, with no `Authorization`
+/// header.
+fn route_request(method: &str, path: &str, caller: Option<&str>) -> Request<Body> {
+    let mut request = Request::builder().method(method).uri(path);
+    if let Some(did) = caller {
+        request = from(request, did);
+    }
+    request
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap()
+}
+
+/// DSP 2025-1, "Unauthorized Access" of the negotiation and the transfer
+/// HTTPS bindings: "If the client is not authorized, the Consumer or
+/// Provider MUST return an HTTP 404 (Not Found) response." The catalog
+/// binding asks for "an appropriate HTTP code": 401 (ADR 0016, amended
+/// in 0.12). Checked on every route of the real router, the consumer's
+/// callbacks included.
+#[tokio::test]
+async fn every_dsp_route_refuses_a_caller_without_a_token() {
+    let (sender, flows) = (
+        Arc::new(FakeSender::default()),
+        Arc::new(FakeFlows::default()),
+    );
+    let app = portitor_connector::router(&config(), ports(&sender, &flows)).unwrap();
+    for (method, path, error_type) in DSP_ROUTES {
+        let expected = if *error_type == "CatalogError" {
+            StatusCode::UNAUTHORIZED
+        } else {
+            StatusCode::NOT_FOUND
+        };
+        let (status, error) = call(&app, route_request(method, path, None)).await;
+        assert_eq!(status, expected, "{method} {path}: {error}");
+        assert_eq!(error["@type"], *error_type, "{method} {path}");
+        assert_eq!(error["code"], expected.as_str(), "{method} {path}");
+        assert_eq!(error["reason"], json!(["unauthorized"]), "{method} {path}");
+    }
+}
+
+/// A verifier whose check cannot finish: a service it needs is down.
+struct Down;
+
+impl CallerVerifier for Down {
+    fn verify<'a>(&'a self, _: Option<&'a str>) -> BoxFuture<'a, Result<Caller, VerifyError>> {
+        let down = VerifyError::Unavailable("the issuer's DID document: no answer".to_owned());
+        Box::pin(async move { Err(down) })
+    }
+
+    fn credentials<'a>(
+        &'a self,
+        _: &'a Caller,
+        _: &'a [String],
+    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, String>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+}
+
+/// Unchanged in 0.12: while a service the caller's check needs is down,
+/// every DSP route answers 503 (ADR 0016, amended in 0.11), never the 404
+/// or 401 of a refusal, so the partner's outbox tries again (ADR 0007).
+#[tokio::test]
+async fn every_dsp_route_answers_503_while_the_callers_check_cannot_finish() {
+    let (sender, flows) = (
+        Arc::new(FakeSender::default()),
+        Arc::new(FakeFlows::default()),
+    );
+    let mut p = ports(&sender, &flows);
+    p.verifier = Arc::new(Down);
+    let app = portitor_connector::router(&config(), p).unwrap();
+    for (method, path, _) in DSP_ROUTES {
+        let request = route_request(method, path, Some(CONSUMER));
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{method} {path}"
+        );
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/problem+json",
+            "{method} {path}"
+        );
+    }
+}
+
+/// A message without a token changes nothing: the transfer it names
+/// stays STARTED and its data flow goes on.
+#[tokio::test]
+async fn a_message_without_a_token_does_not_change_a_transfer() {
+    let (sender, flows) = (
+        Arc::new(FakeSender::default()),
+        Arc::new(FakeFlows::default()),
+    );
+    let app = portitor_connector::router(&config(), ports(&sender, &flows)).unwrap();
+    let (_, ack) = call(&app, post(&format!("{BASE}/request"), &request("a1"))).await;
+    let pid = ack["providerPid"].as_str().unwrap().to_owned();
+    wait_for(&app, &pid, "STARTED").await;
+
+    for (path, kind) in [
+        ("suspension", "TransferSuspensionMessage"),
+        ("completion", "TransferCompletionMessage"),
+        ("termination", "TransferTerminationMessage"),
+    ] {
+        let anonymous = Request::post(format!("{BASE}/{pid}/{path}"))
+            .header("content-type", "application/json")
+            .body(Body::from(message(kind, &pid).to_string()))
+            .unwrap();
+        let (status, error) = call(&app, anonymous).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}: {error}");
+        // the answer is the one for a transfer that does not exist
+        assert_eq!(error["providerPid"], "", "{path}");
+        assert_eq!(state(&app, &pid).await, "STARTED", "{path}");
+    }
+    assert_eq!(flows.calls(), ["start CAT0101"]);
+}
+
+/// A consumer that answers 404 will not take the message: since 0.12 it
+/// is also the answer of a partner that refuses our credentials (ADR
+/// 0016). The start message is sent once, not tried again, and the
+/// transfer ends with its data flow (ADR 0007). The TCK build tries a
+/// 404 again (`outbox.rs`, `tck_retries`).
+#[tokio::test]
+async fn a_consumer_that_answers_404_is_not_sent_the_message_again() {
+    let sender = Arc::new(FakeSender {
+        refuses_with: Some("HTTP 404 Not Found"),
+        ..FakeSender::default()
+    });
+    let flows = Arc::new(FakeFlows::default());
+    let app = portitor_connector::router(&config(), ports(&sender, &flows)).unwrap();
+    let (_, ack) = call(&app, post(&format!("{BASE}/request"), &request("a1"))).await;
+    let pid = ack["providerPid"].as_str().unwrap().to_owned();
+    wait_for(&app, &pid, "TERMINATED").await;
+    assert_eq!(flows.calls(), ["start CAT0101", "terminate"]);
+
+    // one try of the start and one of the termination; two each with `tck`
+    let tries_each = if cfg!(feature = "tck") { 2 } else { 1 };
+    let out = sent(&sender, 2 * tries_each).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(sender.sent().len(), 2 * tries_each, "{out:?}");
+    assert!(out[0].0.ends_with("/start"), "{out:?}");
+    assert!(
+        out[2 * tries_each - 1].0.ends_with("/termination"),
+        "{out:?}"
+    );
 }
 
 #[tokio::test]

@@ -321,3 +321,187 @@ fn same_terms_cannot_be_fooled_by_dropped_terms() {
     // an offer that names no party passes
     assert_eq!(check_parties(&plain, "did:web:p", "did:web:c"), Ok(()));
 }
+
+/// The error of reading the JSON text `raw` as an offer; `None` when it
+/// is read. Text, not `json!`: only text can hold one key twice.
+fn offer_text_error(raw: &str) -> Option<String> {
+    match serde_json::from_str::<Offer>(raw) {
+        Ok(_) => None,
+        Err(error) => Some(error.to_string()),
+    }
+}
+
+/// A field given twice would have one of its two values dropped unseen
+/// (JSON readers disagree on which one). On an offer and on a rule it is
+/// refused by name.
+#[test]
+fn a_field_given_twice_in_an_offer_or_a_rule_is_refused() {
+    let twice_in_the_offer = r#"{"@id": "o", "@type": "Offer",
+        "permission": [{"action": "use"}],
+        "permission": [{"action": "distribute"}]}"#;
+    let error = offer_text_error(twice_in_the_offer).unwrap();
+    assert!(error.contains("duplicate field `permission`"), "{error}");
+
+    let twice_in_the_rule = r#"{"@id": "o", "@type": "Offer",
+        "permission": [{"action": "use", "action": "distribute"}]}"#;
+    let error = offer_text_error(twice_in_the_rule).unwrap();
+    assert!(error.contains("duplicate field `action`"), "{error}");
+}
+
+/// The same inside a constraint: the constraint is read through a
+/// `serde_json::Value` (`read_constraint`), which keeps the last value of
+/// a repeated key and says nothing.
+#[test]
+#[ignore = "bug: a key given twice in a constraint is read, and its first value is dropped"]
+fn a_field_given_twice_in_a_constraint_is_refused() {
+    let twice_in_an_atomic_constraint = r#"{"@id": "o", "@type": "Offer",
+        "permission": [{"action": "use", "constraint": [
+            {"leftOperand": "dateTime", "operator": "lteq",
+             "rightOperand": "2020-12-31", "rightOperand": "2099-12-31"}]}]}"#;
+    let error = offer_text_error(twice_in_an_atomic_constraint);
+    assert!(error.is_some(), "read, and one `rightOperand` was dropped");
+
+    let twice_in_a_logical_constraint = r#"{"@id": "o", "@type": "Offer",
+        "permission": [{"action": "use", "constraint": [{
+            "and": [{"leftOperand": "dateTime", "operator": "lteq", "rightOperand": "2020-12-31"}],
+            "and": []}]}]}"#;
+    let error = offer_text_error(twice_in_a_logical_constraint);
+    assert!(error.is_some(), "read, and one `and` was dropped");
+}
+
+/// `null` is not an empty list: a rule list or a constraint list that is
+/// `null` is refused. An empty list is read, and means the same as a
+/// list that is left out.
+#[test]
+fn a_null_list_is_refused_and_an_empty_list_is_read() {
+    for pointer in [
+        "/permission",
+        "/prohibition",
+        "/obligation",
+        "/permission/0/constraint",
+        "/permission/0/constraint/1/and",
+    ] {
+        let mut offer = full_offer();
+        *offer.pointer_mut(pointer).unwrap() = Value::Null;
+        let error = offer_error(&offer);
+        assert!(error.contains("invalid type: null"), "{pointer}: {error}");
+    }
+
+    let with_empty_lists = json!({"@id": "o", "@type": "Offer",
+        "permission": [{"action": "use", "constraint": []}],
+        "prohibition": [], "obligation": []});
+    let left_out = json!({"@id": "o", "@type": "Offer", "permission": [{"action": "use"}]});
+    let with_empty_lists: Offer = serde_json::from_value(with_empty_lists).unwrap();
+    let left_out: Offer = serde_json::from_value(left_out).unwrap();
+    assert_eq!(with_empty_lists, left_out);
+}
+
+/// A text field that is `null` is read as left out, so nothing is
+/// dropped: the offer names no party and no target.
+#[test]
+fn a_null_text_field_is_read_as_left_out() {
+    let mut offer = full_offer();
+    for field in ["target", "assigner", "assignee"] {
+        offer[field] = Value::Null;
+    }
+    let offer: Offer = serde_json::from_value(offer).unwrap();
+    assert_eq!(offer.target, None);
+    assert_eq!(offer.assigner, None);
+    assert_eq!(offer.assignee, None);
+}
+
+/// DSP 2025-1 `contract-schema.json`: `permission`, `constraint` and the
+/// operands of a logical constraint are arrays. One object in their
+/// place (as JSON-LD compaction writes a list of one without the DSP
+/// context) is refused, not read as a list of one and not dropped.
+#[test]
+fn one_object_in_place_of_a_list_is_refused() {
+    let constraint =
+        json!({"leftOperand": "dateTime", "operator": "lteq", "rightOperand": "2030-12-31"});
+    for (pointer, one_object) in [
+        ("/permission", json!({"action": "use"})),
+        ("/permission/0/constraint", constraint.clone()),
+        ("/permission/0/constraint/1/and", constraint),
+    ] {
+        let mut offer = full_offer();
+        *offer.pointer_mut(pointer).unwrap() = one_object;
+        let error = offer_error(&offer);
+        assert!(error.contains("expected a sequence"), "{pointer}: {error}");
+    }
+}
+
+/// `@type` must be exactly `Offer` on an offer and `Agreement` on an
+/// agreement (DSP 2025-1 `contract-schema.json`, `const`): no prefix, no
+/// other ODRL policy type, no list, and it cannot be left out.
+#[test]
+fn only_the_exact_policy_type_is_read() {
+    for other_type in [
+        json!("odrl:Offer"),
+        json!("http://www.w3.org/ns/odrl/2/Offer"),
+        json!("offer"),
+        json!("Set"),
+        json!("Agreement"),
+        json!(["Offer"]),
+        Value::Null,
+    ] {
+        let mut offer = full_offer();
+        offer["@type"] = other_type.clone();
+        assert!(
+            serde_json::from_value::<Offer>(offer).is_err(),
+            "{other_type}"
+        );
+    }
+    let mut without_type = full_offer();
+    without_type.as_object_mut().unwrap().remove("@type");
+    assert!(offer_error(&without_type).contains("missing field `@type`"));
+
+    let mut agreement = full_agreement();
+    agreement["@type"] = json!("Offer");
+    assert!(serde_json::from_value::<Agreement>(agreement).is_err());
+}
+
+/// JSON-LD keywords are fields like any other: on a rule or a
+/// constraint, where the DSP schema defines none, they are refused by
+/// name.
+#[test]
+fn a_json_ld_keyword_on_a_rule_or_a_constraint_is_refused_by_name() {
+    for (pointer, keyword) in [
+        ("/permission/0", "@type"),
+        ("/prohibition/0", "@id"),
+        ("/permission/0/constraint/0", "@type"),
+        ("/permission/0/constraint/1", "@id"),
+        ("", "@context"),
+    ] {
+        let mut offer = full_offer();
+        offer.pointer_mut(pointer).unwrap()[keyword] = json!("x");
+        let error = offer_error(&offer);
+        assert!(
+            error.contains(&format!("unknown field `{keyword}`")),
+            "{pointer}: {error}"
+        );
+    }
+}
+
+/// An agreement is read with the same rule and constraint types as an
+/// offer: an unknown field is refused by name at every level of it.
+#[test]
+fn an_unknown_field_at_any_level_of_an_agreement_is_refused_by_name() {
+    for (pointer, field) in [
+        ("/permission/0", "assignee"),
+        ("/prohibition/0", "remedy"),
+        ("/obligation/0", "consequence"),
+        ("/permission/0/constraint/0", "unit"),
+        ("/permission/0/constraint/1", "uid"),
+        ("/permission/0/constraint/1/and/1/or/0", "dataType"),
+    ] {
+        let mut agreement = full_agreement();
+        agreement.pointer_mut(pointer).unwrap()[field] = json!("x");
+        let error = serde_json::from_value::<Agreement>(agreement)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(&format!("unknown field `{field}`")),
+            "{pointer}: {error}"
+        );
+    }
+}
