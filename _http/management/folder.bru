@@ -11,7 +11,9 @@ auth:bearer {
 }
 
 docs {
-  Management API (not DSP). Off unless PORTITOR_MANAGEMENT_API_KEY_FILE is set; the
+  The connector's management API (not DSP; docs/api/management-openapi.json): what the
+  operator's own systems call to act as consumer. Its bodies are plain JSON views, not
+  DSP messages, and its paths take our consumerPid. Off unless PORTITOR_MANAGEMENT_API_KEY_FILE is set; the
   health checks (liveness, readiness) on the same port are always on and need no key.
   Put the key file's content in the environment's secret apiKey.
 }

@@ -1,0 +1,53 @@
+meta {
+  name: 1. Transfer request (start)
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{dsp}}/transfers/request
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+    "@type": "TransferRequestMessage",
+    "consumerPid": "{{transferConsumerPid}}",
+    "agreementId": "{{agreementId}}",
+    "format": "HttpData-PULL",
+    "callbackAddress": "{{callbackAddress}}"
+  }
+}
+
+script:pre-request {
+  // A new consumerPid for every run. To see the idempotent answer (0.12), run
+  // "2. Transfer request again" next: it sends the same consumerPid.
+  bru.setVar("transferConsumerPid", "urn:uuid:bruno-transfer-" + Date.now());
+}
+
+script:post-response {
+  if (res.body && res.body.providerPid) {
+    bru.setVar("transferProviderPid", res.body.providerPid);
+  }
+}
+
+assert {
+  res.status: eq 201
+  res.body["@type"]: eq TransferProcess
+}
+
+docs {
+  DSP 2025-1 Transfer Process, HTTPS binding: POST /transfers/request with a
+  TransferRequestMessage. Only pull over HTTP (format HttpData-PULL, no dataAddress).
+  The answer is 201 with the TransferProcess (state REQUESTED). The provider then sends
+  a TransferStartMessage with the data address to {{callbackAddress}}/transfers/<consumerPid>/start.
+  400 when the caller holds no finalized agreement with this id.
+  Saves transferConsumerPid and transferProviderPid.
+  Debug: breakpoint in request (crates/portitor-connector/src/transfer.rs).
+}

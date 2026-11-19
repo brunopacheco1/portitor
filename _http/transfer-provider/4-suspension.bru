@@ -1,0 +1,37 @@
+meta {
+  name: 4. Suspension (consumer pauses)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{dsp}}/transfers/{{transferProviderPid}}/suspension
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+    "@type": "TransferSuspensionMessage",
+    "providerPid": "{{transferProviderPid}}",
+    "consumerPid": "{{transferConsumerPid}}",
+    "code": "99",
+    "reason": ["Paused from Bruno"]
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body["@type"]: eq TransferProcess
+}
+
+docs {
+  DSP 2025-1 Transfer Process, HTTPS binding: POST /transfers/:providerPid/suspension.
+  Fits a STARTED transfer: 200 with the transfer (state SUSPENDED), and the data token
+  stops working. Otherwise 400.
+}

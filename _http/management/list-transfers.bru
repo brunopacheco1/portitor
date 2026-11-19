@@ -17,3 +17,8 @@ params:query {
 assert {
   res.status: eq 200
 }
+
+docs {
+  The transfers this connector runs as consumer, in consumerPid order: transfers and, on
+  a full page, next (pass it as after). limit is 1 to 100.
+}

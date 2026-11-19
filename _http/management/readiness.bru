@@ -18,6 +18,7 @@ assert {
 docs {
   ADR 0023: readiness of the connector, from its own dependencies only: database
   (SQLite file), harvest (the start harvest ran), bundle (when configured) and identity
-  (its DID document resolves and its STS signs; checked at most every 30 s). 503 with
-  the failing component and why when one fails. No API key.
+  (its DID document resolves and its STS signs; checked in the background every 10 s,
+  not ready after two failures in a row). 503 with the failing component and why when
+  one fails. No API key.
 }

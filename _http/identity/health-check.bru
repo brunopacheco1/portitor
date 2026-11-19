@@ -1,0 +1,22 @@
+meta {
+  name: Health check
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{identityMgmtUrl}}/api/check/health
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+  res.body.isSystemHealthy: eq true
+}
+
+docs {
+  ADR 0023: the health check of the identity component, EDC's HealthStatus shape. The same checks as
+  "Readiness"; 503 when one fails. No API key. The plain GET /health on the same port
+  answers 200 "ok" and checks nothing.
+}

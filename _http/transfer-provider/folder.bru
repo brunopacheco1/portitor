@@ -1,0 +1,17 @@
+meta {
+  name: transfer-provider
+}
+
+docs {
+  DSP 2025-1 Transfer Process, HTTPS binding: the provider's endpoints, called as the
+  consumer (the collection gets a DCP token for each request). These take DSP messages;
+  the consumer's management API ("management/Start transfer") is another API.
+  They need an agreement the consumer's DID holds, in the variable agreementId:
+  - "two-connectors": run "management/Start negotiation" and "Get negotiation", which
+    saves agreementId (the consumer connector and this collection share one DID);
+  - "single": run "negotiation-provider" steps 1 to 3 with the fake consumer of
+    docs/TESTING.md, then copy the agreement's @id from what the fake consumer printed
+    into the environment variable agreementId.
+  The provider calls back {{callbackAddress}}: keep the fake consumer (port 9000)
+  running. It prints the TransferStartMessage with the data address.
+}

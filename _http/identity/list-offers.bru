@@ -1,0 +1,22 @@
+meta {
+  name: List credential offers
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{identityMgmtUrl}}/v1/offers
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+  res.body: isArray
+}
+
+docs {
+  The credential offers issuers sent to this identity (DCP 6.6), for example with
+  "issuer/Send credential offer". Nothing is requested automatically: ask with
+  "Request offered credentials".
+}

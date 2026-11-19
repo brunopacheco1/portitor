@@ -1,0 +1,21 @@
+meta {
+  name: DID document
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{issuerUrl}}/.well-known/did.json
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+  res.body.id: eq {{issuerDid}}
+}
+
+docs {
+  The issuer's public port: its did:web DID document, with its key and its
+  IssuerService entry.
+}

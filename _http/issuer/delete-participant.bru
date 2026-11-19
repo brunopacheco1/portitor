@@ -1,0 +1,21 @@
+meta {
+  name: Delete participant
+  type: http
+  seq: 8
+}
+
+delete {
+  url: {{issuerMgmtUrl}}/v1/participants/did%3Aweb%3Abruno.example
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Deletes the registration that "Register participant" made: the participant gets no
+  more credentials; what it was issued stays valid until revoked. The DID is one path
+  segment, percent-encoded as a whole. 404 when it is not registered.
+}

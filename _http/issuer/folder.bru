@@ -14,4 +14,8 @@ docs {
   Management API of the data space's portitor-issuer (docs/api/issuer-management-openapi.json),
   started by scripts/dev-identities.sh. Put target/vscode-dcp/issuer/management.key in the
   environment's secret issuerApiKey.
+  "DID document", "Issuer metadata", "Status list" and "Health (public port)" call the
+  issuer's public port (issuerUrl and issuerServiceUrl, docs/api/issuer-openapi.json) and
+  need no key. The credential request and its status take a holder's token: an identity
+  sends them ("identity/Request credentials from the issuer").
 }

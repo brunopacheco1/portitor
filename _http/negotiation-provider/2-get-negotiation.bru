@@ -12,9 +12,11 @@ get {
 
 assert {
   res.status: eq 200
+  res.body["@type"]: eq ContractNegotiation
 }
 
 docs {
   DSP 2025-1 Contract Negotiation, HTTPS binding: GET /negotiations/:providerPid.
-  Expect state AGREED once the provider has sent the agreement to the callback.
+  Expect state AGREED once the provider has sent the agreement to the callback. Only
+  the consumer that started the negotiation may read it; anyone else gets 404.
 }

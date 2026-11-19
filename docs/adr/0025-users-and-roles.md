@@ -134,11 +134,12 @@ issuer, which is the participant.
   **participant's** credentials (ADR 0019), for example a credential
   that states a permit. Which of its people use the data is the
   consumer's duty under the contract, enforced on the consumer's side.
-- Portitor drops `assignee` on a rule and other unknown policy terms
-  without an error today ([TD-32](../RISKS_AND_TECHNICAL_DEBTS.md#td-32)).
-  The strict reading already decided there must be in 1.0: otherwise a
-  1.0 connector would silently agree to an offer that a later release,
-  or another connector, narrows to users.
+- Until 0.11 Portitor dropped `assignee` on a rule and other unknown
+  policy terms without an error
+  ([TD-32](../RISKS_AND_TECHNICAL_DEBTS.md#td-32)). From 0.12 it refuses
+  them (ADR 0009, amendment of 2026-11-18). This had to be in before
+  1.0: otherwise a 1.0 connector would silently agree to an offer that a
+  later release, or another connector, narrows to users.
 
 ### Governance
 
@@ -298,7 +299,7 @@ existing settings has to change. Four small points do:
    [TD-01](../RISKS_AND_TECHNICAL_DEBTS.md#td-01).
 
 Already decided elsewhere and needed here: the strict reading of policy
-terms (TD-32) before 1.0. Not needed now: any new environment variable.
+terms (TD-32), done in 0.12. Not needed now: any new environment variable.
 User settings come in 1.5, per connector or per data space profile (ADR
 0024).
 
