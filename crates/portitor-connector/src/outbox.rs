@@ -408,9 +408,12 @@ async fn send(
 /// (Request Timeout), 429 (Too Many Requests) and 5xx. Any other answer,
 /// such as 400, 401, 404 or 409, means the counter-party will not take
 /// this message, so it is not sent again. A partner's Portitor answers
-/// 503, not 401, when it could not check our credentials because a
-/// service was down (ADR 0016, amended in 0.11), so that case is tried
-/// again.
+/// 503 when it could not check our credentials because a service was
+/// down (ADR 0016, amended in 0.11), so that case is tried again. When it
+/// refuses our credentials it answers 404 on the negotiation and transfer
+/// routes (401 before 0.12; Eclipse EDC answers 404 too): final, like a
+/// process the partner does not know. The log of the partner says which
+/// of the two it was; ours cannot (ADR 0016, amended in 0.12).
 ///
 /// An error without a status is tried again too, even when it came from
 /// our side (a URL our client refuses, no CA certificates): the text does

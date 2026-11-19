@@ -584,6 +584,49 @@ fn checks_offers_and_agreements() {
     assert!(why.contains("differ"), "{why}");
 }
 
+/// DSP 2025-1, "Contract Agreement Message": "An Agreement MUST contain a
+/// `timestamp` property defined as an XSD `DateTime` type."
+#[test]
+fn an_agreement_without_a_timestamp_is_refused() {
+    let store = Store::default();
+    let svc = ConsumerService::new(
+        &store,
+        AcceptAndVerify,
+        Env::default(),
+        CB.to_owned(),
+        ME.to_owned(),
+    );
+    let (n, req) = svc.start(PROVIDER, "did:web:p", offer()).unwrap();
+    let cpid = n.consumer_pid;
+    svc.delivered(&req, Some(&ack("p1", &cpid))).unwrap();
+
+    for (timestamp, why) in [
+        (None, "no timestamp"),
+        (Some("yesterday"), "not an XSD dateTime"),
+        // a date alone is not a date and time
+        (Some("2026-11-12"), "not an XSD dateTime"),
+    ] {
+        let mut msg = agreement_msg("p1", &cpid);
+        msg.agreement.timestamp = timestamp.map(str::to_owned);
+        let Failure::BadRequest(error) = svc.agreement(&cpid, &msg).unwrap_err() else {
+            panic!("{timestamp:?}: not a 400");
+        };
+        let text = serde_json::to_string(&error).unwrap();
+        assert!(text.contains(why), "{timestamp:?}: {text}");
+        assert!(text.contains("ContractNegotiationError"), "{text}");
+        assert_eq!(state(&store, &cpid), NegotiationState::Requested);
+        assert!(store.0.borrow()[&cpid].agreement.is_none());
+    }
+
+    // with a time zone, without one (xsd:dateTime allows both), and with
+    // a fraction: accepted
+    for timestamp in ["2026-11-12T12:00:00", "2026-11-12T12:00:00.5+01:00"] {
+        assert!(is_xsd_date_time(timestamp), "{timestamp}");
+    }
+    let (a, _) = svc.agreement(&cpid, &agreement_msg("p1", &cpid)).unwrap();
+    assert_eq!(a.state, NegotiationState::Agreed);
+}
+
 #[test]
 fn only_the_provider_it_was_started_with_may_answer() {
     // ADR 0016: the caller's proven DID must be the negotiation's provider

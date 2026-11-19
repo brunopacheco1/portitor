@@ -183,7 +183,8 @@ here with its reason.
   every DSP request needs the caller's credentials ("What a provider
   requires" above), and the access token is the only way to ask the
   caller's Credential Service for them (section 5.1, step 6). Without
-  it the check cannot be done, so the request is refused (401). Eclipse
+  it the check cannot be done, so the request is refused (401 on the
+  catalog routes, 404 on the others, see below). Eclipse
   EDC Connector 1.0.0-RC7 does the same: `TokenNotNullRule` ("The
   'token' claim is mandatory and must not be null") is a rule of every
   self-issued token (`DcpCoreExtension`), and `DcpIdentityService`
@@ -268,6 +269,36 @@ F-04; [R-41](../RISKS_AND_TECHNICAL_DEBTS.md#r-41)). From 0.12:
 - As before, at most 1,000 documents are kept, and a failed lookup is
   never kept. The readiness check of the connector's own identity
   always fetches (no cache), as before.
+
+### Amended in 0.12: a refused caller gets 404 on negotiation and transfer routes (2026-11-18)
+
+The 2026-11-18 review of specifications and code quality (D5,
+[TD-36](../RISKS_AND_TECHNICAL_DEBTS.md#td-36)) found that a refused
+caller got 401 on every route. The maintainer decided on 2026-11-18 to
+follow the specification and Eclipse EDC. It changes "A refused request
+gets HTTP 401" in "Which requests need a token" above:
+
+- On the negotiation and transfer routes, the consumer's callbacks
+  included, a refused caller gets **HTTP 404** with the endpoint's DSP
+  error (`code` "404", `reason` "unauthorized"). DSP 2025-1, "Contract
+  Negotiation HTTPS Binding" and "Transfer Process HTTPS Binding",
+  section "Unauthorized Access": "If the client is not authorized, the
+  Consumer or Provider MUST return an HTTP 404 (Not Found) response."
+- On the catalog routes it still gets **HTTP 401**. The "Catalog HTTPS
+  Binding" only asks for "an appropriate HTTP code".
+- This is what Eclipse EDC 1.0.0-RC7 answers (`DspRequestHandlerImpl`,
+  `unauthorizedStatus`: 401 for a `CatalogError`, 404 otherwise).
+- **503 stays** on every route when the check could not finish (the
+  0.11 amendment above).
+- The reason is still only in the log: `DSP request refused: caller not
+  authenticated` (WARN) with `path`, `reason` and the `status` answered.
+  No token content is logged. A partner cannot tell a refusal from an
+  unknown process by the status, so the operator of the connector that
+  answered must read this line (DEPLOYING, "Health and logs").
+- For a partner's outbox nothing changes: a 404 ends the tries at once,
+  as a 401 did (ADR 0007, amended in 0.11). The `tck` build tries a 404
+  again ([R-08](../RISKS_AND_TECHNICAL_DEBTS.md#r-08)); for a refusal
+  that only makes it give up a little later.
 
 ## Consequences
 

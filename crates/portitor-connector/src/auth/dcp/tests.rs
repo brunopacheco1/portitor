@@ -770,7 +770,8 @@ async fn presentations_and_credentials_are_checked() {
 }
 
 /// A revoked credential, and a server of the caller or its issuer that
-/// answers 404, refuse the caller (HTTP 401). A server that does not
+/// answers 404, refuse the caller (HTTP 404, or 401 on the catalog
+/// routes). A server that does not
 /// answer is a temporary failure (HTTP 503): the caller may be fine.
 #[tokio::test]
 async fn unreachable_services_are_temporary_and_refusals_are_not() {

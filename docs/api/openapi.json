@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "description": "HTTP interface of portitor-connector. The DSP endpoints follow the DSP 2025-1 HTTPS bindings; the message schemas are the official DSP 2025-1 JSON Schemas (copied unchanged in crates/portitor-dsp/tests/schemas). DSP itself publishes no OpenAPI file; this one is written by hand and a test checks that every path in it is served. As consumer, the connector sends callbackAddress = public URL + /dsp/2025-1/callback, so providers call the callback paths below. Every DSP endpoint except /.well-known/dspace-version needs a DCP self-issued ID token (ADR 0016), and the caller's credential service must present a valid MembershipCredential from a trusted issuer, in presentations whose every credential passes its checks (DCP v1.0.1, 5.4.3); otherwise the answer is 401 with the endpoint's DSP error, reason \"unauthorized\". /health and the data plane (/data, its own tokens) are open. Known limits (docs/RISKS_AND_TECHNICAL_DEBTS.md): a negotiation starts from the consumer only, so the DSP consumer endpoint POST /dsp/2025-1/callback/negotiations/offers, with which a provider starts one, is not served (TD-35); a policy field this connector does not know is dropped when an offer or agreement is read (TD-32)."
+    "description": "HTTP interface of portitor-connector. The DSP endpoints follow the DSP 2025-1 HTTPS bindings; the message schemas are the official DSP 2025-1 JSON Schemas (copied unchanged in crates/portitor-dsp/tests/schemas). DSP itself publishes no OpenAPI file; this one is written by hand and a test checks that every path in it is served. As consumer, the connector sends callbackAddress = public URL + /dsp/2025-1/callback, so providers call the callback paths below. Every DSP endpoint except /.well-known/dspace-version needs a DCP self-issued ID token (ADR 0016), and the caller's credential service must present a valid MembershipCredential from a trusted issuer, in presentations whose every credential passes its checks (DCP v1.0.1, 5.4.3); otherwise the answer is the endpoint's DSP error with reason \"unauthorized\": with HTTP 404 on the negotiation and transfer endpoints, callbacks included (DSP 2025-1 HTTPS bindings, \"Unauthorized Access\": a client that is not authorized gets 404; Eclipse EDC answers the same), and with HTTP 401 on the catalog endpoints (ADR 0016, amended in 0.12). The reason is in the connector's log. When the caller could not be checked because a service the check needs did not answer, the answer is 503. /health and the data plane (/data, its own tokens) are open. Known limits (docs/RISKS_AND_TECHNICAL_DEBTS.md): a negotiation starts from the consumer only, so the DSP consumer endpoint POST /dsp/2025-1/callback/negotiations/offers, with which a provider starts one, is not served (TD-35); a policy field this connector does not know is dropped when an offer or agreement is read (TD-32)."
   },
   "servers": [
     {
@@ -175,8 +175,15 @@
               }
             }
           },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
+          "404": {
+            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"404\" and reason \"unauthorized\"",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/contract-negotiation-error-schema.json"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -216,7 +223,7 @@
             }
           },
           "404": {
-            "description": "Unknown negotiation",
+            "description": "Unknown negotiation; also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -224,9 +231,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [
@@ -276,7 +280,7 @@
             }
           },
           "400": {
-            "description": "Invalid message or transition",
+            "description": "Invalid message or transition, or a consumerPid that is not the negotiation's",
             "content": {
               "application/json": {
                 "schema": {
@@ -286,7 +290,7 @@
             }
           },
           "404": {
-            "description": "Unknown negotiation (also answered for another consumer's negotiation)",
+            "description": "Unknown negotiation (also answered for another consumer's negotiation); also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -294,9 +298,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [
@@ -356,7 +357,7 @@
             }
           },
           "404": {
-            "description": "Unknown negotiation (also answered for another consumer's negotiation)",
+            "description": "Unknown negotiation (also answered for another consumer's negotiation); also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -364,9 +365,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [
@@ -426,7 +424,7 @@
             }
           },
           "404": {
-            "description": "Unknown negotiation (also answered for another consumer's negotiation)",
+            "description": "Unknown negotiation (also answered for another consumer's negotiation); also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -434,9 +432,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [
@@ -496,7 +491,7 @@
             }
           },
           "404": {
-            "description": "Unknown negotiation (also answered for another consumer's negotiation)",
+            "description": "Unknown negotiation (also answered for another consumer's negotiation); also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -504,9 +499,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [
@@ -514,7 +506,7 @@
             "dcp": []
           }
         ],
-        "description": "Accepted from the counter-party in every state that is not final (DSP 2025-1: the message \"MAY be sent at any state\"; the state machine figure is narrower, TD-36)."
+        "description": "Accepted from the counter-party in every state that is not final (DSP 2025-1: the message \"MAY be sent at any state\"; the state machine figure is narrower; ADR 0006, amended 2026-11-18)."
       }
     },
     "/dsp/2025-1/transfers/request": {
@@ -523,7 +515,7 @@
           "Transfer process (provider)"
         ],
         "summary": "Request a transfer",
-        "description": "The consumer asks for a dataset under a finalized agreement it holds, in a format the dataset offers (ADR 0013). Only pull transfers (format HttpData-PULL) are supported. The provider answers with its acknowledgement, then sends a TransferStartMessage with the data address (or a termination) to the consumer's callbackAddress. An agreement with credential constraints (ADR 0019) is checked again with fresh credentials, so a revoked credential ends the transfer. A request sent again with the same consumerPid is not recognised: it creates another transfer (TD-34).",
+        "description": "The consumer asks for a dataset under a finalized agreement it holds, in a format the dataset offers (ADR 0013). Only pull transfers (format HttpData-PULL) are supported. The provider answers with its acknowledgement, then sends a TransferStartMessage with the data address (or a termination) to the consumer's callbackAddress. An agreement with credential constraints (ADR 0019) is checked again with fresh credentials, so a revoked credential ends the transfer. A request that the same consumer sends again with the same consumerPid starts nothing new: the answer is the transfer it already has, in its current state, and no second data address or token is sent (DSP 2025-1, Transfer Request Message: idempotent behavior based on consumerPid; ADR 0013, amended in 0.12). If its agreementId, format or callbackAddress differ from the first request, it is refused with 400.",
         "operationId": "transferRequest",
         "requestBody": {
           "required": true,
@@ -537,7 +529,7 @@
         },
         "responses": {
           "201": {
-            "description": "Transfer created (state REQUESTED)",
+            "description": "Transfer created (state REQUESTED); or, for a repeated request, the transfer that already exists, in its current state",
             "content": {
               "application/json": {
                 "schema": {
@@ -547,7 +539,7 @@
             }
           },
           "400": {
-            "description": "Invalid message, no finalized agreement for the caller, format not offered or not supported, push requested, or refused callback address",
+            "description": "Invalid message, no finalized agreement for the caller, format not offered or not supported, push requested, or refused callback address, or a consumerPid the caller already used for another transfer request",
             "content": {
               "application/json": {
                 "schema": {
@@ -556,8 +548,15 @@
               }
             }
           },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
+          "404": {
+            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"404\" and reason \"unauthorized\"",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../../crates/portitor-dsp/tests/schemas/transfer-error-schema.json"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -597,7 +596,7 @@
             }
           },
           "404": {
-            "description": "Unknown transfer",
+            "description": "Unknown transfer; also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -605,9 +604,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [
@@ -667,7 +663,7 @@
             }
           },
           "404": {
-            "description": "Unknown transfer (also answered for another consumer's transfer)",
+            "description": "Unknown transfer (also answered for another consumer's transfer); also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -685,9 +681,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [
@@ -747,7 +740,7 @@
             }
           },
           "404": {
-            "description": "Unknown transfer (also answered for another consumer's transfer)",
+            "description": "Unknown transfer (also answered for another consumer's transfer); also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -765,9 +758,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [
@@ -827,7 +817,7 @@
             }
           },
           "404": {
-            "description": "Unknown transfer (also answered for another consumer's transfer)",
+            "description": "Unknown transfer (also answered for another consumer's transfer); also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -845,9 +835,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [
@@ -907,7 +894,7 @@
             }
           },
           "404": {
-            "description": "Unknown transfer (also answered for another consumer's transfer)",
+            "description": "Unknown transfer (also answered for another consumer's transfer); also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -925,9 +912,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [
@@ -967,7 +951,7 @@
             }
           },
           "404": {
-            "description": "Unknown negotiation",
+            "description": "Unknown negotiation; also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -975,9 +959,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [
@@ -1037,7 +1018,7 @@
             }
           },
           "404": {
-            "description": "Unknown negotiation",
+            "description": "Unknown negotiation; also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1045,9 +1026,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [
@@ -1097,7 +1075,7 @@
             }
           },
           "400": {
-            "description": "Invalid message, or it does not fit the state",
+            "description": "Invalid message, an agreement without a timestamp (DSP 2025-1, Contract Agreement Message), or it does not fit the state",
             "content": {
               "application/json": {
                 "schema": {
@@ -1107,7 +1085,7 @@
             }
           },
           "404": {
-            "description": "Unknown negotiation",
+            "description": "Unknown negotiation; also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1115,9 +1093,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [
@@ -1177,7 +1152,7 @@
             }
           },
           "404": {
-            "description": "Unknown negotiation",
+            "description": "Unknown negotiation; also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1185,9 +1160,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [
@@ -1247,7 +1219,7 @@
             }
           },
           "404": {
-            "description": "Unknown negotiation",
+            "description": "Unknown negotiation; also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1255,9 +1227,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [
@@ -1298,7 +1267,7 @@
             }
           },
           "404": {
-            "description": "Unknown transfer",
+            "description": "Unknown transfer; also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1306,9 +1275,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [
@@ -1368,7 +1334,7 @@
             }
           },
           "404": {
-            "description": "Unknown transfer",
+            "description": "Unknown transfer; also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1376,9 +1342,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [
@@ -1438,7 +1401,7 @@
             }
           },
           "404": {
-            "description": "Unknown transfer",
+            "description": "Unknown transfer; also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1446,9 +1409,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [
@@ -1508,7 +1468,7 @@
             }
           },
           "404": {
-            "description": "Unknown transfer",
+            "description": "Unknown transfer; also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1516,9 +1476,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [
@@ -1578,7 +1535,7 @@
             }
           },
           "404": {
-            "description": "Unknown transfer",
+            "description": "Unknown transfer; also answered, with reason \"unauthorized\", when the caller is not authenticated (DCP)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1586,9 +1543,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "The caller is not authenticated (DCP); the body is the endpoint's DSP error with code \"401\" and reason \"unauthorized\""
           }
         },
         "security": [

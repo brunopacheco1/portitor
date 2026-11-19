@@ -275,6 +275,9 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
             ));
         }
         self.handle(pid, &consumer_pid, caller, credentials, |negotiation| {
+            // the request must name the consumer pid this negotiation was
+            // started with, like every other message on it (TD-36)
+            check_ids(negotiation, pid, &consumer_pid)?;
             self.check_offer(&msg.offer, pid, &consumer_pid, caller)?;
             receive(negotiation, Transition::Request)?;
             negotiation.offer = msg.offer.clone();

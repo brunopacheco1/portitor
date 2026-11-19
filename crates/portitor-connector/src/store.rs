@@ -145,6 +145,13 @@ const MIGRATIONS: &[&str] = &[
     // 0.7: the job log also holds the bundle harvester's runs (ADR 0005);
     // every earlier job harvested datasets
     "ALTER TABLE harvest_job ADD COLUMN kind TEXT NOT NULL DEFAULT 'datasets';",
+    // 0.12: a repeated transfer request is found by its consumer and
+    // consumer pid (DSP 2025-1, "Transfer Request Message": idempotent
+    // on `consumerPid`; TD-34). A plain index, not a UNIQUE one: a file
+    // from before 0.12 may hold a second transfer for a repeated request,
+    // and must still open. `store/transfers.rs` (`insert`) keeps new rows
+    // unique.
+    "CREATE INDEX transfer_request ON transfer (counter_party, consumer_pid)",
 ];
 
 /// Adapter: negotiations in a `SQLite` file.
@@ -800,5 +807,54 @@ mod tests {
         let jobs = crate::harvest::DatasetStore::jobs(&store, None, 10).unwrap();
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].record.kind, crate::harvest::JobKind::Datasets);
+    }
+
+    /// A file written by 0.11 (8 migrations) may hold two transfers for
+    /// one repeated request (TD-34). Migration 9 must still apply: it adds
+    /// the lookup index and keeps both rows; the first one answers.
+    #[test]
+    fn a_file_with_a_repeated_transfer_request_still_opens() {
+        use portitor_dsp::transfer::provider::TransferStore;
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..8]).unwrap();
+        for provider_pid in ["urn:uuid:z-first", "urn:uuid:a-second"] {
+            conn.execute(
+                "INSERT INTO transfer (provider_pid, consumer_pid, state, callback_address, \
+                 counter_party, agreement_id, dataset_id, format, pending, version) \
+                 VALUES (?1, 'urn:uuid:c', 'STARTED', 'https://c.example/cb', 'did:web:c', \
+                 'urn:uuid:a', 'd', 'HttpData-PULL', NULL, 1)",
+                params![provider_pid],
+            )
+            .unwrap();
+        }
+        let store = setup(conn).unwrap();
+        let version: i64 = store
+            .conn()
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 9);
+        let index: String = store
+            .conn()
+            .query_row(
+                "SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = 'transfer_request'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(index, "transfer");
+        // both rows are kept
+        assert!(
+            TransferStore::get(&store, "urn:uuid:a-second")
+                .unwrap()
+                .is_some()
+        );
+        // the one stored first answers a repeated request, and no third
+        // row is added
+        let found = store.requested("did:web:c", "urn:uuid:c").unwrap().unwrap();
+        assert_eq!(found.provider_pid, "urn:uuid:z-first");
+        let mut third = found.clone();
+        third.provider_pid = "urn:uuid:third".to_owned();
+        assert!(!TransferStore::insert(&store, &third).unwrap());
     }
 }

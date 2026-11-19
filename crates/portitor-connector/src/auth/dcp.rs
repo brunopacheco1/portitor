@@ -61,8 +61,8 @@
 //! check that took too long, are temporary failures
 //! ([`VerifyError::Unavailable`], HTTP 503): the caller may be fine. Any
 //! other failure refuses the caller ([`VerifyError::Rejected`], HTTP
-//! 401), also a 404 or an invalid document from the caller's or the
-//! issuer's server.
+//! 404, or 401 on the catalog routes), also a 404 or an invalid document
+//! from the caller's or the issuer's server.
 //!
 //! Status list credentials are cached for a short time, by URL
 //! ([`status_list_cache`]; ADR 0016, amended in 0.11). Tokens and

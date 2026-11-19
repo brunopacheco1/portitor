@@ -433,8 +433,10 @@ space's `portitor-issuer`. It checks, in this order:
    against the shapes and EDC reads it with `dct:conformsTo` and the
    HealthDCAT-AP metadata as full IRIs;
 5. revocation both ways: once the issuer revokes one participant's
-   credential (`POST /v1/credentials/{id}/revoke`), the other refuses it
-   with 401.
+   credential (`POST /v1/credentials/{id}/revoke`), the other refuses it:
+   EDC answers Portitor's catalog request with 401, and Portitor answers
+   EDC's negotiation request with 404 (DSP 2025-1 HTTPS bindings,
+   "Unauthorized Access"; from 0.12).
 
 EDC always sends a `filter` in its `CatalogRequestMessage`: an EDC
 `QuerySpec` with no filter expressions (offset 0, limit 50). Portitor

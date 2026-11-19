@@ -73,9 +73,9 @@ pub enum CredentialError {
 
 The connector's DCP verifier uses this to sort its failures
 (`portitor-connector/src/auth.rs`, `VerifyError`): `?` on a text error
-gives `VerifyError::Rejected` (HTTP 401), and `?` on a failed DID
-resolution gives `Unavailable` (HTTP 503) when the server did not
-answer. Other fetches say which one they are with `fetch_failed`.
+gives `VerifyError::Rejected` (HTTP 404, or 401 on the catalog routes),
+and `?` on a failed DID resolution gives `Unavailable` (HTTP 503) when
+the server did not answer. Other fetches say which one they are with `fetch_failed`.
 
 ### A function name in `map_err`
 

@@ -341,6 +341,32 @@ fn consumer_counter_offer_and_termination() {
     assert_eq!(out, None);
 }
 
+/// A request on a running negotiation must name the `consumerPid` the
+/// negotiation was started with, like every other message on it (TD-36).
+#[test]
+fn a_counter_request_with_another_consumer_pid_is_refused() {
+    let store = Store::default();
+    let script = Script(BTreeMap::from([(
+        NegotiationState::Requested,
+        Decision::Offer,
+    )]));
+    let p = service(&store, script);
+    let (ack, out) = p.request(None, request(None), "c", &none()).unwrap();
+    let pid = ack.provider_pid;
+    p.delivered(&out.unwrap()).unwrap();
+    assert_eq!(store.0.borrow()[&pid].state, NegotiationState::Offered);
+
+    let mut other_pid = request(Some(&pid));
+    other_pid.consumer_pid = "c2".to_owned();
+    let err = p.request(Some(&pid), other_pid, "c", &none()).unwrap_err();
+    assert!(matches!(err, Failure::BadRequest(_)), "{err:?}");
+    assert!(reason(&err).contains("process ids do not match"), "{err:?}");
+    // nothing changed: still OFFERED, with the first consumer pid
+    let stored = store.0.borrow()[&pid].clone();
+    assert_eq!(stored.state, NegotiationState::Offered);
+    assert_eq!(stored.consumer_pid, "c1");
+}
+
 #[test]
 fn refuses_bad_requests() {
     let store = Store::default();

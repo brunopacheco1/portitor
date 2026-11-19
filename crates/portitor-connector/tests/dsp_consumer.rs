@@ -581,6 +581,24 @@ async fn pending_messages_are_sent_after_a_restart() {
 
 /// Invalid provider messages get a `ContractNegotiationError` and leave
 /// the state unchanged (TCK `CN_C:03-*`).
+/// DSP 2025-1, "Contract Agreement Message": "An Agreement MUST contain a
+/// `timestamp` property defined as an XSD `DateTime` type" (TD-36).
+#[tokio::test]
+async fn an_agreement_without_a_timestamp_is_refused() {
+    let c = connector();
+    let cpid = started(&c, "d1").await;
+    let mut msg = agreement_msg(&cpid, "d1");
+    let agreement = msg["agreement"].as_object_mut().unwrap();
+    agreement.remove("timestamp");
+    let uri = format!("{CALLBACK}/{cpid}/agreement");
+    let (s, err) = call(&c.app, post(&uri, &msg)).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{err}");
+    assert_eq!(err["@type"], "ContractNegotiationError");
+    assert_eq!(err["code"], "400");
+    assert_eq!(err["reason"][0], "the agreement has no timestamp");
+    assert_eq!(state(&c.app, &cpid).await, "REQUESTED");
+}
+
 #[tokio::test]
 async fn invalid_messages_are_refused() {
     let c = connector();
@@ -758,8 +776,11 @@ async fn other_participants_cannot_use_the_callback() {
         .body(Body::empty())
         .unwrap();
     let (s, err) = call(&c.app, anonymous).await;
-    assert_eq!(s, StatusCode::UNAUTHORIZED);
-    assert_eq!(err["code"], "401");
+    // DSP 2025-1, "Contract Negotiation HTTPS Binding", "Unauthorized
+    // Access": a client that is not authorized gets 404
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(err["code"], "404");
+    assert_eq!(err["reason"][0], "unauthorized");
 }
 
 /// The same for the transfer callbacks: only the transfer's provider may

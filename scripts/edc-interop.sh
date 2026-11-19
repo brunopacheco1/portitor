@@ -500,7 +500,9 @@ step "The issuer revokes the EDC participant's credential: Portitor refuses EDC"
 revoke "$EDC_DID"
 VIEW=$(edc_negotiate)
 [[ $(jq -r "$STATE_PATH" <<<"$VIEW") == TERMINATED ]] || fail "expected TERMINATED: $VIEW"
-jq -r '.errorDetail' <<<"$VIEW" | grep -q 'code=401' || fail "not refused as unauthorized: $VIEW"
-echo "the negotiation ended TERMINATED: Portitor answered 401"
+# a caller that is not authorized gets 404 on the negotiation routes (DSP
+# 2025-1, "Contract Negotiation HTTPS Binding", "Unauthorized Access")
+jq -r '.errorDetail' <<<"$VIEW" | grep -q 'code=404' || fail "not refused with 404: $VIEW"
+echo "the negotiation ended TERMINATED: Portitor answered 404"
 
 step "Done: credentials issued and checked both ways, data transferred both ways, revocation honoured"

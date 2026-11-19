@@ -363,10 +363,14 @@ impl<S: ConsumerStore, D: ConsumerDecider, E: Environment> ConsumerService<S, D,
     ///
     /// Unknown negotiation, mismatched ids, an agreement for another
     /// dataset, from another provider (its `assigner`) or for another
-    /// consumer (its `assignee`), invalid transition, or store failure.
+    /// consumer (its `assignee`), an agreement without a `timestamp`,
+    /// invalid transition, or store failure.
     pub fn agreement(&self, consumer_pid: &str, msg: &ContractAgreementMessage) -> Handled {
         self.handle(consumer_pid, |negotiation| {
             check_ids(negotiation, &msg.provider_pid, Some(&msg.consumer_pid))?;
+            if let Err(reason) = check_timestamp(msg.agreement.timestamp.as_deref()) {
+                return Err(bad(&msg.provider_pid, &negotiation.consumer_pid, reason));
+            }
             if msg.agreement.target != negotiation.dataset_id() {
                 return Err(bad(
                     &msg.provider_pid,
@@ -759,6 +763,38 @@ fn transition_failure(negotiation: &ConsumerNegotiation, e: TransitionError) -> 
         &negotiation.consumer_pid,
         &e.to_string(),
     )
+}
+
+/// An agreement's `timestamp` must be there and be a date and time (DSP
+/// 2025-1, "Contract Agreement Message": "An Agreement MUST contain a
+/// `timestamp` property defined as an XSD `DateTime` type"). The JSON
+/// Schema (`contract-schema.json`, `Agreement`) gives its pattern but
+/// does not list it as required, so the rule is checked here. Eclipse
+/// EDC refuses such an agreement too
+/// (`JsonObjectToContractAgreementMessageTransformer`).
+///
+/// # Errors
+///
+/// The reason, for the DSP error.
+fn check_timestamp(timestamp: Option<&str>) -> Result<(), &'static str> {
+    let Some(timestamp) = timestamp else {
+        return Err("the agreement has no timestamp");
+    };
+    if is_xsd_date_time(timestamp) {
+        Ok(())
+    } else {
+        Err("the agreement's timestamp is not an XSD dateTime")
+    }
+}
+
+/// Whether `text` is an `xsd:dateTime`: a date and a time, with or
+/// without a time zone (XML Schema lets the zone be left out).
+/// `portitor_time` only reads a time with a zone, so a text without one
+/// is tried again as UTC.
+fn is_xsd_date_time(text: &str) -> bool {
+    let as_utc = format!("{text}Z");
+    portitor_time::timestamp_seconds(text).is_some()
+        || portitor_time::timestamp_seconds(&as_utc).is_some()
 }
 
 /// The message must name this negotiation. The first provider message may
