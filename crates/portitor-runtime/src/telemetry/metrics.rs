@@ -294,8 +294,8 @@ pub fn dsp_request_refused(reason: Refusal) {
     instruments().requests_refused.add(1, &attributes);
 }
 
-/// `outbox` sends a message again: a retry, or a message saved before a
-/// restart.
+/// `outbox` sends a message again: a retry, a message saved before a
+/// restart, or a message whose sending panicked.
 pub fn outbox_resent(outbox: Outbox) {
     instruments().outbox_resent.add(1, &outbox.attributes());
 }

@@ -18,11 +18,19 @@
 //! 4. Otherwise, a consumer's first message means the process never
 //!    started on the other side; a termination may stay unanswered (DSP
 //!    allows it); anything else ends the process.
+//!
+//! A panic (a bug) while a message is sent or recorded does not lose the
+//! message: the same message is sent again after a pause
+//! ([`send_until_counter_party_acts`]). That is safe for the reason a
+//! resend after a restart is: a message is recorded only while it is
+//! still the process's pending message (ADR 0007).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use portitor_dsp::guard::{Direction, MessageGuard};
 use portitor_dsp::policy::CredentialTypes;
+use portitor_runtime::panics::{Panicked, catch_panic, next_pause};
 use portitor_runtime::telemetry::metrics;
 use serde_json::Value;
 use tracing::Instrument as _;
@@ -205,38 +213,80 @@ pub(crate) fn deliver<O: Outbox>(outbox: Arc<O>, out: O::Out) -> impl Future<Out
         portitor.dsp.role = kind.role_name(),
         portitor.dsp.pid = O::message(&out).pid,
     );
-    // a panic here would end the task unseen: it is logged and counted;
-    // the message stays saved and is sent again at the next start
-    let sending = send_until_counter_party_acts(outbox, out);
-    portitor_runtime::panics::report_panic("outbox_delivery", sending).instrument(span)
+    send_until_counter_party_acts(outbox, out).instrument(span)
 }
 
 /// The work of [`deliver`]: sends `out`, then each message that follows
 /// from the answer, until it is the counter-party's turn or the process
 /// ends.
+///
+/// A panic while one message is sent or recorded (a bug) is logged and
+/// counted (`portitor.task.panicked`, task `outbox_delivery`), and the
+/// same message is sent again after a pause: 5 seconds, twice as long
+/// after each further panic on this message, at most 5 minutes
+/// ([`next_pause`], as for a supervised task). Messages sent before it in
+/// this task are recorded already and are not sent again. A message
+/// that panics every time is tried for as long as the process runs.
+///
+/// Why sending again is safe (ADR 0007): the counter-party answers a
+/// message it already took with an error, its state then shows that the
+/// message arrived, and `delivered`, `abort` and `not_started` change
+/// nothing when the message is no longer the pending one (it was
+/// recorded before the panic, or the counter-party's next message
+/// proved it arrived). It is what a restart does with a pending message.
 async fn send_until_counter_party_acts<O: Outbox>(outbox: Arc<O>, mut out: O::Out) {
+    // the pause before the current try of `out`; none before the first
+    let mut pause: Option<Duration> = None;
     loop {
-        let msg = O::message(&out);
-        let (pid, first) = (msg.pid.to_owned(), msg.first);
-        let scopes = outbox.scopes(&out);
-        let reached = |state| O::reached(&out, state);
-        let next = match attempt(outbox.link(), outbox.kind(), &msg, &scopes, reached).await {
-            Outcome::Acknowledged(answer) => outbox.delivered(&out, Some(&answer)),
-            Outcome::ArrivedBefore | Outcome::TerminationUnanswered => outbox.delivered(&out, None),
-            Outcome::NotStarted => outbox.not_started(&out).map(|()| None),
-            Outcome::Unreachable => outbox.abort(&out),
-        };
-        match next {
-            Ok(Some(n)) => out = n,
-            Ok(None) => return,
-            Err(failure) => {
-                tracing::warn!(%pid, ?failure, "outgoing message not recorded");
-                if first {
-                    // without the counter-party's pid the process cannot go on
-                    let _ = outbox.not_started(&out);
-                }
-                return;
+        let started = tokio::time::Instant::now();
+        // `out` is only lent (`&out`) to the step, so after a panic this
+        // loop still has it and can send it again
+        match catch_panic(send_and_record(outbox.as_ref(), &out)).await {
+            Ok(Some(next)) => {
+                out = next;
+                pause = None;
             }
+            Ok(None) => return,
+            Err(Panicked) => {
+                let wait = next_pause(pause, started.elapsed());
+                tracing::error!(
+                    task = "outbox_delivery",
+                    pid = O::message(&out).pid,
+                    again_in_seconds = wait.as_secs(),
+                    "a background task panicked; its message is sent again"
+                );
+                metrics::task_panicked("outbox_delivery");
+                metrics::outbox_resent(outbox.kind());
+                tokio::time::sleep(wait).await;
+                pause = Some(wait);
+            }
+        }
+    }
+}
+
+/// One step of [`send_until_counter_party_acts`]: sends `out` and records
+/// what became of it. Returns the message that follows, or `None` when
+/// it is the counter-party's turn or the process ended.
+async fn send_and_record<O: Outbox>(outbox: &O, out: &O::Out) -> Option<O::Out> {
+    let msg = O::message(out);
+    let (pid, first) = (msg.pid.to_owned(), msg.first);
+    let scopes = outbox.scopes(out);
+    let reached = |state| O::reached(out, state);
+    let recorded = match attempt(outbox.link(), outbox.kind(), &msg, &scopes, reached).await {
+        Outcome::Acknowledged(answer) => outbox.delivered(out, Some(&answer)),
+        Outcome::ArrivedBefore | Outcome::TerminationUnanswered => outbox.delivered(out, None),
+        Outcome::NotStarted => outbox.not_started(out).map(|()| None),
+        Outcome::Unreachable => outbox.abort(out),
+    };
+    match recorded {
+        Ok(next) => next,
+        Err(failure) => {
+            tracing::warn!(%pid, ?failure, "outgoing message not recorded");
+            if first {
+                // without the counter-party's pid the process cannot go on
+                let _ = outbox.not_started(out);
+            }
+            None
         }
     }
 }
@@ -729,5 +779,68 @@ mod tests {
         let outcome = attempt_through(Arc::clone(&sender), status_url, true).await;
         assert!(matches!(outcome, Outcome::ArrivedBefore));
         assert_eq!(sender.posts(), 1);
+    }
+
+    /// An outbox whose first `panics` recordings panic (a bug); it counts
+    /// the recordings.
+    struct PanicsWhenRecording {
+        link: Link,
+        panics: usize,
+        recordings: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Outbox for PanicsWhenRecording {
+        /// The message's body.
+        type Out = Value;
+        type Failure = String;
+
+        fn link(&self) -> &Link {
+            &self.link
+        }
+
+        fn kind(&self) -> metrics::Outbox {
+            metrics::Outbox::Negotiation(metrics::Role::Provider)
+        }
+
+        fn message(out: &Value) -> Message<'_> {
+            Message::new("urn:uuid:1", "https://c.example/x", out, "", "did:web:c")
+        }
+
+        fn reached(_: &Value, _: Value) -> bool {
+            false
+        }
+
+        fn delivered(&self, _: &Value, _: Option<&Value>) -> Result<Option<Value>, String> {
+            let nth = self
+                .recordings
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            assert!(nth >= self.panics, "recording {nth} panics");
+            Ok(None)
+        }
+
+        fn abort(&self, _: &Value) -> Result<Option<Value>, String> {
+            Ok(None)
+        }
+    }
+
+    /// A paused clock: the pauses pass at once, and the test reads how
+    /// long they were.
+    #[tokio::test(start_paused = true)]
+    async fn a_message_whose_delivery_panics_is_sent_again_after_a_pause() {
+        let mut ports = Ports::new(Arc::new(Accepts));
+        ports.prover = Arc::new(FixedToken);
+        let outbox = Arc::new(PanicsWhenRecording {
+            link: Link::new(&ports),
+            panics: 2,
+            recordings: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let begun = tokio::time::Instant::now();
+        let out = serde_json::json!({"@type": "ContractAgreementMessage"});
+        deliver(Arc::clone(&outbox), out).await;
+        // sent and recorded three times: two panics, then it worked
+        let recordings = outbox.recordings.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(recordings, 3);
+        // pauses of 5 and 10 seconds
+        assert_eq!(begun.elapsed(), Duration::from_secs(15));
     }
 }

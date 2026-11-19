@@ -303,14 +303,22 @@ happened in (`crates/portitor-runtime/src/panics.rs`):
   `internal error`; the other requests go on. This holds for every
   HTTP server of the three components, public and management.
 - **A background task that runs for as long as the process** (the
-  bundle and identity checks of the connector, the certificate watch
-  and Gaia-X schedule of the identity, the issuer's outbox): it starts
-  again after 5 seconds. A dataset harvest run that panics is skipped;
-  the next one runs on schedule.
+  dataset, bundle and identity schedules of the connector, the
+  certificate watch and Gaia-X schedule of the identity, the issuer's
+  outbox): it starts again after a pause of 5 seconds, twice as long
+  after each further panic in a row, at most 5 minutes; a task that ran
+  for more than 5 minutes starts at 5 seconds again. So a task that
+  panics on every run does not call other services (the Gaia-X
+  compliance service) every few seconds. A dataset harvest run that
+  panics is skipped; the next one runs on schedule.
 - **A background task for one piece of work** (sending one DSP message,
   deciding one credential request, one Gaia-X run): the work stays as
-  it was saved. A DSP message is sent again at the next start; a
-  credential request is decided on the issuer's next outbox round.
+  it was saved. A DSP message is sent again after the same pauses (5
+  seconds, doubling up to 5 minutes), for as long as the process runs;
+  sending a saved message again is safe (ADR 0007). A credential
+  request stays `RECEIVED` and is tried again on each round of the
+  issuer's outbox (at most a minute apart); a request that panics every
+  time does not hold up the other requests or the deliveries.
 - **The management server's task:** if it ends, the process stops with
   an error, as a component without health checks must not go on.
 
@@ -324,7 +332,8 @@ Data stays consistent: a database write of several statements is one
 transaction, which `rusqlite` rolls back when the panic drops it, and
 every other write is one statement. A lock held during a panic is taken
 again (Rust marks it "poisoned"); each place says why that is safe, and
-each store has a test for it (`store/poison_tests.rs`). Two caches (DID
+each store has a test for it (`store/poison_tests.rs`; the checks are
+in `portitor-runtime/src/sqlite.rs`, `testing`). Two caches (DID
 documents, status lists) switch themselves off instead after a panic
 inside them, until the next start: slower, never wrong.
 

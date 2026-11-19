@@ -25,7 +25,10 @@ use portitor_dcp::{
 };
 use portitor_issuer::config::Config;
 use portitor_issuer::management::openapi_json;
-use portitor_issuer::store::{CredentialRequest, IssuerStore, SqliteStore};
+use portitor_issuer::store::{
+    CredentialRequest, Delivery, DeliveryState, IssueOutcome, IssueRules, IssuedWithDelivery,
+    IssuerStore, Participant, Planned, Revocation, SignCredentials, SqliteStore, StoreError,
+};
 use portitor_issuer::{Issuer, Ports, definitions, delivery, issue};
 use portitor_runtime::BoxFuture;
 use portitor_runtime::api_key::ApiKey;
@@ -324,6 +327,15 @@ impl World {
     }
 
     fn with(setup: Setup) -> Self {
+        Self::with_store_port(setup, |store| store)
+    }
+
+    /// As [`World::with`], but the issuer reaches the store through
+    /// `port(store)`: a test can put a store that misbehaves in between.
+    fn with_store_port(
+        setup: Setup,
+        port: impl FnOnce(Arc<SqliteStore>) -> Arc<dyn IssuerStore>,
+    ) -> Self {
         let directory = Arc::new(FakeDirectory::default());
         let holder = Party::new(HOLDER);
         let stranger = Party::new(STRANGER);
@@ -349,7 +361,7 @@ impl World {
         };
         let store = Arc::new(setup.store);
         let ports = Ports {
-            store: Arc::clone(&store) as _,
+            store: port(Arc::clone(&store)),
             directory: Arc::clone(&directory) as _,
             sender: Arc::clone(&sender) as _,
         };
@@ -1210,6 +1222,118 @@ async fn after_a_restart_waiting_work_is_done_and_revocations_kept() {
     for jwt in after.delivered(0).iter().chain(&after.delivered(1)) {
         assert_eq!(after.status_in_list(jwt).await, Status::Clear);
     }
+}
+
+/// A store whose `request` panics for one request, as a bug in deciding
+/// that request would; everything else goes to the real store.
+struct PanicsOnRequest {
+    inner: Arc<SqliteStore>,
+    issuer_pid: &'static str,
+}
+
+impl IssuerStore for PanicsOnRequest {
+    fn request(&self, issuer_pid: &str) -> Result<Option<CredentialRequest>, StoreError> {
+        assert_ne!(issuer_pid, self.issuer_pid, "deciding this request panics");
+        self.inner.request(issuer_pid)
+    }
+
+    fn add_participant(&self, participant: &Participant) -> Result<bool, StoreError> {
+        self.inner.add_participant(participant)
+    }
+    fn participant(&self, did: &str) -> Result<Option<Participant>, StoreError> {
+        self.inner.participant(did)
+    }
+    fn participants(&self) -> Result<Vec<Participant>, StoreError> {
+        self.inner.participants()
+    }
+    fn delete_participant(&self, did: &str) -> Result<bool, StoreError> {
+        self.inner.delete_participant(did)
+    }
+    fn add_request(&self, request: &CredentialRequest) -> Result<bool, StoreError> {
+        self.inner.add_request(request)
+    }
+    fn received_requests(&self) -> Result<Vec<String>, StoreError> {
+        self.inner.received_requests()
+    }
+    fn reject(&self, issuer_pid: &str) -> Result<bool, StoreError> {
+        self.inner.reject(issuer_pid)
+    }
+    fn issue(
+        &self,
+        issuer_pid: &str,
+        planned: &[Planned],
+        rules: IssueRules,
+        sign: &mut SignCredentials<'_>,
+    ) -> Result<IssueOutcome, StoreError> {
+        self.inner.issue(issuer_pid, planned, rules, sign)
+    }
+    fn due_deliveries(&self, now: u64) -> Result<Vec<Delivery>, StoreError> {
+        self.inner.due_deliveries(now)
+    }
+    fn next_delivery_at(&self) -> Result<Option<u64>, StoreError> {
+        self.inner.next_delivery_at()
+    }
+    fn retry_later(&self, issuer_pid: &str, attempts: u32, at: u64) -> Result<(), StoreError> {
+        self.inner.retry_later(issuer_pid, attempts, at)
+    }
+    fn end_delivery(&self, issuer_pid: &str, state: DeliveryState) -> Result<(), StoreError> {
+        self.inner.end_delivery(issuer_pid, state)
+    }
+    fn issued(&self, holder: Option<&str>) -> Result<Vec<IssuedWithDelivery>, StoreError> {
+        self.inner.issued(holder)
+    }
+    fn revoke(&self, id: &str, now: u64) -> Result<Revocation, StoreError> {
+        self.inner.revoke(id, now)
+    }
+    fn revoked_indexes(
+        &self,
+        profile: portitor_dcp::credential::Profile,
+    ) -> Result<Vec<u64>, StoreError> {
+        self.inner.revoked_indexes(profile)
+    }
+}
+
+/// One request whose decision panics on every round does not block the
+/// outbox: the other waiting request is decided and its credentials are
+/// sent; the panicking one stays `RECEIVED`.
+#[tokio::test]
+async fn a_request_whose_decision_panics_does_not_block_the_outbox() {
+    let world = World::with_store_port(Setup::in_memory(), |store| {
+        Arc::new(PanicsOnRequest {
+            inner: store,
+            issuer_pid: "i-1",
+        })
+    });
+    world.register(HOLDER, json!({})).await;
+    for (issuer_pid, holder_pid) in [("i-1", "h-1"), ("i-2", "h-2")] {
+        let waiting = CredentialRequest {
+            issuer_pid: issuer_pid.to_owned(),
+            holder_did: HOLDER.to_owned(),
+            holder_pid: holder_pid.to_owned(),
+            credential_ids: vec!["membership-vc20".to_owned()],
+            access_token: Some("holder-access-token".to_owned()),
+            status: RequestStatus::Received,
+            received_at: now_secs(),
+        };
+        assert!(world.store.add_request(&waiting).unwrap());
+    }
+
+    // i-1 comes first and panics; i-2 is still decided and sent
+    let outbox = tokio::spawn(delivery::run_outbox(Arc::clone(&world.issuer)));
+    for _ in 0..500 {
+        if !world.sender.sent().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(!outbox.is_finished(), "the outbox ended");
+    outbox.abort();
+    let sent = world.sender.sent();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].body["holderPid"], "h-2");
+    let status = |issuer_pid| world.store.request(issuer_pid).unwrap().unwrap().status;
+    assert_eq!(status("i-1"), RequestStatus::Received);
+    assert_eq!(status("i-2"), RequestStatus::Issued);
 }
 
 /// A key change with the old public key listed as retired

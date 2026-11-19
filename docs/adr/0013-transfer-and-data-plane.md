@@ -148,7 +148,9 @@ on the value of `consumerPid`."
 - The request is checked first (agreement held by the caller, policy,
   format), then looked up. Eclipse EDC 1.0.0-RC7 uses this order and
   this answer (`TransferProcessProtocolServiceImpl.requestedAction`,
-  `findForCorrelationId`).
+  `findForCorrelationId`). So a repeated request gets 400, not the
+  transfer it already has, once the agreement's permissions no longer
+  hold or the dataset is no longer offered in the asked format.
 - DSP adds that the provider "SHOULD respond with an appropriate
   Transfer Start Message". Portitor does not send the start message a
   second time, and neither does EDC: only the token's hash is kept, so
