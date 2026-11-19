@@ -1234,7 +1234,7 @@
               "object",
               "null"
             ],
-            "description": "Where to fetch the data, with the access token (DSP 2025-1\n`DataAddress`): send `GET <endpoint>` with `Authorization: <the\nauthorization property>`. Present while the transfer is `STARTED`\nor `SUSPENDED`; the token works only while it is `STARTED`."
+            "description": "Where to fetch the data, with the access token (DSP 2025-1\n`DataAddress`): send `GET <endpoint>` with `Authorization: Bearer\n<the authorization property>` (its `authType` property says\n`bearer`). Present while the transfer is `STARTED` or `SUSPENDED`;\nthe token works only while it is `STARTED`."
           },
           "format": {
             "type": "string",
