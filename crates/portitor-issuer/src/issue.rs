@@ -278,6 +278,7 @@ mod tests {
             credential_type: "MembershipCredential".to_owned(),
             profile: Profile::Vc20,
             validity_days: 1,
+            credential_schema: "https://example.com/membership-credential-schema.json".to_owned(),
             claims: claims.iter().map(|claim| (*claim).to_owned()).collect(),
         }
     }

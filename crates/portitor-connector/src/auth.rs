@@ -40,7 +40,7 @@ use portitor_dsp::policy::{CallerCredentials, CredentialTypes, HeldCredential, M
 use portitor_dsp::transfer::TransferError;
 use portitor_runtime::BoxFuture;
 use portitor_runtime::api_key::problem;
-use portitor_runtime::did::ResolveError;
+use portitor_runtime::did::{CACHE_SETTING as DID_CACHE_SETTING, ResolveError};
 use portitor_runtime::settings::{bounded_number, comma_list};
 use portitor_runtime::telemetry::metrics::{self, Refusal};
 
@@ -542,6 +542,11 @@ pub struct AuthSettings {
     /// (`PORTITOR_STATUS_LIST_CACHE_SECONDS`, default 300, at most 3600;
     /// 0: fetched on every check). See [`dcp::status_list_cache`].
     pub status_list_cache_seconds: u64,
+    /// How long a resolved DID document is reused, in seconds
+    /// (`PORTITOR_DID_CACHE_SECONDS`, default 300, at most 3600; 0:
+    /// fetched on every use). While a document is kept, a key removed
+    /// from it is still accepted (R-41). See [`portitor_runtime::did`].
+    pub did_cache_seconds: u64,
 }
 
 impl std::fmt::Debug for AuthSettings {
@@ -557,6 +562,7 @@ impl std::fmt::Debug for AuthSettings {
             .field("scopes", &self.scopes)
             .field("allow_http", &self.allow_http)
             .field("status_list_cache_seconds", &self.status_list_cache_seconds)
+            .field("did_cache_seconds", &self.did_cache_seconds)
             .finish_non_exhaustive()
     }
 }
@@ -645,6 +651,8 @@ impl AuthSettings {
         }
         let status_list_cache_seconds =
             status_list_cache_seconds(text("PORTITOR_STATUS_LIST_CACHE_SECONDS").as_deref())?;
+        let did_cache_seconds =
+            portitor_runtime::did::cache_seconds(text(DID_CACHE_SETTING).as_deref())?;
         Ok(Some(Self {
             participant_id: participant_id.to_owned(),
             sts_url,
@@ -658,6 +666,7 @@ impl AuthSettings {
             scopes,
             allow_http,
             status_list_cache_seconds,
+            did_cache_seconds,
         }))
     }
 
@@ -799,6 +808,39 @@ mod tests {
         std::fs::write(&secret, "s3cret\n").unwrap();
         let path = secret.to_string_lossy().into_owned();
         (dir, path)
+    }
+
+    /// `PORTITOR_DID_CACHE_SECONDS`: 300 by default, 0 for no cache, at
+    /// most 3600; the same rules as the status list cache.
+    #[test]
+    fn the_did_cache_setting_is_bounded() {
+        let (dir, secret) = secret_file("did-cache");
+        let me = "did:web:me.example";
+        let base = [
+            ("PORTITOR_STS_URL", "https://me.example/sts/token"),
+            ("PORTITOR_STS_CLIENT_SECRET_FILE", secret.as_str()),
+            ("PORTITOR_TRUSTED_ISSUERS", "did:web:a"),
+        ];
+        let read = |value: Option<&str>| {
+            let mut with = base.to_vec();
+            if let Some(value) = value {
+                with.push(("PORTITOR_DID_CACHE_SECONDS", value));
+            }
+            AuthSettings::from_vars(me, false, vars(&with))
+                .map(|settings| settings.unwrap().did_cache_seconds)
+        };
+        assert_eq!(read(None), Ok(300));
+        assert_eq!(read(Some("")), Ok(300));
+        assert_eq!(read(Some("0")), Ok(0));
+        assert_eq!(read(Some(" 3600 ")), Ok(3600));
+        for refused in ["3601", "-1", "5m"] {
+            let err = read(Some(refused)).unwrap_err();
+            assert!(
+                err.starts_with("PORTITOR_DID_CACHE_SECONDS"),
+                "{refused}: {err}"
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

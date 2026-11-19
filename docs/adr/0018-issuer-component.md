@@ -98,12 +98,15 @@ can issue:
   {
     "id": "membership-vc11",
     "credentialType": "MembershipCredential",
+    "credentialSchema": "https://example.com/membership-credential-schema.json",
     "profile": "vc11-sl2021/jwt",
     "validityDays": 365,
     "claims": ["role"]
   }
 ]
 ```
+
+(`credentialSchema` is required from 0.12; see "Amended in 0.12" below.)
 
 `claims` names the participant claims copied into `credentialSubject`
 (next to `id`, the holder's DID). A definition whose claim a participant
@@ -186,3 +189,44 @@ above where they differ:
 | Delivery retries | every failure retried for about 8 hours | no answer, the holder's DID or credential service not found, and HTTP 401, 408, 429 and 5xx are retried as before; any other 4xx (400, 403, 404, ...) ends the delivery `FAILED` at once | A 4xx says the holder will not take this message (DCP 6.5: "HTTP 2xx OR HTTP 4xx Client Error"); retrying it for hours only delays the `FAILED` the operator must act on. In turn a holder answers 2xx to a message with an `issuerPid` it already stored, so a lost answer does not end `FAILED` (agreed with the holder side, `portitor-identity`) |
 | A decision that failed (for example a store error) | stays `RECEIVED` until the next start | decided again on the outbox's next round (at most a minute) | so a passing error does not leave a request waiting until a restart |
 | Revoking a credential that is revoked already | `204`, nothing else | `204`, and the list is signed again; signing is one at a time | If signing failed after the revocation was stored, repeating the call now publishes it; two revocations at once can no longer publish a list without one of them |
+
+## Amended in 0.12: the metadata passes the DCP schema (2026-11-18)
+
+The review of 2026-11-18 (finding C1,
+[TD-33](../RISKS_AND_TECHNICAL_DEBTS.md#td-33)) found that the issuer
+metadata left out `credentialSchema` and `offerReason`. DCP v1.0.1,
+section 6.7.1: "Every `CredentialObject` in the `credentialsSupported`
+array MUST contain all OPTIONAL properties", and
+`issuer-metadata-schema.json` requires `credentialType`,
+`credentialSchema`, `offerReason`, `bindingMethods` and `profile`. The
+maintainer decided (2026-11-18):
+
+- **`credentialSchema` is a new required field of each entry in the
+  definitions file**: the URL of the schema of the credential's
+  `credentialSubject` (section 6.6.2). Eclipse EDC IdentityHub
+  1.0.0-RC7 takes it the same way from the credential definition
+  (`jsonSchemaUrl`, `DcpIssuerMetadataServiceImpl`). The issuer checks
+  at start that it is an absolute `http://` or `https://` URL with a
+  host, and does not start without it. It only publishes the URL: it
+  does not fetch the schema and does not check credentials against it
+  ([TD-14](../RISKS_AND_TECHNICAL_DEBTS.md#td-14) stays). This breaks
+  definitions files written for 0.11 (DEPLOYING, "From 0.11 to 0.12").
+- **`offerReason` is `reissue` in the metadata**, for every credential.
+  The metadata is not an offer, so no reason really applies, but the
+  property is required. DCP names two values, `reissue` and
+  `proof-key-revocation` (section 6.6.2: "Valid values MAY include").
+  `reissue` is what the specification's metadata example has and what
+  EDC IdentityHub sends, for the same reason
+  (`DcpIssuerMetadataServiceImpl`).
+- **Offers** (`POST /v1/offers`) use the same credential objects, so
+  they now carry `credentialSchema` too. Their `offerReason` is still
+  the one given in the management call, or none:
+  `credential-offer-message-schema.json` requires only `id` and `type`.
+  The `reissue` of the metadata is not copied into an offer.
+- **`issuancePolicy` is still left out.** The sentence of 6.7.1 covers
+  it, but the JSON schema does not require it, and a policy would say
+  that a presentation is needed before issuance, which is not so
+  (TD-14). EDC IdentityHub sends a presentation definition that holds
+  only an `id`.
+- Tests check the issuer's own metadata answer and its offers against
+  the DCP schemas (`crates/portitor-issuer/tests/issuer.rs`).

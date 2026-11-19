@@ -129,8 +129,31 @@ All configuration is by environment variable. The full table is in the
 | `PORTITOR_POLICY_CREDENTIALS` | unset, unless your offers constrain credential claims: the credential types they use, comma-separated, each `Type` or `Type=<scope>` (see [Credential constraints](#credential-constraints)) |
 | `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` | unset, unless your offers require Gaia-X compliance: comma-separated `did:web` DIDs of the compliance services you trust (see [Gaia-X compliance](#gaia-x-compliance)) |
 | `PORTITOR_STATUS_LIST_CACHE_SECONDS` | leave the default, `300` (5 minutes): how long a status list credential is reused; `0` fetches it on every check. At most `3600` (one hour); a larger value, or one that is not a whole number, stops the start. See [Status list cache](#status-list-cache) |
+| `PORTITOR_DID_CACHE_SECONDS` | leave the default, `300` (5 minutes): how long a resolved DID document is reused; `0` fetches it on every use. At most `3600` (one hour); a larger value, or one that is not a whole number, stops the start. See [DID document cache](#did-document-cache) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (no traces or metrics), or your OTLP receiver's base URL; see [Traces and metrics](#traces-and-metrics) for this and the other `OTEL_*` variables |
 | `RUST_LOG` | `info` (default); `debug` only while diagnosing |
+
+### DID document cache
+
+Every component resolves other parties' `did:web` DIDs: the connector
+(each caller's, each credential issuer's, and the authority's for the
+bundle key), the identity (callers' and issuers') and the issuer
+(holders'). Each reuses a DID document it fetched for
+`PORTITOR_DID_CACHE_SECONDS` (default 300 seconds), in memory. Set the
+same value on the connector, the identity and the issuer.
+
+- **The trade-off.** A key that its owner removed from the document,
+  for example after a leak, is still accepted until the cached document
+  is fetched again; a new key is refused for as long. With `0` every
+  use fetches the document: a change is seen at once, at the cost of
+  one fetch more per caller and per credential issuer on every DSP
+  request, and no answer at all while a partner's DID host is down.
+- At most `3600` (one hour). A larger value, or one that is not a whole
+  number, stops the start.
+- At most 1,000 documents are kept. A lookup that failed is never
+  kept. A restart empties the cache.
+- A partner that must drop a leaked key at once should tell you; a
+  restart of your components, or a low value here, shortens the wait.
 
 ### Status list cache
 
@@ -538,6 +561,7 @@ participant.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (no traces or metrics) | your OTLP receiver's base URL, if you collect them ([Traces and metrics](#traces-and-metrics)) |
 | `PORTITOR_SCOPE_TYPE_ALIASES` | `org.eclipse.edc.vc.type` | comma-separated scope aliases that mean "credentials of this type", besides DCP's `org.eclipse.dspace.dcp.vc.type` |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | unset | **unset** (`true` allows plain-HTTP DIDs and URLs, tests only) |
+| `PORTITOR_DID_CACHE_SECONDS` | `300` | leave the default; how long a resolved DID document (a caller's, an issuer's) is reused, `0` to `3600`, `0` for no cache ([DID document cache](#did-document-cache)) |
 | `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` | unset | Gaia-X only: path of the PEM chain of the identity key, the key's certificate first ([Gaia-X onboarding](#gaia-x-onboarding-optional)) |
 | `PORTITOR_GAIAX_COMPLIANCE_URL` | unset (Gaia-X off) | base URL of a Gaia-X compliance service, for example `https://compliance.lab.gaia-x.eu/v2`; needs the settings around it |
 | `PORTITOR_GAIAX_COMPLIANCE_DID` | unset | Gaia-X only: the `did:web` DID of that service, for example `did:web:compliance.lab.gaia-x.eu:v2`; an answer signed by any other DID is refused |
@@ -1296,9 +1320,12 @@ the same way: the old key stays listed until it is revoked
 6. Remove the file from the setting and restart. The old key id leaves
    the DID document; what the old key signed no longer verifies.
 
-Verifiers cache DID documents (Portitor for 5 minutes), so a new key id
-may be refused for that long after step 3 by a verifier that has not
-seen the new document. Do step 3 when the component is quiet.
+Verifiers cache DID documents (Portitor for
+`PORTITOR_DID_CACHE_SECONDS`, 5 minutes by default; see
+[DID document cache](#did-document-cache)), so a new key id may be
+refused for that long after step 3 by a verifier that has not seen the
+new document. Do step 3 when the component is quiet. For the same
+reason a key removed in step 6 is still accepted for that long.
 
 **A leaked or lost key.** Never list a leaked key as retired: anyone
 with it could sign in your name while it is listed. Change the key
@@ -1475,6 +1502,34 @@ move your probes back to `/health` first.
    counts as unset in all three components: the management API is off
    and the port serves only the health checks.
 
+#### From 0.11 to 0.12
+
+No database changes for the points below.
+
+1. **Issuer, breaking: `credentialSchema` in the definitions file.**
+   Before you upgrade the issuer, add `"credentialSchema": "<URL>"` to
+   every entry of the file `PORTITOR_ISSUER_CREDENTIALS_FILE` names: the
+   absolute `http://` or `https://` URL of the JSON schema of that
+   credential's `credentialSubject`. A 0.12 issuer does not start with
+   an entry that lacks it; the line says which
+   (`"<id>": credentialSchema is required`). The issuer only publishes
+   the URL in its metadata, which DCP's schema requires; nothing fetches
+   it ([section 7](#7-run-the-issuer-dataspace-authority-only),
+   "Configuration"; ADR 0018, amended in 0.12). If your dataspace has no
+   schema for a credential yet, agree on the URL where it will be
+   published and use that. Credentials issued before stay valid, and
+   participants change nothing.
+2. **New setting, optional:** `PORTITOR_DID_CACHE_SECONDS` on the
+   connector, the identity and the issuer. The default, 300 seconds, is
+   what every version before did
+   ([DID document cache](#did-document-cache)).
+3. **Behaviour change, verifier and identity:** a credential is refused
+   when the key that signed it is listed in its issuer's DID document
+   under the id of another DID (DCP v1.0.1, 5.4.3, step 4; ADR 0016,
+   amended in 0.12). Credentials from `portitor-issuer` and from EDC
+   IdentityHub are signed with a key of the issuer's own DID, so they
+   are not affected.
+
 ## 7. Run the issuer (dataspace authority only)
 
 The issuer issues and revokes the dataspace's credentials with the
@@ -1507,8 +1562,9 @@ DID.
   issue credentials in the dataspace's name: replace it at once, without
   listing it, and reissue every credential.
 - [ ] **Credential definitions.** A JSON file listing what the issuer can
-  issue (ADR 0018, "Credential definitions"); the issuer checks it at
-  start and refuses to start if it is wrong.
+  issue (ADR 0018, "Credential definitions"), each with the URL of its
+  schema (`credentialSchema`); the issuer checks it at start and refuses
+  to start if it is wrong.
 - [ ] **Management API key.** As for the connector. It registers
   participants and revokes credentials, so guard it like the issuer key.
 - [ ] **Storage.** A persistent volume for `/data`: participants,
@@ -1535,6 +1591,7 @@ DID.
 | `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | keep; the same for the management port |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (no traces or metrics) | your OTLP receiver's base URL, if you collect them ([Traces and metrics](#traces-and-metrics)) |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | unset | **unset**; `true` only for local tests with plain-HTTP DIDs |
+| `PORTITOR_DID_CACHE_SECONDS` | `300` | keep; how long a holder's resolved DID document is reused, `0` to `3600`, `0` for no cache ([DID document cache](#did-document-cache)) |
 | `PORTITOR_ISSUER_BUNDLE_KEY_FILE` | unset | with a bundle: the **public** bundle key as a JWK (as `bundle build` prints it), so the private key stays offline; a PKCS#8 PEM is accepted too. Listed in the DID document as `<did>#bundle-key` under `assertionMethod`. The start fails if it is the credential key |
 | `PORTITOR_ISSUER_BUNDLE_DIR` | unset | with a bundle: the folder of built bundles, served read only at `GET /bundles/{version}/{path}` on the public port, and its `latest.json` at `GET /bundles/latest.json` |
 | `PORTITOR_ISSUER_MAX_ACTIVE_PER_HOLDER` | `10` | keep; the most credentials of one definition a participant may hold that are neither revoked nor expired. A request beyond it ends `REJECTED`. It keeps one participant from filling a status list (131,072 positions) |
@@ -1545,14 +1602,30 @@ The credential definitions file (ADR 0018):
 ```json
 [
   {"id": "membership-vc20", "credentialType": "MembershipCredential",
+   "credentialSchema": "https://issuer.example.com/schemas/membership-credential.json",
    "profile": "vc20-bssl/jwt", "validityDays": 365, "claims": ["role"]}
 ]
 ```
 
-`id` is what holders ask for (it appears in the issuer metadata), and must
-stay the same across restarts. `profile` is `vc11-sl2021/jwt` or
-`vc20-bssl/jwt`. `claims` names the participant claims copied into
-`credentialSubject`; a claim the participant lacks is left out.
+| Field | Required | Meaning |
+|---|---|---|
+| `id` | yes | what holders ask for (it appears in the issuer metadata); must stay the same across restarts, and be unique in the file |
+| `credentialType` | yes | the credential type, for example `MembershipCredential` |
+| `credentialSchema` | yes, from 0.12 | the URL of the JSON schema of the credential's `credentialSubject` (DCP v1.0.1, 6.6.2): an absolute `http://` or `https://` URL. The issuer publishes it in its metadata and does nothing else with it: it does not fetch it and does not check credentials against it |
+| `profile` | yes | `vc11-sl2021/jwt` or `vc20-bssl/jwt` |
+| `validityDays` | yes | how long an issued credential is valid, `1` to `3650` |
+| `claims` | no | the participant claims copied into `credentialSubject`; a claim the participant lacks is left out. Not `id` |
+
+Any other field, a missing required one, or a value outside these rules
+stops the start, with a line that names the entry, for example
+`PORTITOR_ISSUER_CREDENTIALS_FILE: credential definitions:
+"membership-vc20": credentialSchema is required (the URL of the
+credential's schema)`.
+
+The issuer metadata (`GET <issuer service>/metadata`) lists each entry
+with `offerReason: "reissue"`. DCP's schema requires the property there;
+it does not mean the issuer is offering anything (ADR 0018, amended in
+0.12).
 
 Management API (`Authorization: Bearer <key>`; described in
 [api/issuer-management-openapi.json](api/issuer-management-openapi.json)):
@@ -1687,7 +1760,8 @@ known risk and technical debt, with its status and target release):
 - Partners are admitted by one credential type (`MembershipCredential`,
   `PORTITOR_DCP_SCOPES`); offers may add credential claims (ADR 0019),
   but the catalog still shows every offer to every member. Credential
-  schemas (`credentialSchema`) are not checked.
+  schemas are not checked: the issuer publishes each definition's
+  `credentialSchema` URL and no component fetches it.
 - STS tokens are not cached: each DSP request costs one STS call, and each
   incoming one a presentation query.
 - Status lists are reused for up to `PORTITOR_STATUS_LIST_CACHE_SECONDS`

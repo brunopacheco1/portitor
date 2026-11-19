@@ -3,7 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Adapter: resolves `did:web` DIDs over HTTPS (W3C did:web method,
-//! "Read (Resolve)"), with a short cache (ADR 0016: 5 minutes by default).
+//! "Read (Resolve)"), with a short cache (ADR 0016, amended in 0.12:
+//! `PORTITOR_DID_CACHE_SECONDS`, 5 minutes by default, `0` for no cache).
+//!
+//! The cache is a trade: while a document is kept, a key its owner has
+//! removed from it is still accepted (R-41). The setting lets an operator
+//! choose how long, in every component that resolves DIDs (connector,
+//! identity, issuer).
 //!
 //! The DID comes from the other party (the `iss` of its token), so the URL
 //! fetched is the caller's choice. The same rules apply as to every
@@ -19,9 +25,43 @@ use std::time::{Duration, Instant};
 use portitor_dcp::{DidDocument, did_web_url};
 
 use crate::http::HttpSender;
+use crate::settings::bounded_number;
 
-/// How long a resolved DID document is reused by default.
-pub const DEFAULT_TTL: Duration = Duration::from_secs(300);
+/// The setting for how long a resolved DID document is reused.
+pub const CACHE_SETTING: &str = "PORTITOR_DID_CACHE_SECONDS";
+
+/// How long a resolved DID document is reused by default: 5 minutes.
+pub const DEFAULT_SECONDS: u64 = 300;
+
+/// The longest a DID document may be reused: one hour. A larger setting
+/// is refused at start.
+pub const MAX_SECONDS: u64 = 3_600;
+
+/// [`DEFAULT_SECONDS`] as a [`Duration`].
+pub const DEFAULT_TTL: Duration = Duration::from_secs(DEFAULT_SECONDS);
+
+/// Reads `PORTITOR_DID_CACHE_SECONDS` (`value`, `None` when it is not
+/// set): whole seconds from 0 to [`MAX_SECONDS`]; [`DEFAULT_SECONDS`]
+/// when it is not set or empty ([`bounded_number`]). `0` turns the cache
+/// off: every use fetches the document.
+///
+/// # Errors
+/// Not a whole number in that range; the text names the setting.
+pub fn cache_seconds(value: Option<&str>) -> Result<u64, String> {
+    bounded_number(CACHE_SETTING, value, 0..=MAX_SECONDS, DEFAULT_SECONDS)
+}
+
+/// [`cache_seconds`] of the environment variable
+/// `PORTITOR_DID_CACHE_SECONDS`: what each component reads at start.
+///
+/// # Errors
+/// See [`cache_seconds`].
+pub fn cache_seconds_from_env() -> Result<u64, String> {
+    match std::env::var_os(CACHE_SETTING) {
+        Some(value) => cache_seconds(Some(&value.to_string_lossy())),
+        None => cache_seconds(None),
+    }
+}
 
 /// The most DID documents kept at once. Callers choose the DIDs, so
 /// without a limit the cache could grow with every new caller.
@@ -92,8 +132,10 @@ pub struct DidWebResolver {
 }
 
 impl DidWebResolver {
-    /// A resolver that reuses documents for `ttl`. With `allow_http`,
-    /// documents are fetched over plain HTTP (tests only).
+    /// A resolver that reuses documents for `ttl`
+    /// (`PORTITOR_DID_CACHE_SECONDS`); a `ttl` of zero keeps nothing.
+    /// With `allow_http`, documents are fetched over plain HTTP (tests
+    /// only).
     ///
     /// # Errors
     /// The HTTP client cannot be built (see [`HttpSender::new`]).
@@ -152,6 +194,10 @@ impl DidWebResolver {
     /// documents go first, then the oldest one. Both look at every entry,
     /// but only when the cache is full.
     fn keep(&self, did: &str, doc: &Arc<DidDocument>) {
+        if self.ttl.is_zero() {
+            // the cache is off: a kept document would never be used
+            return;
+        }
         let Ok(mut cache) = self.cache.lock() else {
             // a poisoned lock: no cache (see the `cache` field)
             return;
@@ -243,6 +289,59 @@ mod tests {
             1,
             "the second resolve uses the cache"
         );
+    }
+
+    /// `PORTITOR_DID_CACHE_SECONDS=0`: every resolve fetches the document,
+    /// and nothing is kept.
+    #[tokio::test]
+    async fn a_cache_time_of_zero_fetches_every_time() {
+        let (did, hits) = serve(serde_json::json!({"verificationMethod": []})).await;
+        let seconds = cache_seconds(Some("0")).unwrap();
+        let resolver = DidWebResolver::new(true, Duration::from_secs(seconds)).unwrap();
+        resolver.resolve(&did).await.unwrap();
+        resolver.resolve(&did).await.unwrap();
+        assert_eq!(hits.load(Ordering::SeqCst), 2, "no cache");
+        assert!(resolver.cache.lock().unwrap().is_empty());
+    }
+
+    /// The default, 300 seconds: a document is reused until it is 300
+    /// seconds old, then fetched again.
+    #[tokio::test]
+    async fn the_default_cache_time_is_300_seconds() {
+        let (did, hits) = serve(serde_json::json!({"verificationMethod": []})).await;
+        let seconds = cache_seconds(None).unwrap();
+        assert_eq!(seconds, 300);
+        let resolver = DidWebResolver::new(true, Duration::from_secs(seconds)).unwrap();
+        resolver.resolve(&did).await.unwrap();
+        let make_older = |age_seconds: u64| {
+            let mut cache = resolver.cache.lock().unwrap();
+            let entry = cache.get_mut(&did).unwrap();
+            entry.fetched_at = Instant::now()
+                .checked_sub(Duration::from_secs(age_seconds))
+                .unwrap();
+        };
+        make_older(290);
+        resolver.resolve(&did).await.unwrap();
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "still fresh at 290 s");
+        make_older(301);
+        resolver.resolve(&did).await.unwrap();
+        assert_eq!(hits.load(Ordering::SeqCst), 2, "fetched again after 300 s");
+    }
+
+    #[test]
+    fn the_cache_setting_is_bounded() {
+        assert_eq!(cache_seconds(None), Ok(300));
+        // empty is not set, as for every number setting
+        assert_eq!(cache_seconds(Some("")), Ok(300));
+        assert_eq!(cache_seconds(Some("0")), Ok(0));
+        assert_eq!(cache_seconds(Some(" 3600 ")), Ok(3600));
+        for refused in ["3601", "-1", "5m"] {
+            let err = cache_seconds(Some(refused)).unwrap_err();
+            assert!(
+                err.starts_with("PORTITOR_DID_CACHE_SECONDS has an invalid value"),
+                "{refused}: {err}"
+            );
+        }
     }
 
     #[tokio::test]

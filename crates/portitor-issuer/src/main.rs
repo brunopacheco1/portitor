@@ -74,9 +74,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let definitions = read_definitions(&config)?;
     let store = SqliteStore::open(&config.db_file)
         .map_err(|e| format!("cannot open {}: {e}", config.db_file.display()))?;
+    // how long a holder's DID document is reused (R-41)
+    let did_cache_seconds = portitor_runtime::did::cache_seconds_from_env()?;
     let ports = Ports {
         store: Arc::new(store),
-        directory: Arc::new(WebDirectory::new(config.allow_http)?),
+        directory: Arc::new(WebDirectory::new(config.allow_http, did_cache_seconds)?),
         sender: Arc::new(HttpSender::new(config.allow_http)?),
     };
     let credential_key = key.public_jwk();

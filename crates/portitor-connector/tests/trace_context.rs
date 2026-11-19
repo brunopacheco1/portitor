@@ -51,6 +51,7 @@ fn settings(base: &str) -> AuthSettings {
         scopes: Vec::new(),
         allow_http: true,
         status_list_cache_seconds: 0,
+        did_cache_seconds: 300,
     }
 }
 

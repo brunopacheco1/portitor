@@ -44,10 +44,74 @@ const API_KEY: &str = "test-only-api-key-0123456789abcdef0123456789ab";
 
 const DEFINITIONS: &str = r#"[
   {"id": "membership-vc11", "credentialType": "MembershipCredential",
-   "profile": "vc11-sl2021/jwt", "validityDays": 365, "claims": ["role"]},
+   "profile": "vc11-sl2021/jwt", "validityDays": 365,
+   "credentialSchema": "https://example.com/membership-credential-schema.json",
+   "claims": ["role"]},
   {"id": "membership-vc20", "credentialType": "MembershipCredential",
-   "profile": "vc20-bssl/jwt", "validityDays": 30, "claims": ["role", "level"]}
+   "profile": "vc20-bssl/jwt", "validityDays": 30,
+   "credentialSchema": "https://example.com/membership-credential-schema.json",
+   "claims": ["role", "level"]}
 ]"#;
+
+/// The DCP v1.0.1 JSON Schemas the issuer's own answers are checked
+/// against, by the URL the schemas use to refer to each other. They are
+/// the copies kept for `crates/portitor-dcp/tests/spec.rs`.
+const DCP_SCHEMAS: &[(&str, &str)] = &[
+    (
+        "https://w3id.org/dspace-dcp/v1.0/common/context-schema.json",
+        include_str!("../../portitor-dcp/tests/schemas/context-schema.json"),
+    ),
+    (
+        "https://w3id.org/dspace-dcp/v1.0/issuance/credential-object-schema.json",
+        include_str!("../../portitor-dcp/tests/schemas/credential-object-schema.json"),
+    ),
+    (
+        "https://w3id.org/dspace-dcp/v1.0/issuance/issuer-metadata-schema.json",
+        include_str!("../../portitor-dcp/tests/schemas/issuer-metadata-schema.json"),
+    ),
+    (
+        "https://w3id.org/dspace-dcp/v1.0/issuance/credential-offer-message-schema.json",
+        include_str!("../../portitor-dcp/tests/schemas/credential-offer-message-schema.json"),
+    ),
+];
+
+/// Serves [`DCP_SCHEMAS`], so the tests need no network. The Presentation
+/// Exchange schema `issuancePolicy` points to is not part of the DCP
+/// release; any value passes in its place.
+struct LocalSchemas;
+
+impl jsonschema::Retrieve for LocalSchemas {
+    fn retrieve(
+        &self,
+        uri: &jsonschema::Uri<String>,
+    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+        let uri = uri.as_str();
+        if uri.starts_with("https://identity.foundation/presentation-exchange/") {
+            return Ok(json!(true));
+        }
+        let found = DCP_SCHEMAS.iter().find(|(id, _)| *id == uri);
+        let (_, raw) = found.ok_or("unknown schema")?;
+        Ok(serde_json::from_str(raw)?)
+    }
+}
+
+/// What the DCP schema `file` reports for `message`; empty when it passes.
+fn dcp_schema_errors(file: &str, message: &Value) -> Vec<String> {
+    let (_, raw) = DCP_SCHEMAS
+        .iter()
+        .find(|(id, _)| id.ends_with(file))
+        .unwrap();
+    let schema: Value = serde_json::from_str(raw).unwrap();
+    let validator = jsonschema::options()
+        .with_retriever(LocalSchemas)
+        .build(&schema)
+        .unwrap();
+    let mut errors = Vec::new();
+    for error in validator.iter_errors(message) {
+        errors.push(format!("{} at {}", error, error.instance_path()));
+    }
+    errors
+}
 
 /// Another participant: a DID, a key, and its DID document with a
 /// credential service.
@@ -525,6 +589,70 @@ async fn did_document_and_metadata() {
     assert_eq!(metadata["type"], "IssuerMetadata");
     assert_eq!(metadata["issuer"], ISSUER);
     assert_eq!(metadata["credentialsSupported"][1]["id"], "membership-vc20");
+}
+
+/// TD-33: what `GET /metadata` answers passes DCP's own
+/// `issuer-metadata-schema.json` (DCP v1.0.1, section 6.7), which wants
+/// `credentialType`, `credentialSchema`, `offerReason`, `bindingMethods`
+/// and `profile` in every credential object.
+#[tokio::test]
+async fn the_metadata_answer_passes_the_dcp_schema() {
+    let world = World::new();
+    let (status, metadata) = call(
+        &world.app,
+        Request::get("/issuer/metadata")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let errors = dcp_schema_errors("issuer-metadata-schema.json", &metadata);
+    assert!(errors.is_empty(), "{errors:?}\n{metadata:#}");
+
+    let supported = metadata["credentialsSupported"].as_array().unwrap();
+    assert_eq!(supported.len(), 2);
+    for object in supported {
+        assert_eq!(
+            object["credentialSchema"],
+            "https://example.com/membership-credential-schema.json"
+        );
+        assert_eq!(object["offerReason"], "reissue");
+        assert_eq!(object["bindingMethods"], json!(["did:web"]));
+    }
+
+    // the check is real: without one required property the schema objects
+    for property in ["credentialSchema", "offerReason"] {
+        let mut incomplete = metadata.clone();
+        let first = incomplete["credentialsSupported"][0]
+            .as_object_mut()
+            .unwrap();
+        first.remove(property);
+        let errors = dcp_schema_errors("issuer-metadata-schema.json", &incomplete);
+        assert!(!errors.is_empty(), "{property} is required");
+    }
+}
+
+/// Every definitions file in the repository (the demos, the TCK run, the
+/// EDC interop test) has the `credentialSchema` 0.12 requires, and the
+/// metadata built from it passes the DCP schema.
+#[test]
+fn the_definitions_files_of_the_repository_are_valid() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for file in [
+        "examples/issuer-credentials.json",
+        "tck/issuer-credentials.json",
+        "interop/edc/config/issuer-credentials.json",
+    ] {
+        let text = std::fs::read_to_string(root.join(file)).unwrap();
+        let definitions = match portitor_issuer::definitions::parse(&text) {
+            Ok(definitions) => definitions,
+            Err(e) => panic!("{file}: {e}"),
+        };
+        let metadata = portitor_issuer::definitions::metadata(ISSUER, &definitions);
+        let json = serde_json::to_value(&metadata).unwrap();
+        let errors = dcp_schema_errors("issuer-metadata-schema.json", &json);
+        assert!(errors.is_empty(), "{file}: {errors:?}");
+    }
 }
 
 #[tokio::test]
@@ -1289,10 +1417,41 @@ async fn offers_go_to_registered_participants_only() {
     assert_eq!(sent[0].body["credentials"][0]["id"], "membership-vc20");
     assert_eq!(sent[0].body["credentials"][0]["offerReason"], "reissue");
     assert_eq!(sent[0].body["credentials"][0]["profile"], "vc20-bssl/jwt");
+    // the offer passes DCP's credential-offer-message-schema.json (6.6.1)
+    let errors = dcp_schema_errors("credential-offer-message-schema.json", &sent[0].body);
+    assert!(errors.is_empty(), "{errors:?}");
 
     world.sender.fail_with(Some("HTTP 503 Service Unavailable"));
     let (status, _) = call(&world.management, offer(HOLDER, json!(null))).await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
+}
+
+/// An offer sent without a reason has no `offerReason`: the `reissue` of
+/// the metadata (there because the metadata schema requires it) is not
+/// copied into it. The offer still passes its DCP schema.
+#[tokio::test]
+async fn an_offer_without_a_reason_does_not_take_the_metadata_reason() {
+    let world = World::new();
+    world.register(HOLDER, json!({})).await;
+    let request = authed(Request::post("/v1/offers"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({"participantDid": HOLDER}).to_string()))
+        .unwrap();
+    let (status, _) = call(&world.management, request).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let sent = world.sender.sent();
+    let offered = sent[0].body["credentials"].as_array().unwrap();
+    assert_eq!(offered.len(), 2);
+    for object in offered {
+        assert!(object.get("offerReason").is_none(), "{object}");
+        assert_eq!(
+            object["credentialSchema"],
+            "https://example.com/membership-credential-schema.json"
+        );
+    }
+    let errors = dcp_schema_errors("credential-offer-message-schema.json", &sent[0].body);
+    assert!(errors.is_empty(), "{errors:?}");
 }
 
 /// `docs/api/issuer-management-openapi.json` is what the code generates.

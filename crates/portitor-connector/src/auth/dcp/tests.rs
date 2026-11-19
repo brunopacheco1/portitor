@@ -303,6 +303,7 @@ async fn dataspace() -> Dataspace {
         scopes: vec![super::super::DEFAULT_SCOPE.to_owned()],
         allow_http: true,
         status_list_cache_seconds: 0,
+        did_cache_seconds: 300,
     };
     let me_did = me.did.clone();
     let mut verifier = DcpVerifier::new(&settings, Arc::new(LocalSts(me))).unwrap();
@@ -1131,6 +1132,7 @@ async fn our_identity_must_match_the_sts() {
         scopes: Vec::new(),
         allow_http: true,
         status_list_cache_seconds: 0,
+        did_cache_seconds: 300,
     };
     let other = Party::new(&ds.base, "third");
     let mut verifier = DcpVerifier::new(&settings, Arc::new(LocalSts(other))).unwrap();
@@ -1702,6 +1704,7 @@ async fn readiness_checks_our_identity_in_the_background() {
         scopes: Vec::new(),
         allow_http: true,
         status_list_cache_seconds: 0,
+        did_cache_seconds: 300,
     };
     let sts = Arc::new(CountingSts {
         party: mine,
