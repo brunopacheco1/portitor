@@ -65,9 +65,21 @@ struct Made {
     target: Option<String>,
 }
 
+/// The management API key in `key_file`. Reading a file blocks, so it
+/// runs on a thread for blocking work and not on a request thread.
+async fn read_key(key_file: String) -> Result<String, String> {
+    let read = tokio::task::spawn_blocking(move || {
+        std::fs::read_to_string(&key_file).map_err(|e| format!("{key_file}: {e}"))
+    });
+    match read.await {
+        Ok(key) => key,
+        Err(e) => Err(format!("reading the key file: {e}")),
+    }
+}
+
 pub(crate) async fn run() -> Result<(), String> {
     let key_file = crate::required("CONTRACTS_KEY_FILE")?;
-    let key = std::fs::read_to_string(&key_file).map_err(|e| format!("{key_file}: {e}"))?;
+    let key = read_key(key_file).await?;
     let started = Instant::now();
     let seconds = crate::number("CONTRACTS_SECONDS", 0)?;
     let settings = Arc::new(Settings {

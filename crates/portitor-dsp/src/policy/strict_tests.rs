@@ -10,7 +10,9 @@
 
 use serde_json::{Value, json};
 
-use super::*;
+use super::{check_parties, same_terms};
+use crate::Offer;
+use crate::negotiation::Agreement;
 use crate::negotiation::{ContractAgreementMessage, ContractOfferMessage, ContractRequestMessage};
 
 /// An offer with every field Portitor reads, at every level.
