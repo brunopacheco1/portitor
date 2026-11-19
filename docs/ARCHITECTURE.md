@@ -156,6 +156,25 @@ address the consumer's application uses at `/data/{flowId}` (ADRs
 [0016](adr/0016-dsp-caller-authentication.md),
 [0019](adr/0019-credential-constraints.md)).
 
+Two APIs carry this flow, and they have different callers. The
+**management API** (port 8081, API key, `/v1/...`) is for the operator
+of a connector and its own systems; no specification defines it. The
+**DSP API** (port 8080, DCP token, `/dsp/2025-1/...`) is for the other
+connector; DSP 2025-1 defines it. One management call makes the
+connector send one DSP message, so some paths look alike:
+
+| The operator calls its own connector (management) | The connector then calls the other one (DSP) | Steps |
+|---|---|---|
+| `POST /v1/negotiations` | `POST /negotiations/request` | 8, 10 |
+| `POST /v1/transfers` | `POST /transfers/request` | 17, 18 |
+| `POST /v1/transfers/{consumerPid}/completion` | `POST /transfers/{providerPid}/completion` | 27, 28 |
+| `POST /v1/transfers/{consumerPid}/termination` | `POST /transfers/{providerPid}/termination` | not drawn |
+
+The management call takes no DSP message: the connector builds it,
+gets a token and saves it before sending (ADR 0007). An operator does
+not call the other connector's DSP API by hand, because that call must
+carry a token that proves it comes from its connector.
+
 ![Dynamic: negotiating a contract and transferring data](diagrams/dynamic-negotiate-transfer.drawio.svg)
 
 Gaia-X (optional): the identity gets its compliance credential from a
