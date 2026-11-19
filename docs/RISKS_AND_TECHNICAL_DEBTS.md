@@ -136,10 +136,10 @@ checks this file:
 | [TD-36](#td-36) | DSP details: who may terminate, 401 or 404, agreement timestamp, `consumerPid` check, no catalog pages | Technical debt, interoperability | 2026-11-18 review (D4, D5) | Open | 0.12 |
 | [TD-37](#td-37) | DCP details: `token` claim required, presentations as JWT strings only, no `/.well-known/dspace-trust` | Technical debt, interoperability | 2026-11-18 review (C2) | Open | 0.12 |
 | [TD-38](#td-38) | No management call to read a provider's catalog | Technical debt, usability | 2026-11-18 review (Q1) | Open | 0.13 |
-| [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | 2026-11-18 review (Q2, Q7) | Open | 0.13 |
+| [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | 2026-11-18 review (Q2, Q7) | Open | 0.13; 1.x (Helm chart) |
 | [TD-40](#td-40) | Database calls block the async runtime | Technical debt | 2026-11-18 review (Q3) | Open | 0.12 (measure) |
 | [TD-41](#td-41) | A panic stops the whole process (`panic = "abort"`) | Technical debt, security | 2026-11-18 review (Q4) | Open | 0.12 (decision) |
-| [TD-42](#td-42) | Four near-copies of the negotiation and transfer logic | Technical debt | 2026-11-18 review (Q5) | Open | — |
+| [TD-42](#td-42) | Four near-copies of the negotiation and transfer logic | Technical debt | 2026-11-18 review (Q5) | Open | 0.13 (note); 1.x (merge) |
 | [TD-43](#td-43) | The Gaia-X documents name several versions of the rules | Technical debt | 2026-11-18 review (G1) | Open | 0.13 |
 
 Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
@@ -169,7 +169,9 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
   1,000 lines, and `Negotiator`, which also handles transfers and the
   harvest. ROADMAP 0.13: a "read the code in this order" page that
   follows one request from the route to the store; see also
-  [TD-42](#td-42).
+  [TD-42](#td-42). ROADMAP "Code quality in 1.x" (maintainer,
+  2026-11-18): split the files above 1,000 lines, simplify the types
+  and macros, rename or split `Negotiator`.
 
 <a id="r-02"></a>
 ### R-02 One maintainer: no two-person review
@@ -1597,6 +1599,8 @@ certificate and compliance run at each key change (ADR 0021).
 - **Next.** ROADMAP 0.13, documentation review: a short "first
   deployment" path at the top of DEPLOYING, sections in deployment
   order, a "top risks" box here.
+- **Helm chart (maintainer, 2026-11-18).** In a 1.x release (ROADMAP
+  "Code quality in 1.x").
 - **Decision (maintainer, 2026-11-18).** DEPLOYING is written for an
   operations team; running the demo on a laptop belongs in TESTING
   (it has the Compose demo already), so DEPLOYING loses what only the
@@ -1645,9 +1649,10 @@ certificate and compliance run at each key change (ADR 0021).
   connector. The in-memory stores live in production code ([review](reviews/2026-11-18-specifications-and-code-quality.md), Q5).
 - **Why it matters.** A fix in one may be needed in the other three.
 - **Current state: Open.**
-- **Next.** No merge planned before 1.0. ROADMAP 0.13: TESTING gets a
-  note, "changed one, check the other three". Merge only if bugs show
-  the copies drifting apart.
+- **Next.** No merge before 1.0. ROADMAP 0.13: TESTING gets a note,
+  "changed one, check the other three". ROADMAP "Code quality in 1.x"
+  (maintainer, 2026-11-18): one shared core in a 1.x release, best
+  before 1.1 adds push; the in-memory stores move into the tests.
 
 <a id="td-43"></a>
 ### TD-43 The Gaia-X documents name several versions of the rules

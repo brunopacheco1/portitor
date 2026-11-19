@@ -721,6 +721,40 @@ CI job (maintainer, 2026-11-15).
 - Exit: set by the ADRs.
 - Main risk: the largest unknown of the plan; the ADRs may split it.
 
+### Code quality in 1.x
+
+From the [2026-11-18 review](reviews/2026-11-18-specifications-and-code-quality.md)
+(maintainer, 2026-11-18: all of them, in 1.x). They change no behaviour,
+API or setting. Each goes into the plan of a 1.x release, at most one
+large item per release, so a regression is easy to trace. Which release
+takes which item is decided when that release is planned; the first
+item is best done before 1.1 adds push to the transfer code, so the new
+code is written once.
+
+- One shared core for the negotiation and transfer logic, as provider
+  and as consumer, in place of the four near-copies; the in-memory
+  stores move out of the production code into the tests
+  ([TD-42](RISKS_AND_TECHNICAL_DEBTS.md#td-42)).
+- No source file above 1,000 lines, tests not counted: `auth/dcp.rs`,
+  the issuer's and the identity's `store.rs`, `dcp/bundle.rs` and
+  `runtime/http.rs` are split by topic ([R-01](RISKS_AND_TECHNICAL_DEBTS.md#r-01)).
+- Simpler types: fewer type parameters on the services (today
+  `ProviderService<S, D, C, E>`), and each macro that writes types
+  either replaced by plain code or explained with its output in
+  RUST-IDIOMS ([R-01](RISKS_AND_TECHNICAL_DEBTS.md#r-01)).
+- `Negotiator` gets a name that fits what it does (negotiations,
+  transfers and the harvest), or is split ([R-01](RISKS_AND_TECHNICAL_DEBTS.md#r-01)).
+- A Helm chart for the three images, next to the Compose example
+  ([TD-39](RISKS_AND_TECHNICAL_DEBTS.md#td-39)).
+- Exit, for each item: the unit tests, the DSP and DCP TCKs and the EDC
+  interop test pass unchanged; the C4 diagrams, RUST-IDIOMS and the
+  "read the code in this order" page name the new files and types. For
+  the Helm chart: the demo data space runs from it on a local cluster,
+  and DEPLOYING explains it.
+- Main risk: a refactoring that changes behaviour unseen. The TCKs and
+  the interop test are the guard, so no item starts while one of them
+  is red.
+
 ### Research before code
 
 Docs only: a standards check, then an ADR the maintainer accepts or

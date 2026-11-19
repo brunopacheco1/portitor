@@ -30,6 +30,10 @@ versions may change behaviour and configuration.
   say where the answer differs from the specification (TD-32 to TD-36),
   and the website no longer claims strict parsing or a Gaia-X
   conformance kit. No code changed.
+- Roadmap, "Code quality in 1.x" (maintainer, 2026-11-18): one shared
+  core for the negotiation and transfer logic, no file above 1,000
+  lines, simpler types and macros, a better name for `Negotiator`, and a
+  Helm chart (TD-42, TD-39, R-01).
 
 ## [0.11.0] - 2026-11-17
 
