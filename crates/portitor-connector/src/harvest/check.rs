@@ -8,9 +8,10 @@
 
 use std::sync::Arc;
 
-use portitor_dsp::Dataset;
 use portitor_dsp::catalog::{DatasetDefinitionError, prepare_dataset};
 use portitor_dsp::policy::CredentialTypes;
+use portitor_dsp::{Dataset, Offer};
+use serde::Deserialize;
 
 /// The version of the code that checks entries: this crate's version.
 /// [`DspCheck::rules_version`] names it, so after an upgrade of Portitor
@@ -27,7 +28,9 @@ pub enum CheckKind {
     /// The DSP `Dataset` form or the DSP catalog rules (including a bad
     /// `portitor:source` and an `@id` used twice).
     Dsp,
-    /// An offer's constraints are not understood (ADR 0009, ADR 0019).
+    /// An offer is not understood: a field Portitor does not read (ADR
+    /// 0009, amendment of 2026-11-18) or a constraint it cannot evaluate
+    /// (ADR 0009, ADR 0019).
     Odrl,
     /// The SHACL shapes of the bundle (ADR 0005).
     Shacl,
@@ -152,6 +155,7 @@ impl DatasetCheck for DspCheck {
                 "the entry is not a JSON object",
             ));
         }
+        read_offers(entry)?;
         let dataset: Dataset = serde_json::from_value(entry.clone())
             .map_err(|e| EntryFailure::new(CheckKind::Dsp, format!("not a DSP dataset: {e}")))?;
         match prepare_dataset(dataset, &self.service_id, &self.types) {
@@ -162,6 +166,35 @@ impl DatasetCheck for DspCheck {
             Err(e) => Err(definition_failure(&e)),
         }
     }
+}
+
+/// Reads each offer of the entry (`hasPolicy`) on its own, before the
+/// whole dataset is read. Offers are read strictly
+/// ([`portitor_dsp::Offer`]): a policy field Portitor does not understand
+/// (a `duty` inside a permission, a misspelled key) is refused. Reading
+/// them here first makes that an `odrl` failure that names the offer and
+/// the field, not a general "not a DSP dataset".
+///
+/// An entry without a `hasPolicy` list passes here; reading the dataset
+/// reports it.
+fn read_offers(entry: &serde_json::Value) -> Result<(), EntryFailure> {
+    let Some(offers) = entry.get("hasPolicy").and_then(serde_json::Value::as_array) else {
+        return Ok(());
+    };
+    for offer in offers {
+        // `&Value` can be read as a type without copying it first
+        if let Err(error) = Offer::deserialize(offer) {
+            let id = offer
+                .get("@id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            return Err(EntryFailure::new(
+                CheckKind::Odrl,
+                format!("offer {id:?} is not understood: {error}"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The failure for a broken dataset definition: an offer that is not

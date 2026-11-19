@@ -181,7 +181,12 @@ impl<'a> From<&'a Agreement> for Terms<'a> {
 
 /// Whether two policies have the same terms: permissions, prohibitions,
 /// duties and profile. Ids, targets, assigners, assignees and timestamps
-/// are not compared.
+/// are not compared here; the negotiation services check them
+/// ([`check_parties`] for an offer).
+///
+/// The comparison is complete because policies are read strictly
+/// ([`Offer`]): a rule or constraint has no field beyond those compared
+/// here, so no term can be left out of the comparison unseen.
 #[must_use]
 pub fn same_terms<'a, 'b>(a: impl Into<Terms<'a>>, b: impl Into<Terms<'b>>) -> bool {
     let (a, b) = (a.into(), b.into());
@@ -189,6 +194,27 @@ pub fn same_terms<'a, 'b>(a: impl Into<Terms<'a>>, b: impl Into<Terms<'b>>) -> b
         && same_rules(a.prohibition, b.prohibition)
         && same_rules(a.obligation, b.obligation)
         && a.profile == b.profile
+}
+
+/// Checks the parties an offer in a negotiation message names. DSP
+/// 2025-1 does not require `assigner` or `assignee` on an offer, so both
+/// may be absent; Eclipse EDC and the DSP TCK send them. When present,
+/// `assigner` must be the negotiation's provider and `assignee` its
+/// consumer: an offer between other parties is not the one being
+/// negotiated here. [`same_terms`] does not compare them, so this check
+/// is what keeps them from being read and then ignored.
+///
+/// # Errors
+///
+/// Which of the two names another participant.
+pub fn check_parties(offer: &Offer, provider: &str, consumer: &str) -> Result<(), &'static str> {
+    if offer.assigner.as_deref().is_some_and(|id| id != provider) {
+        return Err("the offer's assigner is not the provider");
+    }
+    if offer.assignee.as_deref().is_some_and(|id| id != consumer) {
+        return Err("the offer's assignee is not the consumer");
+    }
+    Ok(())
 }
 
 fn same_rules(a: &[Rule], b: &[Rule]) -> bool {
@@ -357,3 +383,6 @@ mod tests;
 
 #[cfg(test)]
 mod credential_tests;
+
+#[cfg(test)]
+mod strict_tests;

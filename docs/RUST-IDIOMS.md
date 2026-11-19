@@ -804,7 +804,9 @@ context loader). `.into()` turns a `String` into such a boxed error
   "Option::is_none"` leaves out empty fields.
 - `#[serde(deny_unknown_fields)]`: refuse JSON with a field the type
   does not have, instead of ignoring it (the management APIs' request
-  types, so a typo is an error).
+  types, so a typo is an error; the ODRL policy types `Offer`,
+  `Agreement`, `Rule` and `AtomicConstraint`, so a term that is not
+  understood is never dropped, ADR 0009).
 - `#[serde(default)]`: a missing field gets its empty default (`[]`,
   `""`, `false`); `default = "pull_format"` calls that function instead
   (`portitor-connector/src/management.rs`).
@@ -814,6 +816,14 @@ context loader). `.into()` turns a `String` into such a boxed error
 - `#[serde(untagged)]` on an enum: try each variant in turn and take the
   first that fits the JSON. `Relationship` in `did.rs` is a key id string
   or a whole key object.
+  When no variant fits, the error says only "data did not match any
+  variant", so the reason is lost. Where the reason matters, the type is
+  read by hand instead: `Constraint` in `portitor-dsp/src/lib.rs` has
+  its own `impl Deserialize`, which reads the JSON into a
+  `serde_json::Value`, looks at the fields to pick the kind, and then
+  reads that kind (`read_constraint`). A policy field that is not
+  understood is then refused by name. `Offer::deserialize(&value)` reads
+  a type from a `&Value` without copying it.
 - `#[serde(tag = "kty")]`: the JSON field `kty` says which variant it is
   (`Jwk`: `"EC"` or `"RSA"`).
 - `#[serde(deserialize_with = "one_audience")]`: read this field with

@@ -725,3 +725,83 @@ fn both_checks_add_conforms_to_without_losing_one_already_there() {
         Some("https://shapes.example/v1")
     );
 }
+
+/// Policies are read strictly (ADR 0009, amendment of 2026-11-18): a
+/// dataset whose offer has a term Portitor does not read is rejected with
+/// an `odrl` error that names the dataset, the offer and the field. As
+/// for every harvest check (ADR 0020), only that dataset stops: the
+/// others are served, and its previous good version stays.
+#[test]
+fn an_unknown_policy_term_stops_only_that_dataset() {
+    let store = memory();
+    let source = Source::with(vec![entry("a"), entry("b"), entry("c"), entry("d")]);
+    let harvester = started(&source, &store, dsp());
+    let copy = harvester.copy();
+    assert_eq!(ids(&copy), ["a", "b", "c", "d"]);
+
+    // b: a duty inside a permission; c: a misspelled key; d: `unit` on a
+    // constraint; e is new and has an agreement's field on its offer
+    let mut duty = entry("b");
+    duty["hasPolicy"][0]["permission"][0]["duty"] = json!([{"action": "attribute"}]);
+    let mut typo = entry("c");
+    typo["hasPolicy"][0]["prohibtion"] = json!([{"action": "distribute"}]);
+    let mut unit = entry("d");
+    unit["hasPolicy"][0]["permission"][0]["constraint"] = json!([{"leftOperand": "dateTime",
+        "operator": "lteq", "rightOperand": "2030-12-31", "unit": "http://example.com/unit"}]);
+    let mut new_one = entry("e");
+    new_one["hasPolicy"][0]["assigner"] = json!("did:web:p.example");
+    let mut changed = entry("a");
+    changed["dct:title"] = json!("A, changed");
+    source.set(vec![changed, duty, typo, unit, new_one]);
+
+    let job = done(harvester.run(Trigger::Interval));
+    assert_eq!(job.record.outcome, JobOutcome::Partial);
+    assert_eq!(job.record.counts.rejected, 4);
+    assert_eq!(job.record.counts.updated, 1);
+
+    // the good dataset was updated; the bad ones keep their last good
+    // version (without the term), and the new bad one is not served
+    assert_eq!(ids(&copy), ["a", "b", "c", "d"]);
+    assert_eq!(
+        copy.get("a").unwrap().metadata.get("dct:title"),
+        Some(&json!("A, changed"))
+    );
+    let kept = serde_json::to_value(copy.get("b").unwrap()).unwrap();
+    assert_eq!(kept["hasPolicy"], entry("b")["hasPolicy"]);
+
+    let (_, errors) = last_job(&store);
+    let expected = [
+        (
+            "b",
+            "offer \"b:offer\" is not understood: unknown field `duty`",
+        ),
+        (
+            "c",
+            "offer \"c:offer\" is not understood: unknown field `prohibtion`",
+        ),
+        (
+            "d",
+            "offer \"d:offer\" is not understood: unknown field `unit`",
+        ),
+        (
+            "e",
+            "dataset \"e\" has an offer with an assigner or an assignee",
+        ),
+    ];
+    assert_eq!(errors.len(), expected.len());
+    for (error, (dataset, message)) in errors.iter().zip(expected) {
+        assert_eq!(error.dataset_id.as_deref(), Some(dataset));
+        assert!(error.message.starts_with(message), "{}", error.message);
+    }
+    // the unknown fields are ODRL failures; the catalog rule is a DSP one
+    let kinds: Vec<CheckKind> = errors.iter().map(|error| error.kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            CheckKind::Odrl,
+            CheckKind::Odrl,
+            CheckKind::Odrl,
+            CheckKind::Dsp
+        ]
+    );
+}

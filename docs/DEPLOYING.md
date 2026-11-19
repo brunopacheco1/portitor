@@ -288,7 +288,8 @@ file (`PORTITOR_DATASETS_FILE`), in the same format as before.
   the run ends `unchanged` and nothing else is touched. To publish a
   change, replace the file; it is taken at the next run (or restart).
 - Each dataset is checked on its own: JSON object, DSP `Dataset` form,
-  the DSP catalog rules, the supported ODRL constraints, a valid
+  the DSP catalog rules, offers with only the policy terms and ODRL
+  constraints the connector reads ([Known limits](#known-limits)), a valid
   `portitor:source` and, with a bundle, the SHACL shapes for its
   `dct:accessRights` level. A dataset that passes is added or updated. A
   dataset that fails is rejected with its error; its previous good
@@ -1086,6 +1087,7 @@ is the key's thumbprint, so a new key file gives a new key id.
 | `message breaks the dataspace's message rules; not sent, terminating` (WARN) | With bundle message shapes: our own message failed them (`error` lists the SHACL reasons), so it was not sent and the negotiation or transfer is terminated; `..., process not started` for a consumer's first request, `termination breaks ...; not sent` for a termination | Check the offer or policy against the authority's rules |
 | `outbound DSP message breaks the dataspace's message rules; not sent` (WARN) | The same breach, logged by the check itself with `message_type` and `reasons` | As above |
 | `inbound DSP message breaks the dataspace's message rules; answered 400` (INFO) | A partner's negotiation or transfer message failed the bundle's message shapes; it got HTTP 400 and nothing changed | Nothing, unless the partner asks |
+| `inbound DSP message is not valid; answered 400` (INFO) | A partner's negotiation or transfer message could not be read; `reason` says why. `unknown field ...` in an offer or agreement: a policy term the connector does not read (for example a `duty` inside a permission), refused on purpose. The partner got HTTP 400 and nothing changed | Nothing, unless you want that offer: then ask the partner for one with only the terms listed under [Known limits](#known-limits) |
 | `message had arrived before` (INFO) | A send failed, but the partner's state shows it had received the message (a lost answer, or a resend after a restart); the negotiation goes on | Nothing |
 | `sending pending negotiation messages again` (INFO, at start) | Messages saved but not acknowledged before the last stop are being sent | Nothing |
 | `counter-party not reachable; process not started` (WARN) | The first request of a negotiation or transfer we started as consumer failed (tried as above); it ends without a message, as the provider never knew it | Same as above |
@@ -1101,7 +1103,7 @@ is the key's thumbprint, so a new key file gives a new key id.
 | `no datasets file (PORTITOR_DATASETS_FILE): the catalog is empty` (INFO) | No datasets file is set | Set it, if you offer datasets |
 | `harvest run` (INFO) | One per run: `job`, `trigger`, `outcome` and the counts | Nothing |
 | `harvest run` (WARN, `outcome=failed`) | The source could not be read; the catalog is unchanged | Check the file, its mount and its JSON |
-| `harvest: dataset rejected` (WARN) | One dataset failed a check: `position`, `dataset`, `check`, `error` | Fix the dataset in the source; the next run takes it |
+| `harvest: dataset rejected` (WARN) | One dataset failed a check: `position`, `dataset`, `check`, `error`. With check `odrl` and `offer "..." is not understood: unknown field ...`: the offer has a policy term the connector does not read, or a misspelled key | Fix the dataset in the source; the next run takes it. For an unknown field: correct the key, or remove the term ([Known limits](#known-limits)) |
 | `harvest: dataset has no portitor:source; its transfers will be refused` (WARN) | A dataset was added or changed without a data source | Add `portitor:source`, unless the dataset is not transferred |
 | `harvest skipped: a run is going on` (INFO) | A timer tick came while a run was going on | Nothing, unless it repeats: then lengthen the interval |
 | `harvest: cannot store the run; ...` (ERROR) | The database could not be written; the catalog keeps what it had | Check disk space and the `/data` volume |
@@ -1774,12 +1776,21 @@ known risk and technical debt, with its status and target release):
   (ADR 0009). As consumer, the connector does not accept a provider's
   offer (DSP `OFFERED`) that has credential constraints; requests it
   sends itself are not affected.
-- Policy terms the connector does not know are dropped without an
-  error when a policy is read, from your datasets file or from a
-  partner's offer: for example a `duty` inside a permission, or `unit`
-  on a constraint. Check each offer in your own catalog after a harvest,
-  and read a partner's offer in its catalog answer before you request it
-  ([TD-32](RISKS_AND_TECHNICAL_DEBTS.md#td-32)).
+- Policies are read strictly: a policy term the connector does not
+  read is refused, never dropped
+  ([ADR 0009](adr/0009-minimal-odrl-policies.md), amendment of
+  2026-11-18). Examples: a `duty` inside a permission, `unit` on a
+  constraint, a misspelled key. In your datasets file, that dataset is
+  rejected (check `odrl`) and the others are harvested. In a partner's
+  offer, contract request or agreement, the message is answered 400
+  with the DSP error naming the field, and the negotiation does not
+  move. Eclipse EDC ignores such fields, so an offer that EDC accepts
+  can be refused here. The fields read are `@id`, `@type`, `target`,
+  `assigner`, `assignee`, `profile`, `permission`, `prohibition` and
+  `obligation` (and `timestamp` on an agreement); `action` and
+  `constraint` in a rule; `leftOperand`, `operator` and `rightOperand`,
+  or one of `and`, `andSequence`, `or`, `xone`, in a constraint. An
+  offer in your datasets file has no `target`, `assigner` or `assignee`.
 - Negotiations start from the consumer only; a provider cannot start
   one with an offer ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)). A
   transfer request sent twice starts two transfers
