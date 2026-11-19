@@ -17,6 +17,23 @@ issuer and registers each participant. Then each participant deploys its
 identity, asks the issuer for its membership credential, and deploys its
 connector ([ARCHITECTURE.md](ARCHITECTURE.md#deployment-order)).
 
+**What the dataspace decides before participants join.** DSP 2025-1
+says a dataspace is based on an agreed Governance Framework and an
+agreed set of Policies. DCP v1.0.1 leaves some points to that framework
+or to a dataspace profile, on purpose (DCP issues
+[#277](https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/277)
+and [#278](https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/278)).
+The dataspace authority decides them once and tells every participant.
+Every participant then sets the same values:
+
+| Left open by DCP | What the authority decides | Portitor setting |
+| --- | --- | --- |
+| Trusted issuers ("trust anchors" in DCP) | Which issuer DIDs are trusted for which credential types | `PORTITOR_TRUSTED_ISSUERS` (connector and identity) |
+| Scope strings | The exact scopes participants send and accept. EDC needs an access part, for example `org.eclipse.dspace.dcp.vc.type:MembershipCredential:read` | `PORTITOR_DCP_SCOPES`, `PORTITOR_POLICY_CREDENTIALS`, `PORTITOR_SCOPE_TYPE_ALIASES` |
+| Holder binding | Which credential types must have the presenter as subject, and how other credentials are bound | Fixed in Portitor: the subject must be the presenter, except the Gaia-X compliance credential ([Gaia-X compliance](#gaia-x-compliance), ADR 0022) |
+| Gaia-X compliance (optional) | Whether offers may require it, and which compliance services are trusted. Gaia-X lists its Trust Anchors in the Gaia-X Registry | `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` (provider) |
+| Dataset metadata shapes (optional) | Whether dataset metadata is checked, and against which bundle | `PORTITOR_BUNDLE_URL`, `PORTITOR_BUNDLE_VERSION`, `PORTITOR_BUNDLE_AUTHORITY` ([bundle](#schema-and-vocabulary-bundle)) |
+
 Portitor is a prototype (0.x). Read [Known limits](#known-limits) before you
 expose it to partners.
 

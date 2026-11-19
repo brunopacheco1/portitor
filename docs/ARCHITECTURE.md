@@ -516,7 +516,13 @@ by participants.
 
 ## Deployment order
 
-Once per dataspace, by the dataspace authority:
+Once per dataspace, by the dataspace authority, the party that applies
+the dataspace's Governance Framework (DSP 2025-1 term):
+
+First, decide what DCP leaves to the dataspace: trusted issuers, scope
+strings and holder binding, and, if used, Gaia-X compliance and the
+dataset metadata bundle
+([DEPLOYING.md](DEPLOYING.md#deploying-and-operating-portitor)). Then:
 
 1. Issuer (`portitor-issuer`): its own volume, key and `did:web`
    document; its credential definitions; then register each participant
