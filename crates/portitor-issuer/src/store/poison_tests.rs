@@ -13,7 +13,8 @@ use std::sync::Arc;
 
 use portitor_runtime::sqlite::testing;
 
-use super::*;
+use super::{IssuerStore, Participant, SqliteStore};
+use serde_json::Map;
 
 /// How the shared checks reach this store: its own `conn()` (the code
 /// under test) and its lock.
