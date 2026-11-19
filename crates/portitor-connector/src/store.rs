@@ -152,6 +152,18 @@ const MIGRATIONS: &[&str] = &[
     // and must still open. `store/transfers.rs` (`insert`) keeps new rows
     // unique.
     "CREATE INDEX transfer_request ON transfer (counter_party, consumer_pid)",
+    // 0.12: a transfer request names its agreement, and the provider looks
+    // the negotiation up by it (`store/transfers.rs`, `finalized`). Without
+    // an index every stored negotiation was read: 8 ms on an empty file,
+    // 38 ms with 10,000 negotiations (docs/BENCHMARKS.md). The expression
+    // must stay exactly the one of that query, or SQLite does not use the
+    // index.
+    "CREATE INDEX negotiation_agreement
+        ON negotiation (json_extract(agreement, '$.\"@id\"'))",
+    // 0.12: the same lookup on the consumer's side, when it starts a
+    // transfer under an agreement it holds (`store/consumer_transfers.rs`)
+    "CREATE INDEX consumer_negotiation_agreement
+        ON consumer_negotiation (json_extract(agreement, '$.\"@id\"'))",
 ];
 
 /// Adapter: negotiations in a `SQLite` file.
@@ -809,6 +821,36 @@ mod tests {
         assert_eq!(jobs[0].record.kind, crate::harvest::JobKind::Datasets);
     }
 
+    /// The agreement lookups of a transfer request (provider) and of a
+    /// transfer start (consumer) must use the indexes of migrations 10 and
+    /// 11. If a query's expression and its index drift apart, `SQLite`
+    /// reads every negotiation again and this test fails.
+    #[test]
+    fn the_agreement_lookups_use_their_indexes() {
+        let store = setup(Connection::open_in_memory().unwrap()).unwrap();
+        for (table, index) in [
+            ("negotiation", "INDEX negotiation_agreement"),
+            (
+                "consumer_negotiation",
+                "INDEX consumer_negotiation_agreement",
+            ),
+        ] {
+            let sql = format!(
+                "EXPLAIN QUERY PLAN SELECT agreement FROM {table}
+                   WHERE state = ?1 AND json_extract(agreement, '$.\"@id\"') = ?2"
+            );
+            let plan: Vec<String> = store
+                .conn()
+                .prepare(&sql)
+                .unwrap()
+                .query_map(["FINALIZED", "urn:uuid:a"], |row| row.get(3))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            assert!(plan.iter().any(|step| step.contains(index)), "{plan:?}");
+        }
+    }
+
     /// A file written by 0.11 (8 migrations) may hold two transfers for
     /// one repeated request (TD-34). Migration 9 must still apply: it adds
     /// the lookup index and keeps both rows; the first one answers.
@@ -833,7 +875,7 @@ mod tests {
             .conn()
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 9);
+        assert_eq!(version, i64::try_from(MIGRATIONS.len()).unwrap());
         let index: String = store
             .conn()
             .query_row(

@@ -157,6 +157,19 @@ pub async fn serve(
     serve_with_trusted_routes(public, management, &[]).await
 }
 
+/// The listener, with `TCP_NODELAY` set on every connection it accepts:
+/// an answer is sent at once and does not wait for more bytes to fill a
+/// packet. Without it about 5% of small data pulls took 43 ms, with it
+/// 0.4 ms (docs/BENCHMARKS.md, 0.12). A connection where the option
+/// cannot be set is still served.
+fn without_delay(listener: TcpListener) -> impl axum::serve::Listener<Addr = std::net::SocketAddr> {
+    use axum::serve::ListenerExt;
+    listener.tap_io(|connection| {
+        // the option only changes timing, so a failure is not an error
+        let _ = connection.set_nodelay(true);
+    })
+}
+
 /// Like [`serve`], and the public routes in `trusted_routes` (route
 /// templates such as `/sts/token`) take the caller's W3C trace context:
 /// routes called only from inside our own participant (ADR 0023, section
@@ -176,7 +189,7 @@ pub async fn serve_with_trusted_routes(
         // the duration measure show the 500
         let app = observe_requests(answer_500_on_panic(app), &[]);
         let serving = tokio::spawn(
-            axum::serve(listener, app)
+            axum::serve(without_delay(listener), app)
                 .with_graceful_shutdown(wait(stopped.clone()))
                 .into_future(),
         );
@@ -188,7 +201,7 @@ pub async fn serve_with_trusted_routes(
     });
     let (listener, app) = public;
     let app = observe_requests(answer_500_on_panic(app), trusted_routes);
-    axum::serve(listener, app)
+    axum::serve(without_delay(listener), app)
         .with_graceful_shutdown(wait(stopped))
         .await?;
     if let Some(management) = management {
