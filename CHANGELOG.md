@@ -43,6 +43,12 @@ Interoperability and performance. Read "From 0.11 to 0.12" in
   routes still answer 401, and 503 stays when a service the check needs
   is down (TD-36; ADR 0016 amended). The log line `DSP request refused:
   caller not authenticated` has a new `status` field.
+- **A JSON key given twice is refused** in a DSP negotiation or
+  transfer message, in a constraint, and in the datasets file, with
+  "duplicate field" and the key's name. Before, the last value won
+  silently, so two parties could read two different policies in the
+  same bytes (RFC 8259 calls the result "unpredictable"). Found by the
+  0.12 testing review.
 - A repeated `TransferRequestMessage` with the `consumerPid` of a
   transfer the same caller already asked for gets that transfer again:
   no second data flow or token (TD-34; ADR 0013 amended). A repeat with
@@ -88,6 +94,14 @@ Interoperability and performance. Read "From 0.11 to 0.12" in
 
 ### Fixed
 
+- The dataset harvest goes on after a run that panicked. Before, every
+  later run, scheduled or manual, was skipped as "a run is going on"
+  until a restart.
+- A credential whose `kid` is the full key id (`did:web:issuer#key-1`)
+  verifies when the issuer's DID document writes that key as `#key-1`
+  only (W3C DID Core, relative DID URLs).
+- An agreement `timestamp` that writes midnight as `24:00:00`, a valid
+  `xsd:dateTime`, is accepted.
 - A transfer start no longer slows down with stored history: the
   provider read every negotiation to find the agreement (8 ms on an
   empty file, 38 ms with 10,000 negotiations).

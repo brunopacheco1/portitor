@@ -230,6 +230,7 @@ pub mod guard;
 pub mod negotiation;
 pub mod policy;
 pub mod transfer;
+pub mod unique_keys;
 
 #[cfg(test)]
 mod test_support;
@@ -421,7 +422,8 @@ impl<'de> Deserialize<'de> for Constraint {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         // The JSON is read whole first, because the fields present decide
         // which kind of constraint it is.
-        let value = serde_json::Value::deserialize(d)?;
+        // A key given twice is refused here, as the typed readers do.
+        let value = unique_keys::UniqueKeys::deserialize(d)?.0;
         read_constraint(value).map_err(D::Error::custom)
     }
 }

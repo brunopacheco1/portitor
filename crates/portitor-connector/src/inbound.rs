@@ -11,12 +11,15 @@
 use axum::Json;
 use axum::extract::rejection::JsonRejection;
 use portitor_dsp::guard::{Direction, MessageGuard};
+use portitor_dsp::unique_keys::UniqueKeys;
 use portitor_runtime::telemetry::metrics::{self, Refusal};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-/// A DSP request's body as axum gives it: JSON, or why it is not.
-pub(crate) type Body = Result<Json<Value>, JsonRejection>;
+/// A DSP request's body as axum gives it: JSON in which no object names
+/// a key twice (RFC 8259 calls the result of that "unpredictable"), or
+/// why it is not.
+pub(crate) type Body = Result<Json<UniqueKeys>, JsonRejection>;
 
 /// Checks a message's shape with `guard`, then reads it as a `T`. A
 /// refusal is built by `refuse` from the other party's process id (the
@@ -36,7 +39,7 @@ pub(crate) fn read_message<T: DeserializeOwned, E>(
         Box::new(refuse(other_pid, reason))
     };
     let value = match body {
-        Ok(Json(value)) => value,
+        Ok(Json(UniqueKeys(value))) => value,
         Err(rejection) => {
             return Err(refused(Refusal::InvalidMessage, "", &rejection.body_text()));
         }

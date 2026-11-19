@@ -405,8 +405,9 @@ mod tests {
         );
     }
 
-    /// A paused clock shows the pause: each restart comes
-    /// [`RESTART_PAUSE`] after the panic, not at once.
+    /// A paused clock shows the pause: the first restart comes
+    /// [`RESTART_PAUSE`] after the panic, the next after twice that, not
+    /// at once.
     #[tokio::test(start_paused = true)]
     async fn a_supervised_task_waits_the_restart_pause_before_each_restart() {
         let started_at = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -423,7 +424,7 @@ mod tests {
         let starts = started_at.lock().unwrap();
         assert_eq!(starts.len(), 3);
         assert_eq!(starts[1] - starts[0], RESTART_PAUSE);
-        assert_eq!(starts[2] - starts[1], RESTART_PAUSE);
+        assert_eq!(starts[2] - starts[1], RESTART_PAUSE * 2);
     }
 
     /// A task that returns is finished: it is not started again.
@@ -450,7 +451,9 @@ mod tests {
             counted.fetch_add(1, Ordering::SeqCst);
             async { panic!("every time") }
         });
-        tokio::time::sleep(RESTART_PAUSE * 10 + Duration::from_secs(1)).await;
+        // pauses of 5, 10, 20, 40, 80 and 160 seconds, then 300 each
+        let ten_pauses = Duration::from_secs(5 + 10 + 20 + 40 + 80 + 160) + MAX_RESTART_PAUSE * 4;
+        tokio::time::sleep(ten_pauses + Duration::from_secs(1)).await;
         assert_eq!(
             starts.load(Ordering::SeqCst),
             11,
@@ -460,7 +463,7 @@ mod tests {
 
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());
-        tokio::time::sleep(RESTART_PAUSE * 3).await;
+        tokio::time::sleep(MAX_RESTART_PAUSE * 2).await;
         assert_eq!(
             starts.load(Ordering::SeqCst),
             11,

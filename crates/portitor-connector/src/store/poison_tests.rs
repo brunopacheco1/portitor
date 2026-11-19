@@ -9,9 +9,11 @@
 //! Negotiations, transfers and data flows are written with one statement
 //! each, a harvest run in one transaction: both cases are checked.
 
+use std::sync::Arc;
+
 use portitor_runtime::sqlite::testing;
 
-use super::SqliteNegotiations;
+use super::*;
 
 /// How the shared checks reach this store: its own `conn()` (the code
 /// under test) and its lock.

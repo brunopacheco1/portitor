@@ -168,3 +168,11 @@ has them; these are refused.
   terms.
 - A partner whose policies use ODRL terms outside the table cannot
   negotiate with Portitor until the term is supported or removed.
+- A JSON key given twice is refused too, in a DSP negotiation or
+  transfer message, in a constraint and in the datasets file (added
+  2026-11-19, after the 0.12 testing review). JSON permits it, but RFC
+  8259, section 4, calls the behaviour of readers "unpredictable": one
+  keeps the first value, another the last, so the two parties could
+  agree on different terms. The typed readers already refused it; the
+  places that read plain JSON first now do the same
+  (`portitor_dsp::unique_keys`).

@@ -357,7 +357,6 @@ fn a_fragment_only_key_id_is_the_issuers_own() {
 /// EDC write it: `#key-1` in the document of `did:web:issuer.example` is
 /// that same key (W3C DID Core, "Relative DID URLs").
 #[test]
-#[ignore = "bug: a full kid does not find a key whose id the DID document writes as #fragment"]
 fn a_full_key_id_finds_the_fragment_only_key_of_the_issuers_document() {
     let issuer = issuer_with_a_fragment_only_key_id();
     let jwt = issuer.sign("JWT", &vc11_claims_by_the_issuer());

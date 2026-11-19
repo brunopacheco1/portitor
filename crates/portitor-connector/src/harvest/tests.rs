@@ -718,7 +718,6 @@ impl DatasetSource for PanicsOnce {
 /// run, by the schedule or from the management API, is done, not
 /// skipped as if the panicked run were still going on.
 #[test]
-#[ignore = "bug: after a run that panicked every later run is skipped as busy (poisoned lock)"]
 fn a_run_after_one_that_panicked_is_done() {
     let store = memory();
     let entries = Source::with(vec![entry("a")]);
@@ -745,7 +744,6 @@ fn a_run_after_one_that_panicked_is_done() {
 /// keeps what it served, and the run of the next interval works again
 /// and takes the source's changes.
 #[tokio::test(start_paused = true)]
-#[ignore = "bug: after a run that panicked every later run is skipped as busy (poisoned lock)"]
 async fn the_schedule_goes_on_after_a_run_that_panicked() {
     let store = memory();
     let entries = Source::with(vec![entry("a")]);

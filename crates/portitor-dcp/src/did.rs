@@ -155,7 +155,7 @@ impl DidDocument {
                 _ => return Err(Error::Invalid("no kid and several verification methods")),
             },
         };
-        if allowed.iter().any(|r| r.id() == vm.id) {
+        if allowed.iter().any(|r| self.same_key(r.id(), &vm.id)) {
             Ok(vm)
         } else {
             Err(Error::Invalid(purpose.missing_message()))
@@ -166,7 +166,25 @@ impl DidDocument {
     /// (`did:web:example.com#key-1`), or only the `#key-1` part, which
     /// a JWS may use for a key of the signer's own DID document.
     fn names_kid(&self, vm: &VerificationMethod, kid: &str) -> bool {
-        vm.id == kid || vm.id.strip_prefix(&self.id) == Some(kid)
+        self.same_key(&vm.id, kid)
+    }
+
+    /// Whether two key ids name the same key of this document. Each may
+    /// be written in full or as `#fragment` only: inside a DID document
+    /// a relative id is read against the document's own DID (W3C DID
+    /// Core, "Relative DID URLs").
+    fn same_key(&self, one: &str, other: &str) -> bool {
+        self.fragment_of_own(one) == self.fragment_of_own(other)
+    }
+
+    /// The `#fragment` of a key id of this DID; an id of another DID, or
+    /// one without a fragment, is returned whole and so equals only
+    /// itself.
+    fn fragment_of_own<'a>(&self, id: &'a str) -> &'a str {
+        match id.strip_prefix(self.id.as_str()) {
+            Some(fragment) if fragment.starts_with('#') => fragment,
+            _ => id,
+        }
     }
 }
 

@@ -98,8 +98,10 @@ impl DatasetSource for FileSource {
     fn snapshot(&self) -> Result<Snapshot, SourceError> {
         let shown = self.path.display();
         let raw = read_at_most(&self.path, MAX_DATASETS_FILE_BYTES)?;
-        let entries: Vec<serde_json::Value> = serde_json::from_slice(&raw)
+        // a key given twice anywhere in the file is refused (`UniqueKeys`)
+        let entries: Vec<portitor_dsp::unique_keys::UniqueKeys> = serde_json::from_slice(&raw)
             .map_err(|e| SourceError(format!("datasets file {shown} is not a JSON array: {e}")))?;
+        let entries = entries.into_iter().map(|entry| entry.0).collect();
         Ok(Snapshot {
             sha256: sha256_hex(&raw),
             entries,

@@ -9,9 +9,11 @@
 //! The identity store writes more than one statement only inside a
 //! transaction.
 
+use std::sync::Arc;
+
 use portitor_runtime::sqlite::testing;
 
-use super::SqliteStore;
+use super::*;
 
 /// How the shared checks reach this store: its own `conn()` (the code
 /// under test) and its lock.
@@ -26,21 +28,10 @@ fn a_panic_inside_a_transaction_rolls_it_back() {
     testing::assert_a_panic_inside_a_transaction_rolls_it_back(store, &ACCESS);
 }
 
-/// A write of one statement is complete before anything can panic: it
-/// is kept, and the store works.
 #[test]
 fn a_panic_after_a_single_statement_keeps_it() {
-    let store = Arc::new(SqliteStore::in_memory().unwrap());
-    let held = Arc::clone(&store);
-    let panicked = std::thread::spawn(move || {
-        let conn = held.conn();
-        conn.execute_batch("CREATE TABLE written (x TEXT)").unwrap();
-        panic!("while the lock is held");
-    })
-    .join();
-    assert!(panicked.is_err());
-    assert_eq!(tables_named(&store, "written"), 1, "kept");
-    assert_usable(&store);
+    let store = SqliteStore::in_memory().unwrap();
+    testing::assert_a_panic_after_a_single_statement_keeps_it(store, &ACCESS);
 }
 
 /// The store's own operations work on the poisoned lock too: a Gaia-X

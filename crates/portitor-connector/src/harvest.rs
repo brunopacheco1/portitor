@@ -21,7 +21,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 use std::time::Duration;
 
 use portitor_dsp::Dataset;
@@ -547,13 +547,19 @@ impl DatasetHarvester {
     /// One run, unless one is going on. Blocking: it reads the source and
     /// writes the store.
     pub fn run(&self, trigger: Trigger) -> RunResult {
-        // try_lock: a run that finds another one going on is skipped
-        let Ok(_running) = self.busy.try_lock() else {
-            tracing::info!(
-                trigger = trigger.name(),
-                "harvest skipped: a run is going on"
-            );
-            return RunResult::Busy;
+        // try_lock: a run that finds another one going on is skipped. A
+        // lock left "poisoned" by a run that panicked is taken all the
+        // same: it guards no data, it only says that a run is going on
+        let _running = match self.busy.try_lock() {
+            Ok(running) => running,
+            Err(TryLockError::Poisoned(left_by_a_panic)) => left_by_a_panic.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                tracing::info!(
+                    trigger = trigger.name(),
+                    "harvest skipped: a run is going on"
+                );
+                return RunResult::Busy;
+            }
         };
         match self.run_now(trigger, false) {
             Ok(job) => RunResult::Done(job),

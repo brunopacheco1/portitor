@@ -705,7 +705,6 @@ fn the_forms_of_an_agreement_timestamp() {
 /// seconds are zero"); the DSP 2025-1 pattern for `timestamp` has it too
 /// (`contract-schema.json`, `Agreement`: `24:00:00(\.0+)?`).
 #[test]
-#[ignore = "bug: is_xsd_date_time refuses the valid xsd:dateTime form 24:00:00"]
 fn a_timestamp_at_the_end_of_the_day_is_accepted() {
     assert!(is_xsd_date_time("2026-11-12T24:00:00Z"));
     assert!(is_xsd_date_time("2026-11-12T24:00:00.000+01:00"));

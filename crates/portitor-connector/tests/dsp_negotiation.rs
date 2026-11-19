@@ -784,7 +784,6 @@ fn request_text(offer: &str) -> String {
 /// amendment of 2026-11-18: no term is dropped). The request is refused
 /// and no negotiation starts.
 #[tokio::test]
-#[ignore = "bug: a key given twice in a DSP message is read, and its first value is dropped"]
 async fn a_request_with_a_policy_field_given_twice_is_refused() {
     let sender = Arc::new(FakeSender::default());
     let app = app(ports(&sender));

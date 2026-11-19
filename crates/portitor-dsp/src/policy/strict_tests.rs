@@ -354,7 +354,6 @@ fn a_field_given_twice_in_an_offer_or_a_rule_is_refused() {
 /// `serde_json::Value` (`read_constraint`), which keeps the last value of
 /// a repeated key and says nothing.
 #[test]
-#[ignore = "bug: a key given twice in a constraint is read, and its first value is dropped"]
 fn a_field_given_twice_in_a_constraint_is_refused() {
     let twice_in_an_atomic_constraint = r#"{"@id": "o", "@type": "Offer",
         "permission": [{"action": "use", "constraint": [

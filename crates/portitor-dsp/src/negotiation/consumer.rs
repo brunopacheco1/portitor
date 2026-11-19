@@ -791,10 +791,30 @@ fn check_timestamp(timestamp: Option<&str>) -> Result<(), &'static str> {
 /// without a time zone (XML Schema lets the zone be left out).
 /// `portitor_time` only reads a time with a zone, so a text without one
 /// is tried again as UTC.
+///
+/// `xsd:dateTime` may also write the midnight that ends a day as
+/// `24:00:00`, with only zeros after it. `portitor_time` reads hours 0
+/// to 23, so that form is checked as `00:00:00` of the same day: only
+/// whether the text is valid matters here, not the instant.
 fn is_xsd_date_time(text: &str) -> bool {
+    let text = &match text.split_once("T24:00:00") {
+        Some((date, rest)) if zeros_then_zone(rest) => format!("{date}T00:00:00{rest}"),
+        _ => text.to_owned(),
+    };
     let as_utc = format!("{text}Z");
     portitor_time::timestamp_seconds(text).is_some()
         || portitor_time::timestamp_seconds(&as_utc).is_some()
+}
+
+/// Whether what follows `24:00:00` is at most a fraction of zeros
+/// (`.000`) before the time zone, as `xsd:dateTime` asks.
+fn zeros_then_zone(rest: &str) -> bool {
+    let zone_at = rest.find(['Z', '+', '-']).unwrap_or(rest.len());
+    let fraction = &rest[..zone_at];
+    fraction.is_empty()
+        || fraction
+            .strip_prefix('.')
+            .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b == b'0'))
 }
 
 /// The message must name this negotiation. The first provider message may
