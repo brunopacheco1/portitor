@@ -29,7 +29,7 @@ body:json {
 
 script:post-response {
   if (res.body && res.body.consumerPid) {
-    bru.setVar("mgmtConsumerPid", res.body.consumerPid);
+    bru.setVar("mgmtNegotiationConsumerPid", res.body.consumerPid);
   }
 }
 
@@ -39,5 +39,5 @@ assert {
 
 docs {
   Use the "two-connectors" environment (docs/TESTING.md, Two connectors).
-  The offer must be copied from the provider's catalog. Saves mgmtConsumerPid.
+  The offer must be copied from the provider's catalog. Saves mgmtNegotiationConsumerPid.
 }
