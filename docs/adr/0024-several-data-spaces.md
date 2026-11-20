@@ -6,7 +6,8 @@ SPDX-License-Identifier: Apache-2.0
 
 # ADR 0024: A provider in several data spaces
 
-- Status: **Proposed** (2026-11-17; waits for the maintainer)
+- Status: **Accepted** (2026-11-20, by the maintainer; see
+  [Answers of the maintainer](#answers-of-the-maintainer-2026-11-20))
 - Date: 2026-11-17
 - Scope: research only, no code (ROADMAP 0.11, "Research, docs only").
   Answers [TD-03](../RISKS_AND_TECHNICAL_DEBTS.md#td-03). Builds on ADR
@@ -222,7 +223,56 @@ what Simpl-Open does; (b) is what EDC built and ships in the RC7 that
 Portitor tests against, so its names and shape can be reused; neither
 needs a break of the 1.0 API or configuration.
 
+## Answers of the maintainer (2026-11-20)
+
+The maintainer accepted the decision above and answered the open
+questions below.
+
+1. **1.0 is option (a):** one connector per data space.
+2. **After 1.0: option (b),** one connector with several data space
+   profiles, behind its own ADR.
+3. **One DID per data space is the documented default.** A shared DID
+   is allowed; the documentation names what it discloses (a verifier of
+   one data space learns the memberships in the others when the
+   credential type is the same).
+4. **Trusted issuers by credential type wait until after 1.0.** The
+   change is additive.
+
+The maintainer's remark: whether one connector can serve two data
+spaces depends on whether those data spaces are legally,
+organisationally and technically interoperable.
+
+Not answered on 2026-11-20: question 3 below ((b1) or (b2) for
+datasets) and question 5 (a short-lived data space to try this with).
+They belong to the ADR of option (b).
+
+### The check by hand (2026-11-20)
+
+The decision said that the setup of option (a) "is checked once by hand
+before 0.13". Done on 2026-11-20 with `scripts/two-data-spaces.sh`, on
+one machine, with the debug binaries of the 0.13 branch (0.12.0 code).
+
+Setup: two issuers (data spaces A and B); in each data space one
+consumer (identity and connector) that trusts only that issuer; the
+organisation with one connector per data space, each with its own
+database, the same datasets file, and only its data space's issuer in
+`PORTITOR_TRUSTED_ISSUERS`.
+
+| Mode | What was set | Observed |
+|---|---|---|
+| `shared`: one identity, one DID | The identity trusts both issuers and holds a `MembershipCredential` of each. Both connectors have the same `PORTITOR_PARTICIPANT_ID`, `PORTITOR_STS_URL` and STS client secret | In A and in B: catalog 200, negotiation `FINALIZED`, transfer `STARTED`, data fetched. The consumer of A at the connector for B: 401, and the other way round. A presentation query for `MembershipCredential` by a verifier of A returns both credentials (the disclosure of option (a)); the consumer's connector in A still accepts the organisation |
+| `separate`: one identity and DID per data space | Each identity trusts one issuer and holds one credential | The same results; no disclosure step |
+
+Limits of this check: plain HTTP on the loopback address
+(`PORTITOR_ALLOW_HTTP_CALLBACKS=true`), no reverse proxy, no bundle, no
+Gaia-X, one credential type, the same datasets file in both data
+spaces. It is a manual test and not a CI job.
+
 ## Open questions for the maintainer
+
+Answered on 2026-11-20, see above; kept as asked. Question 1: (a) is
+enough for 1.0. Question 2: one DID per data space by default, a shared
+DID allowed. Question 4: after 1.0. Questions 3 and 5: not answered.
 
 1. Is (a) enough for 1.0, or must one connector serve two data spaces
    in 1.0?
@@ -238,7 +288,8 @@ needs a break of the 1.0 API or configuration.
 ## Not verified
 
 - That two Portitor connectors can share one identity and STS client
-  (read in the code, not run).
+  (read in the code, not run). Update 2026-11-20: run, see "The check
+  by hand".
 - Whether EDC binds policy functions to a profile in RC7, and whether
   an EDC verifier in profile A refuses a presentation that holds a
   credential from profile B's issuer, or skips it.
@@ -252,7 +303,11 @@ needs a break of the 1.0 API or configuration.
 ## Consequences
 
 - TD-03 points here; it stays Open until the maintainer decides.
+  Update 2026-11-20: decided; TD-03 is Accepted for 1.0, and option (b)
+  is the work that remains.
 - With (a): DEPLOYING gets a section "Several data spaces" before 0.13.
+  Update 2026-11-20: written as
+  [Two data spaces](../DEPLOYING.md#two-data-spaces).
 - With (b): a code ADR and a release after 1.0; the profile names and
   settings follow EDC's.
 - Finding F-08 (one trusted issuer list for every type) is handled by

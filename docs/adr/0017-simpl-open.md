@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 # ADR 0017: Joining a Simpl-Open data space
 
 - Status: **Proposed** (2026-11-13; waits for the maintainer)
+- Note (2026-11-20): still Proposed at the 0.13 freeze; interoperability with Simpl-Open has not been tested ([STABILITY](../STABILITY.md)).
 - Date: 2026-11-13
 - Scope: the Simpl-Open spike of release 0.5 (roadmap, 0.5). Builds on
   ADR 0011 (interop targets), ADR 0015 (identity component) and ADR 0016

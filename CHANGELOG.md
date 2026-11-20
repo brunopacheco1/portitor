@@ -17,6 +17,34 @@ versions may change behaviour and configuration.
 - Close-out of 0.12: the roadmap and the website mark 0.12 released and
   0.13 as the current release; the website quickstart clones v0.12.0.
   CONTRIBUTING gives `cargo vet diff` with `--mode local`.
+- Identity and issuer management APIs: every route that needs the API
+  key documents HTTP 403 in the OpenAPI files, reserved for tokens with
+  limited rights in 1.x (ADR 0025, freeze point 2). 1.0 never answers
+  403: the API key grants every right. The descriptions say that the
+  API key is an opaque string (freeze point 1).
+- **API and configuration freeze.** New `docs/STABILITY.md`: the HTTP
+  routes, environment variables, file formats and command line that 1.0
+  keeps stable under semantic versioning, what is not part of the stable
+  interface (metric, span and log names; the Rust crates; development
+  aids), and what 1.0 does not do. Migrations stay forward only (TD-22,
+  confirmed by the maintainer, 2026-11-20). README and DEPLOYING say
+  that the management API key and the data plane token are opaque.
+- Tests: a freeze guard (`tests/frozen_interface.rs` in the three
+  binaries' crates) fails when a route or environment variable listed
+  in `docs/STABILITY.md` leaves the code, and when the code gains one
+  that is not listed.
+- **Decisions of the maintainer (2026-11-20), recorded.**
+  [ADR 0024](docs/adr/0024-several-data-spaces.md) accepted: 1.0 is one
+  connector per data space; one DID per data space is the default, a
+  shared DID is allowed. [ADR 0025](docs/adr/0025-users-and-roles.md)
+  accepted: 1.0 stays system to system; access tokens with scopes are
+  planned for 1.5. New
+  [ADR 0026](docs/adr/0026-tls-termination.md): TLS stays the
+  operator's job (TD-19). TD-03, TD-04, TD-19 and TD-22 updated.
+- DEPLOYING: new sections "Two data spaces" and "Users and roles". The
+  two-connector setup was run by hand with the new
+  `scripts/two-data-spaces.sh` (a manual test, TESTING), with a shared
+  identity and with one identity per data space.
 
 ## [0.12.0] - 2026-11-19
 

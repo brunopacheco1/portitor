@@ -45,6 +45,12 @@ cargo test -p portitor-connector --features tck   # also the TCK scripts
 
 Where the tests are:
 
+- **The freeze guard** (`tests/frozen_interface.rs` in the three
+  binaries' crates): the HTTP routes and environment variables listed in
+  [STABILITY.md](STABILITY.md) are the ones the code has. A test fails
+  when a listed name leaves the code, and when the code gains a name
+  that is not listed. The top of each file says what to do then. The
+  tools are in `crates/portitor-runtime/src/testing/frozen.rs`.
 - **Domain crates** (`crates/portitor-dsp`, `crates/portitor-dcp`,
   `crates/portitor-dps`): pure functions
   and ports, tested without network or disk. Examples: the negotiation state
@@ -932,6 +938,22 @@ Then request a transfer under that agreement with
 `POST 127.0.0.1:18091/v1/transfers` and `{"agreementId": "<agreement @id>"}`;
 the HealthDCAT-AP datasets have a data source, so it gets `STARTED` and a
 `dataAddress` to fetch from (on `127.0.0.1:18080`).
+
+### Two data spaces
+
+`scripts/two-data-spaces.sh shared` and `scripts/two-data-spaces.sh
+separate` run one organisation in two data spaces on this machine, with
+one connector per data space
+([DEPLOYING](DEPLOYING.md#two-data-spaces),
+[ADR 0024](adr/0024-several-data-spaces.md)). Each data space has its
+own issuer and one consumer that trusts only that issuer. `shared`
+gives the organisation one identity for both connectors; `separate`
+gives it one identity per data space. The script checks that the whole
+exchange works inside each data space (catalog, negotiation, transfer,
+data), that a member of one data space gets 401 from the connector of
+the other, and, for `shared`, that a verifier of one data space
+receives both membership credentials. It needs curl, jq, openssl and
+python3, uses ports 19070 to 19511, and is not run by CI.
 
 ### Observability stack (by hand)
 

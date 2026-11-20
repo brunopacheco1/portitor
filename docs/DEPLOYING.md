@@ -916,6 +916,67 @@ until their token expires (ADR 0016), so one replica per database file.
 **Key rotation:** see [Rotating a key](#rotating-a-key). The key id
 is the key's thumbprint, so a new key file gives a new key id.
 
+### Two data spaces
+
+One connector serves one data space
+([ADR 0024](adr/0024-several-data-spaces.md), accepted for 1.0). If
+your organisation is in two data spaces, run **one connector per data
+space**. Each connector has its own:
+
+- host name and `PORTITOR_PUBLIC_URL` (the connector serves
+  `/dsp/2025-1` at the root of its host), and its own management port
+  and key;
+- database and volume (`PORTITOR_DB_FILE`; one connector per file);
+- datasets file, with the description and the offers that data space
+  asks for; the `portitor:source` of a dataset can be the same in both;
+- `PORTITOR_TRUSTED_ISSUERS`, with the issuers of **that data space
+  only**, and that data space's `PORTITOR_DCP_SCOPES`,
+  `PORTITOR_POLICY_CREDENTIALS` and bundle settings.
+
+A member of one data space is then refused by the connector of the
+other, because its credential comes from an issuer that connector does
+not trust.
+
+For the identity there are two ways:
+
+| | One identity and DID per data space (the default) | One shared identity and DID |
+|---|---|---|
+| Deploy | One `portitor-identity` per data space, each with its own DID, key, database and host name. Each connector uses the STS of its own identity | One `portitor-identity`. Both connectors have the same `PORTITOR_PARTICIPANT_ID`, `PORTITOR_STS_URL` and STS client secret |
+| `PORTITOR_TRUSTED_ISSUERS` of the identity | That data space's issuers | The issuers of both data spaces |
+| Credentials | Each identity asks its data space's issuer. With Gaia-X, one onboarding per identity | The one identity asks each issuer |
+| What partners learn | Nothing about the other data space | **A partner in one data space learns that you are a member of the other,** when both use the same credential type: it asks for `MembershipCredential` and gets both (DCP has no scope by issuer). Its own check skips the credential of the issuer it does not trust |
+
+Use a shared DID only if this disclosure is acceptable in both data
+spaces. With a shared DID, also remember that a partner whose connector
+trusts both issuers refuses you while one of the two credentials is
+revoked or expired (section 5, "Caller authentication").
+
+Tested by hand on 2026-11-20, both ways, with
+`scripts/two-data-spaces.sh` ([TESTING](TESTING.md#two-data-spaces)):
+on one machine over plain HTTP, without a reverse proxy, a bundle or
+Gaia-X. One connector for several data spaces is planned after 1.0.
+
+### Users and roles
+
+Portitor is system to system: it knows participants, not people
+([ADR 0025](adr/0025-users-and-roles.md), accepted for 1.0). Each
+management API has one key, and the key grants every right.
+
+To let people and applications of your organisation use a management
+API, put your own reverse proxy or API gateway in front of the
+management port. The proxy signs people in at your identity provider
+(for example with OpenID Connect), decides by method and path who may
+call what, logs the person, and adds the Portitor key. The proxy must be
+the only way to the management port. Portitor's own logs do not name the
+person; match them with the proxy's log by time and trace id.
+
+Two limits of this pattern: the proxy cannot hide the `dataAddress`
+(the data plane token) from someone who may read transfers, and the
+provider's data plane does not know which person of the consumer pulls
+the data. The contract is between participants; the consumer answers
+for its people. This pattern is described from ADR 0025; it was not
+tested with a proxy product.
+
 ## 5. Security
 
 - **Caller authentication (DCP, ADR 0016).** Every DSP endpoint, the
@@ -999,7 +1060,11 @@ is the key's thumbprint, so a new key file gives a new key id.
   your secret store, at least 32 characters. Only an HMAC of the key is
   kept in memory, and keys are compared in constant time. The port speaks
   plain HTTP: keep it on a private network or behind TLS, and never on the
-  public proxy. To change the key, replace the file and restart.
+  public proxy. To change the key, replace the file and restart. The
+  key is an opaque string, and so is the data plane token of a
+  transfer: your systems must not parse them, and a 1.x release may
+  accept or issue other forms ([STABILITY](STABILITY.md)). This holds
+  for the keys of the identity and the issuer too.
 - **Health checks and telemetry (0.9).** The health checks answer
   without a key and name what failed, so keep the management port on
   an internal network, as for the management API. Traces and metrics
@@ -1377,7 +1442,11 @@ leaked) can be listed as retired, since only its public key is needed.
 
 Rollback: an older version refuses a database that a newer version
 migrated (`database schema version N is newer than this Portitor`). Restore
-the backup from step 2, then start the older image.
+the backup from step 2, then start the older image. What was written
+after the backup is lost. This stays so in 1.x: migrations run forward
+only, and no release migrates a database back (confirmed by the
+maintainer at the 0.13 freeze, 2026-11-20;
+[TD-22](RISKS_AND_TECHNICAL_DEBTS.md#td-22), [STABILITY](STABILITY.md#database)).
 
 Messages the connector was sending when it stopped are saved and sent
 again at start (ADR 0007), so an upgrade does not leave negotiations
@@ -1890,6 +1959,15 @@ known risk and technical debt, with its status and target release):
 - SHACL: the subset `portitor-shacl` implements (ADR 0005). Shapes that
   use anything else are refused when the bundle is loaded; `sh:extends`
   and `sh:shape` are ignored with a warning.
+- TLS: the services speak plain HTTP; your reverse proxy ends TLS, and
+  the management ports stay on a private network
+  ([ADR 0026](adr/0026-tls-termination.md)).
+- One connector serves one data space
+  ([Two data spaces](#two-data-spaces)), and Portitor does not identify
+  persons ([Users and roles](#users-and-roles)).
+- Interoperability with Simpl-Open has not been tested
+  ([ADR 0017](adr/0017-simpl-open.md)). What 1.0 keeps stable and what
+  it does not do: [STABILITY](STABILITY.md).
 - Transfers: pull only. A data access token ends `PORTITOR_DATA_TOKEN_SECONDS`
   after the transfer starts and is not renewed; the consumer then asks for
   a new transfer. Only `GET` of the whole source; no credentials are sent
