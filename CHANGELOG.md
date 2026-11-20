@@ -12,7 +12,9 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
-This section becomes 0.14.0, the release candidate for 1.0. No setting
+## [0.14.0] - 2026-11-21
+
+The release candidate for 1.0. No setting
 and no route changed. Two checks are stricter; what to do:
 [OPERATING, From 0.13 to 0.14](docs/OPERATING.md#from-013-to-014).
 

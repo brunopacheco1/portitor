@@ -10,7 +10,7 @@
 # plain HTTP between the containers (PORTITOR_ALLOW_HTTP), and
 # the issuer next to the participants. The issuer also serves the
 # dataspace's HealthDCAT-AP demo bundle (scripts/demo-bundle.sh), which the
-# provider pins and checks its datasets (../healthdcat-datasets.json)
+# provider follows and checks its datasets (../healthdcat-datasets.json)
 # against.
 #
 #   scripts/demo-compose.sh
@@ -42,7 +42,7 @@ name: portitor-demo
 
 # shared by both participants
 x-identity: &identity
-  image: ${PORTITOR_IDENTITY_IMAGE:-ghcr.io/brunopacheco1/portitor-identity:0.13.0}
+  image: ${PORTITOR_IDENTITY_IMAGE:-ghcr.io/brunopacheco1/portitor-identity:0.14.0}
   depends_on:
     issuer:
       condition: service_healthy
@@ -52,14 +52,14 @@ x-identity: &identity
     timeout: 5s
     retries: 30
 x-connector: &connector
-  image: ${PORTITOR_IMAGE:-ghcr.io/brunopacheco1/portitor-connector:0.13.0}
+  image: ${PORTITOR_IMAGE:-ghcr.io/brunopacheco1/portitor-connector:0.14.0}
 
 services:
   # The dataspace's authority: did:web:issuer%3A8070, its issuer service
   # (credential requests, status lists) and its management API, where
   # scripts/demo-compose.sh registers the participants.
   issuer:
-    image: ${PORTITOR_ISSUER_IMAGE:-ghcr.io/brunopacheco1/portitor-issuer:0.13.0}
+    image: ${PORTITOR_ISSUER_IMAGE:-ghcr.io/brunopacheco1/portitor-issuer:0.14.0}
     environment:
       PORTITOR_PARTICIPANT_ID: did:web:issuer%3A8070
       PORTITOR_ISSUER_SERVICE_URL: http://issuer:8070/issuer

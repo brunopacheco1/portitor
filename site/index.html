@@ -125,7 +125,7 @@ so visitors' browsers never contact third-party services.
         <h3>You need</h3>
         <p>Docker Engine 25 or later (Docker Desktop 4.27 or later) with the Compose plugin: the images' health check uses <code>HEALTHCHECK --start-interval</code>, which came with Engine 25. Podman works too, see <a href="https://github.com/brunopacheco1/portitor/blob/main/docs/TESTING.md#docker-or-podman">TESTING</a>. Also <code>git</code>, <code>bash</code>, <code>curl</code>, <code>jq</code> and <code>openssl</code>. The demo downloads about 40&nbsp;MB of images; after that it runs in about 10 seconds.</p>
         <h3>Run the demo</h3>
-        <pre><code>git clone --branch v0.13.0 --depth 1 https://github.com/brunopacheco1/portitor
+        <pre><code>git clone --branch v0.14.0 --depth 1 https://github.com/brunopacheco1/portitor
 cd portitor
 KEEP=1 scripts/demo-compose.sh</code></pre>
         <p>The script writes new keys and secrets into <code>examples/compose/run/</code>, builds and signs the dataspace's HealthDCAT-AP bundle, starts the containers and has the issuer give both participants their credentials. Then it runs the demo steps, one line starting with <code>==</code> each: the provider refuses a catalog request without a token, serves its catalog checked against the bundle, agrees a contract and refuses changed terms, checks credential claims, transfers a file, and refuses a credential the issuer has revoked. The last line starts with <code>== Done</code>. If a step fails, the script prints <code>FAILED</code> and the containers' last log lines.</p>
