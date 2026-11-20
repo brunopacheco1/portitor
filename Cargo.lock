@@ -985,7 +985,7 @@ checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 
 [[package]]
 name = "portitor-bundle"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "http-body-util",
  "hyper",
@@ -998,7 +998,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-connector"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "axum",
  "base64",
@@ -1025,7 +1025,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-dcp"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "base64",
  "jsonschema",
@@ -1039,7 +1039,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-dps"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "jsonschema",
  "portitor-dsp",
@@ -1049,7 +1049,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-dsp"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "jsonschema",
  "portitor-time",
@@ -1059,7 +1059,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-identity"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "axum",
  "base64",
@@ -1077,7 +1077,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-issuer"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "axum",
  "futures-util",
@@ -1096,7 +1096,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-runtime"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -1127,7 +1127,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-shacl"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "oxjsonld",
  "oxrdf",
@@ -1140,7 +1140,7 @@ dependencies = [
 
 [[package]]
 name = "portitor-time"
-version = "0.12.0"
+version = "0.13.0"
 
 [[package]]
 name = "ppv-lite86"

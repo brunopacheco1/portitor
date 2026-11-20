@@ -57,11 +57,11 @@ checks this file:
 | [R-02](#r-02) | One maintainer: no two-person review | Delivery, security | 0.1 (ADR 0012, maintainer, 2026-11-11) | Accepted | until a second maintainer (not a 1.0 blocker) |
 | [R-03](#r-03) | Pre-1.0 JSON-LD and VC crates | Dependency | 0.0 (ADR 0002, 2026-11-11) | Mitigated | — |
 | [R-04](#r-04) | Dependencies are not audited crate by crate (cargo-vet) | Dependency, security | 0.1 (maintainer, 2026-11-11 and 2026-11-12) | Mitigated | 0.10 |
-| [R-05](#r-05) | No written OpenSSF Baseline level 1 self-assessment | Security | 0.1 (ADR 0012, maintainer, 2026-11-12) | Open | 0.13 |
+| [R-05](#r-05) | No written OpenSSF Baseline level 1 self-assessment | Security | 0.1 (ADR 0012, maintainer, 2026-11-12) | Open | 0.14 |
 | [R-06](#r-06) | Data Plane Signaling is a draft (v1.0-RC4) | Upstream churn | 0.0 (ARCHITECTURE, 2026-11-11) | Mitigated | until Signaling 1.0 |
 | [R-07](#r-07) | Upstream findings not reported yet | Upstream churn, interoperability | 0.4 to 0.8 (maintainer, 2026-11-13 to 2026-11-15) | Addressed | 0.10 |
 | [R-08](#r-08) | The DSP TCK v1.0.2 needs a test-only build | Interoperability | 0.4, 0.5 (ADR 0014, ADR 0016, 2026-11-13) | Mitigated | — |
-| [R-09](#r-09) | EDC is tested at a release candidate (1.0.0-RC7) | Interoperability, dependency | 0.5 (maintainer, 2026-11-13) | Mitigated | pin 1.0.0 when it ships |
+| [R-09](#r-09) | EDC is tested at a release candidate (1.0.0-RC8) | Interoperability, dependency | 0.5 (maintainer, 2026-11-13) | Mitigated | pin 1.0.0 when it ships |
 | [R-10](#r-10) | EDC refuses the Gaia-X compliance credential | Interoperability | 0.8 (ADR 0022, maintainer, 2026-11-15) | Accepted | Later |
 | [R-11](#r-11) | Gaia-X does not use DCP; Portitor's binding and scope rules are its own reading | Interoperability, upstream churn | 0.8 (ADR 0021, ADR 0022, 2026-11-15) | Open | — |
 | [R-12](#r-12) | Gaia-X never tested with a real trust anchor or the Gaia-X Lab | Interoperability, security | 0.8 (maintainer, 2026-11-15) | Open | Later |
@@ -77,7 +77,7 @@ checks this file:
 | [R-22](#r-22) | Bundle: unsigned `latest.json`, and a revoked bundle key not seen while offline | Security | 0.7 (ADR 0005, SECURITY-ASSURANCE) | Mitigated | — |
 | [R-23](#r-23) | A wrong host clock gives wrong policy and token decisions | Security | 0.3 (ADR 0009, 2026-11-12) | Mitigated | — |
 | [R-24](#r-24) | Simpl-Open: parked, facts not verified, and it changes fast | Interoperability, upstream churn | 0.5 (ADR 0017, maintainer, 2026-11-13) | Accepted | Later |
-| [R-25](#r-25) | Name not checked for trademarks and domains | Delivery, legal | 0.3 (ADR 0008, 2026-11-12) | Open | 0.13 (blocks 1.0) |
+| [R-25](#r-25) | Name not checked for trademarks and domains | Delivery, legal | 0.3 (ADR 0008, 2026-11-12) | Open | 0.14 (blocks 1.0) |
 | [R-26](#r-26) | ODRL `dateTime` definition read from memory | Interoperability | 0.3 (ADR 0009, 2026-11-12) | Addressed (0.13) | — |
 | [R-27](#r-27) | CI downloads from Maven Central and GitHub | Delivery | 0.8 (2026-11-15) | Mitigated | — |
 | [R-28](#r-28) | 0.8 Gaia-X code had no fuzz target | Security | 0.8 (sweep for this file, 2026-11-15) | Addressed | 0.8 |
@@ -132,15 +132,15 @@ checks this file:
 | [TD-32](#td-32) | Policy terms that are not understood are dropped without an error | Technical debt, security | 2026-11-18 review (D1) | Addressed (0.12) | — |
 | [TD-33](#td-33) | The issuer's metadata does not pass the DCP JSON schema | Technical debt, interoperability | 2026-11-18 review (C1) | Addressed (0.12) | — |
 | [TD-34](#td-34) | A repeated transfer request starts a second transfer | Technical debt, interoperability | 2026-11-18 review (D3) | Addressed (0.12) | — |
-| [TD-35](#td-35) | No negotiation started by the provider | Technical debt, interoperability | 2026-11-18 review (D2) | Open | 0.13, if not expensive |
+| [TD-35](#td-35) | No negotiation started by the provider | Technical debt, interoperability | 2026-11-18 review (D2) | Open | after 1.0 (maintainer, 2026-11-20) |
 | [TD-36](#td-36) | DSP details: who may terminate, 401 or 404, agreement timestamp, `consumerPid` check, no catalog pages | Technical debt, interoperability | 2026-11-18 review (D4, D5) | Addressed (0.12; the answer limit in 0.13); catalog pages are neither sent nor followed | — (pages: when a partner needs them) |
 | [TD-37](#td-37) | DCP details: `token` claim required, presentations as JWT strings only, no `/.well-known/dspace-trust` | Technical debt, interoperability | 2026-11-18 review (C2) | Addressed (0.12) | — |
 | [TD-38](#td-38) | No management call to read a provider's catalog | Technical debt, usability | 2026-11-18 review (Q1) | Addressed (0.13) | — |
-| [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | 2026-11-18 review (Q2, Q7) | Open | 0.13; 1.x (Helm chart) |
+| [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | 2026-11-18 review (Q2, Q7) | Open | 0.14; 1.x (Helm chart) |
 | [TD-40](#td-40) | Database calls block the async runtime | Technical debt | 2026-11-18 review (Q3) | Accepted (0.12, measured) | measure again each release |
 | [TD-41](#td-41) | A panic stopped the whole process (`panic = "abort"`) | Technical debt, security | 2026-11-18 review (Q4) | Addressed (0.12) | — |
-| [TD-42](#td-42) | Four near-copies of the negotiation and transfer logic | Technical debt | 2026-11-18 review (Q5) | Open | 0.13 (note); 1.x (merge) |
-| [TD-43](#td-43) | The Gaia-X documents name several versions of the rules | Technical debt | 2026-11-18 review (G1) | Open | 0.13 |
+| [TD-42](#td-42) | Four near-copies of the negotiation and transfer logic | Technical debt | 2026-11-18 review (Q5) | Open | 0.14 (note); 1.x (merge) |
+| [TD-43](#td-43) | The Gaia-X documents name several versions of the rules | Technical debt | 2026-11-18 review (G1) | Open | 0.14 |
 | [TD-44](#td-44) | A transfer request sent at once after the agreement can be refused | Technical debt, interoperability | 0.12 benchmark (2026-11-19) | Addressed (0.13) | — |
 | [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | 0.12 benchmark (2026-11-19) | Open | — |
 
@@ -169,7 +169,7 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
   parameters (`ProviderService<S, D, C, E>`), four macros that write
   types (RUST-IDIOMS covers them in one paragraph), five files above
   1,000 lines, and `Negotiator`, which also handles transfers and the
-  harvest. ROADMAP 0.13: a "read the code in this order" page that
+  harvest. ROADMAP 0.14: a "read the code in this order" page that
   follows one request from the route to the store; see also
   [TD-42](#td-42). ROADMAP "Code quality in 1.x" (maintainer,
   2026-11-18): split the files above 1,000 lines, simplify the types
@@ -240,7 +240,7 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
   says it comes in the release candidate, 0.13. ADR 0012 says "0.9
   hardening release": written before the renumbering of 2026-11-14 and
   the split of 0.10 into 0.10 to 0.13 (maintainer, 2026-11-15).
-- **Next.** ROADMAP 0.13, last, so it assesses the final state; decide
+- **Next.** ROADMAP 0.14, last, so it assesses the final state; decide
   there whether 1.0 aims higher.
 
 <a id="r-06"></a>
@@ -350,12 +350,12 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
   ships.
 
 <a id="r-09"></a>
-### R-09 EDC is tested at a release candidate (1.0.0-RC7)
+### R-09 EDC is tested at a release candidate (1.0.0-RC8)
 
-- **What.** The EDC interop test runs EDC 1.0.0-RC7
+- **What.** The EDC interop test runs EDC 1.0.0-RC8 (RC7 until 0.12)
   (`interop/edc/runtimes/gradle.properties`). The plan was to pin 1.0.0
   when it ships (ROADMAP 0.5). The IdentityHub Identity API the test uses
-  is marked unstable in RC7 ([TESTING](TESTING.md#edc-interop-test)).
+  is in the package `v1.unstable` in RC8 ([TESTING](TESTING.md#edc-interop-test)).
   EDC's reading of a specification can change (ADR 0011).
 - **Why it matters.** Interoperability with the final EDC release is not
   proven.
@@ -626,7 +626,7 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
   ([ADR 0008](adr/0008-project-name.md)).
 - **Why it matters.** A rename after 1.0 is expensive.
 - **Current state: Open.**
-- **Next.** ROADMAP 0.13; it blocks 1.0 (maintainer, 2026-11-15).
+- **Next.** ROADMAP 0.14; it blocks 1.0 (maintainer, 2026-11-15).
 
 <a id="r-26"></a>
 ### R-26 ODRL `dateTime` definition read from memory
@@ -1761,7 +1761,7 @@ certificate and compliance run at each key change (ADR 0021).
 - **Why it matters.** The learning curve to deploy and troubleshoot
   should be as small as possible (maintainer, 2026-11-18).
 - **Current state: Open.**
-- **Next.** ROADMAP 0.13, documentation review: a short "first
+- **Next.** ROADMAP 0.14, documentation review: a short "first
   deployment" path at the top of DEPLOYING, sections in deployment
   order, a "top risks" box here.
 - **Helm chart (maintainer, 2026-11-18).** In a 1.x release (ROADMAP
@@ -1835,7 +1835,7 @@ certificate and compliance run at each key change (ADR 0021).
   connector. The in-memory stores live in production code ([review](reviews/2026-11-18-specifications-and-code-quality.md), Q5).
 - **Why it matters.** A fix in one may be needed in the other three.
 - **Current state: Open.**
-- **Next.** No merge before 1.0. ROADMAP 0.13: TESTING gets a note,
+- **Next.** No merge before 1.0. ROADMAP 0.14: TESTING gets a note,
   "changed one, check the other three". ROADMAP "Code quality in 1.x"
   (maintainer, 2026-11-18): one shared core in a 1.x release, best
   before 1.1 adds push; the in-memory stores move into the tests.
@@ -1853,7 +1853,7 @@ certificate and compliance run at each key change (ADR 0021).
 - **Why it matters.** A reader cannot tell which version Portitor was
   checked against.
 - **Current state: Open.** ADR 0021 has an update note (2026-11-18).
-- **Next.** ROADMAP 0.13, documentation review: one place that says
+- **Next.** ROADMAP 0.14, documentation review: one place that says
   which Compliance Document and ICAM version were checked, and the same
   name everywhere.
 

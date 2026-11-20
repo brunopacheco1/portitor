@@ -12,6 +12,8 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-20
+
 ### Added
 
 - **Docker or Podman.** `scripts/demo-compose.sh`,
