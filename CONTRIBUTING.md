@@ -39,7 +39,8 @@ manual tests: [docs/TESTING.md](docs/TESTING.md).
 ## Code style
 
 The build enforces the style, so a pull request that breaks it fails:
-- **rustfmt** with default settings.
+- **rustfmt** with default settings, which follow the
+  [Rust Style Guide](https://doc.rust-lang.org/style-guide/).
 - **Clippy** with `pedantic` lints; warnings are errors. `unsafe` is
   forbidden and `unwrap()` is denied outside tests (`Cargo.toml`,
   `[workspace.lints]`). Allow a lint only where it cannot be fixed, as
@@ -61,8 +62,12 @@ The build enforces the style, so a pull request that breaks it fails:
 ## Pull requests
 
 1. Fork the repository and create a branch from `main`.
-2. Keep the change focused, and add or update tests. Protocol behaviour
-   cites the spec section it implements.
+2. Keep the change focused. **Test policy:** a change that adds
+   functionality must add tests for it to the automated test suite
+   (`cargo test`; the TCK or interop tests where a protocol is
+   involved), and a bug fix must add a test that fails without the fix.
+   A pull request without them is not merged. Protocol behaviour cites
+   the spec section it implements.
 3. New files need an SPDX header (copy an existing one), or are listed in
    `REUSE.toml`. CI runs [`reuse lint`](https://reuse.software).
 4. New dependencies must have a licence on the allowlist in `deny.toml`

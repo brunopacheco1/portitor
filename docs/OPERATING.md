@@ -681,21 +681,26 @@ start the new images.
    setting (DIDs, DCP scopes, credential types, file paths;
    [DEPLOYING](DEPLOYING.md#settings-of-every-component)). A service
    with a longer item does not start; the log line names the setting and
-   the item (`has an item that is too long: item 2 ...`). Real values
+   the item's position and length, never its text (`has an item that is
+   too long: item 2 is 4106 bytes ...`). Real values
    are far shorter, so a long item is most often a missing comma.
 2. **Behaviour change, connector management API: the catalog must be
    the provider's own.** `POST /v1/catalog/request` answers 502 in two
    more cases: the provider's catalog has no `participantId` (DSP 2025-1
    requires it; 0.13 handed such a catalog on), or its `participantId`
-   differs from the `counterPartyId` of the request. The `detail` says
-   which. Set `counterPartyId` to the id the provider names in its
+   differs from the `counterPartyId` of the request. The two are compared
+   as written, except that `%3A` and `%3a` in the host of a `did:web`
+   are the same. There is no setting to turn the check off. The `detail`
+   says which case it is. Set `counterPartyId` to the id the provider names in its
    catalog. `POST /v1/catalog/dataset/request` did not change: a dataset
    has no `participantId`.
 
 To know: the metric `portitor.outbox.message.given_up` no longer counts
 a finalization event that the consumer's transfer request had already
 settled ([ADR 0007](adr/0007-outbox-and-proof-of-delivery.md), note of
-0.14). An alert on that metric may fire less often; an INFO log line
-says when a message is not counted.
+0.14). It also no longer counts a message whose outcome could not be recorded:
+that message is still pending and is sent again after a restart. An
+alert on that metric may fire less often; an INFO log line says when a
+message is not counted.
 
 Rollback to 0.13: as above; 0.14 adds no migration.

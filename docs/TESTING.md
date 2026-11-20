@@ -170,6 +170,11 @@ docker build --target portitor-issuer -t portitor-issuer:ci .
 On an arm64 machine (an Apple Silicon Mac), see "What Podman needs"
 above for a build that needs nothing but the container engine.
 
+The build is repeatable: with the pinned toolchain and `--locked`, two
+release builds of the same commit in the same path give the same
+binaries, bit for bit (checked on 2026-11-20 for 0.14.0, native Linux
+x86-64 target; the musl targets of the images were not checked).
+
 ## Unit and integration tests
 
 ```sh
