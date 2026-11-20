@@ -259,7 +259,7 @@ can send the same body:
 |---|---|
 | `counterPartyAddress`, `counterPartyId` | Required. The provider's DSP endpoint and its `did:web` DID, as in a negotiation |
 | `protocol`, or `profile` (EDC's newer name) | Exactly one is required, and it must be `dataspace-protocol-http:2025-1`, the only protocol the connector speaks; anything else gets 400 |
-| `additionalScopes` | Optional. Scopes added to the configured ones (`PORTITOR_DCP_SCOPES`) in the token for the provider, for datasets it shows only to holders of a credential |
+| `additionalScopes` | Optional, for a catalog only (refused with 400 for a dataset: EDC's `DatasetRequest` has none). Scopes added to the configured ones (`PORTITOR_DCP_SCOPES`) in the token for the provider, for datasets it shows only to holders of a credential |
 | `querySpec` | Refused with 400. EDC sends it as the `filter` of the DSP request; DSP leaves its content to each implementation, and the connector always asks for the whole catalog |
 | `@context`, `@type` | Optional. `@context` is not read; `@type`, if present, must be `CatalogRequest` (`DatasetRequest` for a dataset) |
 | `@id` | For a dataset: required, the dataset's id. For a catalog: refused, like any other member not listed here |

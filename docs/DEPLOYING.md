@@ -228,12 +228,15 @@ for example only data processors in the EU:
   ```yaml
   edc.iam.dcp.scopes.processor.id: "processor-scope"
   edc.iam.dcp.scopes.processor.type: "POLICY"
-  edc.iam.dcp.scopes.processor.prefix-mapping: "DataProcessorCredential"
+  edc.iam.dcp.scopes.processor.prefix.mapping: "DataProcessorCredential"
   edc.iam.dcp.scopes.processor.value: "org.eclipse.dspace.dcp.vc.type:DataProcessorCredential:read"
   ```
 
-  (as in the Minimum Viable Dataspace, commit 17bb5b8,
-  `k8s/provider/application/controlplane-config.yaml`).
+  (the key names are those of EDC v1.0.0-RC8,
+  `DynamicDcpScopeConfigurationExtension`; the EDC interop run sets them
+  in `interop/edc/config/edc-controlplane.properties`. The Minimum Viable
+  Dataspace, commit 17bb5b8, and EDC's own decision record write
+  `prefix-mapping`: RC8 reads `prefix.mapping`).
 
 ### Gaia-X compliance
 
