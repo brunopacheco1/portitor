@@ -168,8 +168,12 @@ fn with_placeholders_filled(path: &str) -> String {
 /// letters, digits and `_`). All Rust files below each folder are read.
 ///
 /// Left out, because they are not what a running binary reads: comment
-/// lines, files named `tests.rs`, and in each file everything from its
-/// `#[cfg(test)]` line on (the unit tests are at the end of a file).
+/// lines, files named `tests.rs`, and in each file its unit tests: the
+/// `mod` that follows a `#[cfg(test)]` line. A module written in the
+/// file (`mod tests {`) is taken to run to the end of the file; one in a
+/// file of its own (`mod tests;`) is that one line. Any other item
+/// marked `#[cfg(test)]` is read like the rest: the code after it is
+/// what the binary runs.
 ///
 /// # Errors
 /// A folder or a file cannot be read.
@@ -202,9 +206,10 @@ fn add_settings_of_folder(folder: &Path, names: &mut Names) -> Result<(), String
 }
 
 fn add_settings_of_file(text: &str, names: &mut Names) {
-    for line in text.lines() {
+    let lines: Vec<&str> = text.lines().collect();
+    for (number, line) in lines.iter().enumerate() {
         let line = line.trim_start();
-        if line.starts_with("#[cfg(test)]") {
+        if line.starts_with("#[cfg(test)]") && starts_unit_tests_to_the_end(&lines[number + 1..]) {
             return;
         }
         if line.starts_with("//") {
@@ -218,6 +223,21 @@ fn add_settings_of_file(text: &str, names: &mut Names) {
             }
         }
     }
+}
+
+/// Whether the item that `lines` start with (the lines after a
+/// `#[cfg(test)]` line) is a module written out here, `mod tests {`:
+/// the unit tests, which run to the end of the file. Further attribute
+/// lines before the item (`#[allow(...)]`) are passed over.
+fn starts_unit_tests_to_the_end(lines: &[&str]) -> bool {
+    for line in lines {
+        let line = line.trim();
+        if line.starts_with("#[") {
+            continue;
+        }
+        return line.starts_with("mod ") && line.ends_with('{');
+    }
+    false
 }
 
 /// Whether `text` looks like one of our environment variables.
@@ -307,7 +327,9 @@ pub fn check_settings(
 /// variable a route starts with, as (`{credentialService}`, `/cs`).
 ///
 /// # Errors
-/// The lists differ, or a frozen route is not served.
+/// The lists differ, a frozen route is not served, or the router answers
+/// every path, so that nothing can be told
+/// ([`answered_under_a_wrong_name`]).
 pub async fn check_routes(
     what: &str,
     frozen: &Names,
@@ -329,7 +351,64 @@ pub async fn check_routes(
             ));
         }
     }
+    // the check above means something only if the router does not
+    // answer every path
+    let answered = answered_under_a_wrong_name(router, frozen, url_variables).await?;
+    if !answered.is_empty() {
+        return Err(format!(
+            "{what}: the router also answers paths that no route has: {answered:?}. \
+             On such a router this check cannot see a removed or renamed route."
+        ));
+    }
     Ok(())
+}
+
+/// A check of the guard itself on a real router: the `routes` that
+/// `router` also answers under a name no route has. Each route is asked
+/// for with `-renamed` added to the last fixed part of its path
+/// (`GET /v1/things/{id}` as `GET /v1/things-renamed/x`).
+///
+/// The result must be empty. A router that answers every path (a
+/// catch-all route, or a nested router with its own "not found" answer)
+/// would make [`is_served`] say yes to anything, and the freeze guard
+/// would pass whatever route is removed or renamed.
+///
+/// # Errors
+/// See [`is_served`].
+pub async fn answered_under_a_wrong_name(
+    router: &Router,
+    routes: &Names,
+    url_variables: &[(&str, &str)],
+) -> Result<Names, String> {
+    let mut answered = Names::new();
+    for route in routes {
+        let mut on_this_router = route.clone();
+        for (variable, path) in url_variables {
+            on_this_router = on_this_router.replace(variable, path);
+        }
+        let Some(renamed) = with_last_fixed_part_renamed(&on_this_router) else {
+            continue;
+        };
+        if is_served(router, &renamed).await? {
+            answered.insert(format!("{route} (asked as {renamed})"));
+        }
+    }
+    Ok(answered)
+}
+
+/// `route` (`METHOD path`) with `-renamed` added to the last part of its
+/// path that is not a `{name}`; `None` when the path has no such part.
+fn with_last_fixed_part_renamed(route: &str) -> Option<String> {
+    let mut parts: Vec<String> = route.split('/').map(str::to_owned).collect();
+    // `parts[0]` is the method (and a space); the path's parts follow
+    let last_fixed = parts
+        .iter()
+        .rposition(|part| !part.is_empty() && !part.starts_with('{'))?;
+    if last_fixed == 0 {
+        return None;
+    }
+    parts[last_fixed].push_str("-renamed");
+    Some(parts.join("/"))
 }
 
 /// The frozen routes of the management port of `binary`: the list every
@@ -453,7 +532,10 @@ mod tests {
                     // \"PORTITOR_COMMENT\"\n\
                     let b = (\"OTEL_B_2\", \"PORTITOR_C is required\", \"portitor\");\n\
                     #[cfg(test)]\n\
-                    let c = \"PORTITOR_TEST_ONLY\";\n";
+                    #[allow(clippy::unwrap_used)]\n\
+                    mod tests {\n\
+                    let c = \"PORTITOR_TEST_ONLY\";\n\
+                    }\n";
         add_settings_of_file(file, &mut found);
         // a name in a comment at the end of a code line is found too:
         // rare, and it errs on the side of asking
@@ -483,5 +565,247 @@ mod tests {
         let error = compare("things", &frozen, &names(&["B", "C"])).unwrap_err();
         assert!(error.contains("gone from the code: [\"A\"]"), "{error}");
         assert!(error.contains("not frozen: [\"C\"]"), "{error}");
+    }
+
+    /// A `#[cfg(test)]` line that marks something other than the unit
+    /// tests does not end the reading: what follows it is code the
+    /// binary runs. (The connector's `data_plane.rs` has such a line near
+    /// its top.)
+    #[test]
+    fn settings_after_a_test_only_item_are_still_found() {
+        let mut found = Names::new();
+        let file = "#[cfg(test)]\n\
+                    impl Fake for Thing {\n\
+                    }\n\
+                    let a = var(\"PORTITOR_AFTER_A_TEST_ONLY_IMPL\");\n\
+                    #[cfg(test)]\n\
+                    mod more_tests;\n\
+                    let b = var(\"PORTITOR_AFTER_A_TEST_FILE\");\n\
+                    #[cfg(test)] // the tests\n\
+                    #[allow(clippy::unwrap_used)]\n\
+                    mod tests {\n\
+                    let c = \"PORTITOR_TEST_ONLY\";\n\
+                    }\n";
+        add_settings_of_file(file, &mut found);
+        assert_eq!(
+            found,
+            names(&[
+                "PORTITOR_AFTER_A_TEST_FILE",
+                "PORTITOR_AFTER_A_TEST_ONLY_IMPL"
+            ])
+        );
+    }
+
+    /// Two source folders as a binary has them: its own crate, with a
+    /// `tests.rs` and a folder inside, and a shared crate.
+    fn source_folders() -> crate::testing::TempDir {
+        let dir = crate::testing::TempDir::new("frozen");
+        std::fs::create_dir_all(dir.path().join("own/src/auth")).unwrap();
+        std::fs::create_dir_all(dir.path().join("shared/src")).unwrap();
+        let _ = dir.write("own/src/main.rs", "let a = var(\"PORTITOR_A\");\n");
+        let _ = dir.write("own/src/auth/sts.rs", "let b = var(\"PORTITOR_B\");\n");
+        let _ = dir.write("own/src/tests.rs", "let t = var(\"PORTITOR_TEST\");\n");
+        let _ = dir.write("own/src/notes.md", "\"PORTITOR_NOT_RUST\"\n");
+        let _ = dir.write("shared/src/lib.rs", "let o = var(\"OTEL_C\");\n");
+        dir
+    }
+
+    const STABILITY: &str = "### Settings of every binary\n\n```text\nOTEL_C\n```\n\n\
+                             ### Settings of own\n\n```text\nPORTITOR_A\nPORTITOR_B\n```\n";
+
+    /// The settings check as a binary's test calls it, with each change
+    /// someone could make to the list or to the code.
+    #[test]
+    fn the_settings_check_fails_for_every_kind_of_difference() {
+        let dir = source_folders();
+        let (own, shared) = (dir.path().join("own/src"), dir.path().join("shared/src"));
+        let folders = [own.as_path(), shared.as_path()];
+        let check = |stability: &str, not_frozen: &[&str]| {
+            check_settings(stability, "own", &folders, not_frozen)
+        };
+        assert_eq!(check(STABILITY, &[]), Ok(()));
+
+        // a line removed from the list: the code still has the name
+        let removed = STABILITY.replace("PORTITOR_B\n", "");
+        let error = check(&removed, &[]).unwrap_err();
+        assert!(error.contains("not frozen: [\"PORTITOR_B\"]"), "{error}");
+        // the same line removed from the shared list
+        let removed = STABILITY.replace("OTEL_C\n", "");
+        let error = check(&removed, &[]).unwrap_err();
+        assert!(error.contains("not frozen: [\"OTEL_C\"]"), "{error}");
+        // a line added to the list that the code does not have
+        let added = STABILITY.replace("PORTITOR_B\n", "PORTITOR_B\nPORTITOR_NEW\n");
+        let error = check(&added, &[]).unwrap_err();
+        assert!(
+            error.contains("gone from the code: [\"PORTITOR_NEW\"]"),
+            "{error}"
+        );
+        // a name renamed in the list
+        let renamed = STABILITY.replace("PORTITOR_A\n", "PORTITOR_A2\n");
+        let error = check(&renamed, &[]).unwrap_err();
+        assert!(
+            error.contains("gone from the code: [\"PORTITOR_A2\"]"),
+            "{error}"
+        );
+        assert!(error.contains("not frozen: [\"PORTITOR_A\"]"), "{error}");
+        // a list that is not there at all
+        let error = check("### Settings of every binary\n```\nOTEL_C\n```\n", &[]).unwrap_err();
+        assert!(
+            error.contains("no heading \"### Settings of own\""),
+            "{error}"
+        );
+
+        // a name set aside as not frozen is taken out of the code's names
+        let set_aside = check(&STABILITY.replace("PORTITOR_B\n", ""), &["PORTITOR_B"]);
+        assert_eq!(set_aside, Ok(()));
+        // and must still be in the code
+        let error = check(STABILITY, &["PORTITOR_GONE"]).unwrap_err();
+        assert!(
+            error.contains("PORTITOR_GONE is listed as not frozen"),
+            "{error}"
+        );
+
+        // the code changes: a new setting, and a renamed one
+        let _ = dir.write("own/src/new.rs", "let n = var(\"PORTITOR_N\");\n");
+        let error = check(STABILITY, &[]).unwrap_err();
+        assert!(error.contains("not frozen: [\"PORTITOR_N\"]"), "{error}");
+        std::fs::remove_file(own.join("new.rs")).unwrap();
+        let _ = dir.write("own/src/auth/sts.rs", "let b = var(\"PORTITOR_B2\");\n");
+        let error = check(STABILITY, &[]).unwrap_err();
+        assert!(
+            error.contains("gone from the code: [\"PORTITOR_B\"]"),
+            "{error}"
+        );
+
+        // a folder that is not there is an error, not an empty list
+        let missing = dir.path().join("no-such-crate/src");
+        let error = check_settings(STABILITY, "own", &[missing.as_path()], &[]).unwrap_err();
+        assert!(error.starts_with("cannot read "), "{error}");
+    }
+
+    /// The route check as a binary's test calls it, with each change
+    /// someone could make to the list, the description or the router.
+    #[tokio::test]
+    async fn the_route_check_fails_for_every_kind_of_difference() {
+        use axum::routing::{get, post};
+        let frozen = names(&["GET /v1/things/{id}", "POST {service}/query"]);
+        let router = || {
+            Router::new()
+                .route(
+                    "/v1/things/{id}",
+                    get(|| async { StatusCode::UNAUTHORIZED }),
+                )
+                .route("/svc/query", post(|| async { StatusCode::BAD_REQUEST }))
+        };
+        let variables = [("{service}", "/svc")];
+        let check = |frozen: Names, documented: Names, router: Router| async move {
+            check_routes("routes", &frozen, &documented, &router, &variables).await
+        };
+        assert_eq!(
+            check(frozen.clone(), frozen.clone(), router()).await,
+            Ok(())
+        );
+
+        // a route removed from the list, and one added to it
+        let shorter = names(&["GET /v1/things/{id}"]);
+        let error = check(shorter, frozen.clone(), router()).await.unwrap_err();
+        assert!(
+            error.contains("not frozen: [\"POST {service}/query\"]"),
+            "{error}"
+        );
+        let mut longer = frozen.clone();
+        longer.insert("DELETE /v1/things/{id}".to_owned());
+        let error = check(longer.clone(), frozen.clone(), router())
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains("gone from the code: [\"DELETE /v1/things/{id}\"]"),
+            "{error}"
+        );
+        // listed and documented, but the router does not have the method
+        let error = check(longer.clone(), longer, router()).await.unwrap_err();
+        assert!(error.contains("\"DELETE /v1/things/{id}\""), "{error}");
+        assert!(error.contains("the router does not serve it"), "{error}");
+
+        // a route renamed in the router only
+        let renamed = Router::new()
+            .route("/v1/items/{id}", get(|| async { StatusCode::UNAUTHORIZED }))
+            .route("/svc/query", post(|| async { StatusCode::BAD_REQUEST }));
+        let error = check(frozen.clone(), frozen.clone(), renamed)
+            .await
+            .unwrap_err();
+        assert!(error.contains("\"GET /v1/things/{id}\""), "{error}");
+        // a route moved to another path of the service URL
+        let moved = Router::new()
+            .route(
+                "/v1/things/{id}",
+                get(|| async { StatusCode::UNAUTHORIZED }),
+            )
+            .route("/other/query", post(|| async { StatusCode::BAD_REQUEST }));
+        let error = check(frozen.clone(), frozen.clone(), moved)
+            .await
+            .unwrap_err();
+        assert!(error.contains("\"POST {service}/query\""), "{error}");
+        // a router that kept the path and lost the method
+        let other_method = Router::new()
+            .route(
+                "/v1/things/{id}",
+                post(|| async { StatusCode::UNAUTHORIZED }),
+            )
+            .route("/svc/query", post(|| async { StatusCode::BAD_REQUEST }));
+        let error = check(frozen.clone(), frozen.clone(), other_method)
+            .await
+            .unwrap_err();
+        assert!(error.contains("\"GET /v1/things/{id}\""), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_router_that_answers_every_path_is_found_out() {
+        use axum::routing::get;
+        let routes = names(&["GET /v1/things/{id}", "GET {service}/list", "GET /"]);
+        let variables = [("{service}", "/svc")];
+        let exact = Router::new()
+            .route("/v1/things/{id}", get(|| async { "" }))
+            .route("/svc/list", get(|| async { "" }))
+            .route("/", get(|| async { "" }));
+        let answered = answered_under_a_wrong_name(&exact, &routes, &variables);
+        assert_eq!(answered.await.unwrap(), Names::new());
+
+        // a nested router with its own "not found" answers every path
+        // below `/svc`
+        let service = Router::new()
+            .route("/list", get(|| async { "" }))
+            .fallback(|| async { StatusCode::NOT_FOUND });
+        let nested = Router::new()
+            .route("/v1/things/{id}", get(|| async { "" }))
+            .nest("/svc", service);
+        let answered = answered_under_a_wrong_name(&nested, &routes, &variables);
+        assert_eq!(
+            answered.await.unwrap(),
+            names(&["GET {service}/list (asked as GET /svc/list-renamed)"])
+        );
+        // a catch-all route answers every path
+        let catch_all = Router::new().route("/{*path}", get(|| async { "" }));
+        let answered = answered_under_a_wrong_name(&catch_all, &routes, &variables);
+        assert_eq!(answered.await.unwrap().len(), 2);
+    }
+
+    /// The management lists: the shared one and the binary's own, and    /// The management lists: the shared one and the binary's own, and
+    /// the two open routes a description leaves out.
+    #[test]
+    fn management_routes_are_the_shared_list_and_the_binarys_own() {
+        let stability = "### Every binary, management port\n```\nGET /health\n```\n\
+                         ### own, management port\n```\nGET /v1/things\n```\n";
+        assert_eq!(
+            management_routes(stability, "own").unwrap(),
+            names(&["GET /health", "GET /v1/things"])
+        );
+        assert!(management_routes(stability, "other").is_err());
+        let documented =
+            documented_management_routes(r#"{"paths": {"/v1/things": {"get": {}}}}"#).unwrap();
+        assert_eq!(
+            documented,
+            names(&["GET /health", "GET /v1/openapi.json", "GET /v1/things"])
+        );
     }
 }
