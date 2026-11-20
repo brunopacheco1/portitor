@@ -69,8 +69,6 @@ PROVIDER_DSP_INSIDE=http://provider-connector:8080/$DSP
 
 # how this script reaches them
 ISSUER_MANAGEMENT=http://127.0.0.1:18471
-PROVIDER_DSP=http://127.0.0.1:18480
-CONSUMER_IDENTITY=http://127.0.0.1:18490
 declare -A IDENTITY_MANAGEMENT=(
   [provider]=http://127.0.0.1:18491
   [consumer]=http://127.0.0.1:18492
@@ -334,17 +332,10 @@ start_compliance_run provider
 
 # --- 6. and 7. the offer for compliant participants -----------------------------------
 
-step "Read the provider's catalog with the consumer's identity"
-TOKEN=$(curl -sf -X POST "$CONSUMER_IDENTITY/sts/token" \
-  --data-urlencode grant_type=client_credentials \
-  --data-urlencode "client_id=$CONSUMER_DID" \
-  --data-urlencode "client_secret=$(cat "$RUN/consumer/sts-client-secret")" \
-  --data-urlencode "audience=$PROVIDER_DID" \
-  --data-urlencode "bearer_access_scope=org.eclipse.dspace.dcp.vc.type:MembershipCredential" |
-  jq -r '.access_token') || fail "the consumer's STS gave no token"
-CATALOG=$(curl -sS --fail-with-body -X POST "$PROVIDER_DSP/$DSP/catalog/request" \
-  -H "authorization: Bearer $TOKEN" -H "$CONTENT_TYPE_JSON" \
-  -d '{"@context": ["https://w3id.org/dspace/2025/1/context.jsonld"], "@type": "CatalogRequestMessage"}') ||
+step "Read the provider's catalog through the consumer's management API"
+CATALOG=$(connector_api consumer POST /v1/catalog/request "$(jq -nc \
+  --arg addr "$PROVIDER_DSP_INSIDE" --arg id "$PROVIDER_DID" \
+  '{counterPartyAddress: $addr, counterPartyId: $id, protocol: "dataspace-protocol-http:2025-1"}')") ||
   fail "catalog request: $CATALOG"
 OFFER=$(jq -c --arg id "$DATASET" '[.dataset] | flatten | .[] | select(.["@id"] == $id)
   | [.hasPolicy] | flatten | .[0]' <<<"$CATALOG")

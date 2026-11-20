@@ -133,9 +133,9 @@ checks this file:
 | [TD-33](#td-33) | The issuer's metadata does not pass the DCP JSON schema | Technical debt, interoperability | 2026-11-18 review (C1) | Addressed (0.12) | — |
 | [TD-34](#td-34) | A repeated transfer request starts a second transfer | Technical debt, interoperability | 2026-11-18 review (D3) | Addressed (0.12) | — |
 | [TD-35](#td-35) | No negotiation started by the provider | Technical debt, interoperability | 2026-11-18 review (D2) | Open | 0.13, if not expensive |
-| [TD-36](#td-36) | DSP details: who may terminate, 401 or 404, agreement timestamp, `consumerPid` check, no catalog pages | Technical debt, interoperability | 2026-11-18 review (D4, D5) | Addressed (0.12); catalog pages open | 0.13 (catalog pages, with TD-38) |
+| [TD-36](#td-36) | DSP details: who may terminate, 401 or 404, agreement timestamp, `consumerPid` check, no catalog pages | Technical debt, interoperability | 2026-11-18 review (D4, D5) | Addressed (0.12; the answer limit in 0.13); catalog pages are neither sent nor followed | — (pages: when a partner needs them) |
 | [TD-37](#td-37) | DCP details: `token` claim required, presentations as JWT strings only, no `/.well-known/dspace-trust` | Technical debt, interoperability | 2026-11-18 review (C2) | Addressed (0.12) | — |
-| [TD-38](#td-38) | No management call to read a provider's catalog | Technical debt, usability | 2026-11-18 review (Q1) | Open | 0.13 |
+| [TD-38](#td-38) | No management call to read a provider's catalog | Technical debt, usability | 2026-11-18 review (Q1) | Addressed (0.13) | — |
 | [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | 2026-11-18 review (Q2, Q7) | Open | 0.13; 1.x (Helm chart) |
 | [TD-40](#td-40) | Database calls block the async runtime | Technical debt | 2026-11-18 review (Q3) | Accepted (0.12, measured) | measure again each release |
 | [TD-41](#td-41) | A panic stopped the whole process (`panic = "abort"`) | Technical debt, security | 2026-11-18 review (Q4) | Addressed (0.12) | — |
@@ -145,7 +145,7 @@ checks this file:
 | [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | 0.12 benchmark (2026-11-19) | Open | — |
 
 Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
-31 technical debts (Open 18, Accepted 5, Addressed 8).
+31 technical debts (Open 17, Accepted 5, Addressed 9).
 
 ## Risks
 
@@ -1604,6 +1604,21 @@ certificate and compliance run at each key change (ADR 0021).
   (`MAX_ANSWER`), about 250 datasets: this limits the management call
   that reads a partner's catalog ([TD-38](#td-38)), and is decided with
   it.
+- **Decided with TD-38 (0.13).** The management call that reads a
+  catalog has its own limit: 16 MiB and 30 seconds
+  (`MAX_CATALOG_ANSWER`, `CATALOG_TIMEOUT` in
+  `crates/portitor-connector/src/catalog_reader.rs`), fixed, with no
+  setting; every other answer keeps 64 kB. Pages stay as they were:
+  as provider Portitor sends its catalog in one answer, and as
+  consumer it reads the first answer only. When a provider sends
+  `Link` headers (DSP 2025-1, "Catalog HTTPS Binding", "Pagination"),
+  the management call returns that first page with the headers copied,
+  and logs a warning; it does not follow `rel="next"`. The
+  specification names the header but not how the pages of a catalog
+  are joined into one answer, and Eclipse EDC 1.0.0-RC8 returns the
+  body it received and does not read the header either
+  (`DspCatalogHttpDispatcherExtension.java`, `ByteArrayBodyExtractor`).
+  Following pages waits for a partner that sends them.
 
 <a id="td-37"></a>
 ### TD-37 DCP details: `token` claim required, presentations as JWT strings only, no `/.well-known/dspace-trust`
@@ -1645,10 +1660,32 @@ certificate and compliance run at each key change (ADR 0021).
   (`scripts/demo-steps.sh`; [review](reviews/2026-11-18-specifications-and-code-quality.md), Q1).
 - **Why it matters.** It is the first step of every new user and the
   hardest one; it also puts the STS secret in the operator's hands.
-- **Current state: Open.**
-- **Next.** ROADMAP 0.13, before the API freeze: a management call that
-  takes the provider's address and returns its catalog. The request
-  shape follows EDC's management API, not a new one.
+- **Current state: Addressed (0.13).** Two calls on the connector's
+  management API (`crates/portitor-connector/src/management.rs`,
+  `catalog_reader.rs`; tests in `tests/management_catalog.rs`):
+  `POST /v1/catalog/request` returns the provider's DSP `Catalog`, and
+  `POST /v1/catalog/dataset/request` one `Dataset`, each as the provider
+  sent it. The connector gets the token from its STS, as for every DSP
+  request, so the operator needs neither the STS secret nor curl against
+  the provider. `scripts/demo-steps.sh`, `scripts/gaiax-e2e.sh` and
+  `scripts/edc-interop.sh` use the call.
+  The request bodies are the `CatalogRequest` and `DatasetRequest` of
+  Eclipse EDC's management API v4, read in EDC v1.0.0-RC8
+  (`catalog-request-schema.json`, `dataset-request-schema.json`,
+  `CatalogRequestValidator.java`, `CatalogApiV4Controller.java`):
+  - taken as in EDC: `counterPartyAddress`, `counterPartyId`,
+    `additionalScopes`, and `@id` for a dataset;
+  - `protocol` or `profile`: exactly one is required, as in EDC's
+    schema, and only `dataspace-protocol-http:2025-1` is accepted;
+  - `querySpec`: refused with 400. EDC sends it to the provider as the
+    DSP `filter`, whose content DSP 2025-1 leaves to each
+    implementation; Portitor cannot promise what a provider does with
+    it, and its own provider side refuses a filter that selects;
+  - `@context` is accepted and not read; `@type` is optional (EDC
+    requires both); any other member is refused.
+  A failure on the provider's side is HTTP 502, as in EDC
+  (`BaseCatalogApiController.java`). Limits and pages:
+  [TD-36](#td-36), and DEPLOYING, "Known limits".
 
 <a id="td-39"></a>
 ### TD-39 DEPLOYING is not in deployment order; the docs are long

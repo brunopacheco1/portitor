@@ -245,6 +245,16 @@ Where the tests are:
   `crates/portitor-dsp/src/negotiation/consumer/tests.rs` and
   `tests/dsp_consumer.rs`, the `consumerPid` of a counter-request in
   `tests/dsp_negotiation.rs`.
+- **Reading a provider's catalog** (TD-38): the connector's
+  `tests/management_catalog.rs`. A Portitor provider in the same process
+  answers the two management calls (the answers pass the DSP JSON
+  Schemas), and a small HTTP server plays a provider that refuses (401,
+  404, 503), cannot be reached, sends pages (`Link` headers), more than
+  the limit, or something that is not a catalog. Also: every refused
+  request body, `additionalScopes` in the token, an `http://` address
+  without `PORTITOR_ALLOW_HTTP_CALLBACKS`, and HTTP 403 documented on
+  every protected route of the OpenAPI description (ADR 0025).
+  `cargo test -p portitor-connector --test management_catalog`.
 - **Keys of another DID** (DCP 5.4.3): `crates/portitor-dcp/src/credential/tests.rs`
   and `a_credential_signed_with_another_dids_key_refuses_the_caller` in
   the connector's `src/auth/dcp/tests.rs`; for the holder side,
@@ -475,8 +485,9 @@ space's `portitor-issuer`. It checks, in this order:
    Identity API (`POST .../participants/{id}/credentials/request`, marked
    unstable in RC7), Portitor's identity through its management API
    (`POST /v1/credential-requests`); the issuer registered both first;
-2. EDC accepts Portitor's identity: the EDC provider's catalog, read with
-   a token from Portitor's STS (EDC queries Portitor's credential service);
+2. EDC accepts Portitor's identity: the EDC provider's catalog, read
+   through the Portitor connector's management API
+   (`POST /v1/catalog/request`; EDC queries Portitor's credential service);
 3. Portitor consumer, EDC provider: negotiation, pull transfer, and the
    data fetched equals the published file;
 4. EDC consumer, Portitor provider: catalog, negotiation, pull transfer
@@ -487,7 +498,8 @@ space's `portitor-issuer`. It checks, in this order:
    HealthDCAT-AP metadata as full IRIs;
 5. revocation both ways: once the issuer revokes one participant's
    credential (`POST /v1/credentials/{id}/revoke`), the other refuses it:
-   EDC answers Portitor's catalog request with 401, and Portitor answers
+   EDC answers Portitor's catalog request with 401 (the management call
+   then answers 502 and names the 401), and Portitor answers
    EDC's negotiation request with 404 (DSP 2025-1 HTTPS bindings,
    "Unauthorized Access"; from 0.12).
 
@@ -849,8 +861,9 @@ script builds and signs the HealthDCAT-AP demo bundle
 (`scripts/demo-bundle.sh`), the issuer serves it and lists the bundle key,
 and the provider follows its newest version (`PORTITOR_BUNDLE_URL`,
 `_AUTHORITY`) and offers `examples/healthdcat-datasets.json`. A catalog
-request without a token is refused (401), one with a token from the
-consumer's STS is answered: under the plain DSP `@context`, the two
+request without a token is refused (401); one made through the
+consumer's management API (`POST /v1/catalog/request`, for which the
+connector gets a token from its STS) is answered: under the plain DSP `@context`, the two
 valid datasets carry `dct:conformsTo` with the release 8 profile and
 their metadata as full IRIs, and `bed-occupancy` is missing; the
 provider's `GET /v1/harvest-jobs/{id}` shows it rejected by the `shacl`
@@ -1034,7 +1047,7 @@ The collection's folders:
 |---|---|
 | `metadata`, `catalog`, `negotiation-provider`, `transfer-provider` | DSP requests to the provider, each with a fresh DCP token; also a catalog request and a negotiation read without a valid token (401 and 404), a repeated transfer request (the same answer again) and the two negotiation messages the provider always refuses with 400 (it never sends an offer) |
 | `auth` | one token from the consumer's STS, to look at |
-| `management` | the consumer's management API, which is not DSP: start and read negotiations, start, read, complete and terminate transfers, harvest jobs, the health checks, the OpenAPI description |
+| `management` | the consumer's management API, which is not DSP: read the provider's catalog and one dataset, start and read negotiations, start, read, complete and terminate transfers, harvest jobs, the health checks, the OpenAPI description |
 | `data` | fetch the data of a started transfer from the provider's data plane, with the token of its data address |
 | `identity` | an identity's management API: credentials, credential requests to the issuer, offers, Gaia-X compliance runs, the health checks; and its public DID document |
 | `issuer` | the issuer's management API: participants, offers and issued credentials, the health checks; and its public DID document, metadata and status list |

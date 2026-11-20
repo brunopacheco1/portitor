@@ -12,6 +12,30 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Added
+
+- **Connector management API: read a provider's catalog** (TD-38).
+  `POST /v1/catalog/request` returns the provider's DSP `Catalog` and
+  `POST /v1/catalog/dataset/request` one `Dataset`, as the provider
+  sent them. The connector gets the DCP token from its STS, so no
+  hand-made STS call is needed. The bodies are the `CatalogRequest`
+  and `DatasetRequest` of Eclipse EDC's management API v4
+  (`counterPartyAddress`, `counterPartyId`, `protocol` or `profile`,
+  `additionalScopes`, `@id`). `protocol` must be
+  `dataspace-protocol-http:2025-1`; a `querySpec` is refused with 400.
+  A provider that refuses or does not answer gives 502. At most 16 MiB
+  are read (a fixed limit; other answers keep 64 kB), and of a catalog
+  in pages only the first, with the provider's `Link` headers (README,
+  "Management API"; DEPLOYING, "Known limits").
+- The demo, the Gaia-X and the EDC interoperability scripts and the
+  Bruno collection read catalogs through the new call.
+
+### Changed
+
+- The connector's management OpenAPI lists HTTP 403 on every route
+  that needs the key. Nothing answers 403 today: it is reserved for
+  scoped access in 1.x, and the API key keeps every right (ADR 0025).
+
 ### Documentation
 
 - Close-out of 0.12: the roadmap and the website mark 0.12 released and

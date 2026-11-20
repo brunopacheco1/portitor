@@ -129,7 +129,6 @@ wait_for "http://$CONSUMER/health"
 PROVIDER=http://$PROVIDER MANAGEMENT=http://$CONSUMER_MANAGEMENT \
   PROVIDER_MANAGEMENT="http://$PROVIDER_MANAGEMENT" PROVIDER_KEY_FILE="$WORK/provider/management.key" \
   KEY_FILE="$WORK/consumer/management.key" \
-  STS="http://$CONSUMER_IDENTITY/sts/token" STS_SECRET_FILE="$WORK/consumer/sts-client-secret" \
   CONSUMER_ID="$CONSUMER_ID" PROVIDER_ID="$PROVIDER_ID" \
   ISSUER_MANAGEMENT="http://$ISSUER_MANAGEMENT" ISSUER_KEY_FILE="$WORK/issuer/management.key" \
   DATA=examples/data TMPDIR="$WORK" scripts/demo-steps.sh ||

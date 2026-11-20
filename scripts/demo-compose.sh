@@ -163,7 +163,6 @@ request_credentials consumer 18093 membership-vc20 data-processor-vc20
 PROVIDER=http://provider:8080 HERE=http://127.0.0.1:18080 \
   PROVIDER_MANAGEMENT=http://127.0.0.1:18081 PROVIDER_KEY_FILE="$RUN/provider/management.key" \
   MANAGEMENT=http://127.0.0.1:18091 KEY_FILE="$RUN/consumer/management.key" \
-  STS=http://127.0.0.1:18092/sts/token STS_SECRET_FILE="$RUN/consumer/sts-client-secret" \
   CONSUMER_ID="$CONSUMER_ID" PROVIDER_ID="$PROVIDER_ID" \
   ISSUER_MANAGEMENT="$ISSUER_MANAGEMENT" ISSUER_KEY_FILE="$RUN/issuer/management.key" \
   DATA=examples/data scripts/demo-steps.sh

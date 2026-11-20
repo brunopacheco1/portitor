@@ -1,0 +1,40 @@
+meta {
+  name: Request dataset (as consumer)
+  type: http
+  seq: 17
+}
+
+post {
+  url: {{mgmtUrl}}/v1/catalog/dataset/request
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "@context": ["https://w3id.org/edc/connector/management/v2"],
+    "@type": "DatasetRequest",
+    "@id": "{{datasetId}}",
+    "counterPartyAddress": "{{dsp}}",
+    "counterPartyId": "{{providerId}}",
+    "protocol": "dataspace-protocol-http:2025-1"
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body["@type"]: eq Dataset
+}
+
+docs {
+  Use the "two-connectors" environment (docs/TESTING.md, Two connectors).
+  One dataset of the provider, by its @id, through the consumer's management API: the
+  connector gets a DCP token from its own STS and returns the provider's Dataset as it
+  came. The body is the DatasetRequest of Eclipse EDC's management API v4.
+  502 with "the provider answered HTTP 404 Not Found" in the detail for a dataset the
+  provider does not have.
+}
