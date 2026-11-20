@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
@@ -31,12 +32,23 @@ const CODES: &str =
     "<http://a.example/x> <http://www.w3.org/2004/02/skos/core#inScheme> <http://a.example/s> .\n";
 const CONTEXT: &str = r#"{"@context": {"dct": "http://purl.org/dc/terms/"}}"#;
 
-/// A new empty folder under the system's temporary folder.
+/// How many folders [`scratch`] has made in this test run.
+static SCRATCH_FOLDERS: AtomicU32 = AtomicU32::new(0);
+
+/// A new empty folder under the system's temporary folder. Its name is
+/// the process id and a counter, so that the tests of one run, which run
+/// at once, each get their own. The tests print the folder in the text
+/// of a failed check, so the name holds nothing random: the code scanner
+/// takes a UUID for a user id and reports the print as a leak (false
+/// positive).
 fn scratch() -> PathBuf {
-    let folder = std::env::temp_dir().join(format!(
-        "portitor-bundle-test-{}",
-        portitor_runtime::system::new_uuid()
-    ));
+    let number = SCRATCH_FOLDERS.fetch_add(1, Ordering::Relaxed);
+    let name = format!("portitor-bundle-test-{}-{number}", std::process::id());
+    let folder = std::env::temp_dir().join(name);
+    // an earlier run with the same process id may have left the folder
+    if folder.exists() {
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
     std::fs::create_dir_all(&folder).unwrap();
     folder
 }
