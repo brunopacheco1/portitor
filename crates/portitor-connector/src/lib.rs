@@ -15,6 +15,8 @@
 //!   way.
 //! - `outbox`: sending saved DSP messages, retries and proof of delivery
 //!   (ADR 0007).
+//! - [`catalog_reader`]: reading a provider's catalog as consumer, for
+//!   the management API.
 //! - [`data_plane`], [`data_flows`]: the built-in HTTP pull data plane and
 //!   the Data Plane Signaling link to it (ADR 0013).
 //! - [`harvest`]: datasets come from a source (the datasets file) into a
@@ -55,6 +57,7 @@ use portitor_runtime::request_size::small_message;
 use serde::Serialize;
 
 pub mod auth;
+pub mod catalog_reader;
 pub mod consumer;
 pub mod consumer_transfer;
 pub mod data_flows;
@@ -281,6 +284,7 @@ pub struct Negotiator {
     transfers: Arc<transfer::TransferProvider>,
     transfer_consumer: Arc<consumer_transfer::TransferConsumer>,
     harvester: Arc<harvest::DatasetHarvester>,
+    catalog_reader: Arc<catalog_reader::CatalogReader>,
 }
 
 impl std::fmt::Debug for Negotiator {
@@ -419,6 +423,46 @@ impl Negotiator {
         self.harvester.copy().active_count()
     }
 
+    /// Reads the catalog of the provider `provider_id` (a `did:web` DID)
+    /// at its DSP endpoint `provider_address`, with a token of ours that
+    /// also grants `additional_scopes` (see [`catalog_reader`]). One try;
+    /// the caller waits for the provider's answer.
+    ///
+    /// # Errors
+    ///
+    /// The address or the id is refused, no token could be had, or the
+    /// provider gave no usable answer.
+    pub async fn read_catalog(
+        &self,
+        provider_address: &str,
+        provider_id: &str,
+        additional_scopes: &[String],
+    ) -> Result<catalog_reader::ProviderAnswer, catalog_reader::ReadFailure> {
+        let reader = &self.catalog_reader;
+        reader
+            .catalog(provider_address, provider_id, additional_scopes)
+            .await
+    }
+
+    /// Reads the dataset `dataset_id` from the provider `provider_id` at
+    /// its DSP endpoint `provider_address`, as [`Negotiator::read_catalog`]
+    /// reads the catalog.
+    ///
+    /// # Errors
+    ///
+    /// As [`Negotiator::read_catalog`].
+    pub async fn read_dataset(
+        &self,
+        provider_address: &str,
+        provider_id: &str,
+        dataset_id: &str,
+    ) -> Result<catalog_reader::ProviderAnswer, catalog_reader::ReadFailure> {
+        let reader = &self.catalog_reader;
+        reader
+            .dataset(provider_address, provider_id, dataset_id)
+            .await
+    }
+
     /// Up to `limit` harvest jobs older than job `before` (all when
     /// `None`), newest first.
     ///
@@ -517,6 +561,10 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         ports.transfers.agreements = ports::Shared(Arc::new(tck::TckAgreements(stored)));
     }
     let verifier = Arc::clone(&ports.verifier);
+    let catalog_reader = Arc::new(catalog_reader::CatalogReader::new(
+        &ports,
+        config.allow_http_callbacks,
+    ));
     let data_plane = start_data_plane(config, &mut ports, &datasets);
     let transfers = Arc::new(transfer::TransferProvider::new(
         &ports,
@@ -560,6 +608,7 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         transfers: Arc::clone(&transfers),
         transfer_consumer: Arc::clone(&transfer_consumer),
         harvester,
+        catalog_reader,
     };
     let state = Arc::new(AppState { catalog, versions });
     // open: discovery (DSP 2025-1), health, and the data plane, which

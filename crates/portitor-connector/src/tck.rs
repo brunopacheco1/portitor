@@ -331,6 +331,25 @@ impl<S: Sender> Sender for LateStart<S> {
     ) -> BoxFuture<'a, Result<serde_json::Value, String>> {
         self.0.get_authorized(url, authorization)
     }
+    // a catalog read is never a start message: handed on as it is
+    fn post_authorized_within<'a>(
+        &'a self,
+        url: &'a str,
+        body: &'a serde_json::Value,
+        authorization: &'a str,
+        limits: crate::http_client::AnswerLimits,
+    ) -> BoxFuture<'a, Result<crate::http_client::RawAnswer, crate::http_client::HttpError>> {
+        self.0
+            .post_authorized_within(url, body, authorization, limits)
+    }
+    fn get_authorized_within<'a>(
+        &'a self,
+        url: &'a str,
+        authorization: &'a str,
+        limits: crate::http_client::AnswerLimits,
+    ) -> BoxFuture<'a, Result<crate::http_client::RawAnswer, crate::http_client::HttpError>> {
+        self.0.get_authorized_within(url, authorization, limits)
+    }
 }
 
 /// Whether `body` is a transfer start message.
