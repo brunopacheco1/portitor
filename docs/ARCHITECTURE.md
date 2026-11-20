@@ -6,7 +6,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # Architecture (draft)
 
-Status: **draft for review**. Language: Rust ([ADR 0002](adr/0002-technology-stack.md), accepted).
+Status: **draft for review**. Language: Rust
+([ADR 0002](adr/0002-technology-stack.md)). This file describes the
+system as it is now. Why it is so is in the [ADRs](adr/README.md); what
+changed in which release is in the [changelog](../CHANGELOG.md). To read
+the code, start with [READING-THE-CODE](READING-THE-CODE.md).
 
 ## Goal
 
@@ -26,7 +30,7 @@ judged against it.
    DSP and DCP TCKs run in CI.
 2. **Interoperability is tested, not assumed.** EDC and Simpl-Open are
    the reference counterparts ([ADR 0011](adr/0011-interoperability-targets.md)).
-   *Check:* an interop test per protocol flow runs in CI from 0.5.
+   *Check:* an interop test per protocol flow runs in CI.
 3. **Few components, one version.** One mono repo and one version for all
    components. Each component is a module of the repo and can ship as its
    own image. A new component needs an ADR. *Check:* the component list
@@ -76,6 +80,38 @@ judged against it.
 13. **Simple over clever.** Prefer the standard library and a few
     well-maintained dependencies; each new dependency is justified in its
     pull request and passes the licence allow-list.
+
+## Specification versions
+
+The one place that says which version of each specification and test
+kit Portitor is built and checked against. Other files name the
+specification and link here.
+
+| What | Version | Where it is pinned or recorded |
+|---|---|---|
+| Dataspace Protocol (DSP) | 2025-1 | `VERSION` in `crates/portitor-dsp/src/lib.rs`; its JSON Schemas in `crates/portitor-dsp/tests/schemas` |
+| Decentralized Claims Protocol (DCP) | v1.0.1 | its JSON Schemas in `crates/portitor-dcp/tests/schemas` and the test that reads them, `crates/portitor-dcp/tests/spec.rs`; the code comments cite v1.0.1 sections |
+| Eclipse Data Plane Signaling | v1.0-RC4 (tag of 2026-08-27) | `crates/portitor-dps/src/lib.rs` |
+| DSP TCK | v1.0.2, built from a pinned commit | `DSP_TCK_REF` and `DSP_TCK_COMMIT` in `.github/workflows/tck.yml` |
+| DCP TCK | 1.2.1, the released jar, by SHA-256 | `DCP_TCK_JAR` and `DCP_TCK_SHA256` in the same file |
+| Eclipse EDC (Connector and IdentityHub), interop test | 1.0.0-RC8 | `edcVersion` in `interop/edc/runtimes/gradle.properties` |
+| Gaia-X Compliance Document | Written against 3.1.0. Compared with 4.0.0 (2026-10-01) on 2026-11-18: the participant criterion and the process steps Portitor uses did not change | [ADR 0021](adr/0021-gaia-x-onboarding.md), update of 2026-11-18 |
+| Gaia-X ICAM document (identity, credentials and access management) | 25.11 | [ADR 0021](adr/0021-gaia-x-onboarding.md); `crates/portitor-dcp/src/gaiax_sign.rs` |
+| Gaia-X compliance service (gx-compliance), the only one tested | v2.16.0, in test mode | image digest in `interop/gaiax/compose.yaml` |
+| Gaia-X ontology context in the tests | `https://w3id.org/gaia-x/development#`, not a numbered release | `scripts/gaiax-lib.sh`; Portitor accepts any context under `https://w3id.org/gaia-x/` (`GAIAX_CONTEXT_PREFIX` in `crates/portitor-dcp/src/gaiax.rs`) |
+
+Notes:
+
+- Other files call the Gaia-X rules "Trust Framework (Danube)". This
+  table names the documents and their numbers instead, because the name
+  does not say which document version was read.
+- The ADRs keep the versions they were written against; they are
+  records. When a version here changes, change this table and the pin
+  it names in the same pull request.
+- No run against the Gaia-X Lab or a real trust anchor exists
+  ([R-12](RISKS_AND_TECHNICAL_DEBTS.md#r-12)).
+- The other pins of the interop tests (images, libraries) are in
+  [TESTING](TESTING.md#what-is-pinned).
 
 ## Diagrams (C4 model)
 
@@ -223,7 +259,7 @@ a bearer token.
 
 ![C4 Code: provider transfer process](diagrams/c4-transfer-code.drawio.svg)
 
-How the management API reads a provider's catalog (from 0.13):
+How the management API reads a provider's catalog:
 `CatalogReader` gets a token through the `Prover` port, sends one
 request through the `Sender` port and hands the provider's answer on as
 it came. Nothing is stored and nothing is tried again.
@@ -289,7 +325,7 @@ organisation (a legal person) that runs a connector, named by one DID
 
 - The identity is the participant's wallet, not a person's. It holds the
   organisation's key, its credentials (for example `MembershipCredential`
-  from the dataspace issuer, and from 0.8 the Gaia-X `gx:LegalPerson` and
+  from the dataspace issuer, and with Gaia-X the `gx:LegalPerson` and
   `gx:ParticipantComplianceCredential`) and signs the participant's DCP
   tokens and presentations.
 - The issuer registers participants (DIDs), not people, and issues to
@@ -325,14 +361,14 @@ ports.
 
 | # | Component (image) | Role | Mandatory? | Protocols |
 |---|---|---|---|---|
-| 1 | Database: one SQLite file per image today; PostgreSQL (external, not built by Portitor) later | State of negotiations, transfers, credentials | Mandatory | — |
-| 2 | `portitor-identity` | Holds the participant's DID, keys and credentials; asks issuers for credentials; answers presentation queries. From 0.8 it also publishes the X.509 chain of its key and gets its Gaia-X compliance credential from a Gaia-X compliance service ([ADR 0021](adr/0021-gaia-x-onboarding.md)) | Mandatory for each participant, unless an external DCP wallet is used, or the participant uses Simpl-Open x509 only | DCP (credential service) |
-| 3 | `portitor-connector` | Control plane: catalog (datasets harvested into a read copy), contract negotiation, transfer; verifies DCP presentations, including Gaia-X compliance credentials from 0.8 ([ADR 0022](adr/0022-gaia-x-compliance-in-policies.md)); checks datasets and DSP messages against the authority's SHACL shapes. The data plane is its own module, linked into the connector for 0.x (see below) | Mandatory | DSP, DCP (verifier) |
-| 4 | `portitor-issuer` (from 0.6, [ADR 0018](adr/0018-issuer-component.md)) | Issues and revokes credentials (for example membership) to the participants the authority registered; publishes their status lists. From 0.7 it also serves the signed schema and vocabulary bundle, which `portitor-issuer bundle build` signs offline ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)) | Optional: one per dataspace, run by the dataspace authority, never on a participant's host | DCP (issuance) |
+| 1 | Database: one SQLite file per image today; PostgreSQL (external, not built by Portitor) later | State of negotiations, transfers, credentials | Mandatory | none |
+| 2 | `portitor-identity` | Holds the participant's DID, keys and credentials; asks issuers for credentials; answers presentation queries. Optionally it publishes the X.509 chain of its key and gets its Gaia-X compliance credential from a Gaia-X compliance service ([ADR 0021](adr/0021-gaia-x-onboarding.md)) | Mandatory for each participant, unless an external DCP wallet is used, or the participant uses Simpl-Open x509 only | DCP (credential service) |
+| 3 | `portitor-connector` | Control plane: catalog (datasets harvested into a read copy), contract negotiation, transfer; verifies DCP presentations, including Gaia-X compliance credentials ([ADR 0022](adr/0022-gaia-x-compliance-in-policies.md)); checks datasets and DSP messages against the authority's SHACL shapes. The data plane is its own module, linked into the connector ([below](#data-plane-inside-the-connector-or-separate)) | Mandatory | DSP, DCP (verifier) |
+| 4 | `portitor-issuer` ([ADR 0018](adr/0018-issuer-component.md)) | Issues and revokes credentials (for example membership) to the participants the authority registered; publishes their status lists. It also serves the signed schema and vocabulary bundle, which `portitor-issuer bundle build` signs offline ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)) | Optional: one per dataspace, run by the dataspace authority, never on a participant's host | DCP (issuance) |
 
-### Images and crates in 0.9
+### Images and crates
 
-Release 0.9 ships three images, built from one `Dockerfile` (one build
+Each release ships three images, built from one `Dockerfile` (one build
 target per image) and released, signed and attested together
 ([RELEASING.md](RELEASING.md)). Until the PostgreSQL adapter exists, each
 image keeps its state in its own SQLite file under `/data`.
@@ -387,28 +423,24 @@ image keeps its state in its own SQLite file under `/data`.
                                                 (domain crates: no I/O)
 ```
 
-- `portitor-connector`: binary; DSP control plane, built-in data plane,
-  management API, SQLite store. Authenticates every DSP request with DCP
-  and signs its own (ADR 0016). Harvests its datasets into a read copy
-  (ADR 0020) and checks them, and DSP messages, against the authority's
-  bundle (ADR 0005); see "Datasets and shapes" below.
-- `portitor-identity`: binary; the participant's DID document, STS,
-  credential service and management API (ADR 0015); asks issuers for
-  credentials (holder side of DCP issuance, port `IssuerClient` in
-  `issuance.rs`, ADR 0018). From 0.8, optionally, the X.509 chain of its
-  key (`certificate.rs`, served at `/.well-known/x509CertificateChain.pem`
-  and named by `x5u` in the DID document) and the Gaia-X onboarding
-  (`gaiax.rs`, port `GaiaxCompliance`, ADR 0021); see "Gaia-X (0.8)"
-  below.
-- `portitor-issuer`: binary; the dataspace authority's DID document, DCP
-  issuer service (metadata, credential requests and their status),
-  delivery outbox, status lists and management API (ADR 0018). Serves
-  built bundles at `GET /bundles/{version}/{path}`, lists the bundle key
-  in its DID document, and builds and signs a bundle offline
-  (`portitor-issuer bundle build`, ADR 0005).
+The three binaries are described in the table above. What the table
+does not say:
+
+- `portitor-connector` also holds the management API and the SQLite
+  store. For datasets and the bundle see
+  [Datasets and shapes](#datasets-and-shapes).
+- `portitor-identity` asks issuers for credentials through the port
+  `IssuerClient` (`issuance.rs`, ADR 0018). The X.509 chain of its key
+  is in `certificate.rs`, served at
+  `/.well-known/x509CertificateChain.pem` and named by `x5u` in the DID
+  document; the Gaia-X onboarding is in `gaiax.rs`, behind the port
+  `GaiaxCompliance` (ADR 0021; see [Gaia-X](#gaia-x)).
+- `portitor-issuer` serves built bundles at
+  `GET /bundles/{version}/{path}` and lists the bundle key in its DID
+  document.
 - `portitor-runtime`: library of adapters the binaries share, so they are
   not copied.
-- `portitor-bundle` (0.7): adapter library for the authority's signed
+- `portitor-bundle`: adapter library for the authority's signed
   bundle on a participant's side: `BundleSource` (download or folder,
   verified) and `BundleStore` (the read copy on disk and the version in
   use). Its own crate so any service can reuse it (maintainer,
@@ -416,18 +448,20 @@ image keeps its state in its own SQLite file under `/data`.
   ([TD-01](RISKS_AND_TECHNICAL_DEBTS.md#td-01)).
 - `portitor-dsp`, `portitor-dps`, `portitor-dcp`, `portitor-time`: domain
   crates (ADR 0004); CI checks they have no I/O dependency.
-- `portitor-shacl` (0.7): our own SHACL Core subset (ADR 0005), a domain
+- `portitor-shacl`: our own SHACL Core subset (ADR 0005), a domain
   crate too: no I/O, no network. Shapes that use a SHACL term it does not
   implement are refused when they are loaded.
 
-The flow (DCP v1.0.1): (1) the connector asks its own identity's STS for
+### How a DSP call is authenticated
+
+The numbers are those of the drawing above (DCP v1.0.1): (1) the connector asks its own identity's STS for
 a self-issued ID token addressed to the partner; (2) it sends that token
 with its DSP request; (3) the partner's connector checks the token against
 the participant's DID document and queries the participant's credential
 service for the credentials it needs. The connector never holds the
 participant's private key. (4) With Gaia-X on, the identity sends the
 participant's Gaia-X credentials to a compliance service and keeps the
-compliance credential it gets back (see "Gaia-X (0.8)" below).
+compliance credential it gets back (see [Gaia-X](#gaia-x) below).
 
 In the connector (ADR 0016) this is two ports in `auth.rs`, with their DCP
 adapters in `auth/dcp.rs` and `auth/sts.rs`:
@@ -437,7 +471,7 @@ adapters in `auth/dcp.rs` and `auth/sts.rs`:
   `/health` or the data plane). The DCP adapter reads the
   `Authorization: Bearer` ID token, resolves the caller's `did:web` DID
   (a DID document is reused for `PORTITOR_DID_CACHE_SECONDS`, in every
-  component, from 0.12),
+  component),
   validates the token (`portitor_dcp::validate_self_issued`: key with
   `capabilityInvocation`, `aud` = our DID, `iss` = `sub`, `exp`/`iat`/`nbf`,
   `jti` not replayed), then sends a `PresentationQueryMessage` for
@@ -445,15 +479,13 @@ adapters in `auth/dcp.rs` and `auth/sts.rs`:
   from our STS that carries the caller's access token. It verifies every
   presentation and credential (both profiles), fetches and verifies each
   status list credential (signed by the credential's issuer, fail closed;
-  a verified list is reused for `PORTITOR_STATUS_LIST_CACHE_SECONDS`, from
-  0.11),
+  a verified list is reused for `PORTITOR_STATUS_LIST_CACHE_SECONDS`),
   and requires a `MembershipCredential` from a trusted issuer about the
   caller (each credential signed with a key of its issuer's own DID,
   DCP v1.0.1, 5.4.3, step 4). One credential that fails its checks makes its presentation
   invalid and refuses the caller (DCP v1.0.1, 5.4.3, step 8). The verified DID and credentials go to the handler as `Caller`;
   a refusal is a DSP error with no detail: HTTP 404 on the negotiation
-  and transfer routes, HTTP 401 on the catalog routes (ADR 0016, amended
-  in 0.12). When an offer or
+  and transfer routes, HTTP 401 on the catalog routes (ADR 0016). When an offer or
   agreement has credential constraints (ADR 0019), the provider's handler
   derives their scopes (`portitor_dsp::policy::credential_scopes`) and
   asks the verifier again (`CallerVerifier::credentials`): a second query,
@@ -474,7 +506,7 @@ start the connector resolves its own DID document and checks that its STS
 signs for it. Tests use fake ports; the `tck` build maps the DSP TCK's
 fixed header to the TCK participant.
 
-### Gaia-X (0.8)
+### Gaia-X
 
 Gaia-X does not use DCP, so the two Gaia-X parts sit next to the DCP
 code ([ADR 0021](adr/0021-gaia-x-onboarding.md),
@@ -507,10 +539,10 @@ diagrams above):
   caller can still use offers that need only other credentials. Policies
   see Gaia-X credentials only by their Gaia-X type.
 
-### Datasets and shapes (0.7)
+### Datasets and shapes
 
-Four ports carry the 0.7 work, each with its adapters
-(ADR 0004; C4 diagrams above):
+These ports carry the datasets and the authority's bundle, each with its
+adapters (ADR 0004; C4 diagrams above):
 
 - `DatasetSource` (`harvest/source.rs`): a full snapshot of the
   provider's datasets. `FileSource` reads `PORTITOR_DATASETS_FILE` again
@@ -576,7 +608,7 @@ dataset metadata bundle
 1. Issuer (`portitor-issuer`): its own volume, key and `did:web`
    document; its credential definitions; then register each participant
    (DID and claims) through its management API.
-   From 0.7, if the dataspace checks dataset metadata: build and sign the
+   If the dataspace checks dataset metadata: build and sign the
    schema and vocabulary bundle offline with `portitor-issuer bundle
    build`, list the bundle key in the issuer's DID document
    (`PORTITOR_ISSUER_BUNDLE_KEY_FILE`) and publish the bundle folder
@@ -587,7 +619,7 @@ Then for each participant:
 2. Storage: a volume for each image's SQLite file (PostgreSQL later).
 3. Identity (`portitor-identity`): publish the `did:web` document over
    HTTPS, then ask the issuer for a membership credential (DCP issuance).
-   For Gaia-X (from 0.8): get a certificate for the identity key and the
+   For Gaia-X: get a certificate for the identity key and the
    notary's registration number credential, write the participant file,
    and set the compliance service's URL; the identity then gets and
    renews the compliance credential itself.
@@ -599,16 +631,17 @@ Then for each participant:
 
 ## Data plane: inside the connector or separate?
 
-**Decided (maintainer, 2026-11-11): option A, inside the connector, behind
-an internal interface that follows Eclipse Data Plane Signaling.** The
-reasoning is kept below.
+**Decided (maintainer, 2026-11-11): option A, inside the connector,
+behind an internal interface that follows Eclipse Data Plane Signaling.**
+This section is the record of that decision; the debt it leaves is
+[TD-17](RISKS_AND_TECHNICAL_DEBTS.md#td-17).
 
 **What each part does.** The control plane negotiates: catalog, contract,
 and the start and end of a transfer (DSP). The data plane moves the bytes,
 for example by serving a file over HTTP to the consumer, with a short-lived
 token that the control plane issued.
 
-**Option A: in the connector's process (decided for 0.x).** The data plane
+**Option A: in the connector's process (decided).** The data plane
 is its own module, but runs inside the connector's process and image: one
 deployment step. No internal API to secure or version. The cost:
 the data traffic and the protocol logic share CPU, memory and the network
@@ -623,21 +656,22 @@ Eclipse Data Plane Signaling spec does, but it is still incubating with no
 release. EDC (and so Simpl-Open) is moving to Data Plane Signaling, so
 building our own interface now risks rework.
 
-**Decision.** Ship option A in 0.4, with the data plane behind an internal
-interface that follows Eclipse Data Plane Signaling **v1.0-RC4** (tag of
-27 Aug 2026 in `eclipse-dataplane-signaling/dataplane-signaling`): the
-same data flow state machine, the same messages (`prepare`, `start`,
-`started`, `suspend`, `resume`, `terminate`, `completed`, `errored`) and
-the same `DataAddress` shape. In-process, these are function calls; the
-HTTP endpoints (`/dataflows/...` on the data plane, `/transfers/:id/dataflow/...`
-on the control plane) are added only when we split. We track the spec until
-its 1.0 release and record each update in the changelog. When that spec is
-released, split it out as an optional component (option B) without
-changing the connector's protocol code. Interoperability with EDC and
-Simpl-Open is not affected either way: other connectors only see DSP and
-the data endpoint, never our internal split.
+**Decision.** Option A, with the data plane behind an internal interface
+that follows Eclipse Data Plane Signaling v1.0-RC4
+([Specification versions](#specification-versions)): the same data flow
+state machine, the same messages (`prepare`, `start`, `started`,
+`suspend`, `resume`, `terminate`, `completed`, `errored`) and the same
+`DataAddress` shape. In-process, these are function calls. The HTTP
+endpoints (`/dataflows/...` on the data plane,
+`/transfers/:id/dataflow/...` on the control plane) are added only when
+the data plane is split out, which is not in 1.0
+([STABILITY](STABILITY.md#what-10-does-not-do)). We track the
+specification until its 1.0 release and record each update in the
+changelog ([R-06](RISKS_AND_TECHNICAL_DEBTS.md#r-06)). Interoperability
+with EDC and Simpl-Open is not affected either way: other connectors see
+only DSP and the data endpoint, never our internal split.
 
-**In code (0.4).** The domain crate `portitor-dps` holds the signaling
+**In code.** The domain crate `portitor-dps` holds the signaling
 messages, the data flow state machine and two ports: `DataPlane` (what the
 control plane asks: `prepare`, `start`, `started`, `suspend`, `resume`,
 `terminate`, `completed`, `status`) and `ControlPlane` (what the data plane
@@ -645,41 +679,10 @@ reports: `prepared`, `started`, `completed`, `errored`). The optional
 agreement retrieval endpoint and registration are left out: one built-in
 data plane needs neither.
 
-What implementing v1.0-RC4 showed (reported to the Data Plane Signaling
-project on 2026-11-16, and settled in ADR 0013 where it affects us):
-
-- Five examples (start, started, resume, status and the base data address
-  example) fail the specification's own schemas: their data addresses lack
-  the `@type` fields that the DSP `DataAddress` schema requires, and two
-  are an empty `{}`. Reported upstream: https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/133
-- The `DataFlowStartMessage` example is an HTTP pull with a `dataAddress`,
-  while the text says a data address on `start` for a pull "MUST result in
-  a HTTP 4xx Client Error". Reported upstream: https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/134
-- Resume: the specification lets only the party that suspended resume;
-  DSP 2025-1 lets either party start a suspended transfer again.
-  Reported upstream: https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/135
-- The HTTP transfer profile (`profiles` repository, no release yet) sets
-  `endpointType` to `https://w3id.org/dspace-sig/profile/http-pull` and
-  requires HTTPS endpoints; DSP examples and the TCK use
-  `https://w3id.org/idsa/v4.1/HTTP` and the format `HTTP-PULL`. Which value
-  Portitor sends over DSP is decided in ADR 0013 (0.4 PR 3). Reported
-  upstream: https://github.com/eclipse-dataplane-signaling/profiles/issues/8
-- Starting a suspended pull transfer again from the provider side: DSP
-  requires a data address in the provider's start message, but Signaling
-  has no way to ask the data plane for a new one. Portitor's built-in data
-  plane gives the flow a new token (ADR 0014). Reported upstream with
-  the resume point: https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/135
-- The diagram "Consumer Pull – Consumer Suspend/Start" shows the provider
-  sending a `TransferStartMessage` with a data address back after the
-  consumer started the transfer again. The DSP TCK refuses that message
-  (its consumer is already STARTED), and Portitor does not send it
-  (ADR 0013). Reported upstream with the resume point: https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/135
-
-What the transfer work showed about the DSP TCK v1.0.2 (reported to the
-TCK project: https://github.com/eclipse-dataspacetck/dsp-tck/issues/338):
-
-- Its consumer moves a transfer to REQUESTED only after it reads the
-  provider's answer to the request, and its start handler removes itself
-  after the first start message, even one it refused. A provider that sends its start message at once can hit
-  the gap; every retry then gets 404. Portitor's TCK build waits 300 ms
-  before a start message (ADR 0014).
+Implementing v1.0-RC4 and running the DSP TCK v1.0.2 showed errors and
+gaps in both. They are reported upstream; the list, with what Portitor
+does meanwhile, is in
+[RISKS_AND_TECHNICAL_DEBTS, "Upstream reports"](RISKS_AND_TECHNICAL_DEBTS.md#upstream-reports)
+(reports 2 to 6), and the choices they forced are in
+[ADR 0013](adr/0013-transfer-and-data-plane.md) and
+[ADR 0014](adr/0014-transfers-as-consumer.md).
