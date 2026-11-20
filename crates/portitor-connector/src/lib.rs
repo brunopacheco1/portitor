@@ -591,7 +591,9 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
     ));
     #[cfg(feature = "tck")]
     {
-        let stored = ports.transfers.agreements.clone();
+        // the adapter itself (`.0`), not the `Shared` around it: see
+        // `tck::StoredAgreements`
+        let stored = tck::StoredAgreements(Arc::clone(&ports.transfers.agreements.0));
         ports.transfers.agreements = ports::Shared(Arc::new(tck::TckAgreements(stored)));
     }
     let verifier = Arc::clone(&ports.verifier);
