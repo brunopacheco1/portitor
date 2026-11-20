@@ -828,3 +828,397 @@ fn the_description_has_the_catalog_calls_and_403_on_every_protected_route() {
     let required = transfer["required"].as_array().unwrap();
     assert!(!required.contains(&json!("dataAddress")));
 }
+
+// ---- A provider that answers badly, on purpose or not. The played
+// ---- provider below writes its answer byte for byte, so it can send
+// ---- what a web framework would never send.
+
+/// Starts a provider that answers every request with exactly the bytes
+/// of `answer` (a whole HTTP/1.1 response) and then closes the
+/// connection, or, with `then_stalls`, keeps it open and sends nothing
+/// more. Returns its base URL and the first line of each request.
+async fn raw_provider(answer: Vec<u8>, then_stalls: bool) -> (String, Arc<Mutex<Vec<String>>>) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let request_lines = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&request_lines);
+    tokio::spawn(async move {
+        loop {
+            let (mut connection, _) = listener.accept().await.unwrap();
+            let (answer, seen) = (answer.clone(), Arc::clone(&seen));
+            tokio::spawn(async move {
+                // read the whole request first: closing a connection with
+                // unread bytes can cut our answer short
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                loop {
+                    let read = connection.read(&mut buffer).await.unwrap_or(0);
+                    request.extend_from_slice(&buffer[..read]);
+                    if read == 0 || whole_request(&request) {
+                        break;
+                    }
+                }
+                let text = String::from_utf8_lossy(&request);
+                let first_line = text.lines().next().unwrap_or_default().to_owned();
+                seen.lock().unwrap().push(first_line);
+                // the reader may stop reading early (too large): not an
+                // error of this provider
+                let _ = connection.write_all(&answer).await;
+                if then_stalls {
+                    tokio::time::sleep(std::time::Duration::from_secs(3_600)).await;
+                }
+                let _ = connection.shutdown().await;
+            });
+        }
+    });
+    (format!("http://{address}"), request_lines)
+}
+
+/// Whether `request` holds a whole HTTP/1.1 request: its head, and as
+/// many body bytes as its `content-length` says.
+fn whole_request(request: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(request).to_ascii_lowercase();
+    let Some((head, body)) = text.split_once("\r\n\r\n") else {
+        return false;
+    };
+    let mut expected = 0;
+    for line in head.lines() {
+        if let Some(length) = line.strip_prefix("content-length:") {
+            expected = length.trim().parse().unwrap();
+        }
+    }
+    body.len() >= expected
+}
+
+/// A whole `200 OK` response with `body` as JSON and the extra header
+/// lines `headers` (each ends with `\r\n`).
+fn ok_response(headers: &str, body: &[u8]) -> Vec<u8> {
+    let head = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n{headers}content-length: {}\r\n\r\n",
+        body.len()
+    );
+    [head.as_bytes(), body].concat()
+}
+
+/// A whole `200 OK` response that sends `body` in chunks (`Transfer-Encoding:
+/// chunked`, RFC 9112, section 7.1), so without saying its length first.
+fn chunked_response(body: &[u8]) -> Vec<u8> {
+    let mut response =
+        b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ntransfer-encoding: chunked\r\n\r\n"
+            .to_vec();
+    for chunk in body.chunks(1024 * 1024) {
+        response.extend_from_slice(format!("{:x}\r\n", chunk.len()).as_bytes());
+        response.extend_from_slice(chunk);
+        response.extend_from_slice(b"\r\n");
+    }
+    response.extend_from_slice(b"0\r\n\r\n");
+    response
+}
+
+/// Asks the provider that answers with `response` for its catalog,
+/// through the management API.
+async fn catalog_of_raw_provider(response: Vec<u8>) -> Answer {
+    let (base, _) = raw_provider(response, false).await;
+    let app = consumer_over_http(true);
+    post(&app, "/v1/catalog/request", &catalog_request(&base)).await
+}
+
+/// The played catalog as text, padded with spaces to `length` bytes
+/// (spaces after a JSON value are JSON).
+fn played_catalog_of_length(length: usize) -> Vec<u8> {
+    let mut text = played_catalog().to_string();
+    text.push_str(&" ".repeat(length - text.len()));
+    text.into_bytes()
+}
+
+/// The limit of 16 MiB holds for a body sent in chunks too, where no
+/// `Content-Length` announces the size.
+#[tokio::test]
+async fn a_chunked_answer_is_read_up_to_the_limit_and_one_byte_more_is_a_bad_gateway() {
+    let at_the_limit = chunked_response(&played_catalog_of_length(MAX_CATALOG_ANSWER));
+    let answer = catalog_of_raw_provider(at_the_limit).await;
+    assert_eq!(answer.status, StatusCode::OK);
+    assert_eq!(answer.body, played_catalog());
+
+    let one_more = chunked_response(&played_catalog_of_length(MAX_CATALOG_ANSWER + 1));
+    let answer = catalog_of_raw_provider(one_more).await;
+    let detail = problem_detail(&answer, StatusCode::BAD_GATEWAY);
+    assert!(detail.contains("cannot be used"), "{detail}");
+}
+
+/// A provider cannot make the connector buffer response headers without
+/// end: the HTTP client gives up, and the caller gets 502, not 500.
+#[tokio::test]
+async fn an_answer_with_a_huge_header_or_too_many_headers_is_a_bad_gateway() {
+    let catalog = played_catalog().to_string();
+    let huge = format!("x-fill: {}\r\n", "a".repeat(2 * 1024 * 1024));
+    let many = "x-fill: a\r\n".repeat(500);
+    for headers in [huge, many] {
+        let answer = catalog_of_raw_provider(ok_response(&headers, catalog.as_bytes())).await;
+        let detail = problem_detail(&answer, StatusCode::BAD_GATEWAY);
+        assert!(
+            detail.starts_with("the provider did not answer: "),
+            "{detail}"
+        );
+    }
+}
+
+/// An answer that says 200 but is cut off, or is no answer at all.
+#[tokio::test]
+async fn an_answer_that_breaks_off_is_a_bad_gateway() {
+    let catalog = played_catalog().to_string();
+    // announces more bytes than it sends, then closes
+    let mut cut_off = ok_response("", catalog.as_bytes());
+    cut_off.truncate(cut_off.len() - 10);
+    // closes without a word
+    let nothing = Vec::new();
+    // not HTTP
+    let not_http = b"SSH-2.0-OpenSSH_9.6\r\n".to_vec();
+    for response in [cut_off, nothing, not_http] {
+        let answer = catalog_of_raw_provider(response).await;
+        let detail = problem_detail(&answer, StatusCode::BAD_GATEWAY);
+        assert!(
+            detail.starts_with("the provider did not answer: "),
+            "{detail}"
+        );
+    }
+}
+
+/// The 30 seconds are for the whole answer, not only for its first
+/// byte: a provider that sends the status line, the headers and a part
+/// of the body and then nothing more is given up after 30 seconds.
+///
+/// The clock is paused: tokio moves it forward when every task waits,
+/// so the test does not take 30 seconds.
+#[tokio::test(start_paused = true)]
+async fn a_provider_that_stops_in_the_middle_of_the_body_is_given_up_after_30_seconds() {
+    let catalog = played_catalog().to_string();
+    let mut half = ok_response("", catalog.as_bytes());
+    half.truncate(half.len() - 10);
+    let (base, request_lines) = raw_provider(half, true).await;
+    let app = consumer_over_http(true);
+    let started = tokio::time::Instant::now();
+    let answer = post(&app, "/v1/catalog/request", &catalog_request(&base)).await;
+    let detail = problem_detail(&answer, StatusCode::BAD_GATEWAY);
+    assert_eq!(detail, "the provider did not answer: no answer within 30s");
+    let waited = started.elapsed();
+    assert!(waited >= std::time::Duration::from_secs(30), "{waited:?}");
+    assert!(waited < std::time::Duration::from_secs(31), "{waited:?}");
+    // the request did arrive: it is the answer that never ended
+    let request_lines = request_lines.lock().unwrap();
+    assert_eq!(request_lines.len(), 1, "one try");
+    assert!(request_lines[0].starts_with("POST /catalog/request "));
+}
+
+/// What is handed on as `application/json` is JSON: text in UTF-8 (RFC
+/// 8259, section 8.1) with one object whose `@type` is the plain text
+/// `Catalog`, as the DSP 2025-1 schema says (`catalog-schema.json`:
+/// `"@type": {"type": "string", "const": "Catalog"}`; so no list, no
+/// prefix, no IRI).
+#[tokio::test]
+async fn an_answer_that_is_not_a_json_catalog_is_never_handed_on() {
+    let bodies: Vec<(&str, Vec<u8>)> = vec![
+        ("no body", Vec::new()),
+        ("not UTF-8 at all", vec![0xff, 0xfe, 0x00]),
+        (
+            "a text that is not UTF-8 inside the catalog",
+            b"{\"@type\":\"Catalog\",\"dct:title\":\"caf\xe9\"}".to_vec(),
+        ),
+        (
+            "a member name that is not UTF-8",
+            b"{\"@type\":\"Catalog\",\"caf\xe9\":1}".to_vec(),
+        ),
+        (
+            "a byte order mark first",
+            b"\xef\xbb\xbf{\"@type\":\"Catalog\"}".to_vec(),
+        ),
+        ("@type as a list", br#"{"@type":["Catalog"]}"#.to_vec()),
+        (
+            "@type with a prefix",
+            br#"{"@type":"dcat:Catalog"}"#.to_vec(),
+        ),
+        (
+            "@type as an IRI",
+            br#"{"@type":"http://www.w3.org/ns/dcat#Catalog"}"#.to_vec(),
+        ),
+        ("@type in other letters", br#"{"@type":"catalog"}"#.to_vec()),
+        (
+            "@type twice",
+            br#"{"@type":"Catalog","@type":"Dataset"}"#.to_vec(),
+        ),
+        (
+            "@type only further inside",
+            br#"{"dataset":[{"@type":"Catalog"}]}"#.to_vec(),
+        ),
+        (
+            "more after the catalog",
+            br#"{"@type":"Catalog"}{"@type":"Catalog"}"#.to_vec(),
+        ),
+        ("a list of catalogs", br#"[{"@type":"Catalog"}]"#.to_vec()),
+        ("a text", br#""Catalog""#.to_vec()),
+        (
+            "cut in the middle",
+            br#"{"@type":"Catalog","dataset":["#.to_vec(),
+        ),
+    ];
+    for (name, body) in bodies {
+        let answer = catalog_of_raw_provider(ok_response("", &body)).await;
+        assert_eq!(answer.status, StatusCode::BAD_GATEWAY, "{name}");
+        let detail = problem_detail(&answer, StatusCode::BAD_GATEWAY);
+        assert!(
+            detail.starts_with("the provider's answer is not "),
+            "{name}: {detail}"
+        );
+    }
+    // HTTP 204: a success without a catalog
+    let no_content = b"HTTP/1.1 204 No Content\r\n\r\n".to_vec();
+    let answer = catalog_of_raw_provider(no_content).await;
+    problem_detail(&answer, StatusCode::BAD_GATEWAY);
+}
+
+/// A redirect is not followed: our token was made for the provider, and
+/// the provider may not send it elsewhere.
+#[tokio::test]
+async fn a_redirect_is_not_followed() {
+    let (elsewhere, seen_elsewhere) = played_provider().await;
+    let redirect = format!(
+        "HTTP/1.1 307 Temporary Redirect\r\nlocation: {elsewhere}/whole/catalog/request\r\ncontent-length: 0\r\n\r\n"
+    );
+    let answer = catalog_of_raw_provider(redirect.into_bytes()).await;
+    let detail = problem_detail(&answer, StatusCode::BAD_GATEWAY);
+    assert_eq!(detail, "the provider answered HTTP 307 Temporary Redirect");
+    assert!(seen_elsewhere.lock().unwrap().authorizations.is_empty());
+}
+
+/// What the code does today, written down (a question for the
+/// maintainer, not a rule of DSP): the catalog's `participantId` is not
+/// compared with `counterPartyId`. The token is made for
+/// `counterPartyId`, so a provider with another identity normally
+/// refuses it (401, then 502 here); one that answers anyway is believed.
+#[tokio::test]
+async fn a_catalog_that_names_another_participant_is_returned_as_it_is() {
+    let mut catalog = played_catalog();
+    catalog["participantId"] = json!("did:web:someone-else.example");
+    let response = ok_response("", catalog.to_string().as_bytes());
+    let answer = catalog_of_raw_provider(response).await;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    assert_eq!(answer.body["participantId"], "did:web:someone-else.example");
+}
+
+/// The address is used as written: a path stays, slashes at the end go,
+/// the scheme may be in capitals. An address with a user name, spaces
+/// around it or no host is refused with 400 and nothing is sent.
+#[tokio::test]
+async fn the_address_may_have_a_path_but_no_user_name_and_no_spaces() {
+    let (base, seen) = played_provider().await;
+    let app = consumer_over_http(true);
+    let capitals = base.replace("http://", "HTTP://");
+    for address in [
+        format!("{base}/whole"),
+        format!("{base}/whole/"),
+        format!("{base}/whole///"),
+        format!("{capitals}/whole"),
+    ] {
+        let answer = post(&app, "/v1/catalog/request", &catalog_request(&address)).await;
+        assert_eq!(answer.status, StatusCode::OK, "{address}: {}", answer.body);
+        let request = dataset_request(&address, "urn:uuid:dataset-1");
+        let answer = post(&app, "/v1/catalog/dataset/request", &request).await;
+        assert_eq!(answer.status, StatusCode::OK, "{address}: {}", answer.body);
+    }
+    let sent = seen.lock().unwrap().authorizations.len();
+    assert_eq!(sent, 8);
+
+    let host = base.strip_prefix("http://").unwrap();
+    for address in [
+        format!("http://user:password@{host}/whole"),
+        format!("http://user@{host}/whole"),
+        format!(" {base}/whole"),
+        "http://".to_owned(),
+        "http:///whole".to_owned(),
+        format!("{host}/whole"),
+        format!("//{host}/whole"),
+        "file:///etc/passwd".to_owned(),
+        String::new(),
+    ] {
+        let answer = post(&app, "/v1/catalog/request", &catalog_request(&address)).await;
+        let detail = problem_detail(&answer, StatusCode::BAD_REQUEST);
+        assert!(detail.contains("https URL"), "{address:?}: {detail}");
+        let request = dataset_request(&address, "urn:uuid:dataset-1");
+        let answer = post(&app, "/v1/catalog/dataset/request", &request).await;
+        problem_detail(&answer, StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(seen.lock().unwrap().authorizations.len(), sent);
+}
+
+/// Whatever the dataset id holds, it reaches the provider as one path
+/// segment and unchanged, and the path of the address is not left.
+#[tokio::test]
+async fn any_dataset_id_reaches_the_provider_unchanged() {
+    let (base, seen) = played_provider().await;
+    let app = consumer_over_http(true);
+    let long = "d".repeat(4_000);
+    let ids = [
+        "100%",
+        "a%2Fb",
+        "%",
+        "..",
+        ".",
+        "../../whole/catalog/request",
+        "a\\b",
+        "a b",
+        " a ",
+        "a\tb\nc",
+        "a;b=c&d=e+f",
+        "https://provider.example/datasets/1?x=1#y",
+        "données 数据 🗂",
+        long.as_str(),
+    ];
+    for id in ids {
+        let request = dataset_request(&format!("{base}/whole"), id);
+        let answer = post(&app, "/v1/catalog/dataset/request", &request).await;
+        assert_eq!(answer.status, StatusCode::OK, "{id:?}: {}", answer.body);
+        assert_eq!(answer.body["@id"], id);
+    }
+    assert_eq!(seen.lock().unwrap().authorizations.len(), ids.len());
+    assert!(seen.lock().unwrap().catalog_requests.is_empty());
+}
+
+/// Many calls at once do not disturb each other: each gets its answer,
+/// and each has its own token.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn calls_at_once_each_get_their_answer() {
+    let (base, seen) = played_provider().await;
+    let app = consumer_over_http(true);
+    let mut running = Vec::new();
+    for number in 0..24 {
+        let (app, base) = (app.clone(), base.clone());
+        running.push(tokio::spawn(async move {
+            let id = format!("urn:uuid:dataset-{number}");
+            let (uri, request) = match number % 3 {
+                0 => (
+                    "/v1/catalog/request",
+                    catalog_request(&format!("{base}/whole")),
+                ),
+                1 => (
+                    "/v1/catalog/dataset/request",
+                    dataset_request(&format!("{base}/whole"), &id),
+                ),
+                _ => (
+                    "/v1/catalog/request",
+                    catalog_request(&format!("{base}/down")),
+                ),
+            };
+            (number, id, post(&app, uri, &request).await)
+        }));
+    }
+    for task in running {
+        let (number, id, answer) = task.await.unwrap();
+        match number % 3 {
+            0 => assert_eq!(answer.body, played_catalog()),
+            1 => assert_eq!(answer.body["@id"], id.as_str()),
+            _ => assert_eq!(answer.status, StatusCode::BAD_GATEWAY),
+        }
+    }
+    assert_eq!(seen.lock().unwrap().authorizations.len(), 24);
+}

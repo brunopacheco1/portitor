@@ -143,6 +143,14 @@ after 1.0 they could only be made in 2.0. What to do:
   says the same: known roles are closed, a role object with another
   type is valid, at least one file has a known role.
 
+### Fixed
+
+- Connector management API, `POST /v1/catalog/request` and
+  `POST /v1/catalog/dataset/request`: a provider's answer that is not
+  UTF-8 text inside a member the connector does not read was handed on
+  with HTTP 200 as `application/json`. It is now refused with 502, as
+  any other answer that is not JSON (RFC 8259, section 8.1).
+
 ### Documentation
 
 - `docs/TESTING.md`, "EDC interop test": every step with its expected
