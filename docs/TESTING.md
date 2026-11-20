@@ -6,8 +6,10 @@ SPDX-License-Identifier: Apache-2.0
 
 # Testing Portitor
 
-How to check a change before you open a pull request, and how the
-project checks every change. All commands run from the repository root.
+For contributors: how to check a change before you open a pull request,
+how the project checks every change, and how to run the demos by hand.
+All commands run from the repository root. Deploying for real is in
+[DEPLOYING](DEPLOYING.md).
 
 ## What runs where
 
@@ -26,7 +28,7 @@ project checks every change. All commands run from the repository root.
 | Gaia-X compliance between Portitor participants, against a local Gaia-X compliance service in test mode | `scripts/gaiax-e2e.sh`, see [below](#gaia-x-end-to-end-test) | PRs that touch `crates/`, `Cargo.lock`, the `Dockerfile`, `interop/gaiax/`, the scripts or the workflow, and nightly (`Gaia-X`) |
 | Fuzzing | see [below](#fuzzing) | every PR (short), weekly (long) |
 | Two participants authenticate with DCP, agree a contract and transfer a file | `scripts/demo.sh`, see [below](#two-connectors) | every PR (`CI`) |
-| The same in Docker Compose | `scripts/demo-compose.sh` | every PR (`CI`) |
+| The same in Docker Compose | `scripts/demo-compose.sh`, see [below](#two-connectors) | every PR (`CI`) |
 | The container scripts with Podman instead of Docker | `CONTAINER_ENGINE=podman` and the script, see [below](#docker-or-podman) | no: by hand, last run noted there |
 | Images build and start | `docker build --target portitor-connector` / `--target portitor-identity` / `--target portitor-issuer`; the connector and the issuer refuse to start without their settings, the identity serves its DID document | every PR (`CI`) |
 | Static analysis | CodeQL, OpenSSF Scorecard, ORT | every PR or on `main` |
@@ -64,9 +66,6 @@ CI runs everything with Docker. The Podman runs are done by hand:
 | `scripts/gaiax-e2e.sh` | the same day and machine; 44 seconds |
 | `scripts/edc-interop.sh` | the same day and machine; 12 minutes, most of it the Gradle builds of EDC |
 
-Not run with Podman: Linux hosts (SELinux labels are not handled, see
-below), and OpenSSL 4, which Homebrew now installs as `openssl`.
-
 **What Podman needs**
 
 - **Docker Compose** as the provider of `podman compose`: the
@@ -99,10 +98,9 @@ below), and OpenSSL 4, which Homebrew now installs as `openssl`.
   the two interop tests `python3` with `cryptography`. Homebrew's
   Python refuses `pip install` outside a virtual environment (PEP 668):
   `python3 -m venv .venv && .venv/bin/pip install cryptography`, then
-  put `.venv/bin` first in `PATH`. The scripts were written with
-  OpenSSL 3; they have not been run with OpenSSL 4 or with the LibreSSL
-  that macOS ships as `/usr/bin/openssl` (`brew install openssl@3` and
-  put its `bin` first in `PATH`).
+  put `.venv/bin` first in `PATH`. The scripts need OpenSSL 3. On macOS,
+  `/usr/bin/openssl` is LibreSSL: `brew install openssl@3` and put its
+  `bin` first in `PATH`.
   `scripts/bench.sh` and `scripts/measure.sh` run on Linux only (they
   read `/proc`).
 - **Linux binaries for the machine's architecture.** The `Dockerfile`
@@ -138,10 +136,28 @@ below), and OpenSSL 4, which Homebrew now installs as `openssl`.
 
 Not needed, so not used: `host.docker.internal` (no container calls the
 host), ports below 1024 on the host (all published ports are 18000 and
-up, on `127.0.0.1`), SELinux labels on mounts (`:z`). Not handled: Podman
-on a Linux host with SELinux enforcing, where the mounted `run/` folders
+up, on `127.0.0.1`), SELinux labels on mounts (`:z`). Not handled and
+not run: Podman on a Linux host with SELinux enforcing, where the mounted `run/` folders
 would need `:z`; and a Docker CLI that talks to a Podman socket
 (`DOCKER_HOST`), which the scripts take for Docker.
+
+## Building the images locally
+
+The container scripts take the released images, or the ones you name.
+To test your own changes, build the three images as CI does. The
+`Dockerfile` copies static binaries from `dist/<arch>/`:
+
+```sh
+mkdir -p dist/amd64
+cargo build --release --target x86_64-unknown-linux-musl -p portitor-connector -p portitor-identity -p portitor-issuer
+cp target/x86_64-unknown-linux-musl/release/portitor-{connector,identity,issuer} dist/amd64/
+docker build --target portitor-connector -t portitor-connector:ci .
+docker build --target portitor-identity -t portitor-identity:ci .
+docker build --target portitor-issuer -t portitor-issuer:ci .
+```
+
+On an arm64 machine (an Apple Silicon Mac), see "What Podman needs"
+above for a build that needs nothing but the container engine.
 
 ## Unit and integration tests
 
@@ -604,7 +620,7 @@ check. The steps, in this order, and what each must show:
 | 1 | Each identity asks the issuer for its credential through its own API, and the issuer delivers it (DCP 6.4, 6.5): the IdentityHub through its Identity API (`POST .../participants/{id}/credentials/request`, in the package `v1.unstable` in RC8), Portitor's identity through its management API (`POST /v1/credential-requests`). The issuer registered both first | both requests reach `ISSUED`; each identity holds one `MembershipCredential`, the IdentityHub's from `did:web:issuer%3A8070` |
 | 2 | EDC accepts Portitor's identity: the EDC provider's catalog, read through the Portitor connector's management API (`POST /v1/catalog/request`; EDC queries Portitor's credential service) | HTTP 200, and the catalog has an offer for `edc-interop` |
 | 3 | Portitor consumer, EDC provider: negotiation, pull transfer, fetch from the EDC data plane | negotiation `FINALIZED`, transfer `STARTED`, the bytes equal `data/edc-provider.csv` |
-| 4 | EDC consumer, Portitor provider: catalog, negotiation, pull transfer (EDC's data plane fetches from Portitor's). The issuer serves the HealthDCAT-AP demo bundle and the Portitor connector pins it, so its datasets (`config/portitor-datasets.json`) are checked against the shapes | EDC read `dct:conformsTo` and the HealthDCAT-AP metadata as full IRIs; negotiation `FINALIZED`, transfer `STARTED`, the bytes equal `data/portitor-provider.csv` |
+| 4 | EDC consumer, Portitor provider: catalog, negotiation, pull transfer (EDC's data plane fetches from Portitor's). The issuer serves the HealthDCAT-AP demo bundle and the Portitor connector follows it, so its datasets (`config/portitor-datasets.json`) are checked against the shapes | EDC read `dct:conformsTo` and the HealthDCAT-AP metadata as full IRIs; negotiation `FINALIZED`, transfer `STARTED`, the bytes equal `data/portitor-provider.csv` |
 | 5 | Gaia-X, Portitor: its identity did its onboarding by itself (ADR 0021) | its DID document, read over HTTPS, has `alg` `ES256` and `x5u`; the newest compliance run is `SUCCEEDED`; it holds a `gx:ParticipantComplianceCredential` from `did:web:compliance.gaiax.test` |
 | 6 | Gaia-X, the offer: the Portitor provider's second dataset (`.../portitor-interop-gaiax`) is offered only with `ParticipantComplianceCredential.gx:labelLevel` `eq` `SC` (ADR 0022) | the offer in the catalog EDC read still has that left operand and `SC` |
 | 7 | Gaia-X, refused: the EDC consumer, which holds no compliance credential, negotiates that offer | the EDC negotiation ends `TERMINATED`, and its `errorDetail` has no `code=`: Portitor took the request (the caller is a member) and then sent a `ContractNegotiationTerminationMessage`, not an HTTP error |
@@ -618,16 +634,10 @@ EDC always sends a `filter` in its `CatalogRequestMessage`: an EDC
 treats such a filter as "no filter" and answers with the whole catalog.
 
 ```sh
-# builds the Portitor images as CI does, then runs the test; the EDC
-# images are built from interop/edc/runtimes (Maven Central, no EDC images
-# are published); needs Docker or Podman ("Docker or Podman" above), curl,
-# jq, openssl and python3 with `cryptography`
-mkdir -p dist/amd64
-cargo build --release --target x86_64-unknown-linux-musl -p portitor-connector -p portitor-identity -p portitor-issuer
-cp target/x86_64-unknown-linux-musl/release/portitor-{connector,identity,issuer} dist/amd64/
-docker build --target portitor-connector -t portitor-connector:ci .
-docker build --target portitor-identity -t portitor-identity:ci .
-docker build --target portitor-issuer -t portitor-issuer:ci .
+# first build the Portitor images ("Building the images locally" above);
+# the EDC images are built from interop/edc/runtimes (Maven Central, no
+# EDC images are published); needs Docker or Podman, curl, jq, openssl
+# and python3 with `cryptography`
 scripts/edc-interop.sh            # KEEP=1 leaves it running; --no-build reuses the EDC images
 ```
 
@@ -946,7 +956,7 @@ clients that ignore `HTTPS_PROXY`. A change there can break the test
 without a change in Portitor, hence the nightly run.
 
 ```sh
-# builds the Portitor images as for the EDC interop test (above), then:
+# first build the Portitor images ("Building the images locally" above);
 # needs Docker or Podman, curl, jq, openssl and python3 with `cryptography`
 scripts/gaiax-e2e.sh            # KEEP=1 leaves it running, with interop/gaiax/run/
 ```
@@ -966,8 +976,8 @@ cargo test -p portitor-connector auth::dcp     # ADR 0022 checks: admitted, refu
 cargo +nightly fuzz run gaiax_compliance -- -max_total_time=60   # see Fuzzing
 ```
 
-**2. The end-to-end test** (about 5 minutes; Docker, Internet): build the
-Portitor images as for the [EDC interop test](#edc-interop-test), then run
+**2. The end-to-end test** (about 5 minutes; Docker, Internet):
+[build the Portitor images](#building-the-images-locally), then run
 `scripts/gaiax-e2e.sh`. It ends with `== Done` when the compliant consumer
 gets a contract (`FINALIZED`) and the outsider is refused (`TERMINATED`);
 see [Gaia-X end-to-end test](#gaia-x-end-to-end-test) for what it sets up.
@@ -1078,8 +1088,10 @@ scripts/demo-bundle.sh target/demo-bundle
 It writes `target/demo-bundle/bundles/<version>/` for
 `PORTITOR_ISSUER_BUNDLE_DIR` and the public key
 `target/demo-bundle/bundle-key.jwk` for `PORTITOR_ISSUER_BUNDLE_KEY_FILE`.
-A connector then needs `PORTITOR_BUNDLE_URL=<issuer>/bundles/<version>/`,
-`PORTITOR_BUNDLE_VERSION` and `PORTITOR_BUNDLE_AUTHORITY`.
+A connector then needs `PORTITOR_BUNDLE_URL=<issuer>/bundles/` (the
+bundles folder, not a version folder) and `PORTITOR_BUNDLE_AUTHORITY`;
+`PORTITOR_BUNDLE_VERSION` only to keep one version
+([DEPLOYING](DEPLOYING.md#schema-and-vocabulary-bundle)).
 `examples/healthdcat-datasets.json` has a public and a restricted dataset
 that pass the shapes and one, `bed-occupancy`, that does not (7
 violations): its `shacl` error shows in `GET /v1/harvest-jobs`. Terms
@@ -1160,106 +1172,118 @@ provider sends the `FINALIZED` event. `GET
 
 ### Two connectors
 
-`scripts/demo.sh` does all of this in one go, with DCP, and checks the
-result. Each participant (provider and consumer) is a connector and its
-own `portitor-identity`; a `portitor-issuer` with a new key is the data
-space's authority (credential definitions in
-`examples/issuer-credentials.json`). The script registers both
-participants at the issuer (claims: `memberOf`, and `processing: "eu"`
-for the consumer), and each identity asks the issuer for its credentials
-through its own management API (`POST /v1/credential-requests`); the
-script waits until the request is `ISSUED`, since the issuer decides and
-delivers in the background. The provider gets a `MembershipCredential`,
-the consumer also a `DataProcessorCredential`. Then the checks
-(`scripts/demo-steps.sh`). The issuer is also the bundle authority: the
-script builds and signs the HealthDCAT-AP demo bundle
-(`scripts/demo-bundle.sh`), the issuer serves it and lists the bundle key,
-and the provider follows its newest version (`PORTITOR_BUNDLE_URL`,
-`_AUTHORITY`) and offers `examples/healthdcat-datasets.json`. A catalog
-request without a token is refused (401); one made through the
-consumer's management API (`POST /v1/catalog/request`, for which the
-connector gets a token from its STS) is answered: under the plain DSP `@context`, the two
-valid datasets carry `dct:conformsTo` with the release 8 profile and
-their metadata as full IRIs, and `bed-occupancy` is missing; the
-provider's `GET /v1/harvest-jobs/{id}` shows it rejected by the `shacl`
-check with its SHACL report. The `hospital-admissions` offer copied from
-the catalog negotiates to `FINALIZED`, the same offer id without its
-constraint is `TERMINATED`. The restricted `cancer-registry-extract`
-offer for members (the `memberOf` claim of the demo
-`MembershipCredential`, ADR 0019) is `FINALIZED`; its offer for auditors,
-a `role` claim the demo credential does not have, is `TERMINATED`. It
-requests a transfer under the first agreement, fetches the file with the
-token, checks it equals `examples/data/hospital-admissions.csv`,
-completes the transfer and checks that the token is refused afterwards;
-then it transfers the restricted dataset under the members' agreement.
-Last, a second credential type (ADR 0019): the `hospital-admissions`
-offer for EU processors checks the consumer's `DataProcessorCredential`
-(both connectors set
-`PORTITOR_POLICY_CREDENTIALS=DataProcessorCredential`); it negotiates to
-`FINALIZED` and a transfer starts; the issuer revokes that credential
-(`POST /v1/credentials/{id}/revoke`), and a new transfer request under
-the same agreement is `TERMINATED`. It needs `curl`, `jq`, `openssl` and
-Python 3.
+`scripts/demo.sh` runs a small data space on this machine, with DCP,
+and checks the result. It needs `curl`, `jq`, `openssl` and Python 3.
 
 ```sh
 scripts/demo.sh                      # builds the debug binaries
 scripts/demo.sh <portitor-connector> [<portitor-identity> [<portitor-issuer>]]
 ```
 
-A demo step that needs another claim registers the participant with it
-(`register` in `scripts/participants.sh`); the credential definitions
-copy `memberOf` and `role` into the `MembershipCredential`, and
-`processing` into the `DataProcessorCredential`.
+What it sets up:
 
+- Each participant (provider and consumer) is a connector and its own
+  `portitor-identity`. A `portitor-issuer` with a new key is the data
+  space's authority (credential definitions in
+  `examples/issuer-credentials.json`).
+- The script registers both participants at the issuer (claims:
+  `memberOf`, and `processing: "eu"` for the consumer). Each identity
+  asks the issuer for its credentials through its own management API
+  (`POST /v1/credential-requests`); the script waits until the request
+  is `ISSUED`, since the issuer decides and delivers in the background.
+  The provider gets a `MembershipCredential`, the consumer also a
+  `DataProcessorCredential`. The credential definitions copy `memberOf`
+  and `role` into the `MembershipCredential`, and `processing` into the
+  `DataProcessorCredential`. A demo step that needs another claim
+  registers the participant with it (`register` in
+  `scripts/participants.sh`).
+- The issuer is also the bundle authority: the script builds and signs
+  the HealthDCAT-AP demo bundle (`scripts/demo-bundle.sh`), the issuer
+  serves it and lists the bundle key, and the provider follows its
+  newest version (`PORTITOR_BUNDLE_URL`, `_AUTHORITY`) and offers
+  `examples/healthdcat-datasets.json`.
+- Both connectors set
+  `PORTITOR_POLICY_CREDENTIALS=DataProcessorCredential`, and
+  `PORTITOR_STATUS_LIST_CACHE_SECONDS=0` so that the revocation step
+  sees a revocation at once. The EDC interop test and the DCP TCK run
+  set `0` too.
+
+What it checks, in this order (`scripts/demo-steps.sh`):
+
+1. A catalog request without a token is refused (401).
+2. One made through the consumer's management API
+   (`POST /v1/catalog/request`, for which the connector gets a token
+   from its STS) is answered. Under the plain DSP `@context`, the two
+   valid datasets carry `dct:conformsTo` with the release 8 profile and
+   their metadata as full IRIs, and `bed-occupancy` is missing. The
+   provider's `GET /v1/harvest-jobs/{id}` shows it rejected by the
+   `shacl` check with its SHACL report.
+3. The `hospital-admissions` offer copied from the catalog negotiates to
+   `FINALIZED`; the same offer id without its constraint is
+   `TERMINATED`.
+4. The restricted `cancer-registry-extract` offer for members (the
+   `memberOf` claim of the demo `MembershipCredential`, ADR 0019) is
+   `FINALIZED`; its offer for auditors, a `role` claim the demo
+   credential does not have, is `TERMINATED`.
+5. A transfer under the first agreement: the script fetches the file
+   with the token, checks it equals
+   `examples/data/hospital-admissions.csv`, completes the transfer and
+   checks that the token is refused afterwards. Then it transfers the
+   restricted dataset under the members' agreement.
+6. A second credential type (ADR 0019): the `hospital-admissions` offer
+   for EU processors checks the consumer's `DataProcessorCredential`;
+   it negotiates to `FINALIZED` and a transfer starts. The issuer
+   revokes that credential (`POST /v1/credentials/{id}/revoke`), and a
+   new transfer request under the same agreement is `TERMINATED`.
+
+**The same in Docker Compose.**
 `scripts/demo-compose.sh [connector image [identity image [issuer image]]]`
 runs the same checks against the services in
-`examples/compose/compose.yaml`, with the released images or the ones
-you name; it writes the keys and secrets into `examples/compose/run/`
-first, and builds the demo bundle with the issuer image into
-`examples/compose/run/issuer/bundle/`. `KEEP=1` leaves everything
-running (the issuer's management API is then on `127.0.0.1:18071`, with
-the key in `examples/compose/run/issuer/management.key`; the provider's,
-with the harvest jobs, on `127.0.0.1:18081`, key in
-`examples/compose/run/provider/management.key`). The images must be 0.9
-or later: the Compose file starts each service once the ones it needs
-are healthy (`condition: service_healthy`), which needs the image's
-`health` subcommand. Running it again after `KEEP=1` works: the script first
-removes the containers and volumes of the last run
-(`docker compose down --volumes --remove-orphans`), then `run/`. CI runs
-both on every pull request, with the binaries and images it has just
-built.
+`examples/compose/compose.yaml`: the issuer, a provider and a consumer
+(each a connector with its identity), and a small web server that holds
+the provider's data. It uses the released images or the ones you name.
+The [quickstart](https://bruno.pacheco.lu/portitor/#try) on the website
+walks through it.
 
-To try your own changes,
-build local images as for the [EDC interop test](#edc-interop-test)
-and name them:
+- It writes the keys and secrets into `examples/compose/run/` first,
+  and builds the demo bundle with the issuer image into
+  `examples/compose/run/issuer/bundle/`.
+- It stops everything at the end. `KEEP=1` leaves everything running:
+  the consumer's management API is on `127.0.0.1:18091` (key in
+  `examples/compose/run/consumer/management.key`), the provider's, with
+  the harvest jobs, on `127.0.0.1:18081` (key in
+  `examples/compose/run/provider/management.key`), the issuer's on
+  `127.0.0.1:18071` (key in `examples/compose/run/issuer/management.key`).
+- Running it again after `KEEP=1` works: the script first removes the
+  containers and volumes of the last run
+  (`docker compose down --volumes --remove-orphans`), then `run/`.
+- The images must be 0.9 or later: the Compose file starts each service
+  once the ones it needs are healthy (`condition: service_healthy`),
+  which needs the image's `health` subcommand.
+- To try your own changes, [build the images](#building-the-images-locally)
+  and name them:
+  `scripts/demo-compose.sh portitor-connector:ci portitor-identity:ci portitor-issuer:ci`.
 
-```sh
-mkdir -p dist/amd64
-cargo build --release --target x86_64-unknown-linux-musl -p portitor-connector -p portitor-identity -p portitor-issuer
-cp target/x86_64-unknown-linux-musl/release/portitor-{connector,identity,issuer} dist/amd64/
-docker build --target portitor-connector -t portitor-connector:ci .
-docker build --target portitor-identity -t portitor-identity:ci .
-docker build --target portitor-issuer -t portitor-issuer:ci .
-scripts/demo-compose.sh portitor-connector:ci portitor-identity:ci portitor-issuer:ci
-```
+CI runs both scripts on every pull request, with the binaries and
+images it has just built.
 
-By hand, a provider and a consumer with their identities: start the
-Compose demo and keep it running, then use the consumer's management API
-on `127.0.0.1:18091` with the key in `examples/compose/run/consumer/management.key`
-(the provider is `http://provider:8080/dsp/2025-1`, `did:web:provider-identity%3A8090`):
+**By hand.** Start the Compose demo and keep it running, then use the
+consumer's management API. The provider is
+`http://provider:8080/dsp/2025-1`, `did:web:provider-identity%3A8090`:
 
 ```sh
 KEEP=1 scripts/demo-compose.sh
 docker compose -f examples/compose/compose.yaml down --volumes   # when done
 ```
 
-Start a negotiation from the consumer's management API (see the README
-for the request) and read it with `GET 127.0.0.1:18091/v1/negotiations/<consumerPid>`.
-Within a second its state is `FINALIZED` and it holds the agreement.
-Then request a transfer under that agreement with
-`POST 127.0.0.1:18091/v1/transfers` and `{"agreementId": "<agreement @id>"}`;
-the HealthDCAT-AP datasets have a data source, so it gets `STARTED` and a
-`dataAddress` to fetch from (on `127.0.0.1:18080`).
+Start a negotiation from the consumer's management API (the requests
+are in [DEPLOYING](DEPLOYING.md#management-api)) and read it with
+`GET 127.0.0.1:18091/v1/negotiations/<consumerPid>`. Within a second its
+state is `FINALIZED` and it holds the agreement. Then request a transfer
+under that agreement with `POST 127.0.0.1:18091/v1/transfers` and
+`{"agreementId": "<agreement @id>"}`; the HealthDCAT-AP datasets have a
+data source, so it gets `STARTED` and a `dataAddress` to fetch from (on
+`127.0.0.1:18080`).
 
 ### Two data spaces
 
@@ -1276,6 +1300,9 @@ data), that a member of one data space gets 401 from the connector of
 the other, and, for `shared`, that a verifier of one data space
 receives both membership credentials. It needs curl, jq, openssl and
 python3, uses ports 19070 to 19511, and is not run by CI.
+
+Last run by hand that passed: 2026-11-20, both ways, on one machine
+over plain HTTP, without a reverse proxy, a bundle or Gaia-X.
 
 ### Observability stack (by hand)
 
