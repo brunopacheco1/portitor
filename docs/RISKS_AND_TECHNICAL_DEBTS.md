@@ -919,6 +919,15 @@ keep them.
 Mitigation today: the source and the store are their own crate,
 `portitor-bundle`, so they can be replaced as a whole (ADR 0005).
 
+Note for 0.13 (2026-11-20): the manifest format is frozen for 1.0 with
+one opening for later versions. A connector skips a file whose role
+type it does not know, with a warning and a metric, and refuses a bundle
+in which it knows no role (ADR 0005, "Amendment for 0.13"). So a later
+format can add roles without breaking 1.0 connectors. The limit: a
+connector that skips a new kind of rule does not enforce it. The rest
+of this debt (which standard to follow, where schemas are kept) is
+unchanged.
+
 <a id="td-02"></a>
 ### TD-02 Who calls the data plane, and with which credentials
 

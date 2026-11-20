@@ -160,6 +160,13 @@ pub enum BundleError {
         /// The version in the manifest.
         found: String,
     },
+    /// Every file of the manifest has a role this version does not
+    /// know, so the bundle would give no rules at all.
+    #[error(
+        "invalid manifest: no file has a role this version knows \
+         (datasets, messages, vocabulary, context)"
+    )]
+    NoKnownRole,
     /// A file the manifest lists was not given.
     #[error("bundle file {0} is missing")]
     MissingFile(String),
@@ -248,20 +255,23 @@ impl MediaType {
 
 /// What a bundle file is for. In JSON an object with a `type`, for
 /// example `{"type": "datasets", "accessRights": ["…/PUBLIC"]}`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+///
+/// The four known roles are read strictly: a field they do not have is
+/// an error. A role object whose `type` this version does not know is
+/// read as [`Role::Unknown`], whatever other fields it has: a later
+/// version of the format may add roles, and a reader of this version
+/// skips such a file (ADR 0005, amended in 0.13). How it is read is in
+/// `impl Deserialize for Role` below.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Role {
     /// SHACL shapes for dataset metadata, for the datasets whose
     /// `dct:accessRights` is one of these IRIs (for example
     /// `http://publications.europa.eu/resource/authority/access-right/PUBLIC`).
-    #[serde(rename_all = "camelCase")]
     Datasets {
         /// The `dct:accessRights` IRIs the shapes apply to, at least one.
         access_rights: Vec<String>,
     },
-    /// SHACL shapes for DSP messages. (Written `Messages {}` rather than
-    /// `Messages`: serde refuses unknown fields only in variants with
-    /// braces.)
+    /// SHACL shapes for DSP messages.
     Messages {},
     /// Ontologies and code lists, as data for `sh:class` checks.
     Vocabulary {},
@@ -271,6 +281,133 @@ pub enum Role {
         /// The context URL it stands for.
         url: String,
     },
+    /// A role this version does not know. The file is skipped: not
+    /// fetched, not checked, not used. Never written: the build tool
+    /// refuses it.
+    Unknown {
+        /// The role's `type` as the manifest writes it.
+        type_name: String,
+    },
+}
+
+impl Role {
+    /// Whether this version knows the role, so that it uses the file.
+    #[must_use]
+    pub fn is_known(&self) -> bool {
+        !matches!(self, Role::Unknown { .. })
+    }
+}
+
+/// The longest `type` of a role, in bytes.
+pub const MAX_ROLE_TYPE_LEN: usize = 64;
+
+/// Whether `type_name` may be the `type` of a role: 1 to
+/// [`MAX_ROLE_TYPE_LEN`] ASCII letters, digits, `-` or `_`, starting
+/// with a letter. Every role name of a later version must fit; the rule
+/// also keeps an unknown name safe to write into a log line.
+#[must_use]
+pub fn is_role_type_name(type_name: &str) -> bool {
+    type_name.len() <= MAX_ROLE_TYPE_LEN
+        && type_name.starts_with(|first: char| first.is_ascii_alphabetic())
+        && type_name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// The known roles exactly as JSON writes them. serde's derive reads and
+/// writes this enum; [`Role`] is the same plus [`Role::Unknown`].
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+enum KnownRole {
+    #[serde(rename_all = "camelCase")]
+    Datasets {
+        access_rights: Vec<String>,
+    },
+    // Written `Messages {}` rather than `Messages`: serde refuses unknown
+    // fields only in variants with braces.
+    Messages {},
+    Vocabulary {},
+    Context {
+        url: String,
+    },
+}
+
+/// The `type` values of [`KnownRole`].
+const KNOWN_ROLE_TYPES: [&str; 4] = ["datasets", "messages", "vocabulary", "context"];
+
+impl From<KnownRole> for Role {
+    fn from(known: KnownRole) -> Self {
+        match known {
+            KnownRole::Datasets { access_rights } => Role::Datasets { access_rights },
+            KnownRole::Messages {} => Role::Messages {},
+            KnownRole::Vocabulary {} => Role::Vocabulary {},
+            KnownRole::Context { url } => Role::Context { url },
+        }
+    }
+}
+
+/// Only the `type` of a role object; every other field is passed over.
+#[derive(Deserialize)]
+struct RoleTypeOnly {
+    #[serde(rename = "type")]
+    type_name: String,
+}
+
+// Reading a role in two steps (docs/RUST-IDIOMS.md, "Reading JSON in two
+// steps"). serde's derive cannot say "strict for the names I know, open
+// for the others", so the rule is written out here:
+//
+// 1. Keep the role's JSON text as it is (`RawValue`) and read only its
+//    `type` from it. A role that is not an object, or has no `type`
+//    that is a string, is an error.
+// 2. A known `type`: read the same text again as `KnownRole`, strictly
+//    (an unknown field is an error). Any other `type`: `Role::Unknown`,
+//    and the other fields are not looked at.
+impl<'de> Deserialize<'de> for Role {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+
+        let text = Box::<RawValue>::deserialize(deserializer)?;
+        // serde would also read `RoleTypeOnly` from a JSON array
+        // (`["messages"]`), so the object is asked for here
+        if !text.get().starts_with('{') {
+            return Err(D::Error::custom("role: not a JSON object"));
+        }
+        let RoleTypeOnly { type_name } =
+            serde_json::from_str(text.get()).map_err(|e| D::Error::custom(format!("role: {e}")))?;
+        if KNOWN_ROLE_TYPES.contains(&type_name.as_str()) {
+            let known: KnownRole = serde_json::from_str(text.get())
+                .map_err(|e| D::Error::custom(format!("role {type_name}: {e}")))?;
+            return Ok(known.into());
+        }
+        if !is_role_type_name(&type_name) {
+            return Err(D::Error::custom(format!(
+                "role: type must be 1 to {MAX_ROLE_TYPE_LEN} letters, digits, '-' or '_', \
+                 starting with a letter"
+            )));
+        }
+        Ok(Role::Unknown { type_name })
+    }
+}
+
+// Writing: the known roles as `KnownRole` writes them. An unknown role
+// cannot be written, because its other fields were not kept; nothing
+// writes one (the build tool refuses it before).
+impl Serialize for Role {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let known = match self.clone() {
+            Role::Datasets { access_rights } => KnownRole::Datasets { access_rights },
+            Role::Messages {} => KnownRole::Messages {},
+            Role::Vocabulary {} => KnownRole::Vocabulary {},
+            Role::Context { url } => KnownRole::Context { url },
+            Role::Unknown { type_name } => {
+                return Err(serde::ser::Error::custom(format!(
+                    "a file with the unknown role {type_name} cannot be written"
+                )));
+            }
+        };
+        known.serialize(serializer)
+    }
 }
 
 impl Manifest {
@@ -294,7 +431,8 @@ impl Manifest {
     /// Checks the rules JSON alone cannot express: a safe version, a
     /// date, a `did:web` authority, IRIs, at least one and at most
     /// [`MAX_FILES`] files with distinct safe paths, hex digests, media
-    /// types that fit the role, and distinct context URLs.
+    /// types that fit the role, distinct context URLs, and at least one
+    /// file with a role this version knows.
     ///
     /// # Errors
     /// The first rule broken.
@@ -339,7 +477,39 @@ impl Manifest {
                 )));
             }
         }
+        // A bundle of which nothing is understood gives no rules at all.
+        // Using it would mean checking nothing without saying so, so it
+        // is refused like any other invalid bundle.
+        if !self.files.iter().any(|entry| entry.role.is_known()) {
+            return Err(BundleError::NoKnownRole);
+        }
         Ok(())
+    }
+
+    /// The files whose role this version does not know, in manifest
+    /// order. A reader skips them.
+    #[must_use]
+    pub fn files_of_unknown_role(&self) -> Vec<SkippedFile<'_>> {
+        let mut skipped = Vec::new();
+        for entry in &self.files {
+            if let Role::Unknown { type_name } = &entry.role {
+                skipped.push(SkippedFile {
+                    path: &entry.path,
+                    role_type: type_name,
+                });
+            }
+        }
+        skipped
+    }
+
+    /// The files a reader fetches and checks: those with a role this
+    /// version knows, in manifest order.
+    #[must_use]
+    pub fn files_to_fetch(&self) -> Vec<&FileEntry> {
+        self.files
+            .iter()
+            .filter(|entry| entry.role.is_known())
+            .collect()
     }
 
     /// The entry of the file at `path`, if the manifest lists it.
@@ -347,6 +517,15 @@ impl Manifest {
     pub fn entry(&self, path: &str) -> Option<&FileEntry> {
         self.files.iter().find(|entry| entry.path == path)
     }
+}
+
+/// A file a reader skips because it does not know the file's role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SkippedFile<'a> {
+    /// The file's path in the bundle.
+    pub path: &'a str,
+    /// The `type` of its role.
+    pub role_type: &'a str,
 }
 
 /// A manifest error with a fixed text.
@@ -470,7 +649,8 @@ fn check_entry(entry: &FileEntry) -> Result<(), BundleError> {
     }
     let is_context = matches!(entry.role, Role::Context { .. });
     let is_json_ld = entry.media_type == MediaType::JsonLd;
-    if is_context != is_json_ld {
+    // which media type fits an unknown role is not known either
+    if entry.role.is_known() && is_context != is_json_ld {
         return wrong("a context is application/ld+json, and every other file is RDF");
     }
     match &entry.role {
@@ -487,7 +667,7 @@ fn check_entry(entry: &FileEntry) -> Result<(), BundleError> {
                 return wrong("the context url is not an http(s) URL");
             }
         }
-        Role::Messages {} | Role::Vocabulary {} => {}
+        Role::Messages {} | Role::Vocabulary {} | Role::Unknown { .. } => {}
     }
     Ok(())
 }
@@ -515,7 +695,8 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 /// the JSON (a JSON writer adds none).
 ///
 /// # Errors
-/// The manifest is not valid ([`Manifest::parse`]), has white space
+/// The manifest is not valid ([`Manifest::parse`]), lists a file with a
+/// role this version does not know ([`Role::Unknown`]), has white space
 /// around it, `kid` is not the bundle key of the manifest's authority, or signing
 /// fails.
 pub fn sign_manifest(
@@ -524,6 +705,14 @@ pub fn sign_manifest(
     kid: &str,
 ) -> Result<String, BundleError> {
     let manifest = Manifest::parse(manifest_bytes)?;
+    // a reader skips a role it does not know; the signer is strict: it
+    // never publishes a role this version does not know
+    if let Some(unknown) = manifest.files_of_unknown_role().first() {
+        return Err(BundleError::Manifest(format!(
+            "{}: the role {} is not known to this version and cannot be signed",
+            unknown.path, unknown.role_type
+        )));
+    }
     check_kid(kid, &manifest.authority)?;
     let text = std::str::from_utf8(manifest_bytes)
         .map_err(|_| manifest_error("not UTF-8"))?
@@ -664,12 +853,20 @@ pub fn verify(
     Ok(manifest)
 }
 
-/// Checks the files of a verified manifest: every listed file is in
-/// `files` (path to bytes) and has the listed SHA-256. A file in `files`
-/// that the manifest does not list is refused ([`BundleError::UnlistedFile`]):
-/// only what the authority signed may reach the validator. (Adapters
-/// read only the listed files, so other files in a bundle folder are
-/// never read.)
+/// Checks the files of a verified manifest: every listed file with a
+/// known role is in `files` (path to bytes) and has the listed SHA-256.
+/// A file in `files` that the manifest does not list is refused
+/// ([`BundleError::UnlistedFile`]): only what the authority signed may
+/// reach the validator. (Adapters read only the listed files, so other
+/// files in a bundle folder are never read.)
+///
+/// A file whose role this version does not know ([`Role::Unknown`]) is
+/// skipped: it need not be in `files`, and if it is, its bytes are
+/// dropped unread. Adapters do not fetch such a file
+/// ([`Manifest::files_to_fetch`]). This is safe because nothing uses
+/// the bytes: the signature covers the manifest, so the path, the
+/// digest and the role of the skipped file are still the authority's,
+/// and [`VerifiedBundle::skipped_files`] reports them.
 ///
 /// # Errors
 /// A file is missing, does not match its digest, or is not listed.
@@ -679,7 +876,11 @@ pub fn check_files(
 ) -> Result<VerifiedBundle, BundleError> {
     let mut checked = BTreeMap::new();
     for entry in &manifest.files {
-        let Some(bytes) = files.remove(&entry.path) else {
+        let given = files.remove(&entry.path);
+        if !entry.role.is_known() {
+            continue;
+        }
+        let Some(bytes) = given else {
             return Err(BundleError::MissingFile(entry.path.clone()));
         };
         if sha256_hex(&bytes) != entry.sha256 {
@@ -698,7 +899,7 @@ pub fn check_files(
 }
 
 /// A bundle whose signature and digests were checked: the manifest and
-/// the bytes of each file. Only [`check_files`] makes one, so holding a
+/// the bytes of each file with a known role. Only [`check_files`] makes one, so holding a
 /// `VerifiedBundle` means every file is what the authority signed.
 ///
 /// The bytes are not parsed: Turtle and N-Triples for shapes and
@@ -746,10 +947,18 @@ impl VerifiedBundle {
         self.files.get(path).map(Vec::as_slice)
     }
 
-    /// Every file, in manifest order.
+    /// Every file that is used (every file with a known role), in
+    /// manifest order.
     #[must_use]
     pub fn files(&self) -> Vec<BundleFile<'_>> {
         self.select(|_| true)
+    }
+
+    /// The files that are skipped because this version does not know
+    /// their role, in manifest order. Whatever they hold is not enforced.
+    #[must_use]
+    pub fn skipped_files(&self) -> Vec<SkippedFile<'_>> {
+        self.manifest.files_of_unknown_role()
     }
 
     /// The dataset shapes for datasets whose `dct:accessRights` is
@@ -807,7 +1016,8 @@ impl VerifiedBundle {
             if !keep(entry) {
                 continue;
             }
-            // check_files put every listed file in `files`
+            // check_files put every listed file with a known role in
+            // `files`; a skipped file has no bytes and is left out
             if let Some(bytes) = self.files.get(&entry.path) {
                 selected.push(BundleFile { entry, bytes });
             }
@@ -1202,6 +1412,225 @@ mod tests {
             Manifest::parse(&bytes),
             Err(BundleError::Path { .. })
         ));
+    }
+
+    /// The manifest of [`manifest`] as JSON, with one more file,
+    /// `policies/odrl.jsonld`, whose role is `role`.
+    fn with_a_file_of_role(role: &serde_json::Value) -> Vec<u8> {
+        let mut json = serde_json::to_value(manifest()).unwrap();
+        json["files"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "path": "policies/odrl.jsonld",
+                "sha256": sha256_hex(b"not read"),
+                "mediaType": "application/ld+json",
+                "role": role
+            }));
+        serde_json::to_vec(&json).unwrap()
+    }
+
+    /// ADR 0005, amended in 0.13: a file whose role type is not known
+    /// is skipped, with whatever fields the role has; the other files
+    /// are used.
+    #[test]
+    fn a_file_of_an_unknown_role_is_skipped_and_the_others_are_used() {
+        let role = serde_json::json!({
+            "type": "policies", "appliesTo": ["offers"], "level": {"strict": true}
+        });
+        let parsed = Manifest::parse(&with_a_file_of_role(&role)).unwrap();
+        assert_eq!(parsed.files.len(), 3);
+        assert_eq!(
+            parsed.files[2].role,
+            Role::Unknown {
+                type_name: "policies".to_owned()
+            }
+        );
+        let skipped = SkippedFile {
+            path: "policies/odrl.jsonld",
+            role_type: "policies",
+        };
+        assert_eq!(parsed.files_of_unknown_role(), [skipped]);
+        let fetched: Vec<&str> = parsed
+            .files_to_fetch()
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect();
+        assert_eq!(fetched, ["shapes/public.ttl", "contexts/dct.jsonld"]);
+
+        // the skipped file's bytes are not needed ...
+        let bundle = check_files(parsed.clone(), files()).unwrap();
+        assert_eq!(bundle.files().len(), 2);
+        assert_eq!(bundle.file("policies/odrl.jsonld"), None);
+        assert_eq!(bundle.skipped_files(), [skipped]);
+        assert_eq!(
+            bundle.access_rights().into_iter().collect::<Vec<_>>(),
+            [PUBLIC]
+        );
+        // ... and if they are given, they are dropped, whatever they are
+        let mut with_bytes = files();
+        with_bytes.insert("policies/odrl.jsonld".to_owned(), b"anything".to_vec());
+        assert_eq!(check_files(parsed, with_bytes).unwrap(), bundle);
+        // a known file is still needed
+        let mut one_missing = files();
+        one_missing.remove("contexts/dct.jsonld");
+        let parsed = Manifest::parse(&with_a_file_of_role(
+            &serde_json::json!({"type": "policies"}),
+        ))
+        .unwrap();
+        assert_eq!(
+            check_files(parsed, one_missing),
+            Err(BundleError::MissingFile("contexts/dct.jsonld".to_owned()))
+        );
+    }
+
+    /// With nothing understood the bundle would give no rules, so it is
+    /// refused, also through [`verify`].
+    #[test]
+    fn a_manifest_with_only_unknown_roles_is_refused() {
+        let mut json = serde_json::to_value(manifest()).unwrap();
+        json["files"][0]["role"] = serde_json::json!({"type": "policies"});
+        json["files"][1]["role"] = serde_json::json!({"type": "rules", "x": 1});
+        let bytes = serde_json::to_vec(&json).unwrap();
+        assert_eq!(Manifest::parse(&bytes), Err(BundleError::NoKnownRole));
+
+        // signed by a later version of the build tool, which knows them
+        let key = SigningKey::generate().unwrap();
+        let jws = signed_by_a_later_version(&bytes, &key);
+        assert_eq!(
+            verify(&bytes, &jws, &key.public_jwk(), expected()),
+            Err(BundleError::NoKnownRole)
+        );
+    }
+
+    /// A good bundle signature over `bytes`, without the checks of this
+    /// version's [`sign_manifest`].
+    fn signed_by_a_later_version(bytes: &[u8], key: &SigningKey) -> String {
+        let raw = RawValue::from_string(String::from_utf8(bytes.to_vec()).unwrap()).unwrap();
+        key.sign_json(&kid(), JWS_TYPE, &raw).unwrap()
+    }
+
+    /// A reader skips an unknown role; the signer never publishes one.
+    #[test]
+    fn a_manifest_with_an_unknown_role_verifies_but_is_not_signed_here() {
+        let bytes = with_a_file_of_role(&serde_json::json!({"type": "policies"}));
+        let key = SigningKey::generate().unwrap();
+        let refused = sign_manifest(&bytes, &key, &kid()).unwrap_err();
+        assert!(
+            refused
+                .to_string()
+                .contains("policies/odrl.jsonld: the role policies"),
+            "{refused}"
+        );
+        let jws = signed_by_a_later_version(&bytes, &key);
+        let verified = verify(&bytes, &jws, &key.public_jwk(), expected()).unwrap();
+        assert_eq!(verified.files_of_unknown_role().len(), 1);
+    }
+
+    /// Only a well-formed role object with an unknown type is skipped.
+    /// Everything else about roles stays an error.
+    #[test]
+    fn only_a_well_formed_unknown_role_is_skipped() {
+        use serde_json::json;
+        let refused = [
+            // no type, or a type that is not a string
+            json!({}),
+            json!({"url": "https://contexts.example/x"}),
+            json!({"type": 7}),
+            json!({"type": null}),
+            json!({"type": ["policies"]}),
+            // not an object
+            json!("policies"),
+            json!(null),
+            json!(["policies"]),
+            // a type that is not a name
+            json!({"type": ""}),
+            json!({"type": "two words"}),
+            json!({"type": "9lives"}),
+            json!({"type": "line\nbreak"}),
+            json!({"type": "x".repeat(MAX_ROLE_TYPE_LEN + 1)}),
+            // the names are exact: another case is another, unknown type,
+            // but a known role with a field it does not have is refused
+            json!({"type": "messages", "extra": 1}),
+            json!({"type": "vocabulary", "accessRights": ["https://x.example"]}),
+            json!({"type": "context"}),
+            json!({"type": "context", "url": "https://contexts.example/x", "extra": 1}),
+            json!({"type": "datasets"}),
+        ];
+        for role in refused {
+            let outcome = Manifest::parse(&with_a_file_of_role(&role));
+            assert!(
+                matches!(outcome, Err(BundleError::Manifest(_))),
+                "{role}: {outcome:?}"
+            );
+        }
+        // a repeated `type` is refused, also when the last one is unknown
+        let text = String::from_utf8(with_a_file_of_role(&json!({"type": "policies"}))).unwrap();
+        let repeated = text.replace(
+            r#"{"type":"policies"}"#,
+            r#"{"type":"messages","type":"policies"}"#,
+        );
+        assert_ne!(text, repeated);
+        assert!(Manifest::parse(repeated.as_bytes()).is_err());
+
+        let skipped = [
+            json!({"type": "policies"}),
+            json!({"type": "Messages"}),
+            json!({"type": "policy-shapes_2", "anything": [1, {"a": null}]}),
+            json!({"type": "x".repeat(MAX_ROLE_TYPE_LEN)}),
+        ];
+        for role in skipped {
+            let parsed = Manifest::parse(&with_a_file_of_role(&role)).unwrap();
+            assert!(!parsed.files[2].role.is_known(), "{role}");
+        }
+    }
+
+    /// The other fields of a file with an unknown role are checked as
+    /// for every file; only the fit of media type and role is not.
+    #[test]
+    fn a_file_of_an_unknown_role_is_still_a_strict_file_entry() {
+        let good = with_a_file_of_role(&serde_json::json!({"type": "policies"}));
+        let good: serde_json::Value = serde_json::from_slice(&good).unwrap();
+        let mutations: Vec<fn(&mut serde_json::Value)> = vec![
+            |m| m["files"][2]["extra"] = "x".into(),
+            |m| m["files"][2]["path"] = "../x".into(),
+            |m| m["files"][2]["path"] = "shapes/public.ttl".into(),
+            |m| m["files"][2]["sha256"] = "ABC".into(),
+            |m| m["files"][2]["mediaType"] = "application/rdf+xml".into(),
+        ];
+        for (index, mutate) in mutations.into_iter().enumerate() {
+            let mut changed = good.clone();
+            mutate(&mut changed);
+            let bytes = serde_json::to_vec(&changed).unwrap();
+            assert!(Manifest::parse(&bytes).is_err(), "mutation {index}");
+        }
+        for media_type in ["text/turtle", "application/n-triples"] {
+            let mut changed = good.clone();
+            changed["files"][2]["mediaType"] = media_type.into();
+            assert!(Manifest::parse(&serde_json::to_vec(&changed).unwrap()).is_ok());
+        }
+    }
+
+    /// A manifest is written only with known roles: the other fields of
+    /// an unknown role were not kept.
+    #[test]
+    fn an_unknown_role_is_never_written() {
+        let parsed = Manifest::parse(&with_a_file_of_role(
+            &serde_json::json!({"type": "policies"}),
+        ))
+        .unwrap();
+        let error = serde_json::to_vec(&parsed).unwrap_err().to_string();
+        assert!(error.contains("unknown role policies"), "{error}");
+        // the known roles are written as they were read
+        let written = serde_json::to_value(manifest()).unwrap();
+        assert_eq!(
+            written["files"][0]["role"],
+            serde_json::json!({"type": "datasets", "accessRights": [PUBLIC]})
+        );
+        assert_eq!(
+            Manifest::parse(&serde_json::to_vec(&written).unwrap()).unwrap(),
+            manifest()
+        );
     }
 
     #[test]

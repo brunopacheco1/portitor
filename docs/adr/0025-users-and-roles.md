@@ -297,6 +297,11 @@ existing settings has to change. Four small points do:
    warning). This is the only format question found. It is shared with
    the 1.2 policy shapes and with
    [TD-01](../RISKS_AND_TECHNICAL_DEBTS.md#td-01).
+   **Decided (maintainer, 2026-11-20), done in 0.13:** the connector
+   skips the file, with a warning and a metric, and refuses a bundle in
+   which it knows no role; the issuer stays strict
+   ([ADR 0005](0005-schema-and-vocabulary-registry.md), "Amendment for
+   0.13"). This also answers open question 5.
 
 Already decided elsewhere and needed here: the strict reading of policy
 terms (TD-32), done in 0.12. Not needed now: any new environment variable.

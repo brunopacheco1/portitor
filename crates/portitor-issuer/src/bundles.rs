@@ -172,6 +172,16 @@ impl ManifestCache {
             .await
             .map_err(|e| e.to_string())?;
         let manifest = Arc::new(Manifest::parse(&bytes).map_err(|e| e.to_string())?);
+        // The issuer serves only what it understands, as before 0.13: a
+        // manifest with a role this version does not know was made by a
+        // later build tool, and is served by an issuer of that version.
+        // (A connector skips such a file; ADR 0005, amended in 0.13.)
+        if let Some(unknown) = manifest.files_of_unknown_role().first() {
+            return Err(format!(
+                "{}: the role type {} is not known to this version of the issuer",
+                unknown.path, unknown.role_type
+            ));
+        }
         self.keep(version, modified, Arc::clone(&manifest));
         Ok(Some(manifest))
     }

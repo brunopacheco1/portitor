@@ -29,6 +29,20 @@ versions may change behaviour and configuration.
   finalized agreement of the caller is now logged, `transfer request is
   refused; answered 400` (INFO). The line names neither the agreement
   nor the caller.
+- **Behaviour, connector: a bundle file with a role the connector does
+  not know is skipped** (maintainer, 2026-11-20; ADR 0005 amended;
+  ADR 0025, point 4). Before, such a manifest made the whole bundle
+  invalid. Now the file is not downloaded and not used, the other files
+  are, and the connector says so: a WARN line for each file
+  (`bundle file skipped: ...`, with path and role type), the new gauge
+  `portitor.bundle.file.skipped`, and the summary of the bundle run in
+  `GET /v1/harvest-jobs`. A bundle in which the connector knows no role
+  is refused like any invalid bundle. The limit: a connector that skips
+  a new kind of rule does not enforce it. Everything else in a manifest
+  is read as strictly as before, and the issuer still builds, signs and
+  serves only roles it knows. `docs/schemas/bundle-manifest.schema.json`
+  says the same: known roles are closed, a role object with another
+  type is valid, at least one file has a known role.
 
 ### Documentation
 

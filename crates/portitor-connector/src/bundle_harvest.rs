@@ -36,7 +36,7 @@ use crate::harvest::{
     CheckKind, CheckedDataset, Counts, DatasetCheck, DatasetHarvester, EntryFailure, JobKind,
     JobOutcome, JobRecord, Trigger,
 };
-use crate::shacl::BundleRules;
+use crate::shacl::{BundleRules, skipped_files_note};
 use crate::system::now_secs;
 use portitor_bundle::source::{BundleConfig, BundleSource, BundleSourceError, VersionChoice};
 use portitor_bundle::store::{BundleStore, InUse};
@@ -55,6 +55,7 @@ impl BundleCopy {
     #[must_use]
     pub fn new(rules: BundleRules) -> Self {
         metrics::bundle_in_use(rules.version(), true);
+        metrics::bundle_files_skipped(rules.skipped_files().len());
         Self(Arc::new(RwLock::new(Arc::new(rules))))
     }
 
@@ -68,6 +69,7 @@ impl BundleCopy {
     /// rules.
     fn replace(&self, rules: BundleRules) {
         let new_version = rules.version().to_owned();
+        let skipped_files = rules.skipped_files().len();
         let mut in_use = self.0.write().unwrap_or_else(PoisonError::into_inner);
         let old_version = in_use.version().to_owned();
         *in_use = Arc::new(rules);
@@ -80,6 +82,7 @@ impl BundleCopy {
             metrics::bundle_in_use(&old_version, false);
         }
         metrics::bundle_in_use(&new_version, true);
+        metrics::bundle_files_skipped(skipped_files);
     }
 }
 
@@ -213,7 +216,11 @@ impl BundleHarvester {
         };
         let (taken, outcome, summary) = match attempt {
             Ok(taken) => {
-                let summary = format!("version {} in use", taken.bundle.version());
+                let summary = format!(
+                    "version {} in use{}",
+                    taken.bundle.version(),
+                    skipped_files_note(taken.rules.skipped_files().len())
+                );
                 (taken, JobOutcome::Succeeded, summary)
             }
             Err(why) => {
@@ -236,7 +243,11 @@ impl BundleHarvester {
                     version = %previous.version,
                     "bundle: the newest version cannot be taken; keeping the version in use"
                 );
-                let summary = format!("{why}; keeping version {}", previous.version);
+                let summary = format!(
+                    "{why}; keeping version {}{}",
+                    previous.version,
+                    skipped_files_note(rules.skipped_files().len())
+                );
                 let taken = Taken {
                     bundle,
                     rules,
@@ -355,6 +366,7 @@ impl BundleHarvester {
             tracing::warn!(error = %e, "bundle: the version in use is not recorded in the cache");
         }
         rules.log_start();
+        let skipped = skipped_files_note(rules.skipped_files().len());
         self.copy.replace(rules);
         *self.in_use.lock().unwrap_or_else(PoisonError::into_inner) = in_use;
         tracing::info!(
@@ -362,7 +374,7 @@ impl BundleHarvester {
             to = %latest,
             "bundle: new version in use; checking the stored datasets again"
         );
-        let summary = format!("version {latest} in use (was {})", current.version);
+        let summary = format!("version {latest} in use (was {}){skipped}", current.version);
         (job(JobOutcome::Succeeded, summary, manifest_sha256), true)
     }
 

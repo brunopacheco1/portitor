@@ -227,6 +227,45 @@ fn build_one(path: &str, content: &str, media_type: Option<&str>) -> Result<(), 
     build(&options(&input, &output), &SigningKey::generate().unwrap()).map(|_| ())
 }
 
+/// A connector skips a role it does not know (ADR 0005, amended in
+/// 0.13); the build tool never publishes one, alone or among known ones.
+#[test]
+fn a_role_the_build_tool_does_not_know_is_refused() {
+    for role in [
+        serde_json::json!({"type": "policies"}),
+        serde_json::json!({"type": "vocabularies"}),
+        serde_json::json!({"type": "policies", "appliesTo": ["offers"]}),
+    ] {
+        let (input, output) = (scratch(), scratch());
+        write(&input, "codes.nt", CODES);
+        write(&input, "later.nt", CODES);
+        let files = serde_json::json!({"files": [
+            {"path": "codes.nt", "role": {"type": "vocabulary"}},
+            {"path": "later.nt", "role": role}
+        ]});
+        write(&input, "bundle.json", &files.to_string());
+        let key = SigningKey::generate().unwrap();
+        let error = build(&options(&input, &output), &key)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(error.contains("later.nt"), "{error}");
+        assert!(error.contains("is not known"), "{error}");
+        assert!(error.contains(role["type"].as_str().unwrap()), "{error}");
+        // nothing was written
+        assert_eq!(std::fs::read_dir(&output).unwrap().count(), 0);
+    }
+    // still strict about the roles it knows
+    let (input, output) = (scratch(), scratch());
+    write(&input, "codes.nt", CODES);
+    write(
+        &input,
+        "bundle.json",
+        r#"{"files": [{"path": "codes.nt", "role": {"type": "vocabulary", "extra": 1}}]}"#,
+    );
+    let key = SigningKey::generate().unwrap();
+    assert!(build(&options(&input, &output), &key).is_err());
+}
+
 #[test]
 fn rdf_xml_is_refused() {
     for path in ["dcat.rdf", "dcat.owl", "codes/x.XML"] {
@@ -379,6 +418,37 @@ async fn built_bundles_are_served() {
         let (status, _, _) = get(&app, refused).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
     }
+}
+
+/// The issuer serves only bundles it understands: the files of one
+/// whose manifest lists a role of a later version are not served, as
+/// before 0.13.
+#[tokio::test]
+async fn a_bundle_with_a_role_the_issuer_does_not_know_is_not_served() {
+    let (input, output) = (input_folder(), scratch());
+    build(&options(&input, &output), &SigningKey::generate().unwrap()).unwrap();
+    let app = portitor_issuer::router(Arc::new(issuer(Some(output.clone()))));
+    // as a later build tool would write it (the signature is not checked
+    // by the route)
+    let manifest_path = output.join("2026.11.0/manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["files"][0]["role"] = serde_json::json!({"type": "policies", "strict": true});
+    std::fs::write(&manifest_path, manifest.to_string()).unwrap();
+    assert!(Manifest::parse(manifest.to_string().as_bytes()).is_ok());
+
+    // none of its files is served, also not those with a known role;
+    // `manifest.json` itself is served unread, as every manifest is
+    for path in [
+        "shapes/public.ttl",
+        "code-lists/access-right.nt",
+        "contexts/dct.jsonld",
+    ] {
+        let (status, _, _) = get(&app, &format!("/bundles/2026.11.0/{path}")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+    }
+    let (status, _, _) = get(&app, "/bundles/2026.11.0/manifest.json").await;
+    assert_eq!(status, StatusCode::OK);
 }
 
 #[tokio::test]
