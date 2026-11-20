@@ -206,11 +206,8 @@ impl BundleConfig {
         db_file: &Path,
         allow_http: bool,
     ) -> Result<Option<Self>, BundleSourceError> {
-        let text = |name: &str| {
-            var(name)
-                .map(|value| value.to_string_lossy().trim().to_owned())
-                .filter(|value| !value.is_empty())
-        };
+        // trimmed, and `None` for an empty value
+        let text = |name: &str| portitor_runtime::settings::text(&var, name);
         let config_error = |why: String| Err(BundleSourceError::Config(why));
         let location = match (text("PORTITOR_BUNDLE_URL"), text("PORTITOR_BUNDLE_DIR")) {
             (Some(_), Some(_)) => {

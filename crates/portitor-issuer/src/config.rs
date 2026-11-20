@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 pub use portitor_runtime::settings::base_path;
 use portitor_runtime::settings::{
-    ALLOW_HTTP_CALLBACKS, RemovedSetting, is_true, path_list, refuse_removed,
+    self, ALLOW_HTTP_CALLBACKS, RemovedSetting, is_true, path_list, refuse_removed,
 };
 
 /// Where the public server listens unless `PORTITOR_BIND` says otherwise.
@@ -112,12 +112,10 @@ impl Config {
     /// # Errors
     /// A required setting is missing or a setting is invalid.
     pub fn from_vars(var: impl Fn(&str) -> Option<OsString>) -> Result<Self, ConfigError> {
-        let text = |name: &str| var(name).map(|v| v.to_string_lossy().trim().to_owned());
-        let required = |name: &'static str| {
-            text(name)
-                .filter(|v| !v.is_empty())
-                .ok_or_else(|| invalid(name, "required"))
-        };
+        // trimmed, and `None` for an empty value: empty means "not set"
+        // (the rule of every setting, `portitor_runtime::settings`)
+        let text = |name: &str| settings::text(&var, name);
+        let required = |name: &'static str| text(name).ok_or_else(|| invalid(name, "required"));
         refuse_removed(&var, REMOVED_SETTINGS).map_err(removed)?;
         let participant_id = required("PORTITOR_PARTICIPANT_ID")?;
         portitor_dcp::did_web_url(&participant_id)
@@ -156,12 +154,8 @@ impl Config {
             management,
             allow_http: is_true(&var, "PORTITOR_ALLOW_HTTP"),
             max_active_per_holder,
-            bundle_key_file: text("PORTITOR_ISSUER_BUNDLE_KEY_FILE")
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from),
-            bundle_dir: text("PORTITOR_ISSUER_BUNDLE_DIR")
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from),
+            bundle_key_file: text("PORTITOR_ISSUER_BUNDLE_KEY_FILE").map(PathBuf::from),
+            bundle_dir: text("PORTITOR_ISSUER_BUNDLE_DIR").map(PathBuf::from),
         })
     }
 }
@@ -219,6 +213,41 @@ mod tests {
             assert_eq!(error.name, *old);
             assert!(error.to_string().contains(new), "{error}");
         }
+    }
+
+    /// The rule of every setting: spaces around a value are dropped, and
+    /// an empty value means "not set".
+    #[test]
+    fn an_empty_value_is_not_set_and_values_are_trimmed() {
+        // an optional setting that is empty takes its default
+        let mut vars = MINIMAL.to_vec();
+        for optional in [
+            "PORTITOR_BIND",
+            "PORTITOR_DB_FILE",
+            "PORTITOR_ISSUER_RETIRED_KEY_FILES",
+            "PORTITOR_ISSUER_MAX_ACTIVE_PER_HOLDER",
+            "PORTITOR_ISSUER_BUNDLE_KEY_FILE",
+            "PORTITOR_ISSUER_BUNDLE_DIR",
+            "PORTITOR_ALLOW_HTTP",
+            "PORTITOR_MANAGEMENT_BIND",
+            "PORTITOR_MANAGEMENT_API_KEY_FILE",
+        ] {
+            vars.push((optional, " "));
+        }
+        assert_eq!(read(&vars).unwrap(), read(MINIMAL).unwrap());
+        // a required setting that is empty is missing
+        for required in MINIMAL.iter().map(|(name, _)| *name) {
+            let mut vars = MINIMAL.to_vec();
+            vars.push((required, ""));
+            assert_eq!(read(&vars).unwrap_err(), invalid(required, "required"));
+        }
+        // spaces around a value are dropped
+        let mut vars = MINIMAL.to_vec();
+        vars.push(("PORTITOR_BIND", " 127.0.0.1:9 "));
+        vars.push(("PORTITOR_ISSUER_MAX_ACTIVE_PER_HOLDER", " 3 "));
+        let config = read(&vars).unwrap();
+        assert_eq!(config.bind, "127.0.0.1:9");
+        assert_eq!(config.max_active_per_holder, 3);
     }
 
     #[test]

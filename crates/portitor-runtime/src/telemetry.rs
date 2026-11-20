@@ -244,9 +244,10 @@ pub fn init(service_name: &'static str) -> Telemetry {
     }
 }
 
-/// Whether the environment variable `name` holds a value.
+/// Whether the environment variable `name` holds a value (an empty one
+/// means "not set", as for every setting).
 fn is_set(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|value| !value.trim().is_empty())
+    crate::settings::text_from_env(name).is_some()
 }
 
 /// Which signals are exported.
@@ -416,8 +417,8 @@ fn start_providers(
 /// set.
 fn resource(default_service_name: &'static str) -> Resource {
     let from_attributes = EnvResourceDetector::new().detect();
-    let named_by_operator = std::env::var("OTEL_SERVICE_NAME").is_ok_and(|name| !name.is_empty())
-        || from_attributes.get(&Key::new("service.name")).is_some();
+    let named_by_operator =
+        is_set("OTEL_SERVICE_NAME") || from_attributes.get(&Key::new("service.name")).is_some();
     let mut builder = Resource::builder();
     if !named_by_operator {
         builder = builder.with_service_name(default_service_name);

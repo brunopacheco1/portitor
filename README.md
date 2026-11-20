@@ -91,7 +91,9 @@ without a reason: HTTP 404 on the negotiation and transfer routes, HTTP
 401 on the catalog routes (from 0.12,
 [ADR 0016](docs/adr/0016-dsp-caller-authentication.md)).
 
-Configuration (environment variables):
+Configuration (environment variables). In all three services, spaces around a value are dropped and an empty
+value means "not set": a required setting that is empty stops the start,
+and an optional one takes its default.
 
 | Variable | Default | Meaning |
 |---|---|---|

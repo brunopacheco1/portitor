@@ -48,11 +48,7 @@ impl ManagementConfig {
     /// the management API off. Never fails: the `health` subcommand reads
     /// only this.
     pub fn from_vars(default_bind: &str, var: impl Fn(&str) -> Option<OsString>) -> Self {
-        let text = |name: &str| {
-            var(name)
-                .map(|value| value.to_string_lossy().trim().to_owned())
-                .filter(|value| !value.is_empty())
-        };
+        let text = |name: &str| crate::settings::text(&var, name);
         Self {
             bind: text("PORTITOR_MANAGEMENT_BIND").unwrap_or_else(|| default_bind.to_owned()),
             api_key_file: text("PORTITOR_MANAGEMENT_API_KEY_FILE").map(PathBuf::from),

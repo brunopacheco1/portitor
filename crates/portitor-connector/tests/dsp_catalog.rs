@@ -502,7 +502,7 @@ fn config_from_variables() {
     // above one year: refused, as a schedule that far ahead overflows the
     // clock (and would abort the connector) instead of a config error
     let too_large = ["31536001", "18446744073709551615"];
-    for bad in ["hourly", "-1", ""].into_iter().chain(too_large) {
+    for bad in ["hourly", "-1", "1 h"].into_iter().chain(too_large) {
         for name in [
             "PORTITOR_HARVEST_INTERVAL_SECONDS",
             "PORTITOR_DATA_TOKEN_SECONDS",
@@ -524,6 +524,37 @@ fn config_from_variables() {
         portitor_connector::MAX_SETTING_SECONDS
     );
     assert_eq!(one_year.data_token_seconds, 31_536_000);
+    // the rule of every setting: spaces around a value are dropped, and
+    // an empty value means "not set", so the default is used
+    let trimmed = read(&[
+        ("PORTITOR_PARTICIPANT_ID", " did:web:q.example "),
+        ("PORTITOR_DB_FILE", " /data/y.db\n"),
+        ("PORTITOR_DATA_TOKEN_SECONDS", " 60 "),
+        ("PORTITOR_ALLOW_HTTP", " true "),
+    ])
+    .unwrap();
+    assert_eq!(trimmed.participant_id, "did:web:q.example");
+    assert_eq!(trimmed.db_file, std::path::PathBuf::from("/data/y.db"));
+    assert_eq!(trimmed.data_token_seconds, 60);
+    assert!(trimmed.allow_http);
+    let empty = read(&[
+        ("PORTITOR_DATASETS_FILE", ""),
+        ("PORTITOR_DB_FILE", "  "),
+        ("PORTITOR_HARVEST_INTERVAL_SECONDS", ""),
+        ("PORTITOR_DATA_TOKEN_SECONDS", " "),
+        ("PORTITOR_ALLOW_HTTP", ""),
+        ("PORTITOR_POLICY_CREDENTIALS", ""),
+        // a removed name that is empty is not set either
+        ("PORTITOR_DATASETS", ""),
+    ])
+    .unwrap();
+    assert_eq!(empty.datasets_file, None);
+    assert_eq!(empty.db_file, defaults.db_file);
+    assert_eq!(empty.harvest_interval_seconds, 3_600);
+    assert_eq!(empty.data_token_seconds, 3_600);
+    assert!(!empty.allow_http);
+    assert_eq!(empty.credential_types, defaults.credential_types);
+
     // a token must live at least one second
     assert!(read(&[("PORTITOR_DATA_TOKEN_SECONDS", "0")]).is_err());
 

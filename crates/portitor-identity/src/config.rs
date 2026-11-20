@@ -9,7 +9,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use portitor_runtime::settings::{
-    ALLOW_HTTP_CALLBACKS, RemovedSetting, comma_list, is_true, path_list, refuse_removed,
+    self, ALLOW_HTTP_CALLBACKS, RemovedSetting, comma_list, is_true, path_list, refuse_removed,
 };
 
 /// The default scope aliases that mean "credentials of this type", on top
@@ -123,12 +123,10 @@ impl Config {
     /// # Errors
     /// A required setting is missing or a setting is invalid.
     pub fn from_vars(var: impl Fn(&str) -> Option<OsString>) -> Result<Self, ConfigError> {
-        let text = |name: &str| var(name).map(|v| v.to_string_lossy().trim().to_owned());
-        let required = |name: &'static str| {
-            text(name)
-                .filter(|v| !v.is_empty())
-                .ok_or_else(|| invalid(name, "required"))
-        };
+        // trimmed, and `None` for an empty value: empty means "not set"
+        // (the rule of every setting, `portitor_runtime::settings`)
+        let text = |name: &str| settings::text(&var, name);
+        let required = |name: &'static str| text(name).ok_or_else(|| invalid(name, "required"));
         refuse_removed(&var, REMOVED_SETTINGS).map_err(removed)?;
         let participant_id = required("PORTITOR_PARTICIPANT_ID")?;
         portitor_dcp::did_web_url(&participant_id)
@@ -154,16 +152,14 @@ impl Config {
             path_list(&text("PORTITOR_IDENTITY_RETIRED_KEY_FILES").unwrap_or_default());
         // the one STS client is the participant's own connector, so it is
         // named by the participant's DID unless set
-        let sts_client_id = text("PORTITOR_STS_CLIENT_ID")
-            .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| participant_id.clone());
+        let sts_client_id =
+            text("PORTITOR_STS_CLIENT_ID").unwrap_or_else(|| participant_id.clone());
         let sts_client_secret_file = PathBuf::from(required("PORTITOR_STS_CLIENT_SECRET_FILE")?);
         let scope_type_aliases =
             text("PORTITOR_SCOPE_TYPE_ALIASES").unwrap_or_else(|| DEFAULT_TYPE_ALIASES.to_owned());
         let allow_http = is_true(&var, "PORTITOR_ALLOW_HTTP");
-        let certificate_chain_file = text("PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE")
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from);
+        let certificate_chain_file =
+            text("PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE").map(PathBuf::from);
         let gaiax = gaiax_config(&text, certificate_chain_file.is_some(), allow_http)?;
         Ok(Self {
             participant_id,
@@ -196,7 +192,7 @@ fn gaiax_config(
     has_chain: bool,
     allow_http: bool,
 ) -> Result<Option<GaiaxConfig>, ConfigError> {
-    let Some(url) = text("PORTITOR_GAIAX_COMPLIANCE_URL").filter(|v| !v.is_empty()) else {
+    let Some(url) = text("PORTITOR_GAIAX_COMPLIANCE_URL") else {
         return Ok(None);
     };
     if !portitor_runtime::http::outbound_url_allowed(&url, allow_http) {
@@ -205,14 +201,12 @@ fn gaiax_config(
             "not an https:// URL",
         ));
     }
-    let compliance_did = text("PORTITOR_GAIAX_COMPLIANCE_DID")
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| {
-            invalid(
-                "PORTITOR_GAIAX_COMPLIANCE_DID",
-                "required with PORTITOR_GAIAX_COMPLIANCE_URL",
-            )
-        })?;
+    let compliance_did = text("PORTITOR_GAIAX_COMPLIANCE_DID").ok_or_else(|| {
+        invalid(
+            "PORTITOR_GAIAX_COMPLIANCE_DID",
+            "required with PORTITOR_GAIAX_COMPLIANCE_URL",
+        )
+    })?;
     // resolved like any did:web DID, with a path as the Gaia-X Lab's
     if portitor_dcp::did_web_url(&compliance_did).is_err() {
         return Err(invalid(
@@ -220,14 +214,12 @@ fn gaiax_config(
             "not a did:web DID",
         ));
     }
-    let participant_file = text("PORTITOR_GAIAX_PARTICIPANT_FILE")
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| {
-            invalid(
-                "PORTITOR_GAIAX_PARTICIPANT_FILE",
-                "required with PORTITOR_GAIAX_COMPLIANCE_URL",
-            )
-        })?;
+    let participant_file = text("PORTITOR_GAIAX_PARTICIPANT_FILE").ok_or_else(|| {
+        invalid(
+            "PORTITOR_GAIAX_PARTICIPANT_FILE",
+            "required with PORTITOR_GAIAX_COMPLIANCE_URL",
+        )
+    })?;
     if !has_chain {
         return Err(invalid(
             "PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE",
@@ -297,6 +289,42 @@ mod tests {
             assert_eq!(error.name, *old);
             assert!(error.to_string().contains(new), "{error}");
         }
+    }
+
+    /// The rule of every setting: spaces around a value are dropped, and
+    /// an empty value means "not set".
+    #[test]
+    fn an_empty_value_is_not_set_and_values_are_trimmed() {
+        // an optional setting that is empty takes its default
+        let mut vars = MINIMAL.to_vec();
+        for optional in [
+            "PORTITOR_BIND",
+            "PORTITOR_DB_FILE",
+            "PORTITOR_STS_CLIENT_ID",
+            "PORTITOR_SCOPE_TYPE_ALIASES",
+            "PORTITOR_IDENTITY_RETIRED_KEY_FILES",
+            "PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE",
+            "PORTITOR_GAIAX_COMPLIANCE_URL",
+            "PORTITOR_ALLOW_HTTP",
+            "PORTITOR_MANAGEMENT_BIND",
+            "PORTITOR_MANAGEMENT_API_KEY_FILE",
+        ] {
+            vars.push((optional, " "));
+        }
+        assert_eq!(read(&vars).unwrap(), read(MINIMAL).unwrap());
+        // a required setting that is empty is missing
+        for required in MINIMAL.iter().map(|(name, _)| *name) {
+            let mut vars = MINIMAL.to_vec();
+            vars.push((required, ""));
+            assert_eq!(read(&vars).unwrap_err(), invalid(required, "required"));
+        }
+        // spaces around a value are dropped
+        let mut vars = MINIMAL.to_vec();
+        vars.push(("PORTITOR_BIND", " 127.0.0.1:9 "));
+        vars.push(("PORTITOR_IDENTITY_KEY_FILE", " /run/key.pem\n"));
+        let config = read(&vars).unwrap();
+        assert_eq!(config.bind, "127.0.0.1:9");
+        assert_eq!(config.key_file, PathBuf::from("/run/key.pem"));
     }
 
     #[test]

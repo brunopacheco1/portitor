@@ -110,7 +110,7 @@ impl RequestLimits {
 
 /// Reads one limit setting ([`bounded_number`]).
 fn bytes_setting(var: &impl Fn(&str) -> Option<OsString>, name: &str) -> Result<usize, String> {
-    let value = var(name).map(|value| value.to_string_lossy().into_owned());
+    let value = crate::settings::text(var, name);
     let range = 1..=HIGHEST_MAX_REQUEST_BYTES as u64;
     let bytes = bounded_number(
         name,

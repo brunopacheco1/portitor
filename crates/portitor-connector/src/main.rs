@@ -21,6 +21,7 @@ use portitor_runtime::request_size::RequestLimits;
 use portitor_runtime::serve::{
     MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, run_component, serve, with_limits,
 };
+use portitor_runtime::settings;
 
 /// The verifier and the prover (ADR 0016).
 type AuthAdapters = (Arc<dyn CallerVerifier>, Arc<dyn Prover>);
@@ -109,7 +110,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Ok(count) => tracing::info!(count, "sending pending negotiation messages again"),
         Err(failure) => return Err(format!("cannot read pending messages: {failure:?}").into()),
     }
-    let bind = std::env::var("PORTITOR_BIND").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
+    let bind = settings::text_from_env("PORTITOR_BIND")
+        .unwrap_or_else(|| portitor_connector::DEFAULT_BIND.to_owned());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
 
     // the management port always serves the health checks (ADR 0023);
@@ -217,9 +219,7 @@ async fn auth_adapters(settings: Option<AuthSettings>) -> Result<AuthAdapters, S
         );
         (Arc::new(RefuseAll), Arc::new(NoTokens))
     };
-    let fixed = std::env::var("PORTITOR_TCK_AUTHORIZATION")
-        .ok()
-        .filter(|header| !header.is_empty());
+    let fixed = settings::text_from_env("PORTITOR_TCK_AUTHORIZATION");
     Ok((
         Arc::new(TckVerifier {
             fixed: fixed.clone(),

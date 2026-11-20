@@ -115,7 +115,9 @@ Check each item and keep the answers in your own runbook.
 ## 2. Configuration
 
 All configuration is by environment variable. The full table is in the
-[README](../README.md#interface).
+[README](../README.md#interface). In all three services, spaces around a value are dropped and an empty
+value means "not set": a required setting that is empty stops the start,
+and an optional one takes its default.
 
 | Variable | Production value |
 |---|---|

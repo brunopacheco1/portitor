@@ -57,10 +57,7 @@ pub fn cache_seconds(value: Option<&str>) -> Result<u64, String> {
 /// # Errors
 /// See [`cache_seconds`].
 pub fn cache_seconds_from_env() -> Result<u64, String> {
-    match std::env::var_os(CACHE_SETTING) {
-        Some(value) => cache_seconds(Some(&value.to_string_lossy())),
-        None => cache_seconds(None),
-    }
+    cache_seconds(crate::settings::text_from_env(CACHE_SETTING).as_deref())
 }
 
 /// The most DID documents kept at once. Callers choose the DIDs, so

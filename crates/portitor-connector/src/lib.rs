@@ -142,6 +142,12 @@ pub struct Config {
     pub credential_types: CredentialTypes,
 }
 
+/// The `SQLite` file unless `PORTITOR_DB_FILE` says otherwise.
+pub const DEFAULT_DB_FILE: &str = "portitor.db";
+
+/// Where the public port listens unless `PORTITOR_BIND` says otherwise.
+pub const DEFAULT_BIND: &str = "0.0.0.0:8080";
+
 /// Default lifetime of a data access token: one hour.
 pub const DEFAULT_DATA_TOKEN_SECONDS: u64 = 3_600;
 
@@ -151,16 +157,15 @@ pub const DEFAULT_DATA_TOKEN_SECONDS: u64 = 3_600;
 pub const MAX_SETTING_SECONDS: u64 = 31_536_000;
 
 /// Reads a setting in whole seconds, from 0 to [`MAX_SETTING_SECONDS`];
-/// `default` when the variable is not set.
+/// `default` when the variable is not set or empty.
 fn seconds_var(
     var: impl Fn(&str) -> Option<OsString>,
     name: &'static str,
     default: u64,
 ) -> Result<u64, ConfigError> {
-    let Some(value) = var(name) else {
+    let Some(value) = settings::text(var, name) else {
         return Ok(default);
     };
-    let value = value.to_string_lossy().into_owned();
     match value.parse::<u64>() {
         Ok(seconds) if seconds <= MAX_SETTING_SECONDS => Ok(seconds),
         _ => Err(ConfigError::Invalid(name, value)),
@@ -225,7 +230,8 @@ impl Config {
     /// 3600), `PORTITOR_POLICY_CREDENTIALS` (see
     /// [`auth::policy_credentials`]), `PORTITOR_HARVEST_INTERVAL_SECONDS`
     /// (default 3600) and, when set, `PORTITOR_DATASETS_FILE` from the
-    /// environment. The datasets file is not read here: the harvest reads
+    /// environment. As everywhere, spaces around a value are dropped and
+    /// an empty value means "not set" (`portitor_runtime::settings`). The datasets file is not read here: the harvest reads
     /// it at start and at each run, and a bad file or dataset does not stop
     /// the connector.
     ///
@@ -284,10 +290,13 @@ impl Config {
         Ok(Self {
             participant_id,
             public_url,
-            datasets_file: var("PORTITOR_DATASETS_FILE").map(PathBuf::from),
+            datasets_file: settings::text(&var, "PORTITOR_DATASETS_FILE").map(PathBuf::from),
             harvest_interval_seconds,
             allow_http: settings::is_true(&var, "PORTITOR_ALLOW_HTTP"),
-            db_file: var("PORTITOR_DB_FILE").map_or_else(|| "portitor.db".into(), Into::into),
+            db_file: match settings::text(&var, "PORTITOR_DB_FILE") {
+                Some(file) => PathBuf::from(file),
+                None => PathBuf::from(DEFAULT_DB_FILE),
+            },
             data_token_seconds,
             credential_types,
         })
