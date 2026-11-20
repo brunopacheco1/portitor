@@ -22,7 +22,7 @@ project checks every change. All commands run from the repository root.
 | Licence headers | `reuse lint` | every PR (`REUSE compliance`) |
 | DSP conformance (TCK) | see [below](#dsp-conformance-tck) | every PR (`TCK`) |
 | DCP conformance: identity component, connector as verifier, issuer (TCK) | see [below](#dcp-conformance-tck) | every PR (`TCK`) |
-| Interoperability with EDC v1.0.0-RC7 | `scripts/edc-interop.sh`, see [below](#edc-interop-test) | PRs that touch `crates/`, `Cargo.lock`, the `Dockerfile`, `interop/edc/`, the script or its workflow, and nightly (`EDC interop`) |
+| Interoperability with EDC v1.0.0-RC8, with Gaia-X compliance | `scripts/edc-interop.sh`, see [below](#edc-interop-test) | PRs that touch `crates/`, `Cargo.lock`, the `Dockerfile`, `interop/edc/`, `interop/gaiax/compose.yaml`, the scripts it uses or its workflow, and nightly (`EDC interop`) |
 | Gaia-X compliance between Portitor participants, against a local Gaia-X compliance service in test mode | `scripts/gaiax-e2e.sh`, see [below](#gaia-x-end-to-end-test) | PRs that touch `crates/`, `Cargo.lock`, the `Dockerfile`, `interop/gaiax/`, the scripts or the workflow, and nightly (`Gaia-X`) |
 | Fuzzing | see [below](#fuzzing) | every PR (short), weekly (long) |
 | Two participants authenticate with DCP, agree a contract and transfer a file | `scripts/demo.sh`, see [below](#two-connectors) | every PR (`CI`) |
@@ -481,33 +481,30 @@ CI runs both.
 
 `scripts/edc-interop.sh` runs a small data space in Docker Compose
 (`interop/edc/compose.yaml`): a Portitor participant (`portitor-connector`
-and `portitor-identity`) and an Eclipse Dataspace Components participant
-(control plane, data plane, and IdentityHub with its STS, all
-v1.0.0-RC7), both members by a `MembershipCredential` from the data
-space's `portitor-issuer`. It checks, in this order:
+and `portitor-identity`, `did:web:portitor.gaiax.test`) and an Eclipse
+Dataspace Components participant (control plane, data plane, and
+IdentityHub with its STS, all v1.0.0-RC8, `did:web:edc.gaiax.test`), both
+members by a `MembershipCredential` from the data space's
+`portitor-issuer`. From 0.13 it also has the local Gaia-X compliance
+service of the [Gaia-X end-to-end test](#gaia-x-end-to-end-test)
+(gx-compliance v2.16.0 with Memgraph 3.9.0, a test notary and a test CA).
 
-1. each identity asks the issuer for its credential through its own API,
-   and the issuer delivers it (DCP 6.4, 6.5): the IdentityHub through its
-   Identity API (`POST .../participants/{id}/credentials/request`, marked
-   unstable in RC7), Portitor's identity through its management API
-   (`POST /v1/credential-requests`); the issuer registered both first;
-2. EDC accepts Portitor's identity: the EDC provider's catalog, read
-   through the Portitor connector's management API
-   (`POST /v1/catalog/request`; EDC queries Portitor's credential service);
-3. Portitor consumer, EDC provider: negotiation, pull transfer, and the
-   data fetched equals the published file;
-4. EDC consumer, Portitor provider: catalog, negotiation, pull transfer
-   (EDC's data plane fetches from Portitor's), the same check. The
-   issuer serves the HealthDCAT-AP demo bundle and the Portitor connector
-   pins it, so its dataset (`config/portitor-datasets.json`) is checked
-   against the shapes and EDC reads it with `dct:conformsTo` and the
-   HealthDCAT-AP metadata as full IRIs;
-5. revocation both ways: once the issuer revokes one participant's
-   credential (`POST /v1/credentials/{id}/revoke`), the other refuses it:
-   EDC answers Portitor's catalog request with 401 (the management call
-   then answers 502 and names the 401), and Portitor answers
-   EDC's negotiation request with 404 (DSP 2025-1 HTTPS bindings,
-   "Unauthorized Access"; from 0.12).
+One command runs it all, and it exits non-zero at the first failed
+check. The steps, in this order, and what each must show:
+
+| # | Step | Expected result |
+|---|---|---|
+| 1 | Each identity asks the issuer for its credential through its own API, and the issuer delivers it (DCP 6.4, 6.5): the IdentityHub through its Identity API (`POST .../participants/{id}/credentials/request`, in the package `v1.unstable` in RC8), Portitor's identity through its management API (`POST /v1/credential-requests`). The issuer registered both first | both requests reach `ISSUED`; each identity holds one `MembershipCredential`, the IdentityHub's from `did:web:issuer%3A8070` |
+| 2 | EDC accepts Portitor's identity: the EDC provider's catalog, read through the Portitor connector's management API (`POST /v1/catalog/request`; EDC queries Portitor's credential service) | HTTP 200, and the catalog has an offer for `edc-interop` |
+| 3 | Portitor consumer, EDC provider: negotiation, pull transfer, fetch from the EDC data plane | negotiation `FINALIZED`, transfer `STARTED`, the bytes equal `data/edc-provider.csv` |
+| 4 | EDC consumer, Portitor provider: catalog, negotiation, pull transfer (EDC's data plane fetches from Portitor's). The issuer serves the HealthDCAT-AP demo bundle and the Portitor connector pins it, so its datasets (`config/portitor-datasets.json`) are checked against the shapes | EDC read `dct:conformsTo` and the HealthDCAT-AP metadata as full IRIs; negotiation `FINALIZED`, transfer `STARTED`, the bytes equal `data/portitor-provider.csv` |
+| 5 | Gaia-X, Portitor: its identity did its onboarding by itself (ADR 0021) | its DID document, read over HTTPS, has `alg` `ES256` and `x5u`; the newest compliance run is `SUCCEEDED`; it holds a `gx:ParticipantComplianceCredential` from `did:web:compliance.gaiax.test` |
+| 6 | Gaia-X, the offer: the Portitor provider's second dataset (`.../portitor-interop-gaiax`) is offered only with `ParticipantComplianceCredential.gx:labelLevel` `eq` `SC` (ADR 0022) | the offer in the catalog EDC read still has that left operand and `SC` |
+| 7 | Gaia-X, refused: the EDC consumer, which holds no compliance credential, negotiates that offer | the EDC negotiation ends `TERMINATED`, and its `errorDetail` has no `code=`: Portitor took the request (the caller is a member) and then sent a `ContractNegotiationTerminationMessage`, not an HTTP error |
+| 8 | Gaia-X, the EDC participant's onboarding: `scripts/gaiax_test_onboarding.py` signs its `gx:LegalPerson` and `gx:Issuer` credentials and the presentation with the participant's key; the script sends it to the compliance service | the service answers with a VC-JWT whose `id` is the one asked for, issuer `did:web:compliance.gaiax.test`, type `gx:ParticipantComplianceCredential`, `gx:labelLevel` `SC` |
+| 9 | Gaia-X, the IdentityHub stores the compliance credential and the legal person credential (Identity API, `POST .../participants/{id}/credentials`) | it lists exactly one credential of each type |
+| 10 | Gaia-X, admitted: EDC negotiates the same offer again and pulls the data | negotiation `FINALIZED`, transfer `STARTED`, the bytes equal `data/portitor-provider-gaiax.csv` |
+| 11 | Revocation both ways: the issuer revokes one participant's `MembershipCredential` (`POST /v1/credentials/{id}/revoke`), the other refuses it | EDC answers Portitor's catalog request with 401 (the management call then answers 502 and names the 401); EDC's negotiation with Portitor ends `TERMINATED` with `code=404` in its `errorDetail` (DSP 2025-1 HTTPS bindings, "Unauthorized Access"; from 0.12, first seen in CI on 2026-11-20 against RC7) |
 
 EDC always sends a `filter` in its `CatalogRequestMessage`: an EDC
 `QuerySpec` with no filter expressions (offset 0, limit 50). Portitor
@@ -516,7 +513,8 @@ treats such a filter as "no filter" and answers with the whole catalog.
 ```sh
 # builds the Portitor images as CI does, then runs the test; the EDC
 # images are built from interop/edc/runtimes (Maven Central, no EDC images
-# are published); needs docker compose, curl, jq and openssl
+# are published); needs docker compose, curl, jq, openssl and python3
+# with `cryptography`
 mkdir -p dist/amd64
 cargo build --release --target x86_64-unknown-linux-musl -p portitor-connector -p portitor-identity -p portitor-issuer
 cp target/x86_64-unknown-linux-musl/release/portitor-{connector,identity,issuer} dist/amd64/
@@ -526,8 +524,45 @@ docker build --target portitor-issuer -t portitor-issuer:ci .
 scripts/edc-interop.sh            # KEEP=1 leaves it running; --no-build reuses the EDC images
 ```
 
-What EDC needs, and why the test is set up as it is (all read from the
-EDC v1.0.0-RC7 sources):
+It ends with `== Done`. With `LOGS=FILE` a failed run writes every
+container's whole log to that file (CI keeps it as the artifact
+`edc-interop-logs`). It needs Internet access, as the Gaia-X test does:
+Maven Central for the EDC build, and the Gaia-X Registry, `w3id.org` and
+`www.w3.org` for the compliance service.
+
+### What is pinned
+
+Every image and every library is pinned, so a later run uses the same
+software:
+
+| What | Version | Pinned by |
+|---|---|---|
+| EDC Connector and IdentityHub | v1.0.0-RC8 | `edcVersion` in `interop/edc/runtimes/gradle.properties`; the SHA-256 of every plugin and library in `gradle/verification-metadata.xml` |
+| Eclipse Data Plane SDK (the test's data plane) | 1.2.1 | `dataplaneSdkVersion`, and the same file |
+| Build and runtime images of the EDC runtimes | `gradle:9.8.2-jdk21`, `eclipse-temurin:21.0.13_9-jre-noble` | digest, in `interop/edc/runtimes/Dockerfile` |
+| Gaia-X compliance service | gx-compliance v2.16.0 | digest, in `interop/gaiax/compose.yaml` (the EDC test's Compose file takes the service from there with `extends`) |
+| Its graph database | Memgraph 3.9.0 | digest, same file |
+| Vault | `hashicorp/vault:2.2.1` | digest, in `interop/edc/compose.yaml` |
+| Web servers (`tls`, `data`, `identity-api-jwks`) | `nginx:1.29-alpine` | digest, same file |
+| `fetch` | `curlimages/curl:8.11.1` | digest, same file |
+| Portitor | the commit under test | built from the checkout; a release is named with `PORTITOR_IMAGE`, `PORTITOR_IDENTITY_IMAGE` and `PORTITOR_ISSUER_IMAGE` |
+
+Not pinned: what the compliance service loads from the Gaia-X Registry at
+run time (shapes, ontology, contexts), hence the nightly run.
+
+### Last run that passed
+
+| Date | Portitor | EDC | Compliance service | Where |
+|---|---|---|---|---|
+| *to be filled in by the integrator after the first green run* | *commit and version, to be filled in* | v1.0.0-RC8 (Connector, IdentityHub) | gx-compliance v2.16.0 | *link to the `EDC interop` workflow run* |
+
+Before 0.13 (without the Gaia-X steps): the nightly run of 2026-11-20 on
+`main` (after 0.12.0), EDC v1.0.0-RC7, workflow `EDC interop` run 55.
+
+### What EDC needs
+
+Why the test is set up as it is (all read from the EDC v1.0.0-RC8
+sources, Connector and IdentityHub):
 
 - **Scope.** EDC IdentityHub accepts only
   `org.eclipse.dspace.dcp.vc.type:<type>:<read|all|*>` (with the
@@ -570,6 +605,170 @@ EDC v1.0.0-RC7 sources):
   test-only RSA key for each run, signs five-minute RS256 tokens with
   `openssl` (`identity_api_token` in `scripts/edc-interop.sh`), and
   serves the key set from the `identity-api-jwks` web server.
+- **Public names.** The Gaia-X compliance service resolves `did:web`
+  over HTTPS only, so both participants have a public name answered by
+  the `tls` service (nginx, `config/tls.conf`) with a certificate from
+  the run's test CA. EDC's Java does not trust that CA: the EDC runtimes
+  resolve `did:web` over plain HTTP (`edc.iam.did.web.use.https=false`),
+  on port 80 of the same names, and the service endpoints in both DID
+  documents stay plain HTTP inside the network.
+
+### Gaia-X with EDC: what the test shows, and what it does not
+
+What it shows: an EDC participant can **hold** a Gaia-X compliance
+credential in its IdentityHub and **present** it over DCP, and a Portitor
+provider admits it by the checks of ADR 0022 (the credential comes from
+the trusted compliance service, and the `gx:LegalPerson` credential it
+names by digest is in the same presentation, issued and signed by the
+caller). This uses only what EDC v1.0.0-RC8 has, set by configuration:
+
+- **The key.** The Gaia-X compliance service needs `alg` and `x5u` (the
+  key's certificate chain) in the signer's DID document. The IdentityHub
+  takes a key that already exists: `publicKeyJwk` and `privateKeyAlias`
+  in the `KeyDescriptor` of the participant manifest
+  (`KeyPairServiceImpl`, IdentityHub), and publishes the JWK as given
+  (`DidDocumentServiceImpl`). The script puts the private key in the
+  Vault first, as a JWK.
+- **The DID document.** The IdentityHub finds it by the `Host` header
+  (`DidWebController`); the `tls` service passes it on. The certificate
+  chain is a static file next to it.
+- **Storing.** `POST /v1/participants/{id}/credentials` of the Identity
+  API takes a credential that was issued elsewhere
+  (`VerifiableCredentialsApiController`, format `VC2_0_JOSE`).
+- **Scopes.** The control plane asks for the two Gaia-X types when a
+  policy names `ParticipantComplianceCredential`
+  (`edc.iam.dcp.scopes.gaiaxcompliance.*` and `gaiaxlegalperson.*`, type
+  `POLICY`, `DynamicScopeExtractor`). The IdentityHub maps the scope's
+  type to the credential's type `gx:...` with
+  `edc.identityhub.discriminator.*`
+  (`config/edc-identityhub.properties`).
+
+What it does not show:
+
+- **The EDC IdentityHub does not do the Gaia-X onboarding.** It has no
+  code for it. `scripts/gaiax_test_onboarding.py` (test only) signs the
+  `gx:LegalPerson` and `gx:Issuer` credentials and the presentation with
+  the EDC participant's key, as an operator's tool would, in the form a
+  Portitor identity writes (`crates/portitor-dcp/src/gaiax_sign.rs`).
+- **EDC as the provider does not ask Portitor for Gaia-X compliance.**
+  Not done, for two reasons read in the RC8 sources. EDC refuses a
+  presentation with a credential whose subject is not the presenter's DID
+  (`HasValidSubjectIds` in `VerifiableCredentialValidationServiceImpl`);
+  the subject of a compliance credential is `<credential id>#cs`
+  (ADR 0022). And the control plane the test builds
+  (`controlplane-dcp-bom`) has no policy function that reads a
+  credential's claims; EDC has one with CEL expressions
+  (`decentralized-claims-cel`), but only in its `controlplane-virtual-*`
+  BOMs.
+- **No real Gaia-X trust anchor**, as in the Gaia-X test: the compliance
+  service runs in its test mode, and the notary and the CA are made for
+  the run.
+
+### From RC7 to RC8
+
+Read in the diff of the two tags (Connector and IdentityHub). Nothing the
+test uses changed its path or its shape; the management API v4 and the
+Identity API paths are the same. What changed near the test:
+
+- the `controlplane-dcp-bom` no longer has the Linked Data proof modules
+  (credentials as JWT only; the test used JWT already);
+- a `credentialStatus` of an unknown type is now refused by default
+  (`edc.iam.credential.revocation.unknowntypes.ignore`); Portitor's
+  issuer writes `BitstringStatusListEntry`, which EDC knows;
+- a status list that cannot be fetched is now a failure EDC tries again;
+- an initial `ContractRequestMessage` sent twice with the same
+  `consumerPid` gets the first negotiation back;
+- the IdentityHub's changes are in the issuer service's holder API,
+  which the test does not use.
+
+### The EDC interop run by hand
+
+`KEEP=1 scripts/edc-interop.sh` leaves everything running, with the keys
+in `interop/edc/run/`. The run ends after the revocation step, so both
+`MembershipCredential`s are revoked by then: reading works, a new
+negotiation is refused. To try negotiations by hand, stop the script
+before that step, or ask the issuer for new credentials (step 1 of the
+table).
+
+| What | URL on the host | Key |
+|---|---|---|
+| Portitor connector, DSP | `http://127.0.0.1:18080/dsp/2025-1` | a DCP token |
+| Portitor connector, management API | `http://127.0.0.1:18081` | `interop/edc/run/portitor/connector-management.key` (Bearer) |
+| Portitor identity (DID document, STS, credential service) | `http://127.0.0.1:18190` | STS client secret: `interop/edc/run/portitor/sts-client-secret` |
+| Portitor identity, management API | `http://127.0.0.1:18191` | `interop/edc/run/portitor/identity-management.key` (Bearer) |
+| Issuer, management API | `http://127.0.0.1:18371` | `interop/edc/run/issuer/management.key` (Bearer) |
+| Issuer (DID document, issuer service, status lists, bundle) | `http://127.0.0.1:18372` | none |
+| EDC control plane, management API | `http://127.0.0.1:18181/api/management` | header `x-api-key: edc-interop-test-key` |
+| EDC IdentityHub, Identity API | `http://127.0.0.1:18281/api/identity/v1` | a JWT signed with `interop/edc/run/identity-api-key.pem` (below) |
+| EDC data plane | `http://127.0.0.1:18180/api` | none |
+
+The public names (`portitor.gaiax.test`, `edc.gaiax.test`,
+`compliance.gaiax.test`, `notary.gaiax.test`) and the EDC DSP endpoint
+(`http://edc-controlplane:8082/api/dsp/2025-1`) exist only inside the
+Compose network; the `fetch` service reaches them and trusts the test CA.
+
+```sh
+COMPOSE="docker compose -f interop/edc/compose.yaml"
+ID_KEY="authorization: Bearer $(cat interop/edc/run/portitor/identity-management.key)"
+CONN_KEY="authorization: Bearer $(cat interop/edc/run/portitor/connector-management.key)"
+EDC_KEY='x-api-key: edc-interop-test-key'
+EDC_CONTEXT='"@context": ["https://w3id.org/edc/connector/management/v2"]'
+
+# both DID documents, as the compliance service reads them
+$COMPOSE run --rm -q fetch -sS https://portitor.gaiax.test/.well-known/did.json | jq
+$COMPOSE run --rm -q fetch -sS https://edc.gaiax.test/.well-known/did.json | jq
+
+# Portitor: the compliance runs and the credentials it holds
+curl -s -H "$ID_KEY" http://127.0.0.1:18191/v1/gaiax/compliance | jq
+curl -s -H "$ID_KEY" http://127.0.0.1:18191/v1/credentials | jq '.[] | {types, issuer}'
+
+# Portitor: its negotiations (as consumer of the EDC offer)
+curl -s -H "$CONN_KEY" http://127.0.0.1:18081/v1/negotiations | jq '.negotiations[] | {consumerPid, state}'
+
+# EDC: the Portitor provider's catalog, with both datasets and their offers
+curl -s -X POST http://127.0.0.1:18181/api/management/v4/catalog/request -H "$EDC_KEY" \
+  -H 'content-type: application/json' -d "{$EDC_CONTEXT, \"@type\": \"CatalogRequest\",
+  \"counterPartyAddress\": \"http://portitor-connector:8080/dsp/2025-1\",
+  \"counterPartyId\": \"did:web:portitor.gaiax.test\", \"protocol\": \"dataspace-protocol-http:2025-1\"}" | jq
+
+# EDC: its negotiations (one TERMINATED and one FINALIZED for the Gaia-X offer)
+curl -s -X POST http://127.0.0.1:18181/api/management/v4/contractnegotiations/request -H "$EDC_KEY" \
+  -H 'content-type: application/json' -d "{$EDC_CONTEXT, \"@type\": \"QuerySpec\"}" |
+  jq '.[] | {id: .["@id"], state, errorDetail}'
+
+# EDC IdentityHub: the credentials it holds. The Identity API takes a
+# five-minute RS256 token signed with the run's key (identity_api_token
+# in scripts/edc-interop.sh)
+b64() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+NOW=$(date +%s)
+INPUT="$(printf '{"alg":"RS256","typ":"JWT","kid":"edc-interop-admin-key"}' | b64).$(printf \
+  '{"iss":"edc-interop-admin","sub":"admin","scope":"identity-api:admin","jti":"%s","iat":%s,"nbf":%s,"exp":%s}' \
+  "$(openssl rand -hex 16)" "$NOW" "$NOW" "$((NOW + 300))" | b64)"
+TOKEN="$INPUT.$(printf '%s' "$INPUT" | openssl dgst -sha256 -sign interop/edc/run/identity-api-key.pem | b64)"
+curl -s -H "authorization: Bearer $TOKEN" http://127.0.0.1:18281/api/identity/v1/participants/edc/credentials |
+  jq '.[] | {type: .verifiableCredential.credential.type, issuer: .issuerId}'
+
+# the EDC participant's Gaia-X credentials, as the test wrote and received them
+cut -d. -f2 interop/edc/run/edc/www/credentials/gaiax/compliance | base64 -d 2>/dev/null | jq
+```
+
+The [Bruno](https://www.usebruno.com/) collection in `_http/` has the
+environment `edc-interop` (`_http/environments/edc-interop.bru`) with
+these URLs for the Portitor participant and the issuer. Put
+`interop/edc/run/portitor/connector-management.key` in the secret
+`apiKey`, `interop/edc/run/portitor/sts-client-secret` in `stsSecret`,
+`interop/edc/run/portitor/identity-management.key` in `identityApiKey`
+and `interop/edc/run/issuer/management.key` in `issuerApiKey`. The
+`identity`, `issuer` and `auth` folders and the read requests of
+`management` fit this run. `management/Start negotiation` does not: it
+sends `{{dsp}}` as the provider's address, which here is a URL on the
+host that the connector's container cannot reach. The DSP folders call
+the Portitor provider with a token from the Portitor participant's own
+STS, so the participant calls itself; this was not tried. The collection
+has no requests for EDC's APIs.
+
+Clean up with `docker compose -f interop/edc/compose.yaml down --volumes`
+and `rm -rf interop/edc/run/`.
 
 ## Gaia-X end-to-end test
 
@@ -629,7 +828,8 @@ What it does not prove:
 - Not the Gaia-X Lab (`compliance.lab.gaia-x.eu`) nor a GXDCH notary; a
   test against the Lab with a public `did:web` is future work
   ([spike 0.8](spikes/0.8-gaia-x-compliance.md)).
-- Not EDC: the EDC interop test runs without Gaia-X (ADR 0022).
+- Not EDC: this test has only Portitor participants. From 0.13 the
+  [EDC interop test](#edc-interop-test) has the Gaia-X steps with EDC.
 
 It needs Internet access: the compliance service loads the Gaia-X shapes,
 ontology and JSON-LD contexts from `registry.lab.gaia-x.eu` (through
