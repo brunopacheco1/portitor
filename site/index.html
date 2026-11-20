@@ -105,7 +105,7 @@ so visitors' browsers never contact third-party services.
         <h2>Try it</h2>
         <p>Run a small data space on your machine: its issuer, a provider and a consumer (each a connector with its identity component) and a web server with the provider's data. A script checks that the two participants prove who they are with credentials, agree a contract and transfer a file.</p>
         <h3>You need</h3>
-        <p>Docker Engine 25 or later (Docker Desktop 4.27 or later) with the Compose plugin: the images' health check uses <code>HEALTHCHECK --start-interval</code>, which came with Engine 25. Also <code>git</code>, <code>bash</code>, <code>curl</code>, <code>jq</code> and <code>openssl</code>. The demo downloads about 40&nbsp;MB of images; after that it runs in about 10 seconds.</p>
+        <p>Docker Engine 25 or later (Docker Desktop 4.27 or later) with the Compose plugin: the images' health check uses <code>HEALTHCHECK --start-interval</code>, which came with Engine 25. Podman works too, see <a href="https://github.com/brunopacheco1/portitor/blob/main/docs/TESTING.md#docker-or-podman">TESTING</a>. Also <code>git</code>, <code>bash</code>, <code>curl</code>, <code>jq</code> and <code>openssl</code>. The demo downloads about 40&nbsp;MB of images; after that it runs in about 10 seconds.</p>
         <h3>Run the demo</h3>
         <pre><code>git clone --branch v0.12.0 --depth 1 https://github.com/brunopacheco1/portitor
 cd portitor

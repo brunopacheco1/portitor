@@ -1159,7 +1159,9 @@ tested with a proxy product.
   start a service once another is healthy (`depends_on: condition:
   service_healthy`, as in `examples/compose/compose.yaml`). The check
   every 2 s during the start period (`--start-interval`) needs Docker
-  Engine 25 or later (Docker Desktop 4.27 or later).
+  Engine 25 or later (Docker Desktop 4.27 or later). Podman runs the
+  images too, but may not read their `HEALTHCHECK`: see
+  [TESTING](TESTING.md#docker-or-podman).
 - **Kubernetes**: set `PORTITOR_MANAGEMENT_BIND=0.0.0.0:<port>` and probe
   the management port (8081 connector, 8091 identity, 8071 issuer); keep
   that port out of any `Service` that the public reaches:

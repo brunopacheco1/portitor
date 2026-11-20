@@ -32,6 +32,8 @@
 # CI runs it.
 
 set -euo pipefail
+# shellcheck source=scripts/require-bash.sh
+source "$(dirname "$0")/require-bash.sh"
 
 cd "$(dirname "$0")/.."
 if [[ $# -eq 0 ]]; then

@@ -51,22 +51,31 @@
 # (registry.lab.gaia-x.eu), w3id.org and www.w3.org.
 #
 # Usage: scripts/edc-interop.sh [--no-build]
-#   --no-build  use the EDC images already built (docker compose --no-build)
+#   --no-build  use the EDC images already built (compose up --no-build)
 # Environment:
 #   PORTITOR_IMAGE, PORTITOR_IDENTITY_IMAGE, PORTITOR_ISSUER_IMAGE
 #                Portitor images (compose.yaml)
 #   LOGS=FILE    on failure, write every container's whole log there
 #   KEEP=1       leave the containers running, and interop/edc/run/, at the end
 #                (docs/TESTING.md, "The EDC interop run by hand")
-# Needs docker with the compose plugin, curl, jq, openssl, and python3
-# with the `cryptography` package.
+#   CONTAINER_ENGINE=docker|podman
+#                the container engine; without it, docker if it answers,
+#                then podman (scripts/container-engine.sh)
+# Needs Docker or Podman with Docker Compose (docs/TESTING.md, "Docker or
+# Podman"), bash 4.4 or later, curl, jq, openssl, and python3 with the
+# `cryptography` package.
 
 set -euo pipefail
+# shellcheck source=scripts/require-bash.sh
+source "$(dirname "$0")/require-bash.sh"
 
 cd "$(dirname "$0")/.."
 DIR=interop/edc
 RUN=$DIR/run
-COMPOSE=(docker compose -f "$DIR/compose.yaml")
+# ENGINE_COMPOSE: `docker compose` or `podman compose`
+# shellcheck source=scripts/container-engine.sh
+source scripts/container-engine.sh
+COMPOSE=("${ENGINE_COMPOSE[@]}" -f "$DIR/compose.yaml")
 UP_FLAGS=(--build)
 if [[ ${1:-} == --no-build ]]; then UP_FLAGS=(--no-build); fi
 
@@ -226,11 +235,11 @@ step "Build and sign the HealthDCAT-AP demo bundle with the issuer image"
 # folder mounted at the same path
 cat >"$RUN/issuer-command" <<SCRIPT
 #!/bin/sh
-exec ${COMPOSE[*]} run --rm --no-deps -q --user "$(id -u):$(id -g)" \\
+exec ${COMPOSE[*]} run --rm --no-deps -q --user "$(engine_bind_mount_user)" \\
   -v "$PWD:$PWD" -w "$PWD" issuer "\$@"
 SCRIPT
 chmod +x "$RUN/issuer-command"
-mkdir -p "$RUN/issuer/bundle/bundles" # before Docker makes the mount point, as root
+mkdir -p "$RUN/issuer/bundle/bundles" # before the engine makes the mount point, as root
 AUTHORITY=$AUTHORITY scripts/demo-bundle.sh "$RUN/issuer/bundle" "$RUN/issuer-command" >/dev/null ||
   fail "build the demo bundle"
 chmod -R a+rX "$RUN/issuer/bundle"
@@ -701,5 +710,5 @@ echo "the negotiation ended TERMINATED: Portitor answered 404"
 step "Done: credentials issued and checked both ways, data transferred both ways, Gaia-X compliance required and met, revocation honoured"
 if [[ ${KEEP:-} == 1 ]]; then
   echo "KEEP=1: the data space keeps running; see docs/TESTING.md, \"The EDC interop run by hand\"."
-  echo "Remove it with: docker compose -f $DIR/compose.yaml down --volumes && rm -rf $RUN"
+  echo "Remove it with: ${COMPOSE[*]} down --volumes && rm -rf $RUN"
 fi

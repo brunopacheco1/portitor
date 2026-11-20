@@ -64,9 +64,14 @@ services:
 
   # the public names, over HTTPS and HTTP (config/tls.conf)
   tls:
-    image: nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+    image: docker.io/library/nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+    environment:
+      # the image's entrypoint puts the container's name servers
+      # (/etc/resolv.conf) in NGINX_LOCAL_RESOLVERS and fills them into
+      # tls.conf, a template: Docker's are at 127.0.0.11, Podman's are not
+      NGINX_ENTRYPOINT_LOCAL_RESOLVERS: "1"
     volumes:
-      - ./config/tls.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./config/tls.conf:/etc/nginx/templates/default.conf.template:ro
       - ./run/tls:/tls:ro
       - ./run/notary/www:/notary:ro
       # the EDC participant's certificate chain and Gaia-X credentials
@@ -114,13 +119,13 @@ services:
   # The key set of the tokens for the IdentityHub's Identity API
   # (http://identity-api-jwks/jwks.json), written by scripts/edc-interop.sh
   identity-api-jwks:
-    image: nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+    image: docker.io/library/nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
     volumes:
       - ./run/identity-api:/usr/share/nginx/html:ro
 
   # the files both providers share
   data:
-    image: nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+    image: docker.io/library/nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
     volumes:
       - ./data:/usr/share/nginx/html:ro
 
@@ -131,7 +136,7 @@ services:
   # Minimum Viable Dataspace. scripts/edc-interop.sh writes the participant's
   # private key there before it creates the participant.
   vault:
-    image: hashicorp/vault:2.2.1@sha256:962a92876e168d68eaaa24b0b8b49bbce1cb63024060a67bba95cd158a366fc2
+    image: docker.io/hashicorp/vault:2.2.1@sha256:962a92876e168d68eaaa24b0b8b49bbce1cb63024060a67bba95cd158a366fc2
     command: ["server", "-dev"]
     environment:
       VAULT_DEV_ROOT_TOKEN_ID: root
@@ -249,11 +254,11 @@ services:
     # and the identity answer, the start fails and is tried again
     restart: on-failure
 
-  # `docker compose run --rm fetch <url>`: fetches inside the network, where
+  # `docker compose run --rm fetch <url>` (or `podman compose`): fetches inside the network, where
   # the data planes' addresses and the *.gaiax.test names resolve, trusting
   # the test CA
   fetch:
-    image: curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+    image: docker.io/curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
     entrypoint: ["curl", "--cacert", "/ca/ca.pem"]
     volumes:
       - ./run/ca:/ca:ro

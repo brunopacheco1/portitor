@@ -18,6 +18,8 @@ on:
       - "examples/issuer-credentials.json"
       - "interop/gaiax/**"
       - "scripts/gaiax-e2e.sh"
+      - "scripts/container-engine.sh"
+      - "scripts/require-bash.sh"
       - "scripts/gaiax-lib.sh"
       - "scripts/gaiax_test_notary.py"
       - ".github/workflows/gaiax.yml"

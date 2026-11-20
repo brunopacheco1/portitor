@@ -9,12 +9,12 @@
 # The Compose file (../compose.yaml) does this for each service.
 
 # Gradle 9 with JDK 21 (the shadow plugin 9 needs Gradle 9)
-FROM gradle:9.8.2-jdk21@sha256:85f8f572045bfb31874d66d7d8a2bd0c17d8cb9ad34b6a4d02f5d552b4b92c04 AS build
+FROM docker.io/library/gradle:9.8.2-jdk21@sha256:85f8f572045bfb31874d66d7d8a2bd0c17d8cb9ad34b6a4d02f5d552b4b92c04 AS build
 WORKDIR /src
 COPY . .
 RUN gradle --no-daemon --quiet shadowJar
 
-FROM eclipse-temurin:21.0.13_9-jre-noble@sha256:0d57a8e90c2bb844c5a8e1b2b71e11eff06dad7edcfd803cd21ed4ae203b2515 AS runtime
+FROM docker.io/library/eclipse-temurin:21.0.13_9-jre-noble@sha256:0d57a8e90c2bb844c5a8e1b2b71e11eff06dad7edcfd803cd21ed4ae203b2515 AS runtime
 WORKDIR /app
 # EDC reads its settings from this file (configuration-filesystem); the
 # Compose file mounts it

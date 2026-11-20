@@ -14,6 +14,15 @@ versions may change behaviour and configuration.
 
 ### Added
 
+- **Docker or Podman.** `scripts/demo-compose.sh`,
+  `scripts/gaiax-e2e.sh` and `scripts/edc-interop.sh` run with either:
+  Docker if it answers, otherwise Podman, or the one named in
+  `CONTAINER_ENGINE` (`scripts/container-engine.sh`). For Podman, every
+  pulled image is named with its registry, the Compose demo has its own
+  health checks, and the interop tests' web server takes its name server
+  from the container. Every script checks for bash 4.4 or later first.
+  CI stays on Docker; the Podman runs are by hand (TESTING, "Docker or
+  Podman").
 - **Connector management API: read a provider's catalog** (TD-38).
   `POST /v1/catalog/request` returns the provider's DSP `Catalog` and
   `POST /v1/catalog/dataset/request` one `Dataset`, as the provider

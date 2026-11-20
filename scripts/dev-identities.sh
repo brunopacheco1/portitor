@@ -24,6 +24,8 @@
 # Needs curl, jq and openssl.
 
 set -euo pipefail
+# shellcheck source=scripts/require-bash.sh
+source "$(dirname "$0")/require-bash.sh"
 
 cd "$(dirname "$0")/.."
 cargo build --quiet -p portitor-identity -p portitor-issuer

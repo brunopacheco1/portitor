@@ -19,6 +19,8 @@ on:
       - "interop/edc/**"
       - "interop/gaiax/compose.yaml" # the compliance service and its graph database come from there
       - "scripts/edc-interop.sh"
+      - "scripts/container-engine.sh"
+      - "scripts/require-bash.sh"
       - "scripts/gaiax-lib.sh"
       - "scripts/gaiax_test_notary.py"
       - "scripts/gaiax_test_onboarding.py"

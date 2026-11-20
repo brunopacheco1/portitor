@@ -28,6 +28,8 @@
 # Needs openssl.
 
 set -euo pipefail
+# shellcheck source=scripts/require-bash.sh
+source "$(dirname "$0")/require-bash.sh"
 
 cd "$(dirname "$0")/.."
 WORK=${1:?usage: scripts/demo-bundle.sh <work folder> [portitor-issuer]}
