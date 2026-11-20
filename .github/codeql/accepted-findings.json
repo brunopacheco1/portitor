@@ -1,0 +1,35 @@
+{
+  "about": "CodeQL findings that were checked and are false positives. Read by scripts/codeql-gate.sh in the CodeQL workflow; one more finding of a rule in a file than its count fails the run. Each entry is also dismissed as 'False positive' on GitHub (Security, Code scanning) with the same reason. See docs/TESTING.md.",
+  "accepted": [
+    {
+      "rule": "rust/unsafe-deserialization",
+      "file": "crates/portitor-connector/src/inbound.rs",
+      "count": 1,
+      "reason": "serde_json::from_value of an inbound DSP message. The query reports every serde call on request data and knows no check that would clear it. The body is limited (64 KiB on the small-message routes, PORTITOR_MAX_REQUEST_BYTES on the others; request_size.rs), the caller is authenticated before the handler, duplicate keys are refused, the JSON was checked against the DSP JSON Schema by the message guard a few lines above, and the target types are plain structs and enums (no trait objects)."
+    },
+    {
+      "rule": "rust/unsafe-deserialization",
+      "file": "crates/portitor-dsp/src/catalog.rs",
+      "count": 1,
+      "reason": "serde_json::from_value of a CatalogRequestMessage. The route has the 64 KiB small-message limit and an authenticated caller; the target is a plain struct."
+    },
+    {
+      "rule": "rust/unsafe-deserialization",
+      "file": "crates/portitor-identity/src/presentation.rs",
+      "count": 1,
+      "reason": "serde_json::from_slice of a DCP PresentationQueryMessage, after the caller's token is verified. The body is limited by PORTITOR_MAX_REQUEST_BYTES (default 2 MiB); the target is a plain struct."
+    },
+    {
+      "rule": "rust/unsafe-deserialization",
+      "file": "crates/portitor-identity/src/storage.rs",
+      "count": 2,
+      "reason": "serde_json::from_slice of a DCP CredentialMessage and a CredentialOfferMessage, each after the caller is authenticated as a trusted issuer. The body is limited by PORTITOR_MAX_REQUEST_BYTES; the targets are plain structs."
+    },
+    {
+      "rule": "rust/unsafe-deserialization",
+      "file": "crates/portitor-issuer/src/requests.rs",
+      "count": 1,
+      "reason": "serde_json::from_slice of a DCP CredentialRequestMessage, after the caller's token is verified. The route has the 64 KiB small-message limit; the target is a plain struct."
+    }
+  ]
+}
