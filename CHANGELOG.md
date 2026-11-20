@@ -142,6 +142,40 @@ after 1.0 they could only be made in 2.0. What to do:
   serves only roles it knows. `docs/schemas/bundle-manifest.schema.json`
   says the same: known roles are closed, a role object with another
   type is valid, at least one file has a known role.
+- **Found by the engineering review of the release, changed before the
+  freeze** (DEPLOYING, "From 0.12 to 0.13", points 7 to 9):
+  - **Connector: `PORTITOR_PARTICIPANT_ID` and `PORTITOR_PUBLIC_URL`
+    are checked at start**, as the identity's and the issuer's are: a
+    `did:web` DID, and an `http(s)` URL without a query or fragment.
+    Anything else stops the start.
+  - **All three: a switch is `true` or `false`.** Any other value of
+    `PORTITOR_ALLOW_HTTP` or `PORTITOR_STS_ALLOW_HTTP` (`1`, `yes`)
+    stops the start; before, it was read as off without a word.
+  - **All three: a list setting that is set must name something.** A
+    value of commas only (`","`) stops the start, for every
+    comma-separated setting. Before, some read it as an empty list
+    (`PORTITOR_GAIAX_COMPLIANCE_ISSUERS`, `PORTITOR_SCOPE_TYPE_ALIASES`,
+    the retired key files) and some stopped.
+  - **Connector management port: a time limit.** A request that takes
+    longer than 60 seconds is answered 503 with a problem document, as
+    on the public port, and at most 4 provider catalogs or datasets are
+    read at a time (each may hold 16 MiB); a further request waits.
+    Before, the port had no limit on time or on such reads.
+  - **Catalog calls.** A provider's `Dataset` without `@type` is
+    accepted (DSP 2025-1 does not require it there; a different `@type`
+    is still 502), an answer that is not a JSON object is refused also
+    when it is an array naming the type, and a dataset id of `.` or
+    `..` is refused with 400.
+  - **Bundle: a role type that is a known one in other letter case**
+    (`Messages`) is refused as a mistake, not skipped as a later role.
+  - **Transfer request while the finalization is on its way** (TD-44):
+    nothing is written unless the caller is also the agreement's
+    assignee (it always was in practice), and ADR 0007 now says what
+    the rule shows: the consumer acts on the agreement after verifying
+    it, not that the event arrived.
+  - The interop scripts stop the containers of an earlier `KEEP=1` run
+    before they delete its files, clean up from their first line, and
+    say why they stop when `curl` or `openssl` fails.
 
 ### Documentation
 

@@ -395,6 +395,13 @@ messages against them. A dataset that passes is served with
   file may have any media type (`type/subtype`, RFC 6838); a file with
   a role the connector knows must be `text/turtle`,
   `application/n-triples` or `application/ld+json`.
+  **After an upgrade to a version that knows the role**, the connector
+  needs the authority's server once: the cached copy of the bundle does
+  not hold the file that was skipped, so it cannot be used offline (the
+  start stops if the server cannot be reached and there is no other
+  usable copy). Upgrade while the authority's bundle address answers.
+  A role type that is a known one in other letter case (`Messages` for
+  `messages`) is taken as a mistake and the bundle is refused.
 - A bundle that was read but fails a check (signature, key, authority,
   version or a digest) stops the start; the cache does not replace it.
   So does a bundle that cannot be loaded at all (no download and no
@@ -1745,6 +1752,26 @@ new images.
    ([Schema and vocabulary bundle](#schema-and-vocabulary-bundle)).
 6. New in 0.13, nothing to do: the catalog calls of the management API
    ([README](../README.md#management-api)).
+7. **Behaviour change, connector: `PORTITOR_PARTICIPANT_ID` and
+   `PORTITOR_PUBLIC_URL` are checked at start**, as the identity's and
+   the issuer's already were. The id must be a `did:web` DID; the URL an
+   `http://` or `https://` URL without a query or fragment. A wrong
+   value stops the start and the log names the setting. Before, such a
+   connector started and its partners refused its messages.
+8. **Behaviour change, all three: a switch is `true` or `false`.**
+   `PORTITOR_ALLOW_HTTP` and `PORTITOR_STS_ALLOW_HTTP` with any other
+   value (`1`, `yes`, `on`) stop the start; before, such a value was
+   read as off without a word. Upper or lower case does not matter, and
+   empty still means not set (off).
+9. **Behaviour change, all three: a list that is set must name
+   something.** A comma-separated setting whose value holds only commas
+   and spaces (`","`) stops the start: `PORTITOR_TRUSTED_ISSUERS`,
+   `PORTITOR_DCP_SCOPES`, `PORTITOR_POLICY_CREDENTIALS`,
+   `PORTITOR_GAIAX_COMPLIANCE_ISSUERS`, `PORTITOR_SCOPE_TYPE_ALIASES`,
+   `PORTITOR_IDENTITY_RETIRED_KEY_FILES`,
+   `PORTITOR_ISSUER_RETIRED_KEY_FILES`. Before, some of them read such a
+   value as an empty list and some stopped. Leave a list unset (or
+   empty) for its default. To switch EDC's scope alias off, see point 4.
 
 Rollback to 0.12: put the old names back in the configuration and the
 old field names in your clients; for the database, as above.
