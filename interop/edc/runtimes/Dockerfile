@@ -4,7 +4,7 @@
 #
 # The EDC runtimes of the EDC interop test, built from the released EDC
 # modules on Maven Central (see gradle.properties). Test-only images.
-# One build stage makes the three jars; pick a runtime with --target:
+# One build stage makes the four jars; pick a runtime with --target:
 #   docker build --target controlplane -t portitor-interop/edc-controlplane .
 # The Compose file (../compose.yaml) does this for each service.
 
@@ -29,3 +29,6 @@ COPY --from=build /src/dataplane/build/libs/dataplane.jar /app/runtime.jar
 
 FROM runtime AS identityhub
 COPY --from=build /src/identityhub/build/libs/identityhub.jar /app/runtime.jar
+
+FROM runtime AS issuerservice
+COPY --from=build /src/issuerservice/build/libs/issuerservice.jar /app/runtime.jar

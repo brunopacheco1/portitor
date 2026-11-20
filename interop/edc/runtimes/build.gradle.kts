@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Shared settings of the three EDC runtimes. Each is one runnable jar
+// Shared settings of the four EDC runtimes. Each is one runnable jar
 // ("shadow" jar), started with EDC's BaseRuntime.
 
 plugins {

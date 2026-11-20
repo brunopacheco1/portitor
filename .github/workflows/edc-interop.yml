@@ -6,8 +6,10 @@
 # against EDC v1.0.0-RC8 (control plane, data plane, IdentityHub); both
 # ask portitor-issuer for their MembershipCredential. Catalog, negotiation
 # and pull transfer both ways, a dataset that asks for Gaia-X compliance
-# (gx-compliance, a test notary and a test CA, as in the Gaia-X test), then
-# revocation both ways. The EDC runtimes are built from Maven Central
+# (gx-compliance, a test notary and a test CA, as in the Gaia-X test), a
+# second issuer (the EDC Issuer Service: a test credential issued to both,
+# required and checked both ways, then revoked), then revocation by
+# portitor-issuer both ways. The EDC runtimes are built from Maven Central
 # (interop/edc/runtimes); there are no EDC images.
 name: EDC interop
 on:

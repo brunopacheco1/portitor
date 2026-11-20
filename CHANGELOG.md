@@ -12,6 +12,25 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Added
+
+- **The EDC Issuer Service in the EDC interop test.** The test
+  (`scripts/edc-interop.sh`, new step 8) has a second issuer, the Issuer
+  Service of EDC IdentityHub v1.0.0-RC8 (`did:web:edc-issuer.gaiax.test`,
+  a fourth runtime in `interop/edc/runtimes`). It issues a plain test
+  credential, the `InteropTestCredential`, to both participants over DCP:
+  `portitor-identity` asks with `POST /v1/credential-requests`, the EDC
+  IdentityHub through its Identity API. Each provider then offers data
+  only with `InteropTestCredential.level eq "basic"`, and each consumer
+  negotiates and pulls from the other; before anyone holds the
+  credential, both are refused. At the end the Issuer Service revokes the
+  EDC participant's credential, and the Portitor connector, which reads
+  the Bitstring Status List itself, ends EDC's next negotiation. The
+  revocation by `portitor-issuer` is now step 9.
+- A test in `portitor-dcp` (`tests/edc_issuer_service.rs`) reads a
+  credential and the status list of an EDC Issuer Service, before and
+  after a revocation, from that runtime's recorded output.
+
 ### Documentation
 
 - Close-out of 0.13: the roadmap and the website mark 0.13 released and
