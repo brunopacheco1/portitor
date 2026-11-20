@@ -440,19 +440,62 @@ async fn unreadable_or_malformed_files_leave_an_empty_catalog() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// The two connector settings without a default (from 0.13).
+const ID: (&str, &str) = ("PORTITOR_PARTICIPANT_ID", "did:web:p.example");
+const URL: (&str, &str) = ("PORTITOR_PUBLIC_URL", "https://p.example");
+
+/// The connector's configuration from [`ID`], [`URL`] and then `more`
+/// (a name given again in `more` wins).
+fn config_with(
+    more: &[(&str, &str)],
+) -> Result<portitor_connector::Config, portitor_connector::ConfigError> {
+    let mut all = vec![ID, URL];
+    all.extend_from_slice(more);
+    portitor_connector::Config::from_vars(portitor_runtime::testing::vars(&all))
+}
+
+/// The rule of every setting: spaces around a value are dropped, and an
+/// empty value means "not set", so the default is used.
+#[test]
+fn an_empty_setting_is_not_set_and_values_are_trimmed() {
+    let read = config_with;
+    let defaults = read(&[]).unwrap();
+    let trimmed = read(&[
+        ("PORTITOR_PARTICIPANT_ID", " did:web:q.example "),
+        ("PORTITOR_DB_FILE", " /data/y.db\n"),
+        ("PORTITOR_DATA_TOKEN_SECONDS", " 60 "),
+        ("PORTITOR_ALLOW_HTTP", " true "),
+    ])
+    .unwrap();
+    assert_eq!(trimmed.participant_id, "did:web:q.example");
+    assert_eq!(trimmed.db_file, std::path::PathBuf::from("/data/y.db"));
+    assert_eq!(trimmed.data_token_seconds, 60);
+    assert!(trimmed.allow_http);
+    let empty = read(&[
+        ("PORTITOR_DATASETS_FILE", ""),
+        ("PORTITOR_DB_FILE", "  "),
+        ("PORTITOR_HARVEST_INTERVAL_SECONDS", ""),
+        ("PORTITOR_DATA_TOKEN_SECONDS", " "),
+        ("PORTITOR_ALLOW_HTTP", ""),
+        ("PORTITOR_POLICY_CREDENTIALS", ""),
+        // a removed name that is empty is not set either
+        ("PORTITOR_DATASETS", ""),
+    ])
+    .unwrap();
+    assert_eq!(empty.datasets_file, None);
+    assert_eq!(empty.db_file, defaults.db_file);
+    assert_eq!(empty.harvest_interval_seconds, 3_600);
+    assert_eq!(empty.data_token_seconds, 3_600);
+    assert!(!empty.allow_http);
+    assert_eq!(empty.credential_types, defaults.credential_types);
+}
+
 #[test]
 fn config_from_variables() {
     use portitor_runtime::testing::vars;
     let file = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/datasets.json");
 
-    // the two settings without a default (0.13), then the ones under test
-    const ID: (&str, &str) = ("PORTITOR_PARTICIPANT_ID", "did:web:p.example");
-    const URL: (&str, &str) = ("PORTITOR_PUBLIC_URL", "https://p.example");
-    let read = |more: &[(&str, &str)]| {
-        let mut all = vec![ID, URL];
-        all.extend_from_slice(more);
-        portitor_connector::Config::from_vars(vars(&all))
-    };
+    let read = config_with;
 
     // the id and the URL are required: nothing is assumed for them
     for (given, missing) in [
@@ -524,37 +567,6 @@ fn config_from_variables() {
         portitor_connector::MAX_SETTING_SECONDS
     );
     assert_eq!(one_year.data_token_seconds, 31_536_000);
-    // the rule of every setting: spaces around a value are dropped, and
-    // an empty value means "not set", so the default is used
-    let trimmed = read(&[
-        ("PORTITOR_PARTICIPANT_ID", " did:web:q.example "),
-        ("PORTITOR_DB_FILE", " /data/y.db\n"),
-        ("PORTITOR_DATA_TOKEN_SECONDS", " 60 "),
-        ("PORTITOR_ALLOW_HTTP", " true "),
-    ])
-    .unwrap();
-    assert_eq!(trimmed.participant_id, "did:web:q.example");
-    assert_eq!(trimmed.db_file, std::path::PathBuf::from("/data/y.db"));
-    assert_eq!(trimmed.data_token_seconds, 60);
-    assert!(trimmed.allow_http);
-    let empty = read(&[
-        ("PORTITOR_DATASETS_FILE", ""),
-        ("PORTITOR_DB_FILE", "  "),
-        ("PORTITOR_HARVEST_INTERVAL_SECONDS", ""),
-        ("PORTITOR_DATA_TOKEN_SECONDS", " "),
-        ("PORTITOR_ALLOW_HTTP", ""),
-        ("PORTITOR_POLICY_CREDENTIALS", ""),
-        // a removed name that is empty is not set either
-        ("PORTITOR_DATASETS", ""),
-    ])
-    .unwrap();
-    assert_eq!(empty.datasets_file, None);
-    assert_eq!(empty.db_file, defaults.db_file);
-    assert_eq!(empty.harvest_interval_seconds, 3_600);
-    assert_eq!(empty.data_token_seconds, 3_600);
-    assert!(!empty.allow_http);
-    assert_eq!(empty.credential_types, defaults.credential_types);
-
     // a token must live at least one second
     assert!(read(&[("PORTITOR_DATA_TOKEN_SECONDS", "0")]).is_err());
 
