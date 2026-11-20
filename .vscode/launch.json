@@ -106,6 +106,7 @@
           "RUST_LOG": "info,portitor_connector=debug,portitor_dsp=debug,portitor_dcp=debug",
           "PORTITOR_BIND": "127.0.0.1:8080",
           "PORTITOR_PUBLIC_URL": "http://127.0.0.1:8080",
+          "PORTITOR_PARTICIPANT_ID": "did:web:localhost%3A8080",
           "PORTITOR_DATASETS_FILE": "tck/datasets.json",
           "PORTITOR_DB_FILE": "target/vscode-tck.db",
           "PORTITOR_TCK_AUTHORIZATION": "manual-test",

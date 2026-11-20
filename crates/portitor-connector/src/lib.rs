@@ -173,6 +173,9 @@ pub enum ConfigError {
     /// A setting that a release removed or renamed is still set
     /// ([`REMOVED_SETTINGS`]).
     Removed(RemovedSetting),
+    /// A required setting is not set (or is empty): its name, and what
+    /// it must hold.
+    Missing(&'static str, &'static str),
     /// A variable has a value that cannot be used.
     Invalid(&'static str, String),
     /// `PORTITOR_POLICY_CREDENTIALS` cannot be used; the text says why.
@@ -183,6 +186,7 @@ impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Removed(setting) => setting.fmt(f),
+            Self::Missing(name, what) => write!(f, "{name}: required ({what})"),
             Self::Invalid(name, value) => write!(f, "{name} has an invalid value {value:?}"),
             Self::PolicyCredentials(why) => f.write_str(why),
         }
@@ -214,7 +218,8 @@ impl std::fmt::Display for StartError {
 impl std::error::Error for StartError {}
 
 impl Config {
-    /// Reads `PORTITOR_PARTICIPANT_ID`, `PORTITOR_PUBLIC_URL`,
+    /// Reads `PORTITOR_PARTICIPANT_ID` and `PORTITOR_PUBLIC_URL` (both
+    /// required: there is no default that is right for anyone),
     /// `PORTITOR_ALLOW_HTTP` (`true` to allow), `PORTITOR_DB_FILE`
     /// (default `portitor.db`), `PORTITOR_DATA_TOKEN_SECONDS` (default
     /// 3600), `PORTITOR_POLICY_CREDENTIALS` (see
@@ -235,17 +240,28 @@ impl Config {
     ///
     /// # Errors
     ///
-    /// A number is not a number, a number of seconds is above
+    /// `PORTITOR_PARTICIPANT_ID` or `PORTITOR_PUBLIC_URL` is not set or
+    /// empty, a number is not a number, a number of seconds is above
     /// [`MAX_SETTING_SECONDS`] (one year), `PORTITOR_DATA_TOKEN_SECONDS` is
     /// 0, `PORTITOR_POLICY_CREDENTIALS` cannot be used, or one of the
     /// [`REMOVED_SETTINGS`] is set.
     pub fn from_vars(var: impl Fn(&str) -> Option<OsString>) -> Result<Self, ConfigError> {
-        // the variable's value as text, or `default` when it is not set
-        let text = |name: &str, default: &str| match var(name) {
-            Some(value) => value.to_string_lossy().into_owned(),
-            None => default.to_owned(),
-        };
         settings::refuse_removed(&var, REMOVED_SETTINGS).map_err(ConfigError::Removed)?;
+        // required, as the identity's and the issuer's id and URL are: a
+        // connector that started with a made-up id or address would
+        // only fail later, in front of a partner
+        let Some(participant_id) = settings::text(&var, "PORTITOR_PARTICIPANT_ID") else {
+            return Err(ConfigError::Missing(
+                "PORTITOR_PARTICIPANT_ID",
+                "the participant's DID, for example did:web:connector.example.com",
+            ));
+        };
+        let Some(public_url) = settings::text(&var, "PORTITOR_PUBLIC_URL") else {
+            return Err(ConfigError::Missing(
+                "PORTITOR_PUBLIC_URL",
+                "the connector's public address, for example https://connector.example.com",
+            ));
+        };
         let data_token_seconds = seconds_var(
             &var,
             "PORTITOR_DATA_TOKEN_SECONDS",
@@ -266,8 +282,8 @@ impl Config {
         let credential_types =
             auth::policy_credentials(&var).map_err(ConfigError::PolicyCredentials)?;
         Ok(Self {
-            participant_id: text("PORTITOR_PARTICIPANT_ID", "did:web:localhost%3A8080"),
-            public_url: text("PORTITOR_PUBLIC_URL", "http://localhost:8080"),
+            participant_id,
+            public_url,
             datasets_file: var("PORTITOR_DATASETS_FILE").map(PathBuf::from),
             harvest_interval_seconds,
             allow_http: settings::is_true(&var, "PORTITOR_ALLOW_HTTP"),

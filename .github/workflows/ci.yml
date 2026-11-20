@@ -77,8 +77,12 @@ jobs:
           docker rm "$id"
           grep -q "BEGIN CERTIFICATE" ca.crt
           # without the DCP settings it refuses to start, and says why (it
-          # starts, and writes its SQLite file in /data, in the Compose demo)
-          if docker run --rm portitor-connector:ci > smoke.log 2>&1; then
+          # starts, and writes its SQLite file in /data, in the Compose demo).
+          # The id and the URL are set: they are required too, and checked first
+          if docker run --rm \
+            -e PORTITOR_PARTICIPANT_ID=did:web:connector.example \
+            -e PORTITOR_PUBLIC_URL=https://connector.example \
+            portitor-connector:ci > smoke.log 2>&1; then
             echo "::error::the connector started without PORTITOR_STS_URL"; exit 1
           fi
           cat smoke.log

@@ -96,8 +96,8 @@ Configuration (environment variables):
 | Variable | Default | Meaning |
 |---|---|---|
 | `PORTITOR_BIND` | `0.0.0.0:8080` | Address to listen on |
-| `PORTITOR_PARTICIPANT_ID` | `did:web:localhost%3A8080` | Participant id (a DID) |
-| `PORTITOR_PUBLIC_URL` | `http://localhost:8080` | Public base URL; the DSP endpoint is this plus `/dsp/2025-1`, the consumer callback address this plus `/dsp/2025-1/callback` |
+| `PORTITOR_PARTICIPANT_ID` | none (**required**) | Participant id (a DID), for example `did:web:connector.example.com`. The connector does not start without it |
+| `PORTITOR_PUBLIC_URL` | none (**required**) | Public base URL, for example `https://connector.example.com`. The connector does not start without it; the DSP endpoint is this plus `/dsp/2025-1`, the consumer callback address this plus `/dsp/2025-1/callback` |
 | `PORTITOR_DATASETS_FILE` | none (empty catalog) | JSON file with the datasets to offer, harvested into a read copy at start and at each run ([ADR 0020](docs/adr/0020-dataset-harvest.md)) |
 | `PORTITOR_HARVEST_INTERVAL_SECONDS` | `3600` | Seconds between two harvest runs; `0` harvests only at start; at most `31536000` (one year) |
 | `PORTITOR_BUNDLE_URL` | none (no SHACL checks) | `https://` URL of the authority's folder of signed schema and vocabulary bundles, one folder per version and `latest.json` ([ADR 0005](docs/adr/0005-schema-and-vocabulary-registry.md)); `http://` only with `PORTITOR_ALLOW_HTTP` |

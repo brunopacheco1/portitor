@@ -992,6 +992,7 @@ build (test-only) also accepts one fixed header instead,
 with the example datasets:
 
 ```sh
+PORTITOR_PARTICIPANT_ID='did:web:localhost%3A8080' PORTITOR_PUBLIC_URL=http://localhost:8080 \
 PORTITOR_DATASETS_FILE=examples/datasets.json PORTITOR_ALLOW_HTTP=true \
 PORTITOR_TCK_AUTHORIZATION=manual-test \
 PORTITOR_DB_FILE=/tmp/portitor-manual.db cargo run -p portitor-connector --features tck

@@ -150,6 +150,7 @@ echo "issuer_peak_rss_kb=$(rss_kb "$ISSUER_PID" VmHWM)"
 if [[ -n ${TCK_CONNECTOR:-} ]]; then
   mkdir -p "$WORK/tck"
   PORTITOR_BIND=$TCK_PROVIDER PORTITOR_PUBLIC_URL=http://$TCK_PROVIDER \
+    PORTITOR_PARTICIPANT_ID='did:web:localhost%3A8080' \
     PORTITOR_MANAGEMENT_BIND=$TCK_MANAGEMENT \
     PORTITOR_DATASETS_FILE=tck/datasets.json PORTITOR_DB_FILE="$WORK/tck/connector.db" \
     PORTITOR_TCK_AUTHORIZATION=$TCK_HEADER \

@@ -119,8 +119,8 @@ All configuration is by environment variable. The full table is in the
 
 | Variable | Production value |
 |---|---|
-| `PORTITOR_PARTICIPANT_ID` | your DID |
-| `PORTITOR_PUBLIC_URL` | your public `https://` URL |
+| `PORTITOR_PARTICIPANT_ID` | **required**: your DID |
+| `PORTITOR_PUBLIC_URL` | **required**: your public `https://` URL |
 | `PORTITOR_DATASETS_FILE` | path of the mounted datasets file, harvested at start and at each run |
 | `PORTITOR_HARVEST_INTERVAL_SECONDS` | leave the default, `3600` (one hour); `0` harvests only at start. A value that is not a whole number, or is above `31536000` (one year), stops the start |
 | `PORTITOR_BUNDLE_URL` | with a bundle: the `https://` URL of the authority's bundles folder (one folder per version, and `latest.json`), for example `https://issuer.example.com/bundles/`; plain `http://` only with `PORTITOR_ALLOW_HTTP=true` |
