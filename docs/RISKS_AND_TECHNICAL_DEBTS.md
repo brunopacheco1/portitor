@@ -542,7 +542,7 @@ are closed.
 - **What.** In the 0.9 measurements a connector at saturation served 8%
   fewer DSP requests per second than 0.8.0 with export off, 12% fewer
   with every request traced and 18% fewer with one trace in ten
-  (DEPLOYING, "Traces and metrics"); runs vary by up to 15%. Sampling
+  (OPERATING, "Traces and metrics"); runs vary by up to 15%. Sampling
   lowers the data sent, not the cost in the process.
 - **Why it matters.** A busy connector with full tracing reaches its
   limit sooner.
@@ -798,7 +798,7 @@ are closed.
   retired keys (`PORTITOR_IDENTITY_RETIRED_KEY_FILES`,
   `PORTITOR_ISSUER_RETIRED_KEY_FILES`), so what the old key signed
   keeps verifying and the old private key can be destroyed at once
-  (ADR 0015 and ADR 0018, "Amended in 0.11: retired keys"; DEPLOYING,
+  (ADR 0015 and ADR 0018, "Amended in 0.11: retired keys"; OPERATING,
   "Rotating a key").
 - **Still open.** Key custody: the private key is a PEM file. The
   bundle key cannot be rotated (one key, TD-16). With Gaia-X, each key
@@ -1006,7 +1006,7 @@ are closed.
 
 - **What.** An older version refuses a database a newer one migrated;
   going back means restoring the backup, and data written since is lost
-  (DEPLOYING, "Upgrade and rollback").
+  (OPERATING, "Upgrade and rollback").
 - **Current state: Accepted.** Confirmed at the 0.13 freeze
   (maintainer, 2026-11-20): migrations stay forward only in 1.x
   ([STABILITY](STABILITY.md#database)).
@@ -1033,7 +1033,7 @@ are closed.
 - **What.** Portitor exports traces and metrics over OTLP/HTTP with
   Protocol Buffers only. Logs stay JSON lines on stdout, there is no
   gRPC exporter, and `OTEL_EXPORTER_OTLP_COMPRESSION` only gets an SDK
-  warning (ADR 0023; DEPLOYING, "Traces and metrics").
+  warning (ADR 0023; OPERATING, "Traces and metrics").
 - **Why it matters.** Operators whose platform takes only OTLP logs or
   gRPC need a collector in between.
 - **Current state: Open.** Kept out to save binary size and
@@ -1191,7 +1191,7 @@ entries are in [CHANGELOG](../CHANGELOG.md) under the release named.
 | <a id="td-27"></a>TD-27 | The domain crates' I/O check named too few crates | 0.6 (2026-11-14) | [ADR 0004](adr/0004-hexagonal-architecture.md), amended; `.github/workflows/ci.yml` |
 | <a id="td-30"></a>TD-30 | The outbox resent a message the counter-party refused | 0.11 | [ADR 0007](adr/0007-outbox-and-proof-of-delivery.md), amended in 0.11 |
 | <a id="td-32"></a>TD-32 | Policy terms that were not understood were dropped without an error | 0.12 | [ADR 0009](adr/0009-minimal-odrl-policies.md), amended 2026-11-18 |
-| <a id="td-33"></a>TD-33 | The issuer's metadata did not pass the DCP JSON schema | 0.12 | [ADR 0018](adr/0018-issuer-component.md), amended 2026-11-18; DEPLOYING, "From 0.11 to 0.12" |
+| <a id="td-33"></a>TD-33 | The issuer's metadata did not pass the DCP JSON schema | 0.12 | [ADR 0018](adr/0018-issuer-component.md), amended 2026-11-18; OPERATING, "From 0.11 to 0.12" |
 | <a id="td-34"></a>TD-34 | A repeated transfer request started a second transfer | 0.12 | [ADR 0013](adr/0013-transfer-and-data-plane.md), amended 2026-11-18 |
 | <a id="td-36"></a>TD-36 | DSP details: who may terminate, 401 or 404, agreement timestamp, `consumerPid` check, catalog pages | 0.12; the answer limit in 0.13 | [ADR 0006](adr/0006-negotiation-storage.md) and [ADR 0016](adr/0016-dsp-caller-authentication.md), amended 2026-11-18; CHANGELOG 0.13.0 |
 | <a id="td-37"></a>TD-37 | DCP details: `token` claim required, presentations as JWT strings only, no `/.well-known/dspace-trust` | 0.12 | [ADR 0016](adr/0016-dsp-caller-authentication.md), amended 2026-11-18 |

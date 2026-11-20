@@ -21,7 +21,7 @@
 //! each with a small, operator-controlled set of values: the bundle
 //! version, chosen by the dataspace's authority, and the HTTP measures'
 //! route templates, status codes and, for our own services only, server
-//! addresses. The list is repeated in `docs/DEPLOYING.md`; keep both the
+//! addresses. The list is repeated in `docs/OPERATING.md`; keep both the
 //! same.
 //!
 //! When export is off, the instruments come from OpenTelemetry's global

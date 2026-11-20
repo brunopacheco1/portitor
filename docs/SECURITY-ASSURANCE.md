@@ -327,7 +327,7 @@ happened in (`crates/portitor-runtime/src/panics.rs`):
 
 Every case is one log line at ERROR and a count
 (`portitor.http.request.panicked`, `portitor.task.panicked`;
-DEPLOYING, "Traces and metrics"). The panic's message is never logged
+OPERATING, "Traces and metrics"). The panic's message is never logged
 or sent, only the place in the code: the message can quote the value
 that caused it, which may come from a request.
 

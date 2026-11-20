@@ -8,7 +8,7 @@
 # MembershipCredentials come from its portitor-issuer; each participant
 # asks for its own through its identity's API. The authority also serves
 # the HealthDCAT-AP demo bundle (scripts/demo-bundle.sh), which the Portitor
-# connector pins: its datasets (config/portitor-datasets.json) are checked
+# connector follows: its datasets (config/portitor-datasets.json) are checked
 # against it and offered with HealthDCAT-AP metadata.
 #
 # Gaia-X compliance (ADRs 0021 and 0022) is part of the run: a local

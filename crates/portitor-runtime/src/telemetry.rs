@@ -13,7 +13,7 @@
 //!   `OTEL_EXPORTER_OTLP_ENDPOINT` for both, or
 //!   `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `..._METRICS_ENDPOINT` for
 //!   one. The other `OTEL_*` variables the SDK reads are listed in
-//!   `docs/DEPLOYING.md`. When traces are exported, each JSON log line
+//!   `docs/OPERATING.md`. When traces are exported, each JSON log line
 //!   written inside a span also carries that span's `trace_id`.
 //!
 //! All OpenTelemetry code of Portitor lives in this module and its two

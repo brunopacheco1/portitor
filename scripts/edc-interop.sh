@@ -14,7 +14,7 @@
 #     certificates (scripts/gaiax-lib.sh), each participant's Gaia-X files,
 #     the key set of the tokens for the IdentityHub's Identity API, and the
 #     HealthDCAT-AP demo bundle (scripts/demo-bundle.sh, with the issuer
-#     image), which the issuer serves and the Portitor connector pins.
+#     image), which the issuer serves and the Portitor connector follows.
 #  2. Compose up; the EDC IdentityHub gets a participant with the key
 #     made in step 1, the EDC control plane an asset and an offer.
 #  3. The issuer registers both participants. Each identity asks the

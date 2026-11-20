@@ -109,9 +109,9 @@ CI runs everything with Docker. The Podman runs are done by hand:
   the two interop tests `python3` with `cryptography`. Homebrew's
   Python refuses `pip install` outside a virtual environment (PEP 668):
   `python3 -m venv .venv && .venv/bin/pip install cryptography`, then
-  put `.venv/bin` first in `PATH`. The scripts need OpenSSL 3. On macOS,
-  `/usr/bin/openssl` is LibreSSL: `brew install openssl@3` and put its
-  `bin` first in `PATH`.
+  put `.venv/bin` first in `PATH`. The scripts were run with OpenSSL 3
+  only. On macOS, `/usr/bin/openssl` is LibreSSL: `brew install openssl@3`
+  and put its `bin` first in `PATH`.
   `scripts/bench.sh` and `scripts/measure.sh` run on Linux only (they
   read `/proc`).
 - **Linux binaries for the machine's architecture.** The `Dockerfile`
