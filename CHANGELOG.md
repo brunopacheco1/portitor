@@ -146,6 +146,15 @@ Interoperability and performance. Read "From 0.11 to 0.12" in
   lines, simpler types and macros, a better name for `Negotiator`, and a
   Helm chart (TD-42, TD-39, R-01).
 
+### Dependencies
+
+- `rusqlite` 0.42.0 to 0.43.0 (SQLite itself is unchanged). An empty
+  or comment-only SQL text is now an error in `rusqlite`; Portitor
+  sends none. The change was read and the cargo-vet exemption moved to
+  0.43.0 with a note.
+- CI actions: `actions/setup-java` 6.3.0, `taiki-e/install-action`
+  2.90.5.
+
 ## [0.11.0] - 2026-11-17
 
 ### Security
