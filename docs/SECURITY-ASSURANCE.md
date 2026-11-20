@@ -378,7 +378,9 @@ one connection.
   old key retired leaves no verification gap (TESTING, "Unit and
   integration tests").
 - **Static analysis:** Clippy pedantic with warnings as errors; CodeQL and
-  SonarQube Cloud quality gate on every pull request.
+  SonarQube Cloud quality gate on every pull request. A CodeQL finding
+  that is not on the list of accepted findings fails the CodeQL job, on
+  a pull request and on `main` ([TESTING](TESTING.md#codeql)).
 - **Supply chain:** pinned workflow actions, least-privilege workflow
   tokens, REUSE compliance; OpenSSF Scorecard; cargo-vet, so a new or
   bumped crate needs a recorded audit or exemption before it merges.

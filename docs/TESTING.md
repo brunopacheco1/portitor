@@ -32,7 +32,7 @@ All commands run from the repository root. Deploying for real is in
 | The same in Docker Compose | `scripts/demo-compose.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
 | The container scripts with Podman instead of Docker | `CONTAINER_ENGINE=podman` and the script, see [below](#docker-or-podman) | no: by hand, last run noted there |
 | Images build and start | `docker build --target portitor-connector` / `--target portitor-identity` / `--target portitor-issuer`; the connector and the issuer refuse to start without their settings, the identity serves its DID document | every PR that changes more than prose (`CI`) |
-| Static analysis | CodeQL, OpenSSF Scorecard, ORT | CodeQL: every PR; Scorecard: on `main`; ORT: when a manifest changes |
+| Static analysis | CodeQL (see [below](#codeql)), OpenSSF Scorecard, ORT | CodeQL: every PR, every push to `main` and weekly; a finding that is not on the accepted list fails the job (`CodeQL`). Scorecard: on `main`; ORT: when a manifest changes |
 
 "Prose" is the short list of paths that no job reads; which jobs a
 change needs is decided by `scripts/ci_changes.sh`, and the checks a
@@ -1152,6 +1152,47 @@ parsers and targets is in
 [SECURITY-ASSURANCE](SECURITY-ASSURANCE.md#parsers-and-fuzz-targets). In CI, ClusterFuzzLite fuzzes every pull request briefly
 (`cflite_pr.yml`) and runs longer each week (`cflite_batch.yml`). A crash
 is a bug: add the input that caused it as a regression test.
+
+## CodeQL
+
+The workflow `CodeQL` (`.github/workflows/codeql.yml`) analyses the Rust
+code and the GitHub Actions workflows with GitHub's default queries, on
+every pull request, on every push to `main` and once a week. Rust is
+analysed without a build (`build-mode: none`).
+
+The analysis itself succeeds whenever it ran, with or without findings.
+So its last step runs `scripts/codeql-gate.sh <rust|actions> <folder with .sarif>`,
+which fails the job on every result that is not in
+`.github/codeql/accepted-findings.json`, whatever its severity. The list
+names a rule, a file, how many findings of that rule the file may have,
+and the reason. One finding more than the count fails. A count that is
+higher than what was found is only reported: a pull request run may
+hold fewer findings than a run on `main`.
+
+The accepted list today: six findings of the rule `rust/unsafe-deserialization`, entered as proposed false positives with their reasons; the maintainer has not yet decided whether they stay on the list or the query is left out of the analysis.
+
+What to do with a finding is in
+[CONTRIBUTING](../CONTRIBUTING.md#pull-requests).
+
+To run it by hand, download the CodeQL bundle from
+<https://github.com/github/codeql-action/releases>, unpack it, and from
+the repository root:
+
+```sh
+codeql database create codeql-db --language=rust --build-mode=none
+mkdir -p codeql-out
+codeql database analyze codeql-db \
+  codeql/rust-queries:codeql-suites/rust-code-scanning.qls \
+  --format=sarif-latest --output=codeql-out/rust.sarif
+scripts/codeql-gate.sh rust codeql-out
+```
+
+The script needs `jq`. It ends with 0 when nothing new was found, 1 on
+a finding that is not accepted, 2 on a wrong call or a missing file.
+Do not commit `codeql-db` or `codeql-out`.
+
+Last local run: CodeQL bundle 2.27.5, Rust: 6 findings, all
+on the accepted list.
 
 ## Manual tests
 

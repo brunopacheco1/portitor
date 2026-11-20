@@ -62,6 +62,8 @@ and no route changed. Two checks are stricter; what to do:
   DID given as `counterPartyId` cannot be read with this call. No new
   route, member or status code.
   `POST /v1/catalog/dataset/request` is unchanged.
+- Tests: the issuer's bundle tests name their scratch folders by process
+  id and a counter, so two tests, or two runs at once, never share one.
 - The code of the two catalog calls is split into smaller modules
   (`management/catalog/`, `catalog_reader/`). No change in behaviour;
   the OpenAPI description is the same.
@@ -94,7 +96,7 @@ and no route changed. Two checks are stricter; what to do:
 
 - Release: the workflow refuses a signed tag whose commit is not on `main`.
 - CI: `SONAR_TOKEN` is given to the scan step only, not to the build and tests of the dependencies; checkouts no longer keep the workflow token in `.git/config` (except the tag check, which fetches).
-- CI: a CodeQL finding now fails the CodeQL job.
+- CI: a CodeQL finding now fails the CodeQL job, on a pull request, on `main` and in the weekly run: `scripts/codeql-gate.sh` fails on every result that is not in `.github/codeql/accepted-findings.json` (TESTING, "CodeQL"; CONTRIBUTING, "Pull requests").
 
 ### Documentation
 

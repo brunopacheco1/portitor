@@ -71,7 +71,12 @@ The build enforces the style, so a pull request that breaks it fails:
    cargo-vet (below).
 5. Describe what changed and why, and add a line to `CHANGELOG.md` under
    *Unreleased*.
-6. Commits must be signed, and `main` only changes through pull requests
+6. A CodeQL finding fails the `CodeQL` job
+   ([TESTING](docs/TESTING.md#codeql)): fix it. A false positive goes,
+   with its reason, into `.github/codeql/accepted-findings.json` in the
+   same pull request, and a maintainer dismisses the alert on GitHub
+   with the same reason.
+7. Commits must be signed, and `main` only changes through pull requests
    that pass the required checks, are up to date with `main`, and are
    approved by a code owner (`.github/CODEOWNERS`).
 
