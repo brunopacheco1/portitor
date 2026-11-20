@@ -957,6 +957,8 @@ mod tests {
             error.starts_with("PORTITOR_TRUSTED_ISSUERS has an item that is too long: item 2 "),
             "{error}"
         );
+        // no part of the item: it may be a secret pasted by mistake
+        assert!(!error.contains("aaa"), "{error}");
         let entry = format!("{}=org.example:x:read", "T".repeat(5000));
         let policy = vars(&[("PORTITOR_POLICY_CREDENTIALS", entry.as_str())]);
         let error = policy_credentials(policy).unwrap_err();

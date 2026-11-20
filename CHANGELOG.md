@@ -40,8 +40,9 @@ and no route changed. Two checks are stricter; what to do:
 - **Behaviour change, all three: an item of a list setting may be at
   most 4096 bytes.** This holds for every comma-separated `PORTITOR_*`
   setting (DIDs, DCP scopes, credential types, file paths). A service
-  with a longer item does not start; the error names the setting and
-  the item.
+  with a longer item does not start; the error names the setting, the
+  item's position in the list and its length. It shows no part of the
+  item, which may be a secret pasted by mistake.
 - **Behaviour change, connector management API: the catalog must be the
   provider's own.** `POST /v1/catalog/request` answers 502 when the
   provider's catalog has no `participantId` (DSP 2025-1 requires it;
