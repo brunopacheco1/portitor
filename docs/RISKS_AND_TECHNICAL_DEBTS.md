@@ -100,8 +100,8 @@ checks this file:
 | [R-45](#r-45) | No request limit per partner | Security | 0.11 threat model review (F-10, 2026-11-17) | Open | — |
 | [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | 0.7 (maintainer, 2026-11-14) | Open | research, with TD-03 |
 | [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | research; code 1.5 |
-| [TD-03](#td-03) | A provider in several data spaces, each with its own rules | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | research, before the 0.13 freeze |
-| [TD-04](#td-04) | User to system authentication and authorisation, governed per data space | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | research before the 0.13 freeze; code 1.5 |
+| [TD-03](#td-03) | A provider in several data spaces, each with its own rules | Technical debt | 0.8 (maintainer, 2026-11-15) | Accepted ([ADR 0024](adr/0024-several-data-spaces.md), 2026-11-20) | profiles in one connector: after 1.0 |
+| [TD-04](#td-04) | User to system authentication and authorisation, governed per data space | Technical debt | 0.8 (maintainer, 2026-11-15) | Accepted ([ADR 0025](adr/0025-users-and-roles.md), 2026-11-20) | code 1.5 |
 | [TD-05](#td-05) | Key custody and key rotation | Technical debt | 0.5 (ADR 0015); 0.7 close-out (maintainer, 2026-11-15) | Open | two keys listed done in 0.11; 1.4 (OpenBao) |
 | [TD-06](#td-06) | Status lists are not cached in the connector's DCP verifier | Technical debt | 0.6 (maintainer, 2026-11-14) | Addressed | done in 0.11 |
 | [TD-07](#td-07) | STS tokens and presentations are not cached | Technical debt | 0.5 (ADR 0016) | Open | 1.4, if 0.11 measurements need it |
@@ -116,7 +116,7 @@ checks this file:
 | [TD-16](#td-16) | One harvest source; no data space registry; other catalogs not checked; no bundle expiry or bundle key rotation | Technical debt | 0.7 (ADR 0005, ADR 0020, 2026-11-14) | Open | Later |
 | [TD-17](#td-17) | The data plane runs inside the connector process | Technical debt | 0.0 (maintainer, 2026-11-11) | Accepted | when Signaling 1.0 is released |
 | [TD-18](#td-18) | Operations: no metrics, traces or readiness check | Technical debt | 0.1 (ARCHITECTURE principle 11) | Addressed | done in 0.9 |
-| [TD-19](#td-19) | No TLS inside the services | Technical debt | 0.1 (SECURITY-ASSURANCE) | Open | 0.13 (decision) |
+| [TD-19](#td-19) | No TLS inside the services | Technical debt | 0.1 (SECURITY-ASSURANCE) | Accepted ([ADR 0026](adr/0026-tls-termination.md), 2026-11-20) | — |
 | [TD-20](#td-20) | A holder must delete a revoked credential by hand after a reissue | Technical debt | 0.6 (DEPLOYING, 2026-11-14) | Open | 1.4 |
 | [TD-21](#td-21) | Gaia-X beyond 0.8 | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | Later |
 | [TD-22](#td-22) | Migrations run forward only; a rollback needs the backup | Technical debt | 0.3 (DEPLOYING) | Accepted | — |
@@ -949,7 +949,8 @@ Standards check and an ADR before any code.
 ### TD-03 A provider in several data spaces, each with its own rules
 
 Raised by the maintainer, 2026-11-15 (to be investigated). Status:
-**Open**; research ADR before the 0.13 freeze (ROADMAP 0.11).
+**Accepted** for 1.0 (maintainer, 2026-11-20,
+[ADR 0024](adr/0024-several-data-spaces.md)); see "Decided" below.
 
 A data provider may belong to several data spaces at once: long-lived
 ones that may or may not interoperate with each other (for example EHDS
@@ -977,18 +978,29 @@ the catalog it asks); how EHDS and other data spaces publish their
 schemas; how short-lived data spaces are joined and left. Standards
 check and an ADR before any code.
 
-Next: [ADR 0024](adr/0024-several-data-spaces.md) (Proposed, 2026-11-17)
-compares the options with what EDC, Simpl-Open, DSP, DCP and Gaia-X do;
-the maintainer decides before the 0.13 freeze. It also covers the
-0.11 threat model finding F-08: today any trusted issuer is trusted for
-every credential type.
+[ADR 0024](adr/0024-several-data-spaces.md) compares the options with
+what EDC, Simpl-Open, DSP, DCP and Gaia-X do. It also covers the 0.11
+threat model finding F-08: today any trusted issuer is trusted for every
+credential type.
+
+Decided (maintainer, 2026-11-20; ADR 0024 Accepted): 1.0 is one
+connector per data space. One DID per data space is the documented
+default; a shared DID is allowed, and DEPLOYING names what it discloses
+([Two data spaces](DEPLOYING.md#two-data-spaces)). The setup was run by
+hand on 2026-11-20, with a shared identity and with one identity per
+data space (`scripts/two-data-spaces.sh`).
+
+What remains, after 1.0: one connector with several data space profiles
+(option (b)), behind its own ADR; and trusted issuers by credential type
+(F-08), which is additive. No release is named yet for either.
 
 <a id="td-04"></a>
 ### TD-04 User to system authentication and authorisation, governed per data space
 
 Raised by the maintainer, 2026-11-15 (to be investigated). Status:
-**Open**; research ADR before the 0.13 freeze (ROADMAP 0.11), code in
-1.5.
+**Accepted** for 1.0 (maintainer, 2026-11-20,
+[ADR 0025](adr/0025-users-and-roles.md)); code in 1.5. See "Decided"
+below.
 
 Today every credential is system to system: held by a participant (an
 organisation with one DID) and checked between connectors (see "Who
@@ -1017,6 +1029,20 @@ only checks the transfer's bearer token. To investigate:
   per data space, not per connector.
 
 Linked to [TD-02](#td-02). Standards check and an ADR before any code.
+
+Decided (maintainer, 2026-11-20; ADR 0025 Accepted): 1.0 stays system
+to system. Users stop at the organisation's own reverse proxy
+([DEPLOYING, users and roles](DEPLOYING.md#users-and-roles)), and the
+provider's data plane does not identify persons in 1.x. Done at the
+0.13 freeze: the management API key and the data plane token are
+stated as opaque, HTTP 403 is documented as reserved on the management
+routes, and `dataAddress` stays optional
+([STABILITY](STABILITY.md)).
+
+What remains: in 1.5, access tokens of the organisation's identity
+provider on the management APIs, with EDC's scope names, behind its own
+code ADR (option B); the data pull audit line in 1.1 or 1.2
+([TD-31](#td-31)).
 
 <a id="td-05"></a>
 ### TD-05 Key custody and key rotation
@@ -1242,6 +1268,9 @@ certificate and compliance run at each key change (ADR 0021).
   over HTTP before 1.0 if it is not expensive. ROADMAP 0.13: estimate
   it first, with the state of the Signaling specification (R-06); build
   it if the estimate is small, otherwise state it as not in 1.0.
+- **Decision (maintainer, 2026-11-20).** Not in 1.0: the work is
+  large, and it can be added later without a breaking change.
+  [STABILITY](STABILITY.md#what-10-does-not-do) says so.
 
 <a id="td-18"></a>
 ### TD-18 Operations: no metrics, traces or readiness check
@@ -1266,10 +1295,12 @@ certificate and compliance run at each key change (ADR 0021).
 - **What.** The services speak plain HTTP; operators run them behind a
   TLS-terminating proxy. The management ports must stay on a private
   network (SECURITY-ASSURANCE, DEPLOYING).
-- **Current state: Open.** "Not on the roadmap yet"
-  (SECURITY-ASSURANCE).
-- **Next.** ROADMAP 0.13: an ADR decides whether it stays the
-  operator's job.
+- **Current state: Accepted** (maintainer, 2026-11-20,
+  [ADR 0026](adr/0026-tls-termination.md)): TLS stays the operator's
+  job. The services speak plain HTTP behind a TLS-terminating reverse
+  proxy; the management ports stay on a private network.
+- **Next.** None. Optional TLS in the services would be additive; it
+  is not planned.
 
 <a id="td-20"></a>
 ### TD-20 A holder must delete a revoked credential by hand after a reissue
@@ -1305,8 +1336,11 @@ certificate and compliance run at each key change (ADR 0021).
   going back means restoring the backup, and data written since is lost
   (DEPLOYING, "Upgrade and rollback").
 - **Current state: Accepted** (DEPLOYING, since 0.3; each upgrade note
-  says which database moves).
-- **Next.** Revisit at the 0.13 API and config freeze.
+  says which database moves). Confirmed by the maintainer at the 0.13
+  freeze (2026-11-20): migrations stay forward only in 1.x
+  ([STABILITY](STABILITY.md#database), DEPLOYING "Upgrade and
+  rollback").
+- **Next.** None.
 
 <a id="td-23"></a>
 ### TD-23 ADRs 0021 and 0022 were built but still Proposed
@@ -1555,6 +1589,9 @@ certificate and compliance run at each key change (ADR 0021).
   expensive.
 - **Next.** ROADMAP 0.13, before the API freeze: estimate it first;
   build it if the estimate is small, otherwise state it as not in 1.0.
+- **Decision (maintainer, 2026-11-20).** Not in 1.0: the work is
+  large, and it can be added later without a breaking change.
+  [STABILITY](STABILITY.md#what-10-does-not-do) says so.
 
 <a id="td-36"></a>
 ### TD-36 DSP details: who may terminate, 401 or 404, agreement timestamp, `consumerPid` check, no catalog pages

@@ -98,7 +98,9 @@ system to system (see "Who holds the credentials" below). Gaia-X is
 optional: the compliance service (GXDCH), the GXDCH notary the operator
 asks once for the registration number credential, and the certificate
 authority that certifies the identity key. One Portitor serves one
-dataspace today ([TD-03](RISKS_AND_TECHNICAL_DEBTS.md#td-03)).
+dataspace: a participant in two data spaces runs one connector per
+data space ([ADR 0024](adr/0024-several-data-spaces.md),
+[TD-03](RISKS_AND_TECHNICAL_DEBTS.md#td-03)).
 
 ![C1 System context](diagrams/c1-system-context.drawio.svg)
 
@@ -291,8 +293,11 @@ Portitor does not identify the people or applications inside an
 organisation (user to system). The operator's management APIs are
 protected by an API key, and the data plane checks only the transfer's
 bearer token: whoever in the consumer's organisation holds it gets the
-data. How a consumer's users and applications prove who they are is
-open, listed as technical debt in
+data. This is decided for 1.x ([ADR 0025](adr/0025-users-and-roles.md),
+accepted 2026-11-20): users stop at the organisation's own reverse
+proxy, and the provider's data plane does not know persons. What the
+data plane checks again about the participant on each pull is open,
+listed as technical debt in
 [RISKS_AND_TECHNICAL_DEBTS](RISKS_AND_TECHNICAL_DEBTS.md#td-02) ("Who
 calls the data plane, and with which credentials", TD-02; and TD-04, user
 to system authentication).

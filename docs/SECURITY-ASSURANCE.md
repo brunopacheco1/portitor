@@ -79,8 +79,9 @@ dataspace participants over HTTPS.
 
 **Users cannot expect (out of scope in 0.x):**
 - Production readiness: Portitor is a prototype until 1.0.
-- TLS termination inside the services (not on the roadmap yet); run them behind a
-  TLS-terminating proxy.
+- TLS termination inside the services: it stays the operator's job
+  ([ADR 0026](adr/0026-tls-termination.md), 2026-11-20). Run them behind a
+  TLS-terminating proxy, with the management ports on a private network.
 - Multi-instance safety: negotiations are kept in one SQLite file per
   process (ADR 0006); several replicas need the PostgreSQL adapter
   *(planned)*.
