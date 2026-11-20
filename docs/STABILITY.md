@@ -100,6 +100,8 @@ POST /v1/transfers/{consumerPid}/completion
 POST /v1/transfers/{consumerPid}/termination
 GET /v1/harvest-jobs
 GET /v1/harvest-jobs/{id}
+POST /v1/catalog/request
+POST /v1/catalog/dataset/request
 ```
 
 ### portitor-identity, public port

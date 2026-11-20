@@ -47,7 +47,7 @@ use common::{NoSender, PROVIDER, authenticating};
 /// management port" in `docs/STABILITY.md`, then set this to `false`.
 /// From then on a new management route fails the test until it is
 /// listed, as on the other ports.
-const MANAGEMENT_ROUTES_MAY_BE_UNLISTED: bool = true;
+const MANAGEMENT_ROUTES_MAY_BE_UNLISTED: bool = false;
 
 /// Names the code holds that are no settings of a release build.
 const NOT_FROZEN: &[&str] = &[
