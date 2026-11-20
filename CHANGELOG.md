@@ -12,6 +12,24 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Changed
+
+- **Behaviour, connector as provider: a transfer request sent at once
+  after the agreement is no longer refused** (TD-44; maintainer,
+  2026-11-20; ADR 0007 amended). A transfer request from the
+  agreement's consumer that arrives while the finalization event is
+  still on its way (sent, its acknowledgement not yet recorded) proves
+  that the event arrived: the negotiation is recorded as `FINALIZED`
+  and the request is checked as any other. Before, it got HTTP 400 and
+  the consumer's transfer ended `TERMINATED` (2 to 4 times in 6,000 to
+  10,000 transfers in the 0.12 benchmark). An agreement of a
+  negotiation in any other state, or of another consumer, is refused as
+  before. No new migration: the lookup uses the index of migration 10.
+- Connector as provider: a transfer request refused because it names no
+  finalized agreement of the caller is now logged, `transfer request is
+  refused; answered 400` (INFO). The line names neither the agreement
+  nor the caller.
+
 ### Documentation
 
 - Close-out of 0.12: the roadmap and the website mark 0.12 released and

@@ -471,6 +471,33 @@ impl Agreements for AnyAgreements {
     fn finalized(&self, agreement_id: &str) -> Result<Option<Agreement>, StoreError> {
         self.0.finalized(agreement_id)
     }
+    fn negotiation_of(&self, agreement_id: &str) -> Result<Option<Negotiation>, StoreError> {
+        self.0.negotiation_of(agreement_id)
+    }
+    fn replace_negotiation_if(
+        &self,
+        negotiation: &Negotiation,
+        expected: u64,
+    ) -> Result<bool, StoreError> {
+        // a transfer request settled the finalization event (ADR 0007,
+        // amended in 0.13): the state change is reported as for every
+        // other write of a negotiation. Read first: see the comment above
+        // `impl NegotiationStore`. The read is by agreement id, the only
+        // read this port has; a negotiation keeps its agreement.
+        let previous = match &negotiation.agreement {
+            Some(agreement) => self.0.negotiation_of(&agreement.id)?,
+            None => None,
+        };
+        let replaced = self.0.replace_negotiation_if(negotiation, expected)?;
+        if replaced
+            && let Some(previous) = previous
+            && previous.provider_pid == negotiation.provider_pid
+            && previous.version == expected
+        {
+            saved_as_provider(negotiation, Some(previous.state));
+        }
+        Ok(replaced)
+    }
 }
 
 impl DataFlows for AnyDataFlows {

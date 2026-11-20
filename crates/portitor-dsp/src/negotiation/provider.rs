@@ -698,6 +698,27 @@ fn apply_sent(negotiation: &mut Negotiation, sent: &Outgoing) -> Result<(), Tran
     Ok(())
 }
 
+/// The negotiation as it is once its pending finalization event counts as
+/// delivered: `FINALIZED`, nothing pending. `None` when no finalization
+/// event is on its way (any other state, or another pending message).
+///
+/// The transfer provider uses it (ADR 0007, amended in 0.13): a transfer
+/// request under this negotiation's agreement, from its consumer, that
+/// arrives before the acknowledgement of our finalization event is
+/// recorded is proof of delivery, as the consumer's next negotiation
+/// message is in [`receive`]. The same step applies the message here:
+/// [`apply_sent`].
+#[must_use]
+pub fn finalization_proved(negotiation: &Negotiation) -> Option<Negotiation> {
+    let sent = negotiation.pending.as_ref()?;
+    if sent.transition != Transition::Finalize {
+        return None;
+    }
+    let mut proved = negotiation.clone();
+    apply_sent(&mut proved, sent).ok()?;
+    (proved.state == NegotiationState::Finalized).then_some(proved)
+}
+
 /// Applies a consumer's message to `n`. If it does not fit the current
 /// state but fits the state our pending message leads to, the consumer has
 /// received that message (it could not have sent this one otherwise), so

@@ -695,3 +695,103 @@ fn the_parties_an_offer_names_are_checked_and_kept() {
         .unwrap_err();
     assert!(reason(&failure).contains("the offer's assigner is not the provider"));
 }
+
+/// A negotiation of the default policy, taken to `VERIFIED` with the
+/// finalization event on its way. Returns its id and that event.
+fn verified_with_finalization_on_its_way(
+    p: &Service<'_, AgreeToCatalogOffers>,
+) -> (String, Outgoing) {
+    let (ack, agreement) = p
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap();
+    let pid = ack.provider_pid;
+    p.delivered(&agreement.unwrap()).unwrap();
+    let (_, finalization) = p
+        .verify(&pid, &verification(&pid), "did:web:consumer")
+        .unwrap();
+    (pid, finalization.unwrap())
+}
+
+/// ADR 0007, amended in 0.13 (TD-44): only a pending finalization event
+/// can be taken as delivered by a transfer request.
+#[test]
+fn only_a_pending_finalization_event_can_be_proved_by_a_transfer_request() {
+    let store = Store::default();
+    let p = service(&store, AgreeToCatalogOffers);
+
+    // REQUESTED, the agreement on its way: not a finalization
+    let (ack, agreement) = p
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap();
+    let pid = ack.provider_pid;
+    assert_eq!(finalization_proved(&store.0.borrow()[&pid]), None);
+
+    // AGREED, nothing on its way
+    p.delivered(&agreement.unwrap()).unwrap();
+    assert_eq!(store.0.borrow()[&pid].state, NegotiationState::Agreed);
+    assert_eq!(finalization_proved(&store.0.borrow()[&pid]), None);
+
+    // VERIFIED, the finalization event on its way
+    let (_, finalization) = p
+        .verify(&pid, &verification(&pid), "did:web:consumer")
+        .unwrap();
+    let verified = store.0.borrow()[&pid].clone();
+    assert_eq!(verified.state, NegotiationState::Verified);
+    let proved = finalization_proved(&verified).unwrap();
+    assert_eq!(proved.state, NegotiationState::Finalized);
+    assert_eq!(proved.pending, None);
+    assert_eq!(proved.agreement, verified.agreement);
+
+    // VERIFIED, but the provider is ending the negotiation
+    let ending = p.abort(&finalization.unwrap(), "unreachable").unwrap();
+    assert_eq!(ending.unwrap().transition, Transition::Terminate);
+    assert_eq!(finalization_proved(&store.0.borrow()[&pid]), None);
+
+    // TERMINATED and FINALIZED: nothing is pending
+    p.terminate(&pid, &termination(&pid), "did:web:consumer")
+        .unwrap();
+    assert_eq!(store.0.borrow()[&pid].state, NegotiationState::Terminated);
+    assert_eq!(finalization_proved(&store.0.borrow()[&pid]), None);
+    assert_eq!(finalization_proved(&proved), None);
+}
+
+/// After a transfer request settled the finalization event, the outbox
+/// still holds that event: its acknowledgement, or its failure, arrives
+/// later and must change nothing.
+#[test]
+fn a_late_acknowledgement_or_failure_of_a_settled_finalization_changes_nothing() {
+    let store = Store::default();
+    let p = service(&store, AgreeToCatalogOffers);
+    let (pid, finalization) = verified_with_finalization_on_its_way(&p);
+
+    // what the transfer provider writes
+    let verified = store.0.borrow()[&pid].clone();
+    let mut settled = finalization_proved(&verified).unwrap();
+    settled.version = verified.version + 1;
+    assert!((&store).replace_if(&settled, verified.version).unwrap());
+
+    assert_eq!(p.delivered(&finalization).unwrap(), None);
+    assert_eq!(store.0.borrow()[&pid], settled);
+    assert_eq!(p.abort(&finalization, "unreachable").unwrap(), None);
+    assert_eq!(store.0.borrow()[&pid], settled);
+    assert!(p.pending().unwrap().is_empty(), "nothing is sent again");
+}
+
+/// The acknowledgement and the transfer request arrive at the same
+/// moment: the acknowledgement is written first, the transfer provider's
+/// write then loses the version check and writes nothing.
+#[test]
+fn an_acknowledgement_written_first_makes_the_settling_write_lose() {
+    let store = Store::default();
+    let p = service(&store, AgreeToCatalogOffers);
+    let (pid, finalization) = verified_with_finalization_on_its_way(&p);
+    let verified = store.0.borrow()[&pid].clone();
+    let mut settled = finalization_proved(&verified).unwrap();
+    settled.version = verified.version + 1;
+
+    p.delivered(&finalization).unwrap();
+    let finalized = store.0.borrow()[&pid].clone();
+    assert_eq!(finalized.state, NegotiationState::Finalized);
+    assert!(!(&store).replace_if(&settled, verified.version).unwrap());
+    assert_eq!(store.0.borrow()[&pid], finalized);
+}
