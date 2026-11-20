@@ -167,11 +167,11 @@ connector send one DSP message, so some paths look alike:
 
 | The operator calls its own connector (management) | The connector then calls the other one (DSP) | Steps |
 |---|---|---|
-| `POST /v1/catalog/request` | `POST /catalog/request` | 2 (the management call itself is not drawn) |
+| `POST /v1/catalog/request` | `POST /catalog/request` | 1, 3 |
 | `POST /v1/catalog/dataset/request` | `GET /catalog/datasets/{id}` | not drawn |
-| `POST /v1/negotiations` | `POST /negotiations/request` | 8, 10 |
-| `POST /v1/transfers` | `POST /transfers/request` | 17, 18 |
-| `POST /v1/transfers/{consumerPid}/completion` | `POST /transfers/{providerPid}/completion` | 27, 28 |
+| `POST /v1/negotiations` | `POST /negotiations/request` | 10, 12 |
+| `POST /v1/transfers` | `POST /transfers/request` | 19, 20 |
+| `POST /v1/transfers/{consumerPid}/completion` | `POST /transfers/{providerPid}/completion` | 29, 30 |
 | `POST /v1/transfers/{consumerPid}/termination` | `POST /transfers/{providerPid}/termination` | not drawn |
 
 The management call takes no DSP message: the connector builds it,
@@ -204,7 +204,7 @@ with the files they live in:
 
 ![C3 Components of portitor-issuer](diagrams/c3-issuer-components.drawio.svg)
 
-**C4 Code**: eight flows, each drawn as a hexagon: the domain service or
+**C4 Code**: nine flows, each drawn as a hexagon: the domain service or
 function in the middle, the ports (traits, dashed yellow) it uses, the
 adapters behind them, and the HTTP edge that calls it. The names are the
 real type, trait, function and file names, so you can search the code
@@ -222,6 +222,13 @@ on the built-in data plane, which gives the consumer a data address with
 a bearer token.
 
 ![C4 Code: provider transfer process](diagrams/c4-transfer-code.drawio.svg)
+
+How the management API reads a provider's catalog (from 0.13):
+`CatalogReader` gets a token through the `Prover` port, sends one
+request through the `Sender` port and hands the provider's answer on as
+it came. Nothing is stored and nothing is tried again.
+
+![C4 Code: reading a provider's catalog](diagrams/c4-catalog-code.drawio.svg)
 
 How the connector checks who calls a DSP endpoint with DCP (the caller's
 token, its presentations, trusted issuers, status lists), how it checks
@@ -541,8 +548,10 @@ DSP messages are checked through the `MessageGuard` port of
 `ShaclGuard` (`shacl.rs`) checks negotiation and transfer messages in
 (before they are processed; a refusal is answered 400) and out (before
 they are sent; a refused message is not sent and its process ends);
-otherwise `AllowAll` lets every message through. Catalog requests are not
-checked. The catalog's `@context` is always the DSP 2025-1 context alone,
+otherwise `AllowAll` lets every message through. Incoming catalog
+requests are not checked; the `CatalogRequestMessage` the connector
+sends for the management API's catalog call is (`catalog_reader.rs`).
+The catalog's `@context` is always the DSP 2025-1 context alone,
 with or without a bundle; the bundle's `context` files only serve to
 read messages whose `@context` names their URL.
 

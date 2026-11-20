@@ -80,6 +80,18 @@ pull request, or record why it stays.
   DCP credential service) and `issuer-openapi.json` (DID document, DCP
   issuer service, status lists) list every route (their tests check that each
   listed route is served) and describe what changed.
+- [STABILITY.md](STABILITY.md) (from 0.13, the freeze): its lists of
+  routes and settings are those of the code. The freeze guard
+  (`tests/frozen_interface.rs` in the three binaries' crates, part of
+  `cargo test`) fails when a listed route or setting leaves the code,
+  and when the code gains one that is not listed. A new route or setting
+  gets its line there in the same pull request; from 1.0 a listed one is
+  removed or renamed only in 2.0. The guard does not check the other
+  promises (command line, file formats, database, "What 1.0 does not
+  do"): read them against the release.
+- [TESTING.md](TESTING.md): the "last run that passed" tables (container
+  scripts, EDC interop test) name a run of this release, or say that
+  none passed yet.
 - The website (`site/index.html`, published with the API pages by
   `pages.yml`) shows the release's features and the roadmap state.
 - The quickstart ("Try it" on the website, and `scripts/demo-compose.sh`

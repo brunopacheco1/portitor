@@ -553,6 +553,8 @@ jq -e '.["http://healthdataportal.eu/ns/health#healthCategory"] != null' <<<"$PO
   >/dev/null || fail "EDC did not read the HealthDCAT-AP metadata: $PORTITOR_ENTRY"
 
 edc_negotiate() { # dataset offer: prints the ended EDC negotiation for that Portitor offer
+  # providerId is not a member of ContractRequest in EDC v1.0.0-RC8 (its
+  # schema and class have no such member): EDC does not read it.
   local dataset=$1 offer=$2 id
   id=$(edc_management POST /v4/contractnegotiations "$(jq -nc --argjson c "$CONTEXT" \
     --arg addr "$PORTITOR_DSP_INSIDE" --arg p "$EDC_PROTOCOL" --arg id "$PORTITOR_DID" \

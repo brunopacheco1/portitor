@@ -861,9 +861,10 @@ these URLs for the Portitor participant and the issuer. Put
 `interop/edc/run/portitor/identity-management.key` in `identityApiKey`
 and `interop/edc/run/issuer/management.key` in `issuerApiKey`. The
 `identity`, `issuer` and `auth` folders and the read requests of
-`management` fit this run. `management/Start negotiation` does not: it
-sends `{{dsp}}` as the provider's address, which here is a URL on the
-host that the connector's container cannot reach. The DSP folders call
+`management` fit this run. `management/Start negotiation`,
+`management/Request catalog` and `management/Request dataset` do not:
+they send `{{dsp}}` as the provider's address, which here is a URL on
+the host that the connector's container cannot reach. The DSP folders call
 the Portitor provider with a token from the Portitor participant's own
 STS, so the participant calls itself; this was not tried. The collection
 has no requests for EDC's APIs.

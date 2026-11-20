@@ -228,12 +228,15 @@ for example only data processors in the EU:
   ```yaml
   edc.iam.dcp.scopes.processor.id: "processor-scope"
   edc.iam.dcp.scopes.processor.type: "POLICY"
-  edc.iam.dcp.scopes.processor.prefix-mapping: "DataProcessorCredential"
+  edc.iam.dcp.scopes.processor.prefix.mapping: "DataProcessorCredential"
   edc.iam.dcp.scopes.processor.value: "org.eclipse.dspace.dcp.vc.type:DataProcessorCredential:read"
   ```
 
-  (as in the Minimum Viable Dataspace, commit 17bb5b8,
-  `k8s/provider/application/controlplane-config.yaml`).
+  (the key names are those of EDC v1.0.0-RC8,
+  `DynamicDcpScopeConfigurationExtension`; the EDC interop run sets them
+  in `interop/edc/config/edc-controlplane.properties`. The Minimum Viable
+  Dataspace, commit 17bb5b8, and EDC's own decision record write
+  `prefix-mapping`: RC8 reads `prefix.mapping`).
 
 ### Gaia-X compliance
 
@@ -1690,7 +1693,7 @@ do not change.
 
 #### From 0.12 to 0.13
 
-0.13 freezes the interface for 1.0 ([STABILITY](STABILITY.md)). Six
+0.13 freezes the interface for 1.0 ([STABILITY](STABILITY.md)). Several
 things changed before the freeze, because after 1.0 they could only
 change in 2.0. The databases need no manual step. Change your
 configuration and your management API clients **before** you start the
@@ -1772,6 +1775,23 @@ new images.
    `PORTITOR_ISSUER_RETIRED_KEY_FILES`. Before, some of them read such a
    value as an empty list and some stopped. Leave a list unset (or
    empty) for its default. To switch EDC's scope alias off, see point 4.
+10. **Behaviour change, connector, nothing to do:** a bundle file whose
+    role the connector does not know is skipped; before, the whole
+    bundle was refused. The connector does not enforce what such a file
+    holds. Watch the new gauge `portitor.bundle.file.skipped` and the
+    WARN line `bundle file skipped: ...`
+    ([Schema and vocabulary bundle](#schema-and-vocabulary-bundle)).
+11. **Behaviour change, connector as provider, nothing to do:** a
+    transfer request from the agreement's consumer that arrives while
+    the finalization event is still on its way is accepted; before, it
+    got HTTP 400 (ADR 0007, amended;
+    [TD-44](RISKS_AND_TECHNICAL_DEBTS.md#td-44)). A transfer request
+    that is refused because it names no finalized agreement of the
+    caller is now logged: `transfer request is refused; answered 400`
+    (INFO).
+12. The management OpenAPI files of the three services list HTTP 403 on
+    every route that needs the API key. No service answers 403 in 0.13:
+    it is reserved for 1.x (ADR 0025).
 
 Rollback to 0.12: put the old names back in the configuration and the
 old field names in your clients; for the database, as above.

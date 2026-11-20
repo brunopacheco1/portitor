@@ -1661,7 +1661,7 @@ certificate and compliance run at each key change (ADR 0021).
   ([BENCHMARKS](BENCHMARKS.md)) measured a catalog of 10,000 datasets:
   2.6 MB in 13 ms, 150 MB of memory on the provider. A national gateway
   lists about 1,100 datasets, so pages are not needed for the provider.
-  But Portitor's own HTTP client reads at most 64 kB of an answer
+  But Portitor's own HTTP client reads at most 64 KiB of an answer
   (`MAX_ANSWER`), about 250 datasets: this limits the management call
   that reads a partner's catalog ([TD-38](#td-38)), and is decided with
   it.
@@ -1669,7 +1669,7 @@ certificate and compliance run at each key change (ADR 0021).
   catalog has its own limit: 16 MiB and 30 seconds
   (`MAX_CATALOG_ANSWER`, `CATALOG_TIMEOUT` in
   `crates/portitor-connector/src/catalog_reader.rs`), fixed, with no
-  setting; every other answer keeps 64 kB. Pages stay as they were:
+  setting; every other answer keeps 64 KiB. Pages stay as they were:
   as provider Portitor sends its catalog in one answer, and as
   consumer it reads the first answer only. When a provider sends
   `Link` headers (DSP 2025-1, "Catalog HTTPS Binding", "Pagination"),
