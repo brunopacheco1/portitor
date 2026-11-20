@@ -177,6 +177,18 @@ pub(crate) trait Outbox: Send + Sync + 'static {
     ///
     /// The store failed.
     fn abort(&self, out: &Self::Out) -> Result<Option<Self::Out>, Self::Failure>;
+
+    /// Whether the process took `out` as delivered although the outbox
+    /// could not deliver it: something else proved that it arrived. Such
+    /// a message is not counted as given up ([`count_if_given_up`]).
+    ///
+    /// Only the negotiation provider has such a case today: a transfer
+    /// request that settled a finalization event on its way (ADR 0007,
+    /// amended in 0.13; TD-44). So the default is `false`, and it does
+    /// not look at the message (`_out`).
+    fn settled_without_delivery(&self, _out: &Self::Out) -> bool {
+        false
+    }
 }
 
 /// Sends every message in `pending` in the background. Returns how many.
@@ -272,12 +284,20 @@ async fn send_and_record<O: Outbox>(outbox: &O, out: &O::Out) -> Option<O::Out> 
     let (pid, first) = (msg.pid.to_owned(), msg.first);
     let scopes = outbox.scopes(out);
     let reached = |state| O::reached(out, state);
-    let recorded = match attempt(outbox.link(), outbox.kind(), &msg, &scopes, reached).await {
+    let outcome = attempt(outbox.link(), outbox.kind(), &msg, &scopes, reached).await;
+    let undelivered = outcome.undelivered();
+    let recorded = match outcome {
         Outcome::Acknowledged(answer) => outbox.delivered(out, Some(&answer)),
         Outcome::ArrivedBefore | Outcome::TerminationUnanswered => outbox.delivered(out, None),
         Outcome::NotStarted => outbox.not_started(out).map(|()| None),
         Outcome::Unreachable => outbox.abort(out),
     };
+    if undelivered {
+        // after the recording: `abort` and a transfer request that
+        // settles the negotiation write the same record, so by now one
+        // of the two has won and the answer below does not change
+        count_if_given_up(outbox, out);
+    }
     match recorded {
         Ok(next) => next,
         Err(failure) => {
@@ -289,6 +309,29 @@ async fn send_and_record<O: Outbox>(outbox: &O, out: &O::Out) -> Option<O::Out> 
             None
         }
     }
+}
+
+/// Counts `out`, which the outbox could not deliver and will not send
+/// again, as given up (`portitor.outbox.message.given_up`), unless the
+/// process took it as delivered for another reason
+/// ([`Outbox::settled_without_delivery`]).
+fn count_if_given_up<O: Outbox>(outbox: &O, out: &O::Out) {
+    if is_given_up(outbox, out) {
+        metrics::outbox_given_up(outbox.kind());
+    } else {
+        tracing::info!(
+            pid = O::message(out).pid,
+            "message not delivered, but the process was settled without it; not counted as given up"
+        );
+    }
+}
+
+/// Whether `out`, which the outbox could not deliver, is given up: yes,
+/// unless the process was settled without it. Apart from
+/// [`count_if_given_up`] so that a test can ask (a test cannot read a
+/// metric).
+fn is_given_up<O: Outbox>(outbox: &O, out: &O::Out) -> bool {
+    !outbox.settled_without_delivery(out)
 }
 
 /// What became of a message [`attempt`] sent.
@@ -303,6 +346,16 @@ enum Outcome {
     TerminationUnanswered,
     /// The counter-party could not be reached.
     Unreachable,
+}
+
+impl Outcome {
+    /// Whether the message did not arrive and will not be sent again.
+    fn undelivered(&self) -> bool {
+        match self {
+            Outcome::Acknowledged(_) | Outcome::ArrivedBefore => false,
+            Outcome::NotStarted | Outcome::TerminationUnanswered | Outcome::Unreachable => true,
+        }
+    }
 }
 
 /// Sends `msg`, with a token that also grants `scopes`, and says what
@@ -331,10 +384,6 @@ async fn attempt(
         Outcome::Unreachable
     };
     log_unanswered(msg.pid, &outcome, &failure);
-    // the message did not arrive and will not be sent again
-    if !matches!(outcome, Outcome::ArrivedBefore) {
-        metrics::outbox_given_up(kind);
-    }
     outcome
 }
 
@@ -821,6 +870,110 @@ mod tests {
         fn abort(&self, _: &Value) -> Result<Option<Value>, String> {
             Ok(None)
         }
+    }
+
+    /// An outbox whose messages cannot be delivered. `settled` is what it
+    /// answers when asked whether the process was settled without the
+    /// message; `calls` lists what the outbox was asked, in order.
+    struct Undeliverable {
+        link: Link,
+        settled: bool,
+        calls: Mutex<Vec<&'static str>>,
+    }
+
+    impl Undeliverable {
+        fn new(settled: bool) -> Self {
+            let mut ports = Ports::new(Arc::new(Down));
+            ports.prover = Arc::new(FixedToken);
+            ports.retry = Retry {
+                attempts: 1,
+                first_delay: Duration::from_millis(1),
+            };
+            Self {
+                link: Link::new(&ports),
+                settled,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl Outbox for Undeliverable {
+        /// The message's body.
+        type Out = Value;
+        type Failure = String;
+
+        fn link(&self) -> &Link {
+            &self.link
+        }
+
+        fn kind(&self) -> metrics::Outbox {
+            metrics::Outbox::Negotiation(metrics::Role::Provider)
+        }
+
+        fn message(out: &Value) -> Message<'_> {
+            Message::new("urn:uuid:1", "https://c.example/x", out, "", "did:web:c")
+        }
+
+        fn reached(_: &Value, _: Value) -> bool {
+            false
+        }
+
+        fn delivered(&self, _: &Value, _: Option<&Value>) -> Result<Option<Value>, String> {
+            self.calls.lock().unwrap().push("delivered");
+            Ok(None)
+        }
+
+        fn abort(&self, _: &Value) -> Result<Option<Value>, String> {
+            self.calls.lock().unwrap().push("abort");
+            Ok(None)
+        }
+
+        fn settled_without_delivery(&self, _: &Value) -> bool {
+            self.calls.lock().unwrap().push("settled?");
+            self.settled
+        }
+    }
+
+    /// ADR 0007, amended in 0.13 (TD-44): a finalization event that could
+    /// not be delivered, in a negotiation that a transfer request
+    /// settled, is not counted as given up. Any other message that could
+    /// not be delivered is.
+    #[tokio::test]
+    async fn an_undelivered_message_is_given_up_unless_the_process_was_settled_without_it() {
+        let event = serde_json::json!({"@type": "ContractNegotiationEventMessage"});
+        for settled in [false, true] {
+            let outbox = Undeliverable::new(settled);
+            assert_eq!(is_given_up(&outbox, &event), !settled);
+
+            // the whole step: the failure is recorded first (`abort`,
+            // which changes nothing for a settled negotiation), and the
+            // outbox is asked afterwards, once
+            let outbox = Undeliverable::new(settled);
+            assert!(send_and_record(&outbox, &event).await.is_none());
+            assert_eq!(*outbox.calls.lock().unwrap(), ["abort", "settled?"]);
+        }
+    }
+
+    /// A message that was delivered is never asked about: there is
+    /// nothing to count.
+    #[tokio::test]
+    async fn a_delivered_message_is_not_asked_about() {
+        let mut outbox = Undeliverable::new(false);
+        let mut ports = Ports::new(Arc::new(Accepts));
+        ports.prover = Arc::new(FixedToken);
+        outbox.link = Link::new(&ports);
+        let event = serde_json::json!({"@type": "ContractNegotiationEventMessage"});
+        assert!(send_and_record(&outbox, &event).await.is_none());
+        assert_eq!(*outbox.calls.lock().unwrap(), ["delivered"]);
+    }
+
+    #[test]
+    fn only_a_message_that_did_not_arrive_can_be_given_up() {
+        assert!(!Outcome::Acknowledged(Value::Null).undelivered());
+        assert!(!Outcome::ArrivedBefore.undelivered());
+        assert!(Outcome::NotStarted.undelivered());
+        assert!(Outcome::TerminationUnanswered.undelivered());
+        assert!(Outcome::Unreachable.undelivered());
     }
 
     /// A paused clock: the pauses pass at once, and the test reads how

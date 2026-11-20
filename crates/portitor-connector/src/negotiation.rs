@@ -186,6 +186,20 @@ impl Outbox for Provider {
     fn abort(&self, out: &Outgoing) -> Result<Option<Outgoing>, Failure> {
         self.service.abort(out, "the consumer could not be reached")
     }
+
+    /// A finalization event that could not be delivered, in a negotiation
+    /// that a transfer request from the consumer settled as `FINALIZED`
+    /// (ADR 0007, amended in 0.13; TD-44).
+    fn settled_without_delivery(&self, out: &Outgoing) -> bool {
+        match self.service.finalization_settled(out) {
+            Ok(settled) => settled,
+            Err(failure) => {
+                // not known: counted as given up, as before
+                tracing::warn!(pid = %out.provider_pid, ?failure, "negotiation not read");
+                false
+            }
+        }
+    }
 }
 
 pub(crate) fn invalid(
