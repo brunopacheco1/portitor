@@ -488,6 +488,17 @@ impl<'de> Deserialize<'de> for Role {
                 .map_err(|e| D::Error::custom(format!("role {type_name}: {e}")))?;
             return Ok(known.into());
         }
+        // `Messages` for `messages` is a spelling mistake, not a role of a
+        // later version: skipping it would leave its rules unchecked
+        // with only a warning
+        if let Some(known) = KNOWN_ROLE_TYPES
+            .iter()
+            .find(|known| known.eq_ignore_ascii_case(&type_name))
+        {
+            return Err(D::Error::custom(format!(
+                "role: type {type_name} is not known; the type is written {known}"
+            )));
+        }
         if !is_role_type_name(&type_name) {
             return Err(D::Error::custom(format!(
                 "role: type must be 1 to {MAX_ROLE_TYPE_LEN} letters, digits, '-' or '_', \
@@ -1721,6 +1732,14 @@ mod tests {
                 "{role}: {outcome:?}"
             );
         }
+        // a known type in another case is a mistake, not a later role
+        for misspelt in ["Messages", "DATASETS", "Vocabulary", "conText"] {
+            let outcome = Manifest::parse(&with_a_file_of_role(&json!({"type": misspelt})));
+            let Err(BundleError::Manifest(reason)) = outcome else {
+                panic!("{misspelt}: {outcome:?}");
+            };
+            assert!(reason.contains("the type is written"), "{reason}");
+        }
         // a repeated `type` is refused, also when the last one is unknown
         let text = String::from_utf8(with_a_file_of_role(&json!({"type": "policies"}))).unwrap();
         let repeated = text.replace(
@@ -1732,7 +1751,6 @@ mod tests {
 
         let skipped = [
             json!({"type": "policies"}),
-            json!({"type": "Messages"}),
             json!({"type": "policy-shapes_2", "anything": [1, {"a": null}]}),
             json!({"type": "x".repeat(MAX_ROLE_TYPE_LEN)}),
         ];
