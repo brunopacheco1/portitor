@@ -588,71 +588,91 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
   [TD-44](RISKS_AND_TECHNICAL_DEBTS.md#td-44) and
   [TD-45](RISKS_AND_TECHNICAL_DEBTS.md#td-45).
 
-## 0.13 Release candidate for 1.0
+## 0.13 API and configuration freeze
 
-- API and config freeze, upgrade notes, documentation review.
+The release candidate was split in two (maintainer, 2026-11-20): 0.13
+freezes the code, 0.14 makes the documentation and the assurance ready.
+
+- API and configuration freeze: [STABILITY](STABILITY.md) says what 1.0
+  keeps stable, and a test fails when a frozen route or setting
+  disappears.
+- A management call that reads a provider's catalog, shaped as in EDC's
+  management API ([TD-38](RISKS_AND_TECHNICAL_DEBTS.md#td-38)), so the
+  quickstart needs no hand-made STS call.
+- The EDC test moves to EDC 1.0.0-RC8 and gains Gaia-X compliance, as
+  one run that can be repeated later: every version pinned, steps and
+  expected results in [TESTING](TESTING.md) (maintainer, 2026-11-20).
+- A transfer request that arrives just before the provider records
+  `FINALIZED` is accepted as proof that the finalization arrived
+  ([TD-44](RISKS_AND_TECHNICAL_DEBTS.md#td-44), option (a), maintainer,
+  2026-11-20; amends ADR 0007). EDC accepts such a request as soon as
+  the agreement exists.
+- [ADR 0025](adr/0025-users-and-roles.md) (users and roles, TD-04) and
+  [ADR 0024](adr/0024-several-data-spaces.md) (several data spaces,
+  TD-03) accepted. Before the freeze: the management key and the data
+  token are opaque strings; `403` is documented on the management
+  routes; `dataAddress` stays optional in the transfer view; a connector
+  skips a bundle file whose role it does not know, with a warning, and
+  refuses a bundle in which it knows no file.
+- The ODRL 2.2 `dateTime` definition compared with ADR 0009
+  ([R-26](RISKS_AND_TECHNICAL_DEBTS.md#r-26)); TLS stays the operator's
+  job, in an ADR ([TD-19](RISKS_AND_TECHNICAL_DEBTS.md#td-19));
+  migrations stay forward-only
+  ([TD-22](RISKS_AND_TECHNICAL_DEBTS.md#td-22)).
+- Not in 1.0 (maintainer, 2026-11-20; both are large and can be added
+  later without a break): negotiation started by the provider
+  ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)) and Data Plane Signaling
+  over HTTP ([TD-17](RISKS_AND_TECHNICAL_DEBTS.md#td-17)).
+  Interoperability with Simpl-Open has not been tested
+  ([ADR 0017](adr/0017-simpl-open.md) stays proposed).
+- Exit: both TCKs and the EDC test with Gaia-X pass in CI; no open high
+  findings in Sonar or CodeQL; TD-38 and TD-44 addressed.
+- Main risk: freezing too early or too late.
+
+## 0.14 Documentation and assurance (release candidate for 1.0)
+
+- Documentation simplification (maintainer, 2026-11-20): each fact has
+  one home and the other files link to it. The README loses its route
+  and settings tables (the OpenAPI files and DEPLOYING hold them);
+  DEPLOYING is in deployment order (issuer, identity, connector) with a
+  short "first deployment" path at the top
+  ([TD-39](RISKS_AND_TECHNICAL_DEBTS.md#td-39)); the released sections
+  of this roadmap become one table; closed risks become one line each,
+  with a "top risks" box. DEPLOYING is for an operations team; running
+  the demo on a laptop is in TESTING (maintainer, 2026-11-18). ADRs,
+  the changelog and the spikes are records and are not shortened.
+- A "read the code in this order" page
+  ([R-01](RISKS_AND_TECHNICAL_DEBTS.md#r-01)), and a note in TESTING for
+  the four near-copies of the negotiation and transfer logic
+  ([TD-42](RISKS_AND_TECHNICAL_DEBTS.md#td-42)).
+- One place that says which Gaia-X Compliance Document and ICAM version
+  Portitor was checked against
+  ([TD-43](RISKS_AND_TECHNICAL_DEBTS.md#td-43)).
+- The website gets an ancient Roman theme built on the two meanings of
+  *portitor*, the customs officer and the ferryman (maintainer,
+  2026-11-20). An open-licence font may be stored in the repository,
+  with credit.
 - OpenSSF Best Practices **silver**.
 - OpenSSF Baseline **level 1** self-assessment, control by control, in
   `docs/SECURITY-ASSURANCE.md` (moved from 0.1, maintainer, 2026-11-12),
   done last so it assesses the final state; decide whether 1.0 aims at a
   higher level ([R-05](RISKS_AND_TECHNICAL_DEBTS.md#r-05)).
-- The TD-03 and TD-04 ADRs decided; any API or configuration change
-  they need is made before the freeze.
-  [ADR 0025](adr/0025-users-and-roles.md) (TD-04, Proposed in 0.12)
-  names four points to settle before the freeze: say that the
-  management key and the data token are opaque strings; document 403 on
-  the management routes; keep `dataAddress` optional in the transfer
-  view; and decide how a connector treats a bundle file whose role it
-  does not know.
-- From the 0.12 benchmark: decide how a transfer request that arrives
-  just before the provider records `FINALIZED` is treated
-  ([TD-44](RISKS_AND_TECHNICAL_DEBTS.md#td-44)); it touches ADR 0007.
-- Before 1.0 (maintainer, 2026-11-15): read the ODRL 2.2 `dateTime`
-  definition and compare it with ADR 0009
-  ([R-26](RISKS_AND_TECHNICAL_DEBTS.md#r-26)); decide in an ADR whether
-  TLS stays the operator's job
-  ([TD-19](RISKS_AND_TECHNICAL_DEBTS.md#td-19)); confirm forward-only
-  migrations in the upgrade notes
-  ([TD-22](RISKS_AND_TECHNICAL_DEBTS.md#td-22)); the formal trademark and
-  domain check of the name ([R-25](RISKS_AND_TECHNICAL_DEBTS.md#r-25)),
-  which blocks 1.0. A second maintainer
-  ([R-02](RISKS_AND_TECHNICAL_DEBTS.md#r-02)) does not block 1.0.
 - Usable as it is (maintainer, 2026-11-15: 1.0 ships the release
-  candidate only if what is built until 0.13 can be shown and used): a
-  new user runs the website quickstart on a clean machine, and the docs
-  say what 1.0 does and does not do (for example pull transfers only).
-- From the
-  [2026-11-18 review](reviews/2026-11-18-specifications-and-code-quality.md),
-  before the freeze:
-  - A management call that reads a provider's catalog, shaped as in
-    EDC's management API ([TD-38](RISKS_AND_TECHNICAL_DEBTS.md#td-38)), so the quickstart needs no
-    hand-made STS call.
-  - Negotiation started by the provider
-    ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)) and Data Plane
-    Signaling over HTTP ([TD-17](RISKS_AND_TECHNICAL_DEBTS.md#td-17)):
-    before 1.0 if not expensive (maintainer, 2026-11-18). Estimate each
-    first; build it if the estimate is small, otherwise the docs say it
-    is not in 1.0.
-- From the same review, in the documentation review:
-  - DEPLOYING in deployment order (issuer, identity, connector) with a
-    short "first deployment" path at the top, and a "top risks" box in
-    the risks list ([TD-39](RISKS_AND_TECHNICAL_DEBTS.md#td-39)).
-    DEPLOYING is for an operations team; running the demo on a laptop
-    is in TESTING (maintainer, 2026-11-18).
-  - A "read the code in this order" page
-    ([R-01](RISKS_AND_TECHNICAL_DEBTS.md#r-01)), and a note in TESTING for the four near-copies
-    of the negotiation and transfer logic ([TD-42](RISKS_AND_TECHNICAL_DEBTS.md#td-42)).
-  - One place that says which Gaia-X Compliance Document and ICAM
-    version Portitor was checked against ([TD-43](RISKS_AND_TECHNICAL_DEBTS.md#td-43)).
-- Exit: Scorecard at least 8/10; no open high findings in Sonar or
-  CodeQL; the quickstart runs on a clean machine; R-25 done; TD-35 and
-  Signaling over HTTP built or stated as not in 1.0; TD-38, TD-39 and
-  TD-43 addressed.
-- Main risk: freezing too early or too late.
+  candidate only if what is built can be shown and used): a new user
+  runs the website quickstart on a clean machine, and the docs say what
+  1.0 does and does not do.
+- Before 1.0: the formal trademark and domain check of the name
+  ([R-25](RISKS_AND_TECHNICAL_DEBTS.md#r-25)), which blocks 1.0. A
+  second maintainer ([R-02](RISKS_AND_TECHNICAL_DEBTS.md#r-02)) does not
+  block 1.0.
+- Exit: Scorecard at least 8/10; the quickstart runs on a clean machine;
+  TD-39 and TD-43 addressed; R-25 done before 1.0.
+- Main risk: a fact lost while cutting; each removed paragraph names
+  where its facts still live.
 
-## After 0.13 (plan approved by the maintainer, 2026-11-15)
+## After 0.14 (plan approved by the maintainer, 2026-11-15)
 
-1.0 is the 0.13 release candidate, with no new features. After it, the
+1.0 is the 0.14 release candidate, with no new features. After it, the
 1.x releases add features without breaking the 1.0 API or configuration
 (semantic versioning: a breaking change waits for 2.0). As now, each
 minor release is one pull request. Each feature gets an ADR before code,
@@ -666,7 +686,7 @@ CI job (maintainer, 2026-11-15).
 
 ### 1.0 Stable
 
-- The 0.13 release candidate and the "before 1.0" items of 0.13.
+- The 0.14 release candidate and the "before 1.0" items of 0.14.
 - Exit: upgrade notes from 0.9 to 1.0; the website says which APIs and
   settings 1.0 keeps stable.
 - Main risk: a breaking change found after the freeze.
@@ -684,6 +704,9 @@ CI job (maintainer, 2026-11-15).
   (maintainer, 2026-11-13).
 - Management API: suspend and start a transfer again
   ([TD-11](RISKS_AND_TECHNICAL_DEBTS.md#td-11)).
+- An audit log line for each data pull: flow, agreement, consumer DID
+  and bytes sent. It needs no user identity
+  ([ADR 0025](adr/0025-users-and-roles.md), maintainer, 2026-11-20).
 - Demo step 1: the authority (issuer), Alice and Bob. Bob negotiates with
   Alice, peer to peer, and Alice pushes the data to RustFS in Bob's
   network.
@@ -756,6 +779,8 @@ CI job (maintainer, 2026-11-15).
 - Consent enforcement and agreement revision
   ([TD-15](RISKS_AND_TECHNICAL_DEBTS.md#td-15)), if the consent ADR finds
   a standard to follow (ISO/IEC TS 27560 and DPV to read first).
+- User to system access is tested against Simpl-Open, which has
+  implemented user-to-system actions (maintainer, 2026-11-20).
 - Exit: set by the ADRs.
 - Main risk: the largest unknown of the plan; the ADRs may split it.
 
@@ -800,8 +825,8 @@ rejects. It runs beside the releases.
 
 | Topic | Needed by |
 | --- | --- |
-| Several data spaces ([TD-03](RISKS_AND_TECHNICAL_DEBTS.md#td-03)) | 0.13 freeze |
-| Users and roles ([TD-04](RISKS_AND_TECHNICAL_DEBTS.md#td-04)) | 0.13 freeze; code in 1.5 |
+| Several data spaces ([TD-03](RISKS_AND_TECHNICAL_DEBTS.md#td-03)) | Accepted in 0.13 ([ADR 0024](adr/0024-several-data-spaces.md)) |
+| Users and roles ([TD-04](RISKS_AND_TECHNICAL_DEBTS.md#td-04)) | Accepted in 0.13 ([ADR 0025](adr/0025-users-and-roles.md)); code in 1.5 |
 | Who calls the data plane ([TD-02](RISKS_AND_TECHNICAL_DEBTS.md#td-02)) | 1.5 |
 | S3 data address | 1.1 |
 | Agreements that depend on an upstream agreement | 1.3 |
