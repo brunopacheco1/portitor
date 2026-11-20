@@ -366,8 +366,9 @@ fn the_rust_type_refuses_the_version_latest() {
     for version in ["latest", "Latest", "LATEST"] {
         let manifest = changed("", "version", &json!(version));
         let parsed = Manifest::parse(&serde_json::to_vec(&manifest).unwrap());
-        let error = parsed.expect_err(version).to_string();
-        assert!(error.contains("the newest version"), "{error}");
+        // an accepted manifest has no error: the text is then empty
+        let error = parsed.err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(error.contains("the newest version"), "{version}: {error}");
     }
 }
 
@@ -799,7 +800,8 @@ fn a_field_given_twice_is_refused_at_every_level() {
     for text in twice {
         assert_ne!(text, good, "the change was not made");
         let parsed = Manifest::parse(text.as_bytes());
-        let error = parsed.expect_err(&text).to_string();
+        // an accepted manifest has no error: the text is then empty
+        let error = parsed.err().map(|e| e.to_string()).unwrap_or_default();
         assert!(error.contains("duplicate field"), "{text}: {error}");
     }
 }

@@ -1073,7 +1073,7 @@ async fn a_request_is_served_only_when_finalized_or_when_the_finalization_is_on_
     use NegotiationState::{Accepted, Agreed, Finalized, Offered, Requested, Terminated, Verified};
     use Transition::{Agree, Finalize, Offer, Terminate};
     let uri = format!("{BASE}/request");
-    let states = [
+    let every_state = [
         Requested, Offered, Accepted, Agreed, Verified, Finalized, Terminated,
     ];
     let on_its_way = [
@@ -1083,7 +1083,7 @@ async fn a_request_is_served_only_when_finalized_or_when_the_finalization_is_on_
         Some(Finalize),
         Some(Terminate),
     ];
-    for state in states {
+    for state in every_state {
         for pending in on_its_way {
             let served = state == Finalized || (state == Verified && pending == Some(Finalize));
             let negotiation = negotiation_in(state, pending);

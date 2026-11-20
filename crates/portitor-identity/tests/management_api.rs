@@ -12,6 +12,9 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use common::*;
 use portitor_identity::management::openapi_json;
+use portitor_runtime::testing::management_calls::{
+    Call, statuses_other_than, with_a_wrong_body, with_odd_paths_and_queries, without_the_key,
+};
 use serde_json::{Value, json};
 
 fn authed(request: axum::http::request::Builder) -> axum::http::request::Builder {
@@ -183,4 +186,69 @@ fn published_description_is_current() {
     ] {
         assert!(spec["paths"][path].is_object(), "{path}");
     }
+}
+
+/// Every route of the management API, with a body it accepts where it
+/// reads one.
+fn every_call() -> Vec<Call> {
+    // without credential ids the request is only recorded, not sent
+    let request = json!({"issuerDid": ISSUER, "credentialIds": [], "holderPid": "h-1"});
+    let offered = json!({"issuerDid": ISSUER, "credentialIds": ["membership"]});
+    vec![
+        Call::post("/v1/credential-requests", request),
+        Call::without_body("GET", "/v1/credential-requests"),
+        Call::without_body("GET", "/v1/credential-requests/h-1"),
+        Call::without_body("GET", "/v1/credentials"),
+        Call::without_body("DELETE", "/v1/credentials/c-1"),
+        Call::without_body("GET", "/v1/offers"),
+        Call::post("/v1/offers/request", offered),
+        Call::without_body("POST", "/v1/gaiax/compliance"),
+        Call::without_body("GET", "/v1/gaiax/compliance"),
+    ]
+}
+
+#[tokio::test]
+async fn every_route_answers_401_without_the_key_and_never_403() {
+    let world = World::new();
+    let answers = without_the_key(&world.management, &every_call(), API_KEY).await;
+    assert_eq!(answers.len(), 9 * 6);
+    assert_eq!(statuses_other_than(&[401], &answers), "");
+}
+
+/// What is not answered 400 today. An empty `holderPid` is taken as
+/// none (a new id is made); one of spaces or of 100 000 letters is kept
+/// as it is. `POST /v1/offers/request` looks the offer up before it
+/// looks at the values, and finds none (404).
+const WRONG_BODIES_NOT_ANSWERED_400: &str = "\
+POST /v1/credential-requests, holderPid is empty: 201
+POST /v1/credential-requests, holderPid is only spaces: 201
+POST /v1/credential-requests, holderPid is very long: 201
+POST /v1/offers/request, credentialIds holds an empty text: 404
+POST /v1/offers/request, credentialIds holds a very long text: 404
+POST /v1/offers/request, issuerDid is empty: 404
+POST /v1/offers/request, issuerDid is only spaces: 404
+POST /v1/offers/request, issuerDid is very long: 404
+";
+
+#[tokio::test]
+async fn every_route_refuses_a_wrong_body_with_400() {
+    let world = World::new();
+    let answers = with_a_wrong_body(&world.management, &every_call(), API_KEY).await;
+    assert!(answers.len() > 40, "{}", answers.len());
+    assert_eq!(
+        statuses_other_than(&[400], &answers),
+        WRONG_BODIES_NOT_ANSWERED_400
+    );
+}
+
+#[tokio::test]
+async fn odd_paths_and_queries_are_never_an_error_of_the_server() {
+    let world = World::new();
+    let answers = with_odd_paths_and_queries(&world.management, &every_call(), API_KEY).await;
+    assert_eq!(answers.len(), 9 * 14);
+    // 409: the good body of a credential request, sent a second time
+    assert_eq!(
+        statuses_other_than(&[200, 201, 204, 400, 404, 409], &answers),
+        ""
+    );
 }
