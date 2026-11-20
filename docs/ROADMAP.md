@@ -6,628 +6,82 @@ SPDX-License-Identifier: Apache-2.0
 
 # Roadmap (draft)
 
-Status: **draft for review**. Releases are small and frequent. Each 0.x
-release is usable on its own and ends with a tag, a signed image and a
-changelog entry. Version numbers are shared by every component (mono repo).
+Status: **draft for review**. Releases are small and frequent. Each
+release is usable on its own and ends with a tag, signed images and a
+changelog entry. Version numbers are shared by every component (mono
+repo). Each planned item lists its exit criteria, so "done" is
+checkable.
 
-Each item lists its exit criteria, so "done" is checkable.
+## Released
 
-## 0.0 Spike: choose the technology stack (done 2026-11-11)
+What each release delivered, in one line. The details are in the
+[changelog](../CHANGELOG.md) and the [ADRs](adr/README.md); the risks
+and debts each release raised or closed are in
+[RISKS_AND_TECHNICAL_DEBTS](RISKS_AND_TECHNICAL_DEBTS.md).
 
-- Compare candidate languages: [ADR 0002](adr/0002-technology-stack.md).
-- Timeboxed bake-off (3 days): version endpoint + catalog request + DSP TCK
-  catalog tests + DCP self-issued token, with measured footprint.
-- Exit: ADR 0002 accepted by the maintainer. Done: Rust accepted on
-  2026-11-11 after the side-by-side with Quarkus native.
-- Then ADR 0003: evaluate and decide how the system splits into
-  components (modules and images).
+| Release | Date | Tag | What it delivered | Changelog |
+|---|---|---|---|---|
+| 0.0 | 2026-11-11 | none | Spike: Rust chosen after a 3-day bake-off against Quarkus native ([ADR 0002](adr/0002-technology-stack.md)); then the component split ([ADR 0003](adr/0003-component-split.md)) | none |
+| 0.1 | 2026-11-12 | v0.1.0 | Repository foundations: licence and REUSE, community files, CI and security scans, signed multi-arch image with SBOM and provenance, the website, OpenSSF Best Practices registered (project 16578) | [0.1.0](../CHANGELOG.md#010---2026-11-12) |
+| 0.2 | 2026-11-12 | v0.2.0 | DSP version discovery and catalog (provider), schema-checked messages, DSP TCK in CI, fuzzing; Best Practices **passing**; Scorecard from 6.7 to 7.9 | [0.2.0](../CHANGELOG.md#020---2026-11-12) |
+| 0.3 | 2026-11-12 | v0.3.0 | Contract negotiation as provider and consumer in SQLite (ADR 0006), outbox with proof of delivery (ADR 0007), minimal ODRL (ADR 0009), management API; renamed to Portitor (ADR 0008) | [0.3.0](../CHANGELOG.md#030---2026-11-12) |
+| 0.4 | 2026-11-13 | v0.4.0 | Transfer process and the built-in HTTP pull data plane behind Data Plane Signaling v1.0-RC4 (ADRs 0013, 0014); Compose demo; RUST-IDIOMS | [0.4.0](../CHANGELOG.md#040---2026-11-13) |
+| 0.5 | 2026-11-13 | v0.5.0 | `portitor-identity` (ADR 0015); every DSP request authenticated with DCP (ADR 0016); DCP TCK; first EDC interop test; Simpl-Open spike (ADR 0017, proposed) | [0.5.0](../CHANGELOG.md#050---2026-11-13) |
+| 0.6 | 2026-11-14 | v0.6.0 | `portitor-issuer` (ADR 0018); the identity asks an issuer for credentials; credential constraints in policies (ADR 0019); SHACL engine spike | [0.6.0](../CHANGELOG.md#060---2026-11-14) |
+| 0.7 | 2026-11-15 | v0.7.0 | Signed schema and vocabulary bundle and our own SHACL Core engine (ADR 0005); datasets harvested into a read copy (ADR 0020); DSP messages checked against shapes | [0.7.0](../CHANGELOG.md#070---2026-11-15) |
+| 0.8 | 2026-11-15 | v0.8.0 | Gaia-X: onboarding in the identity (ADR 0021) and compliance credentials in policies (ADR 0022); a Gaia-X job in CI with a local compliance service | [0.8.0](../CHANGELOG.md#080---2026-11-15) |
+| 0.9 | 2026-11-15 | v0.9.0 | Operations: liveness and readiness, a `health` subcommand, traces and metrics over OTLP (ADR 0023), the website quickstart | [0.9.0](../CHANGELOG.md#090---2026-11-15) |
+| 0.10 | 2026-11-16 | v0.10.0 | Supply chain: cargo-vet in CI, website trust values, upstream reports filed | [0.10.0](../CHANGELOG.md#0100---2026-11-16) |
+| 0.11 | 2026-11-17 | v0.11.0 | Security hardening: a fuzz target per parser, request size limits, status list cache, retired keys for rotation, outbox retry rules, threat model review, ADR 0024 proposed | [0.11.0](../CHANGELOG.md#0110---2026-11-17) |
+| 0.12 | 2026-11-20 | v0.12.0 | Interoperability and performance: strict policy reading, DSP and DCP fixes checked against EDC, benchmarks published, a panic fails one request, ADR 0025 proposed | [0.12.0](../CHANGELOG.md#0120---2026-11-19) |
+| 0.13 | 2026-11-20 | v0.13.0 | API and configuration freeze ([STABILITY](STABILITY.md)); management call that reads a catalog; EDC test on 1.0.0-RC8 with Gaia-X; ADRs 0024, 0025 and 0026 accepted | [0.13.0](../CHANGELOG.md#0130---2026-11-20) |
 
-## 0.1 Repository foundations (released 2026-11-12 as v0.1.0)
+Older documents cite sections of this file that the table replaced, for
+example "ROADMAP 0.11, Decisions on the 0.11 plan". Their full text is in
+the Git history of this file, last at commit `0637b72` (2026-11-20).
 
-Mirror the set-up already proven in
-[praecepta](https://github.com/brunopacheco1/praecepta).
+### Decisions recorded here
 
-Community and licensing files:
-- `LICENSE` (Apache-2.0), `LICENSES/`, `REUSE.toml`, SPDX headers, `reuse lint` in CI.
-- `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1), `CONTRIBUTING.md`,
-  `GOVERNANCE.md`, `SECURITY.md` (private vulnerability reporting),
-  `CHANGELOG.md` (Keep a Changelog), `CODEOWNERS`, issue forms, PR template.
+Decisions about the plan itself that no ADR or changelog entry holds.
 
-Docs:
-- `docs/ARCHITECTURE.md`, `docs/SECURITY-ASSURANCE.md`, `docs/RELEASING.md`,
-  `docs/ROADMAP.md`, `docs/adr/`.
+- **One main risk per release** (maintainer, 2026-11-14). For this
+  reason the schema registry moved from 0.6 to 0.7 (2026-11-14), the
+  hardening release planned as 0.10 was split into 0.10 to 0.13
+  (2026-11-15), and the release candidate was split into 0.13 (code
+  freeze) and 0.14 (documentation and assurance) (2026-11-20). A
+  document that names "0.9 hardening" or "0.10" for key rotation or the
+  Baseline self-assessment was written before these moves.
+- **Repository settings** (0.1, set by the owner in GitHub). A ruleset
+  on `main`: changes only through pull requests; one approval from a
+  code owner, also of the latest push; stale approvals dismissed; the
+  branch up to date before merge; signed commits; required status
+  checks; no force push or deletion. Admin bypass only for merging a
+  pull request, because a sole maintainer cannot approve their own
+  ([R-02](RISKS_AND_TECHNICAL_DEBTS.md#r-02)). Private vulnerability
+  reporting, secret scanning with push protection, Dependabot (weekly;
+  tooling updates grouped, runtime dependencies separate), CodeQL. A
+  `release` environment with its own secrets; releases start from a
+  signed, annotated `v*` tag.
+- **The EDC interop test** moved from 0.4 to 0.5, so it first ran with
+  real identity (DCP) and not EDC's mock (maintainer, 2026-11-12). To
+  save CI minutes it runs on pull requests that change the code and
+  nightly (maintainer, 2026-11-13; [TESTING](TESTING.md#what-runs-where)).
+- **Upstream reports** are part of the work: what implementing a
+  specification shows is reported to its project, and the code that
+  works around it links the report (maintainer, 2026-11-13). The list
+  is in [RISKS_AND_TECHNICAL_DEBTS](RISKS_AND_TECHNICAL_DEBTS.md#upstream-reports).
+- **Reviews before each release** since 0.4: engineering and testing,
+  readability, documentation ([RELEASING](RELEASING.md#documentation-review)).
 
-Repository configuration (GitHub settings, done by the owner, recorded in docs):
-- **Ruleset on `main`**: changes only through pull requests; 1 approval
-  from a code owner; approval of the latest push; stale approvals dismissed;
-  branch up to date before merge; signed commits; required status checks
-  (build and test, style, `reuse lint`, Sonar quality gate); no force push or
-  deletion. Admin bypass only for merging a pull request, because a sole
-  maintainer cannot approve their own (Scorecard Branch-Protection expected
-  8/10 until a second maintainer joins).
-- **Security**: private vulnerability reporting, secret scanning, push
-  protection, Dependabot alerts and security updates, CodeQL code scanning.
-- **Updates**: `dependabot.yml` for the language ecosystem, GitHub Actions
-  and Docker base images, weekly, with tooling updates grouped and runtime
-  dependencies kept separate.
-- **Release environment** `release` with its own secrets; releases start
-  from a **signed, annotated `v*` tag**.
-- Repository successor set, for continuity.
+### Still open from released versions
 
-CI (every action pinned to a commit SHA, `permissions: contents: read` by default):
-- build and test; style check and linter as errors; coverage to Sonar.
-- `reuse lint`; CodeQL; OpenSSF Scorecard (published, README badge).
-- Dependency review on pull requests (fail on moderate or worse);
-  OSV-Scanner on `Cargo.lock`; licence allowlist, RustSec advisories and
-  crate sources with cargo-deny (`deny.toml`); ORT.
-- Container image: built on every PR, scanned, not pushed.
-
-Release (on signed tag):
-- multi-arch image pushed to GHCR, signed (cosign keyless), SBOM
-  (CycloneDX) and build provenance (`actions/attest-build-provenance`)
-  attached; GitHub release with changelog notes and third-party notices.
-
-Website:
-- Static site in `site/`, published by GitHub Pages: what Portitor is, its
-  objectives, the minimum functionality, the component list and the
-  deployment order, live badges.
-
-OpenSSF:
-- Register at bestpractices.dev (done: project 16578, 91% at release).
-  Reaching **passing** moved to 0.2.
-- OpenSSF Baseline **level 1** (version 2026-08-28) is the target for all
-  of 0.x ([ADR 0012](adr/0012-openssf-baseline.md)). The written
-  self-assessment moved to the hardening release (maintainer,
-  2026-11-12), renumbered 0.10 on 2026-11-14; since the split of
-  2026-11-15 it is in 0.13, the release candidate.
-
-Exit: a "hello" binary ships as a signed image through the full pipeline,
-all checks green, Scorecard published.
-
-## 0.2 DSP basics: version and catalog (released 2026-11-12 as v0.2.0)
-
-- `/.well-known/dspace-version` (version discovery).
-- Catalog protocol (provider side): catalog request, dataset request,
-  datasets defined in a config file.
-- DSP message validation against the DSP 2025-1 JSON schemas.
-- DSP TCK in CI (catalog tests must pass).
-- Raise the OpenSSF scores (decided 2026-11-12):
-  - Best Practices from 91% to 100% **passing**: answer the open
-    criteria with evidence (release notes, test coverage, bug and
-    enhancement responses, secure design knowledge).
-  - Scorecard from 6.7/10 (2026-11-12). Checks we can move now:
-    CII-Best-Practices (2 to 5 at passing), Signed-Releases (v0.1.0 has
-    provenance; confirm on the next scan), Fuzzing (fuzz the DSP and DCP
-    parsers with cargo-fuzz, run by ClusterFuzzLite, which Scorecard
-    detects), Branch-Protection (0 although a ruleset exists; find out
-    why). Checks that only time or more people fix: Maintained (project
-    under 90 days old), Code-Review (needs a second maintainer),
-    Contributors.
-- Exit: DSP TCK catalog tests green; Best Practices badge at **passing**;
-  Scorecard fuzzing and branch protection no longer 0.
-- Result (2026-11-12): all met. Best Practices **passing** (100%).
-  Scorecard 6.7 to 7.9: Fuzzing 10, CII-Best-Practices 5,
-  Signed-Releases 10, Branch-Protection 5. Branch-Protection was 0
-  because the `main` ruleset targeted no branch; fixed.
-
-## 0.3 Contract negotiation (released 2026-11-12 as v0.3.0)
-
-- Provider and consumer state machines, persisted in a SQLite file
-  (ADR 0006); a PostgreSQL adapter follows later on the same port.
-- Minimal ODRL policy support: permit all, and one constraint type.
-- Management API to start a negotiation (consumer side), on its own port
-  with an API key; its OpenAPI description is generated from the code.
-  The DSP endpoints keep the hand-written `docs/api/openapi.json`, which
-  uses the official DSP schemas.
-- Exit: DSP TCK negotiation tests green; two Portitor instances agree a contract.
-- Result (2026-11-12): met. The DSP TCK passes the 15 provider and 16
-  consumer negotiation tests (CN:01 to CN:03, CN_C:01 to CN_C:03).
-  `scripts/demo.sh` has two connectors agree a contract and refuse
-  changed terms; CI runs it on every pull request. Also in 0.3: outbox
-  with proof of delivery (ADR 0007), minimal ODRL (ADR 0009), and the
-  rename to Portitor (ADR 0008).
-
-## 0.4 Transfer process and HTTP data plane (released 2026-11-13 as v0.4.0)
-
-- Transfer process state machines (provider and consumer).
-- Data plane in the same binary, behind a feature flag: HTTP pull with a
-  short-lived token. Internal interface follows Eclipse Data Plane
-  Signaling v1.0-RC4, so the data plane can later be split out.
-- Report to the Dataspace Protocol project what implementing it shows,
-  starting with the three transfer JSON Schemas (suspension, termination,
-  error) whose `$ref` to `AbstractTransferCodeMessage` is not a valid JSON
-  pointer (`#definitions/...` instead of `#/definitions/...`; tag
-  2025-1-err2). Each report links back from the code that works around it.
-  Filed 2026-11-16 on the existing issue
-  https://github.com/eclipse-dataspace-protocol-base/DataspaceProtocol/issues/265.
-- Report the same way to the Eclipse Data Plane Signaling project what
-  implementing v1.0-RC4 shows (listed in ARCHITECTURE, "Data plane"):
-  examples that fail the specification's own schemas, a pull `start`
-  example that breaks a MUST, who may resume, and the HTTP profile's
-  `endpointType` (maintainer, 2026-11-13), plus what the consumer side
-  showed: no Signaling message for a new token when the provider starts a
-  transfer again, and the "Consumer Suspend/Start" diagram. Report the
-  DSP TCK race (ADR 0014) to the TCK project. Filed 2026-11-16:
-  https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/133,
-  https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/134,
-  https://github.com/eclipse-dataplane-signaling/dataplane-signaling/issues/135,
-  https://github.com/eclipse-dataplane-signaling/profiles/issues/8 (`endpointType`),
-  https://github.com/eclipse-dataspacetck/dsp-tck/issues/338 (TCK race).
-- Code quality and readability review of the whole code base before the
-  release, so a maintainer who is not a Rust expert can follow it (asked
-  by the maintainer, 2026-11-13): simpler code where it is hard to read,
-  comments where an idiom hides the intent, and a short guide to the Rust
-  idioms the code uses (closures `|x| ...`, the `?` operator, `match`,
-  `Option` and `Result`). Findings are fixed or recorded before tagging.
-  Done: `docs/RUST-IDIOMS.md`, and the review's fixes (2026-11-13).
-- Exit: DSP TCK transfer tests green; end-to-end file transfer between two
-  instances in Docker Compose. The EDC interop test moved to 0.5, so it
-  runs once with real identity (DCP) instead of EDC's mock (maintainer,
-  2026-11-12).
-- Result (2026-11-13): met. The DSP TCK passes the 15 provider and 15
-  consumer transfer tests (TP:01 to TP:03, TP_C:01 to TP_C:03; TP:02-04
-  and TP_C:02-04 are disabled in the TCK itself), 65 tests in all with
-  metadata, catalog and negotiation. `scripts/demo-compose.sh` has two
-  connectors in Docker Compose negotiate a contract and fetch the data
-  over HTTP pull; CI runs it on every pull request. The upstream reports
-  are drafted; the maintainer files them, and their links are added here
-  (filed 2026-11-16, linked above and in
-  [R-07](RISKS_AND_TECHNICAL_DEBTS.md#r-07)).
-
-## 0.5 DCP: identity and DSP authentication (released 2026-11-13 as v0.5.0)
-
-Plan approved by the maintainer on 2026-11-13. DCP v1.0.1 and the DCP
-TCK v1.2.1 are the targets (latest releases, checked 2026-11-13).
-
-- Identity component `portitor-identity` ([ADR 0015](adr/0015-dcp-identity-component.md)):
-  did:web document, one P-256 key from a mounted file, Secure Token
-  Service (the DCP TCK and EDC need one), presentation API, storage API
-  and credential offers (holder side), credentials in SQLite. Profile
-  both DCP profiles, `vc11-sl2021/jwt` (what the DCP TCK uses) and
-  `vc20-bssl/jwt` (what Gaia-X needs, now in 0.8). Its own signed image.
-- The connector authenticates every DSP request with DCP
-  ([ADR 0016](adr/0016-dsp-caller-authentication.md)): the caller's DID
-  is proven, it must hold a `MembershipCredential` from a trusted issuer,
-  not revoked (BitstringStatusList). Every outgoing DSP request carries a
-  token from the own identity's STS. `/.well-known/dspace-version` stays
-  open. Credential rules in ODRL stay in 0.6.
-- Until the issuer exists (0.6), a test-only tool, not shipped in any
-  image, signs credentials for the demos and the EDC test.
-- **First interop test against EDC**: catalog, negotiation and pull
-  transfer, with DCP against EDC's IdentityHub. Target the EDC 1.0
-  release candidates and pin 1.0.0 when it ships (fallback 0.18.2). To
-  save CI minutes it runs on pull requests that change DSP or DCP code
-  and nightly (maintainer, 2026-11-13).
-- Spike: how to join a **Simpl-Open** dataspace
-  ([ADR 0017](adr/0017-simpl-open.md), proposed). Simpl-Open's connector
-  is EDC 0.17.0 with DSP 2025-1 but no DCP; agents authenticate each
-  other with GA-issued x509 certificates over mTLS at their Tier 2
-  gateway, with attribute-based access. Proposed: no x509/mTLS profile
-  in Portitor; later, run Portitor behind the Simpl Tier 2 gateway with
-  a small adapter, and ask Simpl whether SSI Tier 2 will use DCP.
-- Code quality and readability review before the release, as in 0.4.
-- Pull requests: (1) ADRs 0015 and 0016; (2) DCP domain types;
-  (3) identity component; (4) storage API and DCP TCK credential service
-  tests; (5) connector as verifier, DCP TCK verifier tests, DSP TCK and
-  demos with DCP; (6) EDC interop test; (7) Simpl-Open spike;
-  (8) readability review and 0.5.0.
-- Exit: DCP TCK credential service tests (presentation and holder-side
-  issuance) and verifier tests green; DSP flows from 0.2 to 0.4 run with
-  DCP authentication; the EDC interop test is green in CI.
-- Result (2026-11-13): met. The DCP TCK v1.2.1 passes all 54 credential
-  service tests and all 22 verifier tests, locally and in CI. The DSP TCK
-  runs green with DCP authentication on every request. The EDC interop
-  test (EDC 1.0.0-RC7 with its IdentityHub) runs catalog, negotiation and
-  pull transfer with DCP in both directions, checks that each side
-  refuses the other once its credential is revoked, and is green in CI. The
-  Simpl-Open spike stays at ADR 0017 (proposed) until the maintainer sets
-  up a Simpl-Open sandbox (maintainer, 2026-11-13). Upstream reports
-  (DCP TCK, EDC IdentityHub, DCP schemas) are still to be filed. They
-  were filed on 2026-11-16; the links are in
-  [R-07](RISKS_AND_TECHNICAL_DEBTS.md#r-07).
-
-## 0.6 DCP: issuance and credential-based policies (released 2026-11-14 as v0.6.0)
-
-Plan approved by the maintainer on 2026-11-14. The schema and vocabulary
-registry moved to 0.7, so each release has one main risk (maintainer,
-2026-11-14).
-
-- Issuer component `portitor-issuer` ([ADR 0018](adr/0018-issuer-component.md)):
-  optional per participant, one per dataspace, run by the authority.
-  DCP issuer metadata, credential request and status, delivery to the
-  holder's Storage API, offers; issues only to participants the authority
-  registered; credential types from a configuration file; both DCP
-  profiles; BitstringStatusList revocation. Its own signed image.
-- The identity component asks an issuer for credentials (holder side of
-  DCP issuance) and accepts their delivery.
-- ODRL constraints that check credentials
-  ([ADR 0019](adr/0019-credential-constraints.md)): left operand
-  `<CredentialType>.<claim path>`, as EDC does, with scopes derived from
-  the policy. Checked at negotiation and again at transfer start.
-- The test-only `test-issuer` tool is removed; demos and the EDC
-  interop test use `portitor-issuer`.
-- Spike (3 days): SHACL engine for ADR 0005 (rudof, a small SHACL Core
-  subset on Oxigraph's RDF crates, or a sidecar), on HealthDCAT-AP
-  release 7 samples. Ends with ADR 0005 updated for the maintainer's
-  decision.
-- Reviews before the release: engineering and testing, readability
-  (`docs/RUST-IDIOMS.md`), documentation (C4 diagrams, OpenAPI, website,
-  DEPLOYING).
-- Exit: DCP TCK v1.2.1 issuer tests (41) green against `portitor-issuer`,
-  and the credential service, verifier and DSP TCK runs still green; a
-  negotiation under a credential constraint succeeds for a holder with
-  the claim and is terminated for one without it; a revoked credential
-  blocks a new negotiation; EDC IdentityHub gets its membership credential
-  from `portitor-issuer` and the EDC interop test stays green.
-- Result (2026-11-14): met. The DCP TCK v1.2.1 passes all 41 issuer
-  tests against `portitor-issuer` (a new CI job), all 54 credential
-  service tests and all 22 verifier tests, run locally. The DSP TCK passes
-  its 65 required tests with the connector of this release, run locally.
-  `scripts/demo.sh` and the Compose demo pass locally: a negotiation under
-  a `DataProcessorCredential` constraint is agreed, one for a missing role
-  claim is terminated, and once the issuer revokes the credential a new
-  transfer is refused. The EDC interop test (EDC v1.0.0-RC7) passes
-  locally, with the IdentityHub asking `portitor-issuer` for its
-  credential. Verifiers follow DCP 5.4.3, step 8: a presentation that
-  holds a revoked credential is refused, so after a reissue the holder
-  deletes the revoked one (DEPLOYING). The SHACL spike is done; the
-  maintainer chose an own SHACL Core subset for 0.7 (ADR 0005).
-
-## 0.7 Schema and vocabulary registry, dataset harvest (released 2026-11-15 as v0.7.0)
-
-Plan approved by the maintainer on 2026-11-14.
-
-- Schema and vocabulary registry ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)):
-  the authority builds and signs a bundle of SHACL shapes, vocabularies
-  and JSON-LD contexts with `portitor-issuer bundle build`, signed with a
-  separate bundle key under its `did:web`; the issuer can serve it. The
-  connector pulls the newest version (or a fixed one), verifies it,
-  caches it on disk and puts a new version in use without a restart.
-  How schemas are collected and stored stays open: see
-  [TD-01](RISKS_AND_TECHNICAL_DEBTS.md#td-01).
-  HealthDCAT-AP release 8 is the baseline.
-- Our own SHACL Core engine, `portitor-shacl` (maintainer, 2026-11-14):
-  shapes that use anything it does not implement are refused.
-- Datasets are harvested into a read copy ([ADR 0020](adr/0020-dataset-harvest.md)):
-  the source of truth lives outside the connector; the first source is
-  the existing datasets file; harvest at start and every hour
-  (`PORTITOR_HARVEST_INTERVAL_SECONDS`); each dataset is checked on its
-  own (DSP, ODRL, SHACL for its `dct:accessRights` level); a bad dataset
-  is rejected and never stops the connector; every run is stored with
-  its errors and a summary, readable at `GET /v1/harvest-jobs`. Policies
-  live with the datasets; no API writes datasets or policies.
-- The SHACL `MessageGuard` adapter checks DSP messages in and out.
-- Datasets that passed carry `dct:conformsTo`. The catalog `@context`
-  stays the DSP context alone; metadata terms outside it are full IRIs
-  (maintainer, 2026-11-14).
-- Reviews before the release: engineering and testing, readability
-  (`docs/RUST-IDIOMS.md`), documentation (C4 diagrams, OpenAPI, website,
-  DEPLOYING).
-- Exit: a dataset that breaks the authority's shapes is not published,
-  its error is in the harvest job, and the connector keeps running; a
-  dataset removed from the source stops new negotiations while a
-  transfer under an existing agreement still works; a DSP message that
-  breaks the shapes is refused; a changed or wrongly signed bundle is
-  refused; the engine agrees with the EU ITB validator on our release 8
-  samples; the DSP TCK, the DCP TCK and the EDC interop test stay green.
-
-- Result (2026-11-14): met, run locally. A HealthDCAT-AP release 8 bundle
-  (with the DCAT-AP 3.0.0 shapes and reduced code lists) is built and
-  signed with the issuer's bundle key and pinned by the provider; in the
-  demo two valid datasets are served with `dct:conformsTo` and one is
-  rejected with its 7 SHACL violations in `GET /v1/harvest-jobs`, while
-  the connector keeps running. A dataset removed from the source stops new
-  negotiations while a transfer under an existing agreement still works
-  (tests). A DSP message that breaks the shapes is refused (400 inbound,
-  not sent outbound). A changed or wrongly signed bundle, or one signed
-  with any key other than the bundle key, is refused. The engine gives
-  the same 7 results as the EU ITB validator on the spike samples and
-  passes the vendored W3C SHACL tests for its components. The DSP TCK
-  passes its 65 required tests, the DCP TCK 41 issuer (also with a bundle
-  key), 54 credential service and 22 verifier tests, and the EDC interop
-  test (EDC v1.0.0-RC7) passes with the bundle on. The catalog `@context`
-  stays the DSP context alone; datasets use full IRIs (maintainer,
-  2026-11-14).
-
-## 0.8 Gaia-X Trust Framework (Danube) (released 2026-11-15 as v0.8.0)
-
-Plan approved by the maintainer on 2026-11-15. Gaia-X does not use DCP,
-and EDC 1.0.0-RC7 refuses a credential that is not about the holder's
-DID, which the Gaia-X compliance credential is not. So Gaia-X policies
-are tested between Portitor connectors, and the EDC interop test keeps
-running without Gaia-X (maintainer, 2026-11-15).
-
-- Spike (go/no-go): a local Gaia-X compliance service accepts a
-  presentation signed with a Portitor ES256 key. Result: go
-  ([spike report](spikes/0.8-gaia-x-compliance.md)).
-- The identity component publishes the X.509 chain of its key (`x5u`)
-  and onboards to Gaia-X: it signs the LegalPerson and terms and
-  conditions credentials, sends them with the notary's registration
-  number credential to a compliance service, stores the compliance
-  credential and renews it ([ADR 0021](adr/0021-gaia-x-onboarding.md)).
-- The connector checks a Gaia-X compliance credential from a trusted
-  compliance service, tied to the caller through the digest of its
-  LegalPerson credential, and policies can require it
-  ([ADR 0022](adr/0022-gaia-x-compliance-in-policies.md)).
-- CI: a Gaia-X job with a local compliance service (pinned image, Gaia-X
-  test mode); the DCP TCK jar is cached (Maven Central answered HTTP 429
-  on 2026-11-15).
-- Reviews before the release: engineering and testing, readability
-  (`docs/RUST-IDIOMS.md`), documentation (C4 diagrams, OpenAPI, website,
-  DEPLOYING).
-- Exit: a participant set up from scratch gets a
-  `ParticipantComplianceCredential` from the local compliance service in
-  CI, and a Portitor consumer negotiates with a Portitor provider under a
-  policy that requires it; a consumer without it is refused; a tampered
-  LegalPerson credential and an untrusted compliance service are refused.
-  The DCP TCK (issuer, credential service, verifier), the DSP TCK and the
-  EDC interop test stay green.
-- Not in 0.8 (see "Later"): the real Gaia-X Lab, Gaia-X DCAT and service
-  offering credentials, OpenID4VC, label levels 1 to 3, calling the
-  notary, Gaia-X with EDC.
-
-## 0.9 Operations (released 2026-11-15 as v0.9.0)
-
-Plan approved by the maintainer on 2026-11-15. The two-participant demo
-in Docker Compose exists since 0.4; 0.9 adds what an operator needs to
-run Portitor and what a new user needs to try it
-([ADR 0023](adr/0023-observability.md)).
-
-- Spike (go/no-go): OpenTelemetry in the connector within the footprint
-  budget (at most +25% binary size and idle memory against 0.8.0, start
-  time unchanged), and `cargo deny` still green
-  ([spike report](spikes/0.9-opentelemetry.md)).
-- Liveness and readiness in the connector, the identity component and
-  the issuer, on the management port without the API key, with the paths,
-  status codes and body of EDC's Observability API
-  (`/api/check/liveness`, `/readiness`, `/startup`, `/health`). Readiness
-  checks only the component's own dependencies, never other
-  participants. `GET /health` on the public port stays.
-- A `health` subcommand in each binary for Docker `HEALTHCHECK`, as the
-  images hold no shell; the Compose demo waits for each component to be
-  ready, so the file itself shows the deployment order.
-- Traces and metrics with OpenTelemetry over OTLP/HTTP, off unless
-  `OTEL_EXPORTER_OTLP_ENDPOINT` is set, configured with OpenTelemetry's
-  own variables. Trace context stays inside one participant: DSP calls
-  to other participants carry no `traceparent`. HTTP metrics follow the
-  OpenTelemetry semantic conventions; a short list of Portitor metrics
-  covers negotiations, transfers, refused DSP requests, the outbox, the
-  harvest and the bundle. Log lines carry the `trace_id`.
-- An optional Compose file with an OpenTelemetry Collector, Jaeger and
-  Prometheus, started by hand and described in TESTING (not run in CI).
-- A quickstart on the website.
-- Reviews before the release: engineering and testing, readability
-  (`docs/RUST-IDIOMS.md`), documentation (C4 diagrams, OpenAPI, website,
-  DEPLOYING, `_http`).
-- Exit: readiness fails when a component's own dependency is down
-  (tested) and the Compose demo starts in order on it; with an OTLP
-  endpoint set, a negotiation and a transfer show as traces and metrics;
-  without it nothing is exported and the footprint stays in budget; a new
-  user runs the demo from the website in under 15 minutes (timed by the
-  maintainer on a clean machine). The DSP TCK, the DCP TCK, the EDC
-  interop test and the Gaia-X test stay green.
-- Result (2026-11-15): met, except the timed quickstart, which waits for
-  the maintainer's run on a clean machine. Spike: go. Readiness fails
-  when a component's own dependency is down (unit and integration
-  tests), and the Compose demo starts each component once the ones it
-  needs are healthy. With the observability stack, Jaeger shows traces
-  of all three components with the negotiation and transfer state
-  changes, and Prometheus the metrics; without an endpoint nothing is
-  exported (in-process OTLP receiver test). Footprint against 0.8.0:
-  binaries +14% (connector), +20% (identity, issuer); idle memory +1.2
-  MB per process with export off. At saturation the connector serves
-  8% fewer requests with export off and 12% to 18% fewer with export on
-  (R-37). The DSP TCK (65 of 65), the DCP TCK (issuer 41, credential
-  service 54, verifier 22), the EDC interop test (RC7) and the Gaia-X
-  test pass.
-
-The hardening release planned as 0.10 is split into four smaller
-releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
-0.13.
-
-## 0.10 Supply chain (released 2026-11-16 as v0.10.0)
-
-- Dependency review with **cargo-vet**: every crate version in `Cargo.lock`
-  audited (own audits or imported sets, such as Mozilla's and Google's) or
-  explicitly exempted; CI fails on an unaudited change. Deferred from 0.1
-  (decided 2026-11-11) because it turns each dependency bump into review
-  work ([R-04](RISKS_AND_TECHNICAL_DEBTS.md#r-04)).
-- Website trust values (maintainer, 2026-11-15): the site shows "not
-  available" for the SonarQube Cloud quality gate and for REUSE. Register
-  the repository with the REUSE API (open since 0.1), check that the
-  quality gate can be read without a token
-  (`api/qualitygates/project_status`), and check that the site shows
-  both after its next build.
-- File the upstream reports drafted from 0.4 to 0.8 and link them
-  (maintainer, 2026-11-15; earlier if an answer is needed to go on;
-  [R-07](RISKS_AND_TECHNICAL_DEBTS.md#r-07)).
-- Exit: cargo-vet runs in CI with every crate audited or exempted; the
-  site shows the SonarQube and REUSE values; each upstream report filed
-  and linked.
-- Main risk: the audit load of cargo-vet.
-- Result (2026-11-16): cargo-vet runs in CI: 45 of 204 crate versions
-  are audited by imported sets from Mozilla, Google, Bytecode Alliance,
-  ISRG and Zcash, and 159 are exempted. The SonarQube quality gate is
-  fixed: the site asks for `branch=main`, because SonarQube Cloud still
-  names its main branch `master`. The REUSE value is pending: the
-  maintainer registers the repository with the REUSE API. Upstream
-  reports: 12 filed and linked in
-  [R-07](RISKS_AND_TECHNICAL_DEBTS.md#r-07) (11 issues and 1 comment), 1
-  not filed (Gaia-X, no GitLab account), 1 on hold (R-10), 1 dropped
-  (already filed by a third party).
-
-## 0.11 Security hardening (released 2026-11-17 as v0.11.0)
-
-- Threat model review; fuzzing on every parser (ClusterFuzzLite).
-- Explicit request size limits per port and route, set by Portitor
-  (today axum's default of 2 MB on every parsed body; data plane bodies
-  are streamed), with tests ([R-18](RISKS_AND_TECHNICAL_DEBTS.md#r-18)).
-- Cache status list credentials in the connector's DCP verifier
-  (maintainer, 2026-11-14): `PORTITOR_STATUS_LIST_CACHE_SECONDS`, default
-  300 (5 minutes), 0 checks on every request, at most 3600; only lists
-  that were fetched and verified are cached, never longer than the list's
-  own expiry. Trade-off documented in DEPLOYING: a revocation takes up to
-  that long to be seen. EDC v1.0.0-RC7 caches for 15 minutes by default
-  (`edc.iam.credential.revocation.cache.validity`). Demos, the EDC test
-  and the TCK runs use 0. Amends ADR 0016 ("Presentations are not
-  cached") ([TD-06](RISKS_AND_TECHNICAL_DEBTS.md#td-06)).
-- Investigate key custody and key rotation
-  ([TD-05](RISKS_AND_TECHNICAL_DEBTS.md#td-05)), and list a retired key
-  next to the current one in each DID document, so a key change leaves
-  no gap: what the old key signed keeps verifying until it expires.
-  EDC IdentityHub rotates this way (maintainer, 2026-11-15, plan after
-  0.13). Key custody in OpenBao comes in 1.4.
-- The outbox retries a DSP message only on network errors, 408, 429 and
-  5xx, and gives up at once on other 4xx
-  ([TD-30](RISKS_AND_TECHNICAL_DEBTS.md#td-30); maintainer, 2026-11-15).
-- Research, docs only, in 0.11 and 0.12: an ADR on a provider in several
-  data spaces ([TD-03](RISKS_AND_TECHNICAL_DEBTS.md#td-03)) and one on
-  user to system authentication and authorisation
-  ([TD-04](RISKS_AND_TECHNICAL_DEBTS.md#td-04)). Their answers may change
-  the API and the configuration, so they must be known before the 0.13
-  freeze (maintainer, 2026-11-15).
-- README badges, as in praecepta (maintainer, 2026-11-16): release, CI,
-  TCK, CodeQL, OpenSSF Scorecard, Best Practices and Baseline, licence,
-  REUSE (API registered the same day) and Contributor Covenant. Still to
-  add: the SonarQube Cloud quality gate and coverage badges. SonarQube
-  Cloud analyses `main` as a short-lived branch (its main branch is still
-  named `master`, with no analysis), and its badges read "not computed"
-  for both, so they wait until the maintainer renames `master` to `main`
-  in SonarQube Cloud.
-- Decisions on the 0.11 plan (maintainer, 2026-11-17): a parser is any
-  code that reads bytes from outside the process that the operator did
-  not write (network messages, DID documents, certificates, tokens, the
-  bundle, harvested datasets), not the operator's own configuration;
-  request limits are settings, one per port, with lower fixed limits on
-  routes whose messages are small by specification; the status list
-  cache amends ADR 0016; a retired key is listed as a public key only
-  (`PORTITOR_IDENTITY_RETIRED_KEY_FILES`, `PORTITOR_ISSUER_RETIRED_KEY_FILES`),
-  so the old private key can be destroyed, as EDC IdentityHub rotates;
-  the bundle key stays one key (its rotation is under "Later"); the
-  TD-03 ADR comes in 0.11 and the TD-04 ADR in 0.12; the threat model
-  keeps its table and gets a STRIDE pass per trust boundary; the 300 ms
-  `LateStart` workaround stays until a DSP TCK release includes the fix
-  of dsp-tck #338 (PR #339, merged 2026-11-17, not released).
-- Exit: every parser has a fuzz target; the request limits per port and
-  route are tested; the status list cache is tested at 0 and 300 s; the
-  threat model review is recorded in SECURITY-ASSURANCE; a key change
-  with two keys listed leaves no verification gap (tested); the outbox
-  stops at the first 4xx it may not retry (tested); the README shows the
-  quality gate and coverage badges.
-- Main risk: a finding that needs a design change.
-- Result (2026-11-17): 22 fuzz targets, one for each parser of outside
-  input (list in SECURITY-ASSURANCE, "Parsers and fuzz targets"); request
-  size limits per port (`PORTITOR_MAX_REQUEST_BYTES`,
-  `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES`, 2 MiB by default) and 64 KiB on
-  routes with small messages, HTTP 413 above them; the status list cache
-  (`PORTITOR_STATUS_LIST_CACHE_SECONDS`, tested at 0 and 300 s; ADR 0016
-  amended); retired public keys in the identity's and issuer's DID
-  documents, tested with no verification gap (ADRs 0015 and 0018
-  amended); the outbox stops at the first answer it may not retry (ADR
-  0007 amended), and the connector answers 503, not 401, when a service
-  it needs to check a caller is down; the threat model review with a
-  STRIDE pass per trust boundary (10 findings, F-01 to F-10); ADR 0024 on
-  a provider in several data spaces (Proposed). Not met: the quality gate
-  and coverage badges, which wait for the SonarQube Cloud branch rename.
-
-## 0.12 Interoperability and performance (released 2026-11-20 as v0.12.0)
-
-- Interoperability tests against Eclipse EDC, without Gaia-X: EDC
-  1.0.0-RC7 refuses the Gaia-X compliance credential (ADR 0022). Simpl-Open
-  stays under "Later" until a sandbox exists (ADR 0017).
-- Benchmarks published. They also measure the database calls that
-  block the async runtime ([TD-40](RISKS_AND_TECHNICAL_DEBTS.md#td-40)); the calls move to blocking threads
-  only if the numbers show the need.
-- Findings of the
-  [2026-11-18 review](reviews/2026-11-18-specifications-and-code-quality.md)
-  that touch interoperability or what a partner can make Portitor do:
-  - A policy term that is not understood stops the harvest of that
-    dataset, and a partner's message that carries one is refused
-    (maintainer, 2026-11-18: strict;
-    [TD-32](RISKS_AND_TECHNICAL_DEBTS.md#td-32)). The check is in
-    Portitor's policy reader: the SHACL shapes do not catch it.
-  - The issuer's metadata passes the DCP JSON schema, and a test checks
-    Portitor's own answer ([TD-33](RISKS_AND_TECHNICAL_DEBTS.md#td-33)).
-  - A repeated transfer request with the same `consumerPid` gets the
-    same transfer ([TD-34](RISKS_AND_TECHNICAL_DEBTS.md#td-34)).
-  - The small DSP and DCP points ([TD-36](RISKS_AND_TECHNICAL_DEBTS.md#td-36), [TD-37](RISKS_AND_TECHNICAL_DEBTS.md#td-37)): see what EDC
-    does, then fix each or record the choice in its ADR.
-  - Decide whether `panic = "abort"` stays ([TD-41](RISKS_AND_TECHNICAL_DEBTS.md#td-41)).
-- Exit: the EDC interop test passes against the newest EDC release;
-  the benchmarks are published in `docs/`; TD-32, TD-33 and TD-34 are
-  addressed, and TD-36, TD-37, TD-40 and TD-41 are fixed or recorded as
-  accepted.
-- Main risk: EDC changing under us.
-- Decisions on the 0.12 plan (maintainer, 2026-11-18): the strict
-  reading of policies also holds for a partner's message; the issuer's
-  `credentialSchema` is a required URL in the definitions file, as in
-  EDC; a refused caller gets 404 on the negotiation and transfer routes
-  and 401 on the catalog, as the DSP bindings say and EDC answers;
-  `panic = "abort"` goes, unless the binaries grow more than 10% (they
-  grew 13%; asked again on 2026-11-19); the DID document cache time
-  becomes a setting; the TD-04 ADR is written in 0.12 as Proposed and
-  does not block the release. The reference load for the benchmarks
-  comes from published reports of real platforms: few negotiations, a
-  data plane that carries many and long pulls, and stored history that
-  grows (BENCHMARKS, "Reference load").
-- Result (2026-11-19): TD-32, TD-33, TD-34 and TD-37 addressed; TD-36
-  addressed but for catalog pages, which go with TD-38; TD-41 addressed
-  (a panic fails one request); TD-40 measured and accepted: with 100
-  pulls running, the data plane's p99 time to first byte stays under 15
-  ms at any negotiation rate the test machine produced.
-  [BENCHMARKS](BENCHMARKS.md) is published. The EDC interop test already
-  ran against EDC 1.0.0-RC7, still the newest release on 2026-11-18, so
-  0.12 only changed what the test expects (404 after a revocation). Also
-  in 0.12: `PORTITOR_DID_CACHE_SECONDS`
-  ([R-41](RISKS_AND_TECHNICAL_DEBTS.md#r-41)); a credential's key must
-  belong to its issuer's DID (DCP 5.4.3); two things the benchmark
-  found and 0.12 fixed (a transfer start that slowed with stored
-  history, and small answers that waited 43 ms); and
-  [ADR 0025](adr/0025-users-and-roles.md) on users and roles (Proposed).
-  The benchmark also raised
-  [TD-44](RISKS_AND_TECHNICAL_DEBTS.md#td-44) and
-  [TD-45](RISKS_AND_TECHNICAL_DEBTS.md#td-45).
-
-## 0.13 API and configuration freeze (released 2026-11-20 as v0.13.0)
-
-The release candidate was split in two (maintainer, 2026-11-20): 0.13
-freezes the code, 0.14 makes the documentation and the assurance ready.
-
-- API and configuration freeze: [STABILITY](STABILITY.md) says what 1.0
-  keeps stable, and a test fails when a frozen route or setting
-  disappears.
-- A management call that reads a provider's catalog, shaped as in EDC's
-  management API ([TD-38](RISKS_AND_TECHNICAL_DEBTS.md#td-38)), so the
-  quickstart needs no hand-made STS call.
-- The EDC test moves to EDC 1.0.0-RC8 and gains Gaia-X compliance, as
-  one run that can be repeated later: every version pinned, steps and
-  expected results in [TESTING](TESTING.md) (maintainer, 2026-11-20).
-- A transfer request that arrives just before the provider records
-  `FINALIZED` is accepted as proof that the finalization arrived
-  ([TD-44](RISKS_AND_TECHNICAL_DEBTS.md#td-44), option (a), maintainer,
-  2026-11-20; amends ADR 0007). EDC accepts such a request as soon as
-  the agreement exists.
-- [ADR 0025](adr/0025-users-and-roles.md) (users and roles, TD-04) and
-  [ADR 0024](adr/0024-several-data-spaces.md) (several data spaces,
-  TD-03) accepted. Before the freeze: the management key and the data
-  token are opaque strings; `403` is documented on the management
-  routes; `dataAddress` stays optional in the transfer view; a connector
-  skips a bundle file whose role it does not know, with a warning, and
-  refuses a bundle in which it knows no file.
-- The ODRL 2.2 `dateTime` definition compared with ADR 0009
-  ([R-26](RISKS_AND_TECHNICAL_DEBTS.md#r-26)); TLS stays the operator's
-  job, in an ADR ([TD-19](RISKS_AND_TECHNICAL_DEBTS.md#td-19));
-  migrations stay forward-only
-  ([TD-22](RISKS_AND_TECHNICAL_DEBTS.md#td-22)).
-- Not in 1.0 (maintainer, 2026-11-20; both are large and can be added
-  later without a break): negotiation started by the provider
-  ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)) and Data Plane Signaling
-  over HTTP ([TD-17](RISKS_AND_TECHNICAL_DEBTS.md#td-17)).
-  Interoperability with Simpl-Open has not been tested
-  ([ADR 0017](adr/0017-simpl-open.md) stays proposed).
-- Exit: both TCKs and the EDC test with Gaia-X pass in CI; no open high
-  findings in Sonar or CodeQL; TD-38 and TD-44 addressed.
-- Main risk: freezing too early or too late.
+- 0.9: the quickstart timed by the maintainer on a clean machine
+  (target: under 15 minutes). Now an exit criterion of 0.14.
+- 0.10 and 0.11: the README badges for the SonarQube Cloud quality gate
+  and coverage. SonarQube Cloud still names its main branch `master`
+  and analyses `main` as a short-lived branch, so the badges read "not
+  computed". They wait until the maintainer renames the branch in
+  SonarQube Cloud. The website already asks for `branch=main`.
 
 ## 0.14 Documentation and assurance (release candidate for 1.0)
 
@@ -638,25 +92,36 @@ freezes the code, 0.14 makes the documentation and the assurance ready.
   short "first deployment" path at the top
   ([TD-39](RISKS_AND_TECHNICAL_DEBTS.md#td-39)); the released sections
   of this roadmap become one table; closed risks become one line each,
-  with a "top risks" box. DEPLOYING is for an operations team; running
-  the demo on a laptop is in TESTING (maintainer, 2026-11-18). ADRs,
-  the changelog and the spikes are records and are not shortened.
-- A "read the code in this order" page
+  with a "top risks" box; ARCHITECTURE describes the system as it is,
+  not release by release; the ADRs get an [index](adr/README.md).
+  DEPLOYING is for an operations team; running the demo on a laptop is
+  in TESTING (maintainer, 2026-11-18). ADRs, the changelog and the
+  spikes are records and are not shortened.
+- A "read the code in this order" page,
+  [READING-THE-CODE](READING-THE-CODE.md)
   ([R-01](RISKS_AND_TECHNICAL_DEBTS.md#r-01)), and a note in TESTING for
   the four near-copies of the negotiation and transfer logic
   ([TD-42](RISKS_AND_TECHNICAL_DEBTS.md#td-42)).
-- One place that says which Gaia-X Compliance Document and ICAM version
-  Portitor was checked against
+- One place that says which specification versions Portitor was checked
+  against, the Gaia-X Compliance Document and ICAM version among them:
+  [ARCHITECTURE, "Specification versions"](ARCHITECTURE.md#specification-versions)
   ([TD-43](RISKS_AND_TECHNICAL_DEBTS.md#td-43)).
+- An interoperability test against the EDC Issuer Service of
+  IdentityHub 1.0.0-RC8 (DCP issuance). Until now the EDC test has one
+  issuer, `portitor-issuer`.
+- A review of the scope of the CI pipeline.
+- The leftovers of the 0.13 release review.
 - The website gets an ancient Roman theme built on the two meanings of
   *portitor*, the customs officer and the ferryman (maintainer,
   2026-11-20). An open-licence font may be stored in the repository,
   with credit.
-- OpenSSF Best Practices **silver**.
+- OpenSSF Best Practices **silver**. Its access continuity criterion is
+  covered by the successor set on the maintainer's GitHub account
+  (maintainer, 2026-11-20).
 - OpenSSF Baseline **level 1** self-assessment, control by control, in
-  `docs/SECURITY-ASSURANCE.md` (moved from 0.1, maintainer, 2026-11-12),
-  done last so it assesses the final state; decide whether 1.0 aims at a
-  higher level ([R-05](RISKS_AND_TECHNICAL_DEBTS.md#r-05)).
+  `docs/SECURITY-ASSURANCE.md`, done last so it assesses the final
+  state. The target stays level 1 for 1.0 (maintainer, 2026-11-20;
+  [R-05](RISKS_AND_TECHNICAL_DEBTS.md#r-05)).
 - Usable as it is (maintainer, 2026-11-15: 1.0 ships the release
   candidate only if what is built can be shown and used): a new user
   runs the website quickstart on a clean machine, and the docs say what
