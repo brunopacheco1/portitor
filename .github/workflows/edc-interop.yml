@@ -39,9 +39,11 @@ on:
     - cron: "37 2 * * *" # nightly: EDC's side changes without our code changing
   workflow_dispatch:
 
-# a newer push to the same pull request replaces the run in progress; nightly and manual runs always finish
+# Runs of one pull request share a group: a newer push replaces the run in progress.
+# Every other run (a push to main, a scheduled or a manual run) is a group of its own,
+# named by its run id, so it is never cancelled and never waits for another run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
