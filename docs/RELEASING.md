@@ -9,8 +9,8 @@ SPDX-License-Identifier: Apache-2.0
 All components share one version (mono repo). Pushing a signed tag `vX.Y.Z`
 runs [`.github/workflows/release.yml`](../.github/workflows/release.yml), which:
 1. checks the tag is annotated, signed by the maintainer (keys from
-   `github.com/<owner>.gpg`), equal to `version` in `Cargo.toml`, and
-   listed in `CHANGELOG.md`;
+   `github.com/<owner>.gpg`), on a commit of `main`, equal to `version`
+   in `Cargo.toml`, and listed in `CHANGELOG.md`;
 2. tests the workspace and builds static musl binaries on native amd64 and
    arm64 runners;
 3. builds one multi-arch image per component and pushes it to
@@ -39,8 +39,11 @@ per image, and the GitHub release is created only when every image job
 succeeded. Adding a component means: a binary crate, a target in the
 `Dockerfile`, a line in `.dockerignore`, and its name in `COMPONENTS`.
 
-A pull request that changes the release workflow, the `Dockerfile` or the
-notices script runs the same build as a dry run: nothing is pushed or signed.
+A pull request that changes the release workflow, the root `Cargo.toml`,
+the `Dockerfile`, `.dockerignore` or the notices script runs the same
+build as a dry run: nothing is pushed or signed. The release pull request
+sets the version in `Cargo.toml`, so it always gets a dry run: the arm64
+build and tests, the SBOMs and the notices are checked before the tag.
 
 ## One-time setup (owner)
 
@@ -130,6 +133,10 @@ pull request, or record why it stays.
    git tag -s vX.Y.Z -m "Portitor X.Y.Z"
    git push origin vX.Y.Z
    ```
+   The tag must be on a commit of `main`: the workflow refuses a tag on
+   any other commit, so a signed tag on an unmerged branch publishes
+   nothing. A release from a maintenance branch needs that rule widened
+   in `release.yml` first (job `verify`).
 3. Watch **Actions → Release**. When it is green, the images and the GitHub
    release are published.
 4. Run the website's quickstart ("Try it" in `site/index.html`) on a
