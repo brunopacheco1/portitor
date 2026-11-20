@@ -428,6 +428,30 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
         Ok(saved.and_then(|negotiation| negotiation.pending))
     }
 
+    /// Whether `sent`, a finalization event, no longer has to arrive: the
+    /// negotiation is `FINALIZED`, so `sent` is not pending any more.
+    /// `false` for any other message, and for an unknown negotiation.
+    ///
+    /// The outbox asks this for an event it could not deliver. The
+    /// negotiation can then be `FINALIZED` only because a transfer
+    /// request from the consumer was taken as proof of delivery
+    /// ([`finalization_proved`]; ADR 0007, amended in 0.13): such an
+    /// event is not given up. [`Service::abort`] changes nothing then.
+    ///
+    /// # Errors
+    ///
+    /// Store failure.
+    pub fn finalization_settled(&self, sent: &Outgoing) -> Result<bool, Failure> {
+        if sent.transition != Transition::Finalize {
+            return Ok(false);
+        }
+        let stored = self.store.get(&sent.provider_pid);
+        let Some(negotiation) = stored.map_err(Failure::Store)? else {
+            return Ok(false);
+        };
+        Ok(negotiation.state == NegotiationState::Finalized)
+    }
+
     /// Negotiations with a message still to send, for example after a
     /// restart.
     ///
