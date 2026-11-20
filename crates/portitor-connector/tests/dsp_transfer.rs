@@ -925,6 +925,8 @@ impl std::io::Write for Log {
 impl Log {
     /// Collects until the guard is dropped.
     fn start() -> (Self, tracing::subscriber::DefaultGuard) {
+        // other tests run at the same time on threads without a subscriber
+        portitor_runtime::telemetry::testing::keep_a_second_subscriber();
         let log = Self::default();
         let writer = log.clone();
         let subscriber = tracing_subscriber::fmt()

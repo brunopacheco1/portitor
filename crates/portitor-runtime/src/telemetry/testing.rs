@@ -91,11 +91,19 @@ impl Traced {
 static SECOND_DISPATCHER: LazyLock<tracing::Dispatch> =
     LazyLock::new(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default()));
 
+/// Keeps a second subscriber alive for the whole test process, so a
+/// subscriber set on one test's thread is asked about every call site
+/// (see `SECOND_DISPATCHER`). Call it before a test sets its own
+/// subscriber with `tracing::subscriber::set_default`.
+pub fn keep_a_second_subscriber() {
+    LazyLock::force(&SECOND_DISPATCHER);
+}
+
 /// Starts tracing on this thread (see [`Traced`]), with the same choice of
 /// spans as the real export (Portitor's own, at `info`).
 #[must_use]
 pub fn trace_on_this_thread() -> Traced {
-    LazyLock::force(&SECOND_DISPATCHER);
+    keep_a_second_subscriber();
     let spans = Collected::default();
     let provider = SdkTracerProvider::builder()
         .with_simple_exporter(Collector(Arc::clone(&spans)))
