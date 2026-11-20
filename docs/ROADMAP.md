@@ -33,7 +33,7 @@ and debts each release raised or closed are in
 | 0.9 | 2026-11-15 | v0.9.0 | Operations: liveness and readiness, a `health` subcommand, traces and metrics over OTLP (ADR 0023), the website quickstart | [0.9.0](../CHANGELOG.md#090---2026-11-15) |
 | 0.10 | 2026-11-16 | v0.10.0 | Supply chain: cargo-vet in CI, website trust values, upstream reports filed | [0.10.0](../CHANGELOG.md#0100---2026-11-16) |
 | 0.11 | 2026-11-17 | v0.11.0 | Security hardening: a fuzz target per parser, request size limits, status list cache, retired keys for rotation, outbox retry rules, threat model review, ADR 0024 proposed | [0.11.0](../CHANGELOG.md#0110---2026-11-17) |
-| 0.12 | 2026-11-20 | v0.12.0 | Interoperability and performance: strict policy reading, DSP and DCP fixes checked against EDC, benchmarks published, a panic fails one request, ADR 0025 proposed | [0.12.0](../CHANGELOG.md#0120---2026-11-19) |
+| 0.12 | 2026-11-20 | v0.12.0 | Interoperability and performance: strict policy reading, DSP and DCP fixes checked against EDC, benchmarks published, a panic fails one request, ADR 0025 proposed | [0.12.0](../CHANGELOG.md#0120---2026-11-20) |
 | 0.13 | 2026-11-20 | v0.13.0 | API and configuration freeze ([STABILITY](STABILITY.md)); management call that reads a catalog; EDC test on 1.0.0-RC8 with Gaia-X; ADRs 0024, 0025 and 0026 accepted | [0.13.0](../CHANGELOG.md#0130---2026-11-20) |
 
 Older documents cite sections of this file that the table replaced, for

@@ -339,7 +339,7 @@ after 1.0 they could only be made in 2.0. What to do:
   `scripts/two-data-spaces.sh` (a manual test, TESTING), with a shared
   identity and with one identity per data space.
 
-## [0.12.0] - 2026-11-19
+## [0.12.0] - 2026-11-20
 
 Interoperability and performance. Read "From 0.11 to 0.12" in
 `docs/DEPLOYING.md` before you upgrade: two changes need action.
