@@ -641,7 +641,9 @@ pub struct TransferView {
     /// `DataAddress`): send `GET <endpoint>` with `Authorization: Bearer
     /// <the authorization property>` (its `authType` property says
     /// `bearer`). Present while the transfer is `STARTED` or `SUSPENDED`;
-    /// the token works only while it is `STARTED`.
+    /// the token works only while it is `STARTED`. The token is an opaque
+    /// string: send it as it is and do not parse it; a 1.x release may
+    /// issue another form.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<Object>)]
     data_address: Option<Value>,
@@ -1075,7 +1077,7 @@ fn next_after<T>(found: &[T], limit: usize, key: impl Fn(&T) -> &String) -> Opti
 #[openapi(
     info(
         title = "Portitor management API",
-        description = "Reads a provider's catalog, starts and follows contract negotiations and transfers in which this connector is the consumer, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only.",
+        description = "Reads a provider's catalog, starts and follows contract negotiations and transfers in which this connector is the consumer, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only. The API key is opaque (see the api_key security scheme). HTTP 403 is reserved for tokens with limited rights in 1.x; 1.0 never answers it. The data plane token (the authorization property of a transfer's dataAddress) is opaque too: send it as it is, do not parse it; a 1.x release may issue another form.",
         license(name = "Apache-2.0", identifier = "Apache-2.0"),
     ),
     paths(

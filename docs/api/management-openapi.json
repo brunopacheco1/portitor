@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Portitor management API",
-    "description": "Reads a provider's catalog, starts and follows contract negotiations and transfers in which this connector is the consumer, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only.",
+    "description": "Reads a provider's catalog, starts and follows contract negotiations and transfers in which this connector is the consumer, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only. The API key is opaque (see the api_key security scheme). HTTP 403 is reserved for tokens with limited rights in 1.x; 1.0 never answers it. The data plane token (the authorization property of a transfer's dataAddress) is opaque too: send it as it is, do not parse it; a 1.x release may issue another form.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
@@ -1640,7 +1640,7 @@
               "object",
               "null"
             ],
-            "description": "Where to fetch the data, with the access token (DSP 2025-1\n`DataAddress`): send `GET <endpoint>` with `Authorization: Bearer\n<the authorization property>` (its `authType` property says\n`bearer`). Present while the transfer is `STARTED` or `SUSPENDED`;\nthe token works only while it is `STARTED`."
+            "description": "Where to fetch the data, with the access token (DSP 2025-1\n`DataAddress`): send `GET <endpoint>` with `Authorization: Bearer\n<the authorization property>` (its `authType` property says\n`bearer`). Present while the transfer is `STARTED` or `SUSPENDED`;\nthe token works only while it is `STARTED`. The token is an opaque\nstring: send it as it is and do not parse it; a 1.x release may\nissue another form."
           },
           "format": {
             "type": "string",
@@ -1665,7 +1665,7 @@
       "api_key": {
         "type": "http",
         "scheme": "bearer",
-        "description": "The key from PORTITOR_MANAGEMENT_API_KEY_FILE: Authorization: Bearer <key>"
+        "description": "The key from PORTITOR_MANAGEMENT_API_KEY_FILE: Authorization: Bearer <key>. The key is an opaque string: a client must not parse it or rely on its length or alphabet, and a 1.x release may accept other forms of token."
       }
     }
   },
