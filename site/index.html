@@ -40,13 +40,26 @@ so visitors' browsers never contact third-party services.
         </ul>
       </nav>
     </div>
+    <div class="meander" aria-hidden="true"></div>
   </header>
 
   <main id="main">
     <section class="hero">
       <div class="wrap">
+        <svg class="mark" aria-hidden="true" focusable="false" viewBox="0 0 152 112" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <!-- the gate -->
+          <path d="M34 82V44a42 42 0 0 1 84 0v38M46 82V44a30 30 0 0 1 60 0v38"/>
+          <path d="M30 44h20M102 44h20M28 82h22M102 82h22"/>
+          <!-- the toll -->
+          <g class="toll"><circle cx="76" cy="40" r="8"/><circle cx="76" cy="40" r="4.5"/></g>
+          <!-- the ferry -->
+          <g class="ferry"><path d="M52 68h48c-4 9-13 14-24 14s-20-5-24-14z"/><path d="M84 58l16 30"/></g>
+          <!-- the river -->
+          <path d="M8 96q6-5 12 0t12 0 12 0 12 0 12 0 12 0 12 0 12 0 12 0 12 0 12 0 12 0M32 106q6-5 12 0t12 0 12 0 12 0 12 0 12 0 12 0 12 0"/>
+        </svg>
         <p class="eyebrow">Open source · Apache-2.0 · Rust · @STATUS@</p>
         <h1>A small and fast connector.</h1>
+        <p class="motto">Checked at the gate, carried across.</p>
         <p class="lede">
           Portitor lets an organisation offer and use data under agreed rules, using the open
           standards of European data spaces: the Eclipse <strong>Dataspace Protocol</strong>
@@ -54,6 +67,7 @@ so visitors' browsers never contact third-party services.
           Protocol</strong> for identity and verifiable credentials. It is built to work with
           Eclipse EDC and Simpl-Open, and to follow the Gaia-X Trust Framework.
         </p>
+        <div class="notes">
         <p class="note">
           <strong>The name.</strong> In Latin a <em>portitor</em> is both the customs officer at a
           port, who checks goods against the rules, and the ferryman who carries them across.
@@ -63,6 +77,7 @@ so visitors' browsers never contact third-party services.
           <strong>Prototype.</strong> Portitor is in its 0.x releases and not ready for production.
           What works today is listed in the <a href="#roadmap">roadmap</a>.
         </p>
+        </div>
         <div class="actions">
           <a class="button" href="https://github.com/brunopacheco1/portitor">Source code</a>
           <a class="button ghost" href="https://github.com/brunopacheco1/portitor/blob/main/docs/ARCHITECTURE.md">Architecture</a>
@@ -203,8 +218,10 @@ rm -rf examples/compose/run</code></pre>
   </main>
 
   <footer>
+    <div class="meander" aria-hidden="true"></div>
     <div class="wrap">
       <p>Portitor is open source under the <a href="https://github.com/brunopacheco1/portitor/blob/main/LICENSE">Apache License 2.0</a>. Contributions are welcome: see <a href="https://github.com/brunopacheco1/portitor/blob/main/CONTRIBUTING.md">CONTRIBUTING</a> and the <a href="https://github.com/brunopacheco1/portitor/blob/main/CODE_OF_CONDUCT.md">code of conduct</a>. This page sets no cookies and loads nothing from other sites.</p>
+      <p>Headings are set in <a href="https://github.com/NDISCOVER/Cinzel">Cinzel</a> by Natanael Gama, used under the <a href="https://github.com/brunopacheco1/portitor/blob/main/LICENSES/OFL-1.1.txt">SIL Open Font License 1.1</a> and served from this site.</p>
     </div>
   </footer>
 </body>
