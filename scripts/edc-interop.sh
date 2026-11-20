@@ -53,17 +53,21 @@
 #        EDC provider. Each catalog, as the other side read it, has the
 #        constraint.
 #     c. Before anyone holds the credential, each consumer negotiates
-#        the other's offer: refused.
+#        the other's offer: both negotiations end TERMINATED, and EDC has
+#        no new agreement.
 #     d. Portitor's identity asks the EDC Issuer Service for the
 #        credential (POST /v1/credential-requests) and stores what it
 #        delivers; the EDC IdentityHub does the same (Identity API).
 #     e. EDC negotiates Portitor's offer: FINALIZED, PULL transfer, fetch.
 #        Portitor checked a credential an EDC issuer signed, with its
-#        Bitstring Status List.
+#        Bitstring Status List: its log shows that it fetched the list.
 #     f. Portitor negotiates EDC's offer: FINALIZED, PULL transfer, fetch.
 #        EDC checked the credential Portitor's identity presented.
 #     g. The EDC Issuer Service revokes the EDC participant's credential
-#        (admin API). EDC negotiates Portitor's offer again: TERMINATED.
+#        (admin API). EDC negotiates Portitor's offer again: TERMINATED,
+#        and either Portitor's log says it found the credential revoked,
+#        or the IdentityHub's record of the credential shows that it saw
+#        the revocation first.
 #  9. Revocation by portitor-issuer: once it revokes a participant's
 #     MembershipCredential (POST /v1/credentials/{id}/revoke), the other
 #     refuses it (both ways).
@@ -552,7 +556,8 @@ until_state() { # api path states (regex): prints the record once in one of them
 }
 
 portitor_negotiation_request() { # offer: the body that asks Portitor to negotiate that EDC offer
-  jq -nc --arg addr "$EDC_DSP_INSIDE" --arg id "$EDC_DID" --argjson offer "$1" \
+  local offer=$1
+  jq -nc --arg addr "$EDC_DSP_INSIDE" --arg id "$EDC_DID" --argjson offer "$offer" \
     '{counterPartyAddress: $addr, counterPartyId: $id, datasetId: "edc-interop", offer: $offer}'
 }
 
@@ -762,6 +767,43 @@ edc_issuer_admin() { # method path [body]: the Issuer Service's admin API, for i
   edc_api "$EDC_ISSUER_ADMIN" issuer-admin-api:admin "$@"
 }
 
+edc_finalized_negotiations() { # prints how many of EDC's negotiations, on either side, are FINALIZED
+  local all
+  all=$(edc_management POST /v4/contractnegotiations/request \
+    "$(jq -nc --argjson c "$CONTEXT" '{"@context": $c, "@type": "QuerySpec"}')") ||
+    fail "query EDC's negotiations: $all"
+  jq -e 'type == "array"' <<<"$all" >/dev/null || fail "EDC's negotiations are not a list: $all"
+  jq '[.[] | select(.state == "FINALIZED")] | length' <<<"$all"
+}
+
+# How many lines of the Portitor connector's log have every one of the
+# given texts. The log is read from the container engine, which may hand
+# on a line a moment after the connector wrote it: a caller that expects
+# a line asks again for a few seconds (log_lines_appear).
+portitor_log_lines() { # text...: prints the number of lines
+  "${COMPOSE[@]}" logs --no-color portitor-connector >"$RUN/portitor-connector.log" 2>&1 ||
+    fail "read the Portitor connector's log"
+  local text
+  local matched=$RUN/portitor-connector.matched
+  cp "$RUN/portitor-connector.log" "$matched"
+  for text in "$@"; do
+    # grep -F: the texts are URLs and DIDs, not patterns; no line left is exit 1
+    grep -F -- "$text" "$matched" >"$matched.next" || true
+    mv "$matched.next" "$matched"
+  done
+  wc -l <"$matched" | tr -d ' '
+}
+
+log_lines_appear() { # more-than text...: whether more than that many lines have the texts, within 10 seconds
+  local more_than=$1
+  shift
+  for _ in $(seq 1 20); do
+    if (($(portitor_log_lines "$@") > more_than)); then return 0; fi
+    sleep 0.5
+  done
+  return 1
+}
+
 step "EDC Issuer Service: its participant context $EDC_ISSUER_DID, with the key made for this run"
 wait_identity_api edc_issuer_identity "EDC Issuer Service"
 # as for the EDC participant (step 2): the private key is in the Vault
@@ -867,20 +909,25 @@ VIEW=$(edc_negotiate "$TEST_DATASET" "$TEST_OFFER")
 echo "EDC's negotiation ended TERMINATED: Portitor refused"
 # The other way. EDC asks Portitor's identity for the credential
 # (config/edc-controlplane.properties, edc.iam.dcp.scopes.interoptest) and
-# gets none, so it refuses the request. How Portitor's negotiation ends
-# is EDC's choice (an HTTP error or a termination message): this check
-# only says that EDC did not agree.
+# gets none, so it refuses the request. How EDC refuses is its choice (an
+# HTTP error or a termination message), so no reason is asked for. But
+# the negotiation must end, and end refused: both ways of refusing leave
+# Portitor's negotiation TERMINATED. One that is still open after the
+# wait of until_state (60 seconds), or that cannot be read, fails with
+# its state printed: nothing was refused then.
+FINALIZED_BEFORE=$(edc_finalized_negotiations)
 PID=$(portitor POST /v1/negotiations "$(portitor_negotiation_request "$EDC_TEST_OFFER")" |
   jq -r '.consumerPid') || fail "start the negotiation"
-STATE=
-for _ in $(seq 1 60); do
-  VIEW=$(portitor GET "/v1/negotiations/$PID") || fail "read the negotiation $PID"
-  STATE=$(jq -r "$STATE_PATH" <<<"$VIEW")
-  [[ $STATE =~ ^(FINALIZED|TERMINATED)$ ]] && break
-  sleep 0.5
-done
-[[ $STATE != FINALIZED ]] || fail "EDC agreed with a participant that holds no $TEST_CREDENTIAL_TYPE: $VIEW"
-echo "Portitor's negotiation is $STATE, not FINALIZED: EDC refused"
+VIEW=$(until_state portitor "/v1/negotiations/$PID" 'FINALIZED|TERMINATED')
+[[ $(jq -r "$STATE_PATH" <<<"$VIEW") == TERMINATED ]] ||
+  fail "EDC agreed with a participant that holds no $TEST_CREDENTIAL_TYPE: $VIEW"
+# and EDC's own view: it has no agreement more than before. Nothing else
+# negotiates at this moment, so the number is exact. (Step 8f checks that
+# this number does rise when EDC agrees, so the comparison is not empty.)
+FINALIZED_AFTER=$(edc_finalized_negotiations)
+[[ $FINALIZED_AFTER == "$FINALIZED_BEFORE" ]] ||
+  fail "EDC has $FINALIZED_AFTER FINALIZED negotiations, $FINALIZED_BEFORE before Portitor asked without a $TEST_CREDENTIAL_TYPE"
+echo "Portitor's negotiation ended TERMINATED, and EDC has no new agreement: EDC refused"
 
 step "Portitor identity: asks the EDC Issuer Service for the $TEST_CREDENTIAL_TYPE (management API)"
 # the same call as in step 3, with the other issuer: the identity reads the
@@ -903,7 +950,12 @@ echo "Portitor's identity holds a $TEST_CREDENTIAL_TYPE from $EDC_ISSUER_DID"
 # Reported here, not a failed check.
 ISSUER_STATUS_ERROR=$(portitor_test_request | jq -r '.issuerStatusError // empty')
 if [[ -n $ISSUER_STATUS_ERROR ]]; then
-  echo "known gap (EDC): the request status at $(portitor_test_request | jq -r '.statusUrl') cannot be read: $ISSUER_STATUS_ERROR"
+  # only the known shape is the known gap: the address EDC gave has no
+  # issuance path. An error for an address that has it would be ours.
+  ISSUER_STATUS_URL=$(portitor_test_request | jq -r '.statusUrl // empty')
+  [[ $ISSUER_STATUS_URL != *"/api/issuance/"* ]] ||
+    fail "the request status at $ISSUER_STATUS_URL has the issuance path and still cannot be read: $ISSUER_STATUS_ERROR"
+  echo "known gap (EDC): the request status at $ISSUER_STATUS_URL cannot be read: $ISSUER_STATUS_ERROR"
 else
   echo "the EDC Issuer Service reports the request as $(portitor_test_request | jq -c '.issuerStatus')"
 fi
@@ -923,6 +975,16 @@ edc_identity GET "/participants/$EDC_CONTEXT/credentials?type=$TEST_CREDENTIAL_T
   jq -e --arg issuer "$EDC_ISSUER_DID" 'length == 1 and .[0].issuerId == $issuer' >/dev/null ||
   fail "the IdentityHub does not hold one $TEST_CREDENTIAL_TYPE from $EDC_ISSUER_DID"
 echo "the IdentityHub holds a $TEST_CREDENTIAL_TYPE from $EDC_ISSUER_DID"
+# The IdentityHub's own state of that credential (a number, the "state"
+# of its record), kept now, while the credential is good, to compare
+# after the revocation in step 8g.
+edc_held_state() { # prints the state of the one InteropTestCredential the IdentityHub holds
+  local held
+  held=$(edc_identity GET "/participants/$EDC_CONTEXT/credentials?type=$TEST_CREDENTIAL_TYPE") ||
+    fail "read the IdentityHub's $TEST_CREDENTIAL_TYPE: $held"
+  jq -c '[.[].state]' <<<"$held"
+}
+EDC_HELD_BEFORE=$(edc_held_state)
 
 # What the Issuer Service issued, from its admin API: the credential it
 # keeps for a holder, as {id, status list URL, index}. The id is the
@@ -973,9 +1035,17 @@ step "$TEST_CREDENTIAL_TYPE: EDC, with the credential, negotiates Portitor's off
 # Portitor asks the IdentityHub for the credential, verifies the EDC
 # Issuer Service's signature (a trusted issuer: PORTITOR_TRUSTED_ISSUERS in
 # compose.yaml), reads its status list, and compares the claim
+STATUS_LIST_FETCHED="status list fetched and verified" # the connector's DEBUG line (auth/dcp.rs; RUST_LOG in compose.yaml)
+FETCHES_BEFORE=$(portitor_log_lines "$STATUS_LIST_FETCHED" "$EDC_STATUS_LIST")
 VIEW=$(edc_negotiate "$TEST_DATASET" "$TEST_OFFER")
 [[ $(jq -r "$STATE_PATH" <<<"$VIEW") == FINALIZED ]] || fail "expected FINALIZED: $VIEW"
 TEST_AGREEMENT=$(jq -r '.contractAgreementId' <<<"$VIEW")
+# FINALIZED alone would also be reached by a connector that skipped the
+# status check: its log must show that it fetched this status list, from
+# this issuer, during the negotiation
+log_lines_appear "$FETCHES_BEFORE" "$STATUS_LIST_FETCHED" "$EDC_STATUS_LIST" "$EDC_ISSUER_DID" ||
+  fail "Portitor agreed, but its log has no new \"$STATUS_LIST_FETCHED\" for $EDC_STATUS_LIST from $EDC_ISSUER_DID (see $RUN/portitor-connector.log; the line is at DEBUG, RUST_LOG in $DIR/compose.yaml)"
+echo "Portitor's log: it fetched and verified the status list $EDC_STATUS_LIST"
 
 step "$TEST_CREDENTIAL_TYPE: EDC pulls the data for its holders from the Portitor provider"
 edc_pull "$TEST_AGREEMENT" "$DIR/data/portitor-provider-issuer.csv"
@@ -985,18 +1055,32 @@ step "$TEST_CREDENTIAL_TYPE: Portitor, with the credential, negotiates EDC's off
 # credential in its access token (PORTITOR_POLICY_CREDENTIALS), and its
 # identity presents the credential to EDC, which trusts the issuer
 # (edc.iam.trustedissuer.edcissuer.id) and checks the claim
+FINALIZED_BEFORE=$(edc_finalized_negotiations)
 PID=$(portitor POST /v1/negotiations "$(portitor_negotiation_request "$EDC_TEST_OFFER")" |
   jq -r '.consumerPid') || fail "start the negotiation"
 VIEW=$(until_state portitor "/v1/negotiations/$PID" 'FINALIZED|TERMINATED')
 [[ $(jq -r "$STATE_PATH" <<<"$VIEW") == FINALIZED ]] || fail "expected FINALIZED: $VIEW"
 jq -e --arg operand "$TEST_OPERAND" '.agreement | [.. | strings] | index($operand) != null' <<<"$VIEW" >/dev/null ||
   fail "the agreement is not for the offer with the $TEST_OPERAND constraint: $VIEW"
+# EDC's own count sees this agreement: the count that did not move when
+# EDC refused (step 8c) is one that moves when EDC agrees. EDC notes its
+# side as FINALIZED a moment after Portitor has the event's answer, so
+# this is asked for up to 30 seconds.
+FINALIZED_AFTER=$FINALIZED_BEFORE
+for _ in $(seq 1 60); do
+  FINALIZED_AFTER=$(edc_finalized_negotiations)
+  [[ $FINALIZED_AFTER == "$FINALIZED_BEFORE" ]] || break
+  sleep 0.5
+done
+[[ $FINALIZED_AFTER == $((FINALIZED_BEFORE + 1)) ]] ||
+  fail "EDC agreed, but it has $FINALIZED_AFTER FINALIZED negotiations after $FINALIZED_BEFORE before (expected one more): the check of step 8c does not see EDC's agreements"
 
 step "$TEST_CREDENTIAL_TYPE: Portitor pulls the data for its holders from the EDC data plane"
 # EDC checks the policy again at the transfer request
 portitor_pull "$(jq -r '.agreement["@id"]' <<<"$VIEW")"
 
 step "The EDC Issuer Service revokes the EDC participant's $TEST_CREDENTIAL_TYPE: Portitor refuses EDC"
+REFUSALS_BEFORE=$(portitor_log_lines "credential refused" "$TEST_CREDENTIAL_TYPE" "revoked")
 edc_issuer_admin POST "/credentials/$(jq -r '.id | @uri' <<<"$EDC_ISSUED")/revoke" >/dev/null ||
   fail "revoke the EDC participant's $TEST_CREDENTIAL_TYPE"
 [[ $(status_list_bit "$EDC_STATUS_LIST" "$EDC_STATUS_INDEX") == 1 ]] ||
@@ -1008,21 +1092,35 @@ VIEW=$(edc_negotiate "$TEST_DATASET" "$TEST_OFFER")
 [[ $(jq -r "$STATE_PATH" <<<"$VIEW") == TERMINATED ]] || fail "expected TERMINATED: $VIEW"
 # EDC is still a member, so Portitor took the request and then ended the
 # negotiation with a termination message, as before anyone held the
-# credential. Why it did is in its log. The IdentityHub keeps status
-# lists for 15 minutes, so it still presents the credential: Portitor
-# reads the status list itself, finds the credential revoked and logs
-# "credential refused". Had the IdentityHub seen the revocation first, it
-# would present no such credential, and Portitor would log nothing of it:
-# that is reported, not failed, as it is the IdentityHub's timing.
+# credential.
 if jq -r '.errorDetail // empty' <<<"$VIEW" | grep -q 'code='; then
   fail "refused with an HTTP error, not with a termination message: $VIEW"
 fi
-"${COMPOSE[@]}" logs --no-color portitor-connector >"$RUN/portitor-connector.log" 2>&1 || true
-if awk -v type="$TEST_CREDENTIAL_TYPE" 'index($0, "credential refused") && index($0, type) && index($0, "revoked") { found = 1 }
-  END { exit !found }' "$RUN/portitor-connector.log"; then
+# TERMINATED alone does not say why: the negotiation of step 8c ended the
+# same way. One of two things must be shown.
+# 1. Portitor found the revocation: the IdentityHub still presented the
+#    credential (it keeps status lists for 15 minutes and read this one
+#    in step 8e), Portitor read the status list itself and logged
+#    "credential refused" with the type and "revoked". This is what a
+#    run normally shows.
+# 2. The IdentityHub saw the revocation first and presented no such
+#    credential, so Portitor's own check had nothing to refuse. This is
+#    the IdentityHub's timing, not ours, so it is accepted, but only
+#    with proof: the IdentityHub's record of the credential is no longer
+#    what it was while the credential was good (EDC_HELD_BEFORE). It is
+#    printed as a warning, because Portitor's status list check was not
+#    exercised by this run.
+# Neither: the run fails. Portitor refused for a reason this step does
+# not know.
+EDC_HELD_NOW=$(edc_held_state)
+if log_lines_appear "$REFUSALS_BEFORE" "credential refused" "$TEST_CREDENTIAL_TYPE" "revoked"; then
   echo "the negotiation ended TERMINATED: Portitor read the status list and found the credential revoked"
+elif [[ $EDC_HELD_NOW != "$EDC_HELD_BEFORE" ]]; then
+  WARNING="the IdentityHub saw the revocation first (its record of the credential went from $EDC_HELD_BEFORE to $EDC_HELD_NOW) and presented no $TEST_CREDENTIAL_TYPE: Portitor's own status list check was not exercised by this run"
+  if [[ -n ${GITHUB_ACTIONS:-} ]]; then echo "::warning::EDC interop, step 8g: $WARNING"; fi
+  echo "the negotiation ended TERMINATED: $WARNING"
 else
-  echo "the negotiation ended TERMINATED: the IdentityHub presented no $TEST_CREDENTIAL_TYPE any more (Portitor's log has no \"credential refused\" for it)"
+  fail "the negotiation ended TERMINATED, but nothing shows why: Portitor's log has no \"credential refused\" with $TEST_CREDENTIAL_TYPE and \"revoked\" (see $RUN/portitor-connector.log), and the IdentityHub's record of the credential is unchanged ($EDC_HELD_NOW)"
 fi
 # Portitor's own credential from the same issuer is not revoked
 PORTITOR_ISSUED=$(edc_issued "$PORTITOR_DID")

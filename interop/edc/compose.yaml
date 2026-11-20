@@ -258,6 +258,10 @@ services:
       # status lists fetched on every check, so the revocation step sees a
       # revocation at once (docs/DEPLOYING.md)
       PORTITOR_STATUS_LIST_CACHE_SECONDS: "0"
+      # the DCP checks also log at DEBUG: scripts/edc-interop.sh (step 8e)
+      # looks for "status list fetched and verified", the proof that the
+      # connector read the EDC Issuer Service's status list
+      RUST_LOG: info,portitor_connector::auth::dcp=debug
       # the same scope as the EDC control plane's (config/edc-controlplane.properties)
       PORTITOR_DCP_SCOPES: org.eclipse.dspace.dcp.vc.type:MembershipCredential:read
       # ADR 0022: the compliance service it trusts, and the credential type

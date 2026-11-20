@@ -825,11 +825,11 @@ each offers data only with `InteropTestCredential.level` `eq` `basic`.
 |---|---|---|
 | 8a | The Issuer Service gets its participant context (Identity API) and, through its admin API, both participants as holders, an attestation and the credential definition | its DID document, over HTTPS and HTTP, names its key as `assertionMethod` and an `IssuerService`; its issuer metadata lists `interop-test-credential` |
 | 8b | The offers: Portitor's third dataset (`.../portitor-interop-issuer`), and a second offer of the EDC asset | each catalog, as the other side read it, has the left operand `InteropTestCredential.level` |
-| 8c | Refused: before anyone holds the credential, each consumer negotiates the other's offer | EDC's negotiation ends `TERMINATED`; Portitor's does not reach `FINALIZED` |
+| 8c | Refused: before anyone holds the credential, each consumer negotiates the other's offer | both negotiations end `TERMINATED` (one still open after 60 seconds fails the step); EDC has no `FINALIZED` negotiation more than before |
 | 8d | Portitor's identity asks the Issuer Service (`POST /v1/credential-requests`); the EDC IdentityHub does the same (Identity API) | both requests `ISSUED`; each holds one `InteropTestCredential` from `did:web:edc-issuer.gaiax.test`; its status list bit is not set |
-| 8e | EDC negotiates Portitor's offer and pulls | `FINALIZED`, `STARTED`, the bytes equal `data/portitor-provider-issuer.csv` |
-| 8f | Portitor negotiates EDC's offer and pulls | `FINALIZED`, the agreement has the constraint, `STARTED`, the bytes equal `data/edc-provider.csv` |
-| 8g | The Issuer Service revokes the EDC participant's credential (`POST .../credentials/{id}/revoke`); EDC negotiates Portitor's offer again | the status list bit is set; the negotiation ends `TERMINATED` with no `code=`; Portitor's log has `credential refused` for the revoked credential |
+| 8e | EDC negotiates Portitor's offer and pulls | `FINALIZED`; the connector's log has a new DEBUG line `status list fetched and verified` for the Issuer Service's list (`RUST_LOG` in `interop/edc/compose.yaml`); `STARTED`, the bytes equal `data/portitor-provider-issuer.csv` |
+| 8f | Portitor negotiates EDC's offer and pulls | `FINALIZED`, the agreement has the constraint, EDC has one `FINALIZED` negotiation more than before, `STARTED`, the bytes equal `data/edc-provider.csv` |
+| 8g | The Issuer Service revokes the EDC participant's credential (`POST .../credentials/{id}/revoke`); EDC negotiates Portitor's offer again | the status list bit is set; the negotiation ends `TERMINATED` with no `code=`; and one of two: Portitor's log has a new `credential refused` line with the type and `revoked`, or (a warning, not a failure) the IdentityHub's record of the credential changed its `state`, so it presented none. With neither, the step fails |
 
 Step 9 is the revocation by `portitor-issuer` (before 0.14: step 8).
 The script's header comment uses the same letters.

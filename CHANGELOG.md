@@ -37,6 +37,14 @@ and no route changed. Two checks are stricter; what to do:
 
 ### Changed
 
+- Connector: a new DEBUG log line, `status list fetched and verified`
+  (with the list's URL and issuer), each time a status list credential
+  is fetched; nothing at the default level `info`.
+- EDC interop test, step 8: Portitor's negotiation without the
+  credential must end `TERMINATED` and EDC must have no new agreement;
+  the connector's log must show that it fetched the EDC Issuer Service's
+  status list; after the revocation the run needs proof of why Portitor
+  refused, or fails.
 - **Behaviour change, all three: an item of a list setting may be at
   most 4096 bytes.** This holds for every comma-separated `PORTITOR_*`
   setting (DIDs, DCP scopes, credential types, file paths). A service
