@@ -12,6 +12,12 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Documentation
+
+- Close-out of 0.12: the roadmap and the website mark 0.12 released and
+  0.13 as the current release; the website quickstart clones v0.12.0.
+  CONTRIBUTING gives `cargo vet diff` with `--mode local`.
+
 ## [0.12.0] - 2026-11-19
 
 Interoperability and performance. Read "From 0.11 to 0.12" in

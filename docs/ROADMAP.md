@@ -530,7 +530,7 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
   a provider in several data spaces (Proposed). Not met: the quality gate
   and coverage badges, which wait for the SonarQube Cloud branch rename.
 
-## 0.12 Interoperability and performance (release pull request open, 2026-11-19)
+## 0.12 Interoperability and performance (released 2026-11-20 as v0.12.0)
 
 - Interoperability tests against Eclipse EDC, without Gaia-X: EDC
   1.0.0-RC7 refuses the Gaia-X compliance credential (ADR 0022). Simpl-Open

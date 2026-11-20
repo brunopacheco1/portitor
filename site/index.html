@@ -107,7 +107,7 @@ so visitors' browsers never contact third-party services.
         <h3>You need</h3>
         <p>Docker Engine 25 or later (Docker Desktop 4.27 or later) with the Compose plugin: the images' health check uses <code>HEALTHCHECK --start-interval</code>, which came with Engine 25. Also <code>git</code>, <code>bash</code>, <code>curl</code>, <code>jq</code> and <code>openssl</code>. The demo downloads about 40&nbsp;MB of images; after that it runs in about 10 seconds.</p>
         <h3>Run the demo</h3>
-        <pre><code>git clone --branch v0.11.0 --depth 1 https://github.com/brunopacheco1/portitor
+        <pre><code>git clone --branch v0.12.0 --depth 1 https://github.com/brunopacheco1/portitor
 cd portitor
 KEEP=1 scripts/demo-compose.sh</code></pre>
         <p>The script writes new keys and secrets into <code>examples/compose/run/</code>, builds and signs the data space's HealthDCAT-AP bundle, starts the containers and has the issuer give both participants their credentials. Then it runs the demo steps, one line starting with <code>==</code> each: the provider refuses a catalog request without a token, serves its catalog checked against the bundle, agrees a contract and refuses changed terms, checks credential claims, transfers a file, and refuses a credential the issuer has revoked. The last line starts with <code>== Done</code>. If a step fails, the script prints <code>FAILED</code> and the containers' last log lines.</p>
@@ -171,8 +171,8 @@ rm -rf examples/compose/run</code></pre>
           <li class="done"><span>0.9</span> Operations: health checks, traces and metrics (OpenTelemetry), a quickstart</li>
           <li class="done"><span>0.10</span> Supply chain: cargo-vet, website trust values, upstream reports</li>
           <li class="done"><span>0.11</span> Security hardening: threat model, fuzzing every parser, request limits, status list cache</li>
-          <li class="now"><span>0.12</span> Interoperability with EDC, published benchmarks, and the fixes of the <a href="https://github.com/brunopacheco1/portitor/blob/main/docs/reviews/2026-11-18-specifications-and-code-quality.md">specification review</a> (policy terms that are not understood are refused)</li>
-          <li><span>0.13</span> Release candidate for 1.0: freeze, reading a provider's catalog from the management API, a deployment guide for operations teams, OpenSSF silver, Baseline level 1 self-assessment</li>
+          <li class="done"><span>0.12</span> Interoperability with EDC, published benchmarks, and the fixes of the <a href="https://github.com/brunopacheco1/portitor/blob/main/docs/reviews/2026-11-18-specifications-and-code-quality.md">specification review</a> (policy terms that are not understood are refused)</li>
+          <li class="now"><span>0.13</span> Release candidate for 1.0: freeze, reading a provider's catalog from the management API, a deployment guide for operations teams, OpenSSF silver, Baseline level 1 self-assessment</li>
           <li><span>1.0</span> Stable: the 0.13 release candidate, with no new features</li>
           <li><span>1.1</span> Push to S3-compatible object storage; health data space demo, step 1</li>
           <li><span>1.2</span> Purpose and data permit in policies; demo, step 2</li>
