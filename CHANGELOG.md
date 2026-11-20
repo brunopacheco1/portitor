@@ -145,6 +145,10 @@ Interoperability and performance. Read "From 0.11 to 0.12" in
   core for the negotiation and transfer logic, no file above 1,000
   lines, simpler types and macros, a better name for `Negotiator`, and a
   Helm chart (TD-42, TD-39, R-01).
+- DEPLOYING and ARCHITECTURE: what the dataspace authority decides
+  before participants join, because DCP v1.0.1 leaves it to the
+  dataspace (trusted issuers, scope strings, holder binding, Gaia-X
+  compliance, dataset metadata bundle), each with its Portitor setting.
 
 ### Dependencies
 
