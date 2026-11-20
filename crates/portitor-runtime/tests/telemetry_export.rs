@@ -426,6 +426,64 @@ async fn a_signal_endpoint_alone_exports_that_signal() {
     assert!(!lines_in_span(&stdout)[0].contains("trace_id"), "{stdout}");
 }
 
+/// The rule of every setting (0.13) for the `OTEL_*` settings that
+/// `docs/STABILITY.md` lists: an empty value, or one of spaces only,
+/// means "not set", so nothing is exported.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_empty_endpoint_is_no_endpoint() {
+    for name in [
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    ] {
+        for empty in ["", "  "] {
+            let (stdout, stderr) = run_child_output("normal", &[(name, empty.to_owned())]).await;
+            let lines = lines_in_span(&stdout);
+            assert_eq!(lines.len(), 1, "{name}={empty:?}: {stdout}");
+            assert!(!lines[0].contains("trace_id"), "{name}={empty:?}");
+            assert!(
+                !stdout.contains("telemetry: export"),
+                "{name}={empty:?}: {stdout}"
+            );
+            assert!(
+                !stderr.contains("OpenTelemetry"),
+                "{name}={empty:?}: {stderr}"
+            );
+        }
+    }
+}
+
+/// The other half of the rule: spaces around a value are dropped. An
+/// endpoint written with a space before or after it (easy to do in a
+/// Compose or `.env` file) is the same endpoint.
+///
+/// Today it is not: Portitor only looks whether the variable is set; the
+/// `OpenTelemetry` SDK reads the value itself, with its spaces, and
+/// refuses it (`invalid uri character`). The process starts, logs
+/// `telemetry: export is off` (ERROR) and exports nothing.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "bug: spaces around an OTEL_EXPORTER_OTLP_* endpoint are not dropped (the rule of every setting, 0.13); the SDK refuses the value and nothing is exported"]
+async fn spaces_around_an_endpoint_are_dropped() {
+    let received = Received::default();
+    let endpoint = receiver(Arc::clone(&received)).await;
+    let padded = format!(" {endpoint} ");
+    let stdout = run_child("normal", &[("OTEL_EXPORTER_OTLP_ENDPOINT", padded)]).await;
+    let paths: Vec<String> = received
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(path, _, _)| path.clone())
+        .collect();
+    assert!(
+        paths.iter().any(|p| p == "/v1/traces"),
+        "{paths:?}\n{stdout}"
+    );
+    assert!(
+        paths.iter().any(|p| p == "/v1/metrics"),
+        "{paths:?}\n{stdout}"
+    );
+}
+
 /// A receiver that is down, answers 5xx or never answers: the child keeps
 /// serving, and its shutdown ends within the budget (the child checks
 /// both, see `failing_work`).
