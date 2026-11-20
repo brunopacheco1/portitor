@@ -99,9 +99,16 @@ files:
 
 The licence check (`reuse lint`) and `scripts/check_docs.py` always run.
 The script tests its own rule in every run
-(`scripts/ci_changes.sh self-test`). Before you add a path to the prose
-list, check that no test, script or workflow reads it, and add a case to
-the self-test.
+(`scripts/ci_changes.sh self-test`: the path lists, and the reading of
+the changed files in a temporary git repository). Before you add a path
+to the prose list, check that no test, script or workflow reads it, and
+add a case to the self-test.
+
+What a gate job decides is in `scripts/ci_gate.sh`, one script for the
+three gates, which also tests its own rule in every run
+(`scripts/ci_gate.sh self-test`). When a workflow gets a new job that
+the gate must wait for, add it to the gate job's `needs` and to its
+`NEEDED_JOBS` (or `ALWAYS_JOBS`).
 
 Only a gate job can be a required check. A job that is skipped on
 purpose reports "skipped", and its name alone cannot tell that from
