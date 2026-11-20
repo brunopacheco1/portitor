@@ -152,7 +152,8 @@ pub struct CatalogRequest {
     /// Not supported: a request with a `querySpec` is refused with 400.
     /// The whole catalog is always asked for.
     #[schema(value_type = Option<Object>)]
-    query_spec: Option<Value>,
+    // only whether it is there matters (`null` reads as left out)
+    query_spec: Option<serde::de::IgnoredAny>,
 }
 
 /// Ask a provider for one dataset.
@@ -361,10 +362,10 @@ async fn request_catalog(
     request_body = DatasetRequest,
     responses(
         (status = 200, description = "The dataset (DSP 2025-1 Dataset), as the provider sent it", body = Object, content_type = "application/json"),
-        (status = 400, description = "Invalid request, a protocol other than dataspace-protocol-http:2025-1, or an address that is not an https URL", body = Problem, content_type = "application/problem+json"),
+        (status = 400, description = "Invalid request, a protocol other than dataspace-protocol-http:2025-1, a dataset id that is \".\" or \"..\", or an address that is not an https URL", body = Problem, content_type = "application/problem+json"),
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
         (status = 403, description = FORBIDDEN, body = Problem, content_type = "application/problem+json"),
-        (status = 502, description = "No dataset: the provider refused (the detail has its HTTP status; 404 for a dataset it does not have or does not show us), did not answer, answered with something that is not a Dataset, or the identity component gave no token", body = Problem, content_type = "application/problem+json"),
+        (status = 502, description = "No dataset: the provider refused (the detail has its HTTP status; 404 for a dataset it does not have or does not show us), did not answer, answered with something that is not a JSON object or whose @type is not Dataset (a dataset without @type is accepted), or the identity component gave no token", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = [])),
     tag = "Catalog"
@@ -1077,7 +1078,7 @@ fn next_after<T>(found: &[T], limit: usize, key: impl Fn(&T) -> &String) -> Opti
 #[openapi(
     info(
         title = "Portitor management API",
-        description = "Reads a provider's catalog, starts and follows contract negotiations and transfers in which this connector is the consumer, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only. The API key is opaque (see the api_key security scheme). HTTP 403 is reserved for tokens with limited rights in 1.x; 1.0 never answers it. The data plane token (the authorization property of a transfer's dataAddress) is opaque too: send it as it is, do not parse it; a 1.x release may issue another form.",
+        description = "Reads a provider's catalog, starts and follows contract negotiations and transfers in which this connector is the consumer, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only. The API key is opaque (see the api_key security scheme). HTTP 403 is reserved for tokens with limited rights in 1.x; 1.0 never answers it. Every route answers 503 with a problem document when the request took longer than 60 seconds; at most 4 catalog or dataset answers are read from providers at a time, and a further request waits within those 60 seconds. The data plane token (the authorization property of a transfer's dataAddress) is opaque too: send it as it is, do not parse it; a 1.x release may issue another form.",
         license(name = "Apache-2.0", identifier = "Apache-2.0"),
     ),
     paths(

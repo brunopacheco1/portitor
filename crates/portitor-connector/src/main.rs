@@ -127,7 +127,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         portitor_connector::management::router(negotiator.clone(), key)
     })
     .await?;
+    // the same time limit and number of requests at a time as the public
+    // port: a call for a provider's catalog waits for that provider
     let management_app = limits.on_management_port(management_app);
+    let management_app = with_limits(management_app, REQUEST_TIMEOUT, MAX_CONCURRENT_REQUESTS);
     tracing::info!(
         %bind,
         datasets = negotiator.catalog_size(),

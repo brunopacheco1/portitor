@@ -29,9 +29,11 @@ pub enum HttpError {
     /// The counter-party answered with this status, which is not 2xx.
     Status(u16),
     /// Like [`HttpError::Status`], with the start of the answer's body
-    /// (at most [`ERROR_BODY_BYTES`]), which often says why. Only
-    /// [`HttpSender::post_text`] reads it: a Gaia-X compliance service
-    /// explains there why it refused a participant.
+    /// (at most [`ERROR_BODY_BYTES`]), which often says why. Read where a
+    /// person is told the reason: by [`HttpSender::post_text`] (a Gaia-X
+    /// compliance service explains there why it refused a participant)
+    /// and by the catalog calls (`post_authorized_within`,
+    /// `get_authorized_within`).
     StatusWithBody(u16, String),
     /// No answer: the connection failed, no answer came in time, or the
     /// answer broke off while it was read.

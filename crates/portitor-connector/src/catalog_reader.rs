@@ -21,9 +21,13 @@
 //! - A larger answer is read ([`MAX_CATALOG_ANSWER`]) and more time is
 //!   given ([`CATALOG_TIMEOUT`]).
 //! - The provider's answer is handed on as it came, byte for byte. It is
-//!   only checked to be JSON whose `@type` is `Catalog` (or `Dataset`):
-//!   reading it into Portitor's own types and writing it again would drop
-//!   whatever those types do not know.
+//!   only checked to be a JSON object whose `@type` is `Catalog` (for a
+//!   dataset: `Dataset`, or no `@type` at all, as the DSP 2025-1 schema
+//!   of a dataset does not require one): reading it into Portitor's own
+//!   types and writing it again would drop whatever those types do not
+//!   know.
+//! - At most [`MAX_CONCURRENT_READS`] answers are read at a time, as each
+//!   may be held in memory whole.
 //!
 //! Pages: a provider MAY send its catalog in pages, named by `Link`
 //! headers ("Catalog HTTPS Binding", "Pagination"). Portitor reads the
@@ -60,9 +64,18 @@ pub const MAX_CATALOG_ANSWER: usize = 16 * 1024 * 1024;
 /// answer: longer than the 10 seconds of other calls, as the answer may
 /// be large and the provider builds it on request. With the token
 /// request before it (at most 10 seconds) this stays under the 60
-/// seconds a request to the connector may take
-/// (`portitor_runtime::serve::REQUEST_TIMEOUT`).
+/// seconds a request to the management port may take
+/// (`portitor_runtime::serve::REQUEST_TIMEOUT`, set on that port in
+/// `main.rs`).
 pub const CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How many provider answers are read at the same time. Each may hold
+/// [`MAX_CATALOG_ANSWER`] in memory (and about twice that while its
+/// parts are joined), so without a limit a script sending many catalog
+/// requests at once could use up the connector's memory. A request over
+/// the limit waits for a free place; the time limit of the management
+/// port ends a wait that is too long with HTTP 503.
+pub const MAX_CONCURRENT_READS: usize = 4;
 
 /// A provider's answer to a catalog or dataset request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,12 +114,20 @@ enum Wanted<'a> {
 }
 
 impl Wanted<'_> {
-    /// The `@type` the provider's answer must have.
+    /// The `@type` of the provider's answer.
     fn answer_type(&self) -> &'static str {
         match self {
             Wanted::Catalog => "Catalog",
             Wanted::Dataset(_) => "Dataset",
         }
+    }
+
+    /// Whether the answer must say its `@type`. DSP 2025-1 requires it of
+    /// a catalog (`catalog-schema.json`: `@type` is `Catalog`) but not of
+    /// a dataset (`dataset-schema.json`, `RootDataset`, requires
+    /// `@context`, `@id`, `hasPolicy` and `distribution` only).
+    fn type_required(&self) -> bool {
+        matches!(self, Wanted::Catalog)
     }
 }
 
@@ -116,6 +137,8 @@ pub(crate) struct CatalogReader {
     prover: Arc<dyn Prover>,
     guard: Arc<dyn MessageGuard + Send + Sync>,
     allow_http: bool,
+    /// One permit per answer being read ([`MAX_CONCURRENT_READS`]).
+    reads: tokio::sync::Semaphore,
 }
 
 impl CatalogReader {
@@ -125,6 +148,7 @@ impl CatalogReader {
             prover: Arc::clone(&ports.prover),
             guard: Arc::clone(&ports.guard),
             allow_http,
+            reads: tokio::sync::Semaphore::new(MAX_CONCURRENT_READS),
         }
     }
 
@@ -160,6 +184,14 @@ impl CatalogReader {
                 "the dataset id must not be empty".to_owned(),
             ));
         }
+        if matches!(dataset_id, "." | "..") {
+            // as a path segment these mean "this folder" and "the folder
+            // above" (RFC 3986, section 5.2.4): a provider or a proxy
+            // that resolves them would answer for another path
+            return Err(ReadFailure::BadRequest(
+                "the dataset id must not be \".\" or \"..\"".to_owned(),
+            ));
+        }
         let wanted = Wanted::Dataset(dataset_id);
         self.read(provider_address, provider_id, &[], &wanted).await
     }
@@ -191,6 +223,8 @@ impl CatalogReader {
             )));
         }
         let base = provider_address.trim_end_matches('/');
+        // the semaphore is never closed, so this waits for a free place
+        let _reading = self.reads.acquire().await;
         let limits = AnswerLimits {
             max_bytes: MAX_CATALOG_ANSWER,
             timeout: CATALOG_TIMEOUT,
@@ -213,7 +247,7 @@ impl CatalogReader {
             }
         };
         let RawAnswer { body, links } = sent.map_err(ReadFailure::Provider)?;
-        check_type(&body, wanted.answer_type())?;
+        check_type(&body, wanted.answer_type(), wanted.type_required())?;
         if !links.is_empty() {
             tracing::warn!(
                 "the provider sent Link headers (catalog pages); only this first answer is read"
@@ -268,8 +302,17 @@ struct TypeOnly {
     kind: Option<String>,
 }
 
-/// Checks that `body` is a JSON object whose `@type` is `expected`.
-fn check_type(body: &[u8], expected: &str) -> Result<(), ReadFailure> {
+/// Checks that `body` is a JSON object whose `@type` is `expected`; an
+/// object without `@type` passes unless `required`.
+fn check_type(body: &[u8], expected: &str, required: bool) -> Result<(), ReadFailure> {
+    // serde reads a struct from a JSON array too (its fields in order),
+    // so `["Catalog"]` would pass below: only an object is read
+    let first = body.iter().find(|byte| !byte.is_ascii_whitespace());
+    if first != Some(&b'{') {
+        return Err(ReadFailure::NotDsp(
+            "the provider's answer is not a JSON object".to_owned(),
+        ));
+    }
     let read: TypeOnly = match serde_json::from_slice(body) {
         Ok(read) => read,
         Err(error) => {
@@ -280,6 +323,7 @@ fn check_type(body: &[u8], expected: &str) -> Result<(), ReadFailure> {
     };
     match read.kind.as_deref() {
         Some(kind) if kind == expected => Ok(()),
+        None if !required => Ok(()),
         Some(_) | None => Err(ReadFailure::NotDsp(format!(
             "the provider's answer is not a DSP 2025-1 {expected} (its @type is not \"{expected}\")"
         ))),
@@ -323,18 +367,35 @@ mod tests {
     #[test]
     fn the_answer_must_have_the_type_asked_for() {
         assert_eq!(
-            check_type(br#"{"@type":"Catalog","x":[1,{}]}"#, "Catalog"),
+            check_type(br#" {"@type":"Catalog","x":[1,{}]}"#, "Catalog", true),
             Ok(())
         );
         for wrong in [
             &br#"{"@type":"Dataset"}"#[..],
             br#"{"x":1}"#,
             b"[]",
+            br#"["Catalog"]"#,
+            br#""Catalog""#,
             b"",
             b"<html>",
             br#"{"@type":"Catalog""#,
         ] {
-            let checked = check_type(wrong, "Catalog");
+            let checked = check_type(wrong, "Catalog", true);
+            assert!(matches!(checked, Err(ReadFailure::NotDsp(_))), "{wrong:?}");
+        }
+    }
+
+    /// DSP 2025-1 `dataset-schema.json` does not require `@type`.
+    #[test]
+    fn a_dataset_may_leave_its_type_out_but_not_name_another() {
+        let dataset = br#"{"@id":"urn:uuid:1","hasPolicy":[],"distribution":[]}"#;
+        assert_eq!(check_type(dataset, "Dataset", false), Ok(()));
+        assert_eq!(
+            check_type(br#"{"@type":"Dataset"}"#, "Dataset", false),
+            Ok(())
+        );
+        for wrong in [&br#"{"@type":"Catalog"}"#[..], br#"["Dataset"]"#, b"[]"] {
+            let checked = check_type(wrong, "Dataset", false);
             assert!(matches!(checked, Err(ReadFailure::NotDsp(_))), "{wrong:?}");
         }
     }
@@ -383,6 +444,12 @@ mod tests {
             .dataset("https://provider.example/dsp", provider, " ")
             .await;
         assert!(matches!(read, Err(ReadFailure::BadRequest(_))));
+        for dots in [".", ".."] {
+            let read = reader(false)
+                .dataset("https://provider.example/dsp", provider, dots)
+                .await;
+            assert!(matches!(read, Err(ReadFailure::BadRequest(_))), "{dots}");
+        }
     }
 
     #[tokio::test]
