@@ -46,6 +46,12 @@ versions may change behaviour and configuration.
 
 ### Documentation
 
+- ODRL `dateTime` (R-26): the definition in the ODRL 2.2 vocabulary was
+  read and compared with ADR 0009 and the code. The text ADR 0009 used
+  from memory was the definition, and the code follows it; no code
+  changed. ADR 0009 has the quoted definition, its source and the
+  comparison, also with Eclipse EDC (`edc:inForceDate`). A test holds
+  the specification's own examples.
 - Close-out of 0.12: the roadmap and the website mark 0.12 released and
   0.13 as the current release; the website quickstart clones v0.12.0.
   CONTRIBUTING gives `cargo vet diff` with `--mode local`.

@@ -78,7 +78,7 @@ checks this file:
 | [R-23](#r-23) | A wrong host clock gives wrong policy and token decisions | Security | 0.3 (ADR 0009, 2026-11-12) | Mitigated | — |
 | [R-24](#r-24) | Simpl-Open: parked, facts not verified, and it changes fast | Interoperability, upstream churn | 0.5 (ADR 0017, maintainer, 2026-11-13) | Accepted | Later |
 | [R-25](#r-25) | Name not checked for trademarks and domains | Delivery, legal | 0.3 (ADR 0008, 2026-11-12) | Open | 0.13 (blocks 1.0) |
-| [R-26](#r-26) | ODRL `dateTime` definition read from memory | Interoperability | 0.3 (ADR 0009, 2026-11-12) | Open | 0.13 |
+| [R-26](#r-26) | ODRL `dateTime` definition read from memory | Interoperability | 0.3 (ADR 0009, 2026-11-12) | Addressed (0.13) | — |
 | [R-27](#r-27) | CI downloads from Maven Central and GitHub | Delivery | 0.8 (2026-11-15) | Mitigated | — |
 | [R-28](#r-28) | 0.8 Gaia-X code had no fuzz target | Security | 0.8 (sweep for this file, 2026-11-15) | Addressed | 0.8 |
 | [R-29](#r-29) | DCP costs about 2 ms per request and 13 times fewer requests under load | Performance | 0.5 (ADR 0002 section 7, 2026-11-13) | Open (measured again in 0.12) | with TD-07 |
@@ -634,8 +634,23 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
 - **What.** ADR 0009 could not read the ODRL 2.2 definition of `dateTime`
   and used it from memory: "check before 1.0".
 - **Why it matters.** Another connector may read it differently.
-- **Current state: Open.**
-- **Next.** ROADMAP 0.13, before 1.0.
+- **Current state: Addressed (0.13).** The definition was read on
+  2026-11-20 from the W3C working group's repository
+  (`https://raw.githubusercontent.com/w3c/poe/gh-pages/vocab/ODRL22.ttl`;
+  w3.org could not be reached). The text from memory was the definition
+  word for word, and the code follows it; a test now holds the
+  specification's own examples
+  ([ADR 0009](adr/0009-minimal-odrl-policies.md), note of 2026-11-20).
+  No code changed.
+- **What is left.** Portitor is stricter in one point, on purpose: a
+  date and time without a time zone is not understood (ODRL: optional,
+  "strongly recommended"). Two `xsd:dateTime` forms are not read
+  (`24:00:00`, years outside 0001 to 9999). Eclipse EDC has no built-in
+  `odrl:dateTime`; its own term is `edc:inForceDate`. So a time limit
+  is not interoperable with EDC out of the box, whatever the reading.
+- **Next.** The maintainer decides whether to read a date and time
+  without a time zone; compare the file with the copy at w3.org when it
+  can be reached.
 
 <a id="r-27"></a>
 ### R-27 CI downloads from Maven Central and GitHub
