@@ -1957,9 +1957,11 @@ known risk and technical debt, with its status and target release):
   check `bundle` does not show skipped files (it only passes or
   fails); the log, the gauge and the job log do.
 - Negotiations start from the consumer only; a provider cannot start
-  one with an offer ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)). A
-  transfer request sent twice starts two transfers
-  ([TD-34](RISKS_AND_TECHNICAL_DEBTS.md#td-34)).
+  one with an offer ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)). As
+  provider, a transfer request repeated with the same `consumerPid`
+  gets the transfer it already has, not a second one (from 0.12;
+  [TD-34](RISKS_AND_TECHNICAL_DEBTS.md#td-34)). As consumer, each
+  `POST /v1/transfers` on the management API starts a new transfer.
 - Reading a provider's catalog (`POST /v1/catalog/request` and
   `/v1/catalog/dataset/request` on the management API, from 0.13;
   [README](../README.md#management-api)): at most 16 MiB of answer are
