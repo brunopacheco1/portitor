@@ -107,7 +107,9 @@ When cargo-vet fails on a pull request (usually a Dependabot bump):
    covers the new version, commit the updated `imports.lock` and
    `config.toml` (it may also drop exemptions no longer needed).
 2. Otherwise `cargo vet suggest` lists what is missing, and
-   `cargo vet diff <crate> <old> <new>` shows the change to read. After
+   `cargo vet diff <crate> <old> <new> --mode local` shows the change
+   to read, in the terminal (without `--mode local` cargo-vet opens the
+   website diff.rs, which did not find the page on 2026-11-20). After
    reading it, record it with `cargo vet certify <crate> <old> <new>`
    (a delta audit), and commit `audits.toml`.
 3. If the change cannot be reviewed now, exempt that version with
