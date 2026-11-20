@@ -32,6 +32,8 @@ path = [
     "_http/**",
     # VS Code configuration (JSON with comments)
     ".vscode/*.json",
+    # CodeQL findings accepted as false positives (JSON has no comments)
+    ".github/codeql/*.json",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "Portitor contributors"
