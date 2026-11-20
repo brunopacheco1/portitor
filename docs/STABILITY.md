@@ -115,6 +115,12 @@ POST /v1/catalog/request
 POST /v1/catalog/dataset/request
 ```
 
+`POST /v1/catalog/request` returns the first page of the provider's
+catalog and copies the provider's `Link` headers; it follows no link to
+a next page. This stays so in 1.x: reading further pages for the caller
+would be a new field or a new route, never a change to what this call
+returns.
+
 ### portitor-identity, public port
 
 `{credentialService}` is the path of `PORTITOR_CREDENTIAL_SERVICE_URL`.
@@ -334,7 +340,10 @@ confirmed this for 1.x at the freeze (2026-11-20,
 - **Texts for people:** error messages, the `detail` of a problem
   answer, and the reasons in the harvest job log.
 - **Limits and timings** that are not a setting (for example the number
-  of retries, the 64 KiB limit of small messages, the request timeout).
+  of retries, the 64 KiB limit of small messages, the request timeout,
+  and for the catalog calls of the management API the 16 MiB limit of
+  an answer, the 30 seconds a read may take and the number of reads at
+  once).
 
 ## What 1.0 does not do
 
