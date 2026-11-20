@@ -93,6 +93,9 @@ credential type is `BitstringStatusListCredential`.
 A JSON file (`PORTITOR_ISSUER_CREDENTIALS_FILE`) lists what the issuer
 can issue:
 
+Note, 2026-11-20: `PORTITOR_ISSUER_CREDENTIALS_FILE` was renamed in 0.13
+to `PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE`.
+
 ```json
 [
   {

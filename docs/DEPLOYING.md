@@ -1726,7 +1726,7 @@ DID.
 | `PORTITOR_ISSUER_SERVICE_URL` | required | public base URL of the issuer service, for example `https://issuer.example.com/issuer`; written into the DID document (`IssuerService`). The status lists are served under it (`/status-lists/vc11`, `/status-lists/vc20`) and every credential points there, so **never change it** once credentials are issued |
 | `PORTITOR_ISSUER_KEY_FILE` | required | path of the mounted PEM key |
 | `PORTITOR_ISSUER_RETIRED_KEY_FILES` | unset (no retired key) | only during a key change: comma-separated paths of the old **public** keys, as for the identity ([Rotating a key](#rotating-a-key)). The start fails for a private key, a key that is not P-256, the current key, a key given twice, or the bundle key |
-| `PORTITOR_ISSUER_CREDENTIALS_FILE` | required | path of the mounted credential definitions file |
+| `PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE` | required | path of the mounted credential definitions file |
 | `PORTITOR_BIND` | `0.0.0.0:8070` | keep |
 | `PORTITOR_DB_FILE` | `/data/portitor-issuer.db` | keep the image default |
 | `PORTITOR_MANAGEMENT_API_KEY_FILE` | unset (management API off; the port serves only the health checks; an empty value counts as unset) | path of the mounted key file |
@@ -1762,7 +1762,7 @@ The credential definitions file (ADR 0018):
 
 Any other field, a missing required one, or a value outside these rules
 stops the start, with a line that names the entry, for example
-`PORTITOR_ISSUER_CREDENTIALS_FILE: credential definitions:
+`PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE: credential definitions:
 "membership-vc20": credentialSchema is required (the URL of the
 credential's schema)`.
 

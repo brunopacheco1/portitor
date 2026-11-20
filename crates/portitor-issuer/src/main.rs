@@ -155,11 +155,12 @@ fn read_key(config: &Config) -> Result<SigningKey, String> {
 
 /// The credential definitions, checked.
 fn read_definitions(config: &Config) -> Result<Vec<definitions::Definition>, String> {
-    let text = std::fs::read_to_string(&config.credentials_file).map_err(|e| {
+    let text = std::fs::read_to_string(&config.credential_definitions_file).map_err(|e| {
         format!(
-            "PORTITOR_ISSUER_CREDENTIALS_FILE: cannot read {}: {e}",
-            config.credentials_file.display()
+            "PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE: cannot read {}: {e}",
+            config.credential_definitions_file.display()
         )
     })?;
-    definitions::parse(&text).map_err(|e| format!("PORTITOR_ISSUER_CREDENTIALS_FILE: {e}"))
+    definitions::parse(&text)
+        .map_err(|e| format!("PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE: {e}"))
 }

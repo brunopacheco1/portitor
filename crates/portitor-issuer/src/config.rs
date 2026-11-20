@@ -33,7 +33,14 @@ pub const DEFAULT_MAX_ACTIVE_PER_HOLDER: u64 = 10;
 
 /// The settings the issuer no longer has. When one of them is set, the
 /// issuer refuses to start and names what to set instead.
-pub const REMOVED_SETTINGS: &[RemovedSetting] = &[ALLOW_HTTP_CALLBACKS];
+pub const REMOVED_SETTINGS: &[RemovedSetting] = &[
+    ALLOW_HTTP_CALLBACKS,
+    // the file holds credential definitions, not credentials
+    RemovedSetting {
+        name: "PORTITOR_ISSUER_CREDENTIALS_FILE",
+        advice: "was renamed in 0.13; set PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE instead",
+    },
+];
 
 /// Everything the issuer needs to start.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,8 +53,8 @@ pub struct Config {
     /// listed in the DID document but never used to sign
     /// (`PORTITOR_ISSUER_RETIRED_KEY_FILES`, comma-separated; TD-05).
     pub retired_key_files: Vec<PathBuf>,
-    /// The credential definitions, JSON (`PORTITOR_ISSUER_CREDENTIALS_FILE`).
-    pub credentials_file: PathBuf,
+    /// The credential definitions, JSON (`PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE`).
+    pub credential_definitions_file: PathBuf,
     /// The issuer service's public base URL, written into the DID
     /// document as `IssuerService` (`PORTITOR_ISSUER_SERVICE_URL`). The
     /// status lists are served under it too, so it must not change once
@@ -138,7 +145,9 @@ impl Config {
             retired_key_files: path_list(
                 &text("PORTITOR_ISSUER_RETIRED_KEY_FILES").unwrap_or_default(),
             ),
-            credentials_file: PathBuf::from(required("PORTITOR_ISSUER_CREDENTIALS_FILE")?),
+            credential_definitions_file: PathBuf::from(required(
+                "PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE",
+            )?),
             issuer_service_url: issuer_service_url.trim_end_matches('/').to_owned(),
             bind: text("PORTITOR_BIND").unwrap_or_else(|| DEFAULT_BIND.to_owned()),
             db_file: PathBuf::from(
@@ -180,13 +189,19 @@ mod tests {
     }
 
     /// Old names (refused) and the new name each error must give.
-    const RENAMED: &[(&str, &str)] = &[("PORTITOR_ALLOW_HTTP_CALLBACKS", "PORTITOR_ALLOW_HTTP")];
+    const RENAMED: &[(&str, &str)] = &[
+        ("PORTITOR_ALLOW_HTTP_CALLBACKS", "PORTITOR_ALLOW_HTTP"),
+        (
+            "PORTITOR_ISSUER_CREDENTIALS_FILE",
+            "PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE",
+        ),
+    ];
 
     const MINIMAL: &[(&str, &str)] = &[
         ("PORTITOR_PARTICIPANT_ID", "did:web:issuer.example"),
         ("PORTITOR_ISSUER_KEY_FILE", "/run/secrets/issuer.pem"),
         (
-            "PORTITOR_ISSUER_CREDENTIALS_FILE",
+            "PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE",
             "/config/credentials.json",
         ),
         (

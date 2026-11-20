@@ -73,7 +73,7 @@ start_issuer() { # name address management-address
   openssl rand -hex 32 >"$dir/management.key"
   env PORTITOR_PARTICIPANT_ID="$(did_web "$address")" PORTITOR_BIND="$address" \
     PORTITOR_ISSUER_SERVICE_URL="http://$address/issuer" PORTITOR_ISSUER_KEY_FILE="$dir/key.pem" \
-    PORTITOR_ISSUER_CREDENTIALS_FILE=examples/issuer-credentials.json \
+    PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE=examples/issuer-credentials.json \
     PORTITOR_DB_FILE="$dir/issuer.db" PORTITOR_MANAGEMENT_BIND="$management" \
     PORTITOR_MANAGEMENT_API_KEY_FILE="$dir/management.key" PORTITOR_ALLOW_HTTP=true \
     "$BIN/portitor-issuer" >"$WORK/$name.log" 2>&1 &

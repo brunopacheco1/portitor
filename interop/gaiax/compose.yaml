@@ -101,7 +101,7 @@ services:
       PORTITOR_PARTICIPANT_ID: did:web:issuer%3A8070
       PORTITOR_ISSUER_SERVICE_URL: http://issuer:8070/issuer
       PORTITOR_ISSUER_KEY_FILE: /config/issuer-key.pem
-      PORTITOR_ISSUER_CREDENTIALS_FILE: /credentials/issuer-credentials.json
+      PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE: /credentials/issuer-credentials.json
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8071
       PORTITOR_MANAGEMENT_API_KEY_FILE: /config/management.key
       PORTITOR_ALLOW_HTTP: "true"

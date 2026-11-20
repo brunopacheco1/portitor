@@ -248,7 +248,7 @@ PORTITOR_GAIAX_PARTICIPANT_FILE
 PORTITOR_ISSUER_SERVICE_URL
 PORTITOR_ISSUER_KEY_FILE
 PORTITOR_ISSUER_RETIRED_KEY_FILES
-PORTITOR_ISSUER_CREDENTIALS_FILE
+PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE
 PORTITOR_ISSUER_MAX_ACTIVE_PER_HOLDER
 PORTITOR_ISSUER_BUNDLE_KEY_FILE
 PORTITOR_ISSUER_BUNDLE_DIR
@@ -270,7 +270,7 @@ named in the CHANGELOG.
 | File | Set with | Format |
 |---|---|---|
 | Datasets file | `PORTITOR_DATASETS_FILE` | A JSON list of DCAT datasets with their ODRL offers and `portitor:source` ([ADR 0020](adr/0020-dataset-harvest.md), [DEPLOYING](DEPLOYING.md#dataset-harvest)). Policies are read strictly ([ADR 0009](adr/0009-minimal-odrl-policies.md)); a 1.x release may understand more terms |
-| Credential definitions | `PORTITOR_ISSUER_CREDENTIALS_FILE` | A JSON list ([DEPLOYING, issuer configuration](DEPLOYING.md#configuration-1), `examples/issuer-credentials.json`) |
+| Credential definitions | `PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE` | A JSON list ([DEPLOYING, issuer configuration](DEPLOYING.md#configuration-1), `examples/issuer-credentials.json`) |
 | Bundle | `PORTITOR_BUNDLE_URL`, `portitor-issuer bundle build` | A folder per version with `manifest.json` and `manifest.jws`, and `latest.json` ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)); the manifest follows [bundle-manifest.schema.json](schemas/bundle-manifest.schema.json) |
 | Gaia-X participant file | `PORTITOR_GAIAX_PARTICIPANT_FILE` | JSON ([DEPLOYING, Gaia-X onboarding](DEPLOYING.md#gaia-x-onboarding-optional)) |
 | Private keys | `PORTITOR_IDENTITY_KEY_FILE`, `PORTITOR_ISSUER_KEY_FILE` | One P-256 key, unencrypted PKCS#8 PEM |

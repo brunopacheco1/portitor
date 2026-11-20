@@ -59,7 +59,7 @@ services:
       PORTITOR_ISSUER_KEY_FILE: /run/secrets/issuer-key
       # MembershipCredential (claims memberOf, role) and
       # DataProcessorCredential (claim processing)
-      PORTITOR_ISSUER_CREDENTIALS_FILE: /config/issuer-credentials.json
+      PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE: /config/issuer-credentials.json
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8071
       PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/issuer-management-key
       PORTITOR_ALLOW_HTTP: "true"
