@@ -60,12 +60,12 @@ CI runs everything with Docker. The Podman runs are done by hand:
 
 | Script | Podman run that passed |
 |---|---|
-| `scripts/demo-compose.sh` | *none yet: date, Podman and Docker Compose versions, macOS version, to be filled in by the integrator after the maintainer's run* |
-| `scripts/gaiax-e2e.sh` | *none yet: to be filled in* |
-| `scripts/edc-interop.sh` | *none yet: to be filled in* |
+| `scripts/demo-compose.sh` | 2026-11-20, commit `d857330` (0.13.0 before the tag): Podman 6.1.4 with machine 5.8.5 (libkrun, rootless, 6 CPUs, 8 GiB), Docker Compose 5.6.1, macOS 26.7.3 on Apple Silicon, bash 5.3, OpenSSL 3.5; 7 seconds, with the three `:ci` images as arguments |
+| `scripts/gaiax-e2e.sh` | the same day and machine; 44 seconds |
+| `scripts/edc-interop.sh` | the same day and machine; 12 minutes, most of it the Gradle builds of EDC |
 
-Until that table is filled in, the Podman path has been checked against
-Podman's documentation and source only, not run.
+Not run with Podman: Linux hosts (SELinux labels are not handled, see
+below), and OpenSSL 4, which Homebrew now installs as `openssl`.
 
 **What Podman needs**
 
@@ -86,8 +86,9 @@ Podman's documentation and source only, not run.
 - **Enough memory for the EDC interop test.** A new machine has 2048 MiB.
   The test builds three EDC runtimes with Gradle, then runs three JVMs,
   Memgraph, the compliance service (Node.js), Vault, three web servers
-  and three Portitor components. An estimate, not measured: 4 CPUs,
-  8 GiB of memory, 40 GiB of disk
+  and three Portitor components. It passed on a machine with 6 CPUs
+  and 8 GiB of memory; our estimate for the least is 4 CPUs, 8 GiB of
+  memory, 40 GiB of disk
   (`podman machine init --cpus 4 --memory 8192 --disk-size 40`, or
   `podman machine set` on a stopped machine). The Compose demo and the
   Gaia-X test should fit in 4 GiB (also an estimate).
@@ -95,16 +96,21 @@ Podman's documentation and source only, not run.
   first, `scripts/require-bash.sh`). macOS has bash 3.2 as `/bin/bash`:
   `brew install bash`; the scripts start with `#!/usr/bin/env bash`, so
   the newer one is used once it comes first in `PATH`. Also `jq`, and for
-  the two interop tests `python3` with `cryptography`. The scripts were
-  written with OpenSSL 3; they have not been run with the LibreSSL that
-  macOS ships as `/usr/bin/openssl` (`brew install openssl@3`).
+  the two interop tests `python3` with `cryptography`. Homebrew's
+  Python refuses `pip install` outside a virtual environment (PEP 668):
+  `python3 -m venv .venv && .venv/bin/pip install cryptography`, then
+  put `.venv/bin` first in `PATH`. The scripts were written with
+  OpenSSL 3; they have not been run with OpenSSL 4 or with the LibreSSL
+  that macOS ships as `/usr/bin/openssl` (`brew install openssl@3` and
+  put its `bin` first in `PATH`).
   `scripts/bench.sh` and `scripts/measure.sh` run on Linux only (they
   read `/proc`).
 - **Linux binaries for the machine's architecture.** The `Dockerfile`
   copies static binaries from `dist/<arch>/`. On an Apple Silicon Mac
   the Podman machine is arm64: build `aarch64-unknown-linux-musl` and
-  copy to `dist/arm64/`. One way that needs nothing but the engine (not
-  run by us; it is what the release workflow does on an arm64 runner):
+  copy to `dist/arm64/`. One way that needs nothing but the engine (it is what the
+  release workflow does on an arm64 runner; about 8 minutes on the Mac
+  above):
 
   ```sh
   podman run --rm -v "$PWD:/src" -w /src docker.io/library/rust:1.97.0 sh -c '
