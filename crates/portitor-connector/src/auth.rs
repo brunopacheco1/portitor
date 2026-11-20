@@ -480,7 +480,9 @@ pub fn policy_credentials(
         .unwrap_or_else(|| DEFAULT_SCOPE.to_owned());
     let mut types = CredentialTypes::new(&membership_scope);
     let mut listed: Vec<String> = Vec::new();
-    for entry in comma_list(&text("PORTITOR_POLICY_CREDENTIALS").unwrap_or_default()) {
+    let entries = settings::list(&var, "PORTITOR_POLICY_CREDENTIALS")
+        .map_err(|e| format!("PORTITOR_POLICY_CREDENTIALS {e}"))?;
+    for entry in entries.unwrap_or_default() {
         let (credential_type, scope) = parse_policy_entry(&entry)?;
         let credential_type = credential_type.as_str();
         if listed.iter().any(|t| t == credential_type) {
@@ -675,7 +677,10 @@ impl AuthSettings {
         let Some(sts_url) = text("PORTITOR_STS_URL") else {
             return Ok(None);
         };
-        let sts_allow_http = settings::is_true(&var, "PORTITOR_STS_ALLOW_HTTP");
+        // a list that is set must name something (`settings::list`)
+        let list = |name: &str| settings::list(&var, name).map_err(|e| format!("{name} {e}"));
+        let sts_allow_http = settings::switch(&var, "PORTITOR_STS_ALLOW_HTTP")
+            .map_err(|e| format!("PORTITOR_STS_ALLOW_HTTP {e}"))?;
         let plain_http = sts_url
             .get(..7)
             .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"));
@@ -693,33 +698,18 @@ impl AuthSettings {
         if sts_client_secret.is_empty() {
             return Err(format!("the STS client secret file {secret_file} is empty"));
         }
-        let trusted_issuers = comma_list(
-            text("PORTITOR_TRUSTED_ISSUERS")
-                .as_deref()
-                .unwrap_or_default(),
-        );
-        if trusted_issuers.is_empty() {
+        let Some(trusted_issuers) = list("PORTITOR_TRUSTED_ISSUERS")? else {
             return Err("PORTITOR_TRUSTED_ISSUERS is required: the DIDs trusted to issue MembershipCredential".to_owned());
-        }
-        let gaiax_compliance_issuers = comma_list(
-            text("PORTITOR_GAIAX_COMPLIANCE_ISSUERS")
-                .as_deref()
-                .unwrap_or_default(),
-        );
+        };
+        let gaiax_compliance_issuers =
+            list("PORTITOR_GAIAX_COMPLIANCE_ISSUERS")?.unwrap_or_default();
         for did in &gaiax_compliance_issuers {
             // resolved like any did:web DID (with a path, as the Gaia-X
             // Lab's did:web:compliance.lab.gaia-x.eu:v2)
             portitor_dcp::did_web_url(did)
                 .map_err(|e| format!("PORTITOR_GAIAX_COMPLIANCE_ISSUERS: {did}: {e}"))?;
         }
-        let scopes = match text("PORTITOR_DCP_SCOPES") {
-            Some(scopes) => comma_list(&scopes),
-            None => vec![DEFAULT_SCOPE.to_owned()],
-        };
-        if scopes.is_empty() {
-            // a value of commas only; an empty value is "not set" above
-            return Err("PORTITOR_DCP_SCOPES names no scope".to_owned());
-        }
+        let scopes = list("PORTITOR_DCP_SCOPES")?.unwrap_or_else(|| vec![DEFAULT_SCOPE.to_owned()]);
         for scope in &scopes {
             // the DCP aliases only: they are what other Credential Services
             // must understand
@@ -984,7 +974,28 @@ mod tests {
         let mut commas = base.to_vec();
         commas.push(("PORTITOR_DCP_SCOPES", " , "));
         let error = AuthSettings::from_vars(me, false, vars(&commas)).unwrap_err();
-        assert_eq!(error, "PORTITOR_DCP_SCOPES names no scope");
+        assert!(
+            error.starts_with("PORTITOR_DCP_SCOPES names nothing"),
+            "{error}"
+        );
+        // the same for every list, and a switch is true or false
+        for (name, value, problem) in [
+            ("PORTITOR_TRUSTED_ISSUERS", ",", "names nothing"),
+            ("PORTITOR_GAIAX_COMPLIANCE_ISSUERS", " ,, ", "names nothing"),
+            ("PORTITOR_STS_ALLOW_HTTP", "1", "must be true or false"),
+        ] {
+            let mut wrong = base.to_vec();
+            wrong.push((name, value));
+            let error = AuthSettings::from_vars(me, false, vars(&wrong)).unwrap_err();
+            assert!(error.starts_with(name), "{error}");
+            assert!(error.contains(problem), "{error}");
+        }
+        let commas = vars(&[("PORTITOR_POLICY_CREDENTIALS", ",")]);
+        let error = policy_credentials(commas).unwrap_err();
+        assert!(
+            error.starts_with("PORTITOR_POLICY_CREDENTIALS names nothing"),
+            "{error}"
+        );
         // required settings that are empty are missing
         for required in [
             "PORTITOR_STS_CLIENT_SECRET_FILE",

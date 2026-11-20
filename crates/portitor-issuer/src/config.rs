@@ -10,9 +10,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub use portitor_runtime::settings::base_path;
-use portitor_runtime::settings::{
-    self, ALLOW_HTTP_CALLBACKS, RemovedSetting, is_true, path_list, refuse_removed,
-};
+use portitor_runtime::settings::{self, ALLOW_HTTP_CALLBACKS, RemovedSetting, refuse_removed};
 
 /// Where the public server listens unless `PORTITOR_BIND` says otherwise.
 pub const DEFAULT_BIND: &str = "0.0.0.0:8070";
@@ -137,12 +135,16 @@ impl Config {
             },
         };
         let management = ManagementConfig::from_vars(DEFAULT_MANAGEMENT_BIND, &var);
+        // a list that is set must name something (`settings::list`)
+        let retired_key_files = settings::list(&var, "PORTITOR_ISSUER_RETIRED_KEY_FILES")
+            .map_err(|e| invalid("PORTITOR_ISSUER_RETIRED_KEY_FILES", &e))?
+            .unwrap_or_default();
+        let allow_http = settings::switch(&var, "PORTITOR_ALLOW_HTTP")
+            .map_err(|e| invalid("PORTITOR_ALLOW_HTTP", &e))?;
         Ok(Self {
             participant_id,
             key_file: PathBuf::from(required("PORTITOR_ISSUER_KEY_FILE")?),
-            retired_key_files: path_list(
-                &text("PORTITOR_ISSUER_RETIRED_KEY_FILES").unwrap_or_default(),
-            ),
+            retired_key_files: retired_key_files.into_iter().map(PathBuf::from).collect(),
             credential_definitions_file: PathBuf::from(required(
                 "PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE",
             )?),
@@ -152,7 +154,7 @@ impl Config {
                 text("PORTITOR_DB_FILE").unwrap_or_else(|| DEFAULT_DB_FILE.to_owned()),
             ),
             management,
-            allow_http: is_true(&var, "PORTITOR_ALLOW_HTTP"),
+            allow_http,
             max_active_per_holder,
             bundle_key_file: text("PORTITOR_ISSUER_BUNDLE_KEY_FILE").map(PathBuf::from),
             bundle_dir: text("PORTITOR_ISSUER_BUNDLE_DIR").map(PathBuf::from),
@@ -213,6 +215,25 @@ mod tests {
             assert_eq!(error.name, *old);
             assert!(error.to_string().contains(new), "{error}");
         }
+    }
+
+    /// A list that is set names something, and a switch is `true` or
+    /// `false`: anything else stops the start.
+    #[test]
+    fn a_list_of_commas_or_a_switch_that_is_not_true_or_false_is_refused() {
+        for (name, value) in [
+            ("PORTITOR_ISSUER_RETIRED_KEY_FILES", ",,"),
+            ("PORTITOR_ALLOW_HTTP", "1"),
+            ("PORTITOR_ALLOW_HTTP", "yes"),
+        ] {
+            let mut vars = MINIMAL.to_vec();
+            vars.push((name, value));
+            let error = read(&vars).unwrap_err();
+            assert_eq!(error.name, name, "{error}");
+        }
+        let mut vars = MINIMAL.to_vec();
+        vars.push(("PORTITOR_ALLOW_HTTP", "FALSE"));
+        assert!(!read(&vars).unwrap().allow_http);
     }
 
     /// The rule of every setting: spaces around a value are dropped, and

@@ -39,12 +39,20 @@ pub fn text_from_env(name: &str) -> Option<String> {
     text(|name| std::env::var_os(name), name)
 }
 
-/// Whether the switch `name` is on: its value is `true`, in any case.
-/// Any other value, an empty one or none is off.
-pub fn is_true(var: impl Fn(&str) -> Option<OsString>, name: &str) -> bool {
+/// Whether the switch `name` is on: `true` or `false`, in any case. Not
+/// set (or empty) is off.
+///
+/// # Errors
+/// Any other value, with what is wrong, written to follow the name:
+/// `must be true or false, not "1"`. A value such as `1` or `yes` that
+/// was silently read as off would leave the operator with a switch they
+/// believe is on.
+pub fn switch(var: impl Fn(&str) -> Option<OsString>, name: &str) -> Result<bool, String> {
     match text(var, name) {
-        Some(value) => value.eq_ignore_ascii_case("true"),
-        None => false,
+        None => Ok(false),
+        Some(value) if value.eq_ignore_ascii_case("true") => Ok(true),
+        Some(value) if value.eq_ignore_ascii_case("false") => Ok(false),
+        Some(value) => Err(format!("must be true or false, not {value:?}")),
     }
 }
 
@@ -107,6 +115,30 @@ pub fn comma_list(text: &str) -> Vec<String> {
     items
 }
 
+/// The items of the comma-separated setting `name` ([`comma_list`]);
+/// `None` when it is not set (or empty).
+///
+/// # Errors
+/// The setting is set but names nothing (only commas and spaces), with
+/// what is wrong, written to follow the name. One rule for every list:
+/// such a value is most likely a mistake, and whether it would mean
+/// "the default" or "nothing at all" differs from list to list.
+pub fn list(
+    var: impl Fn(&str) -> Option<OsString>,
+    name: &str,
+) -> Result<Option<Vec<String>>, String> {
+    let Some(value) = text(var, name) else {
+        return Ok(None);
+    };
+    let items = comma_list(&value);
+    if items.is_empty() {
+        return Err(format!(
+            "names nothing ({value:?}): list at least one item, or leave it unset"
+        ));
+    }
+    Ok(Some(items))
+}
+
 /// Reads a whole-number setting named `name`. `value` is the
 /// variable's value, `None` when it is not set. The value is trimmed; an
 /// empty value counts as not set. A setting not set is `default`.
@@ -154,8 +186,11 @@ pub fn base_path(url: &str) -> Option<String> {
     let rest = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))?;
+    if rest.contains(['?', '#']) {
+        return None;
+    }
     let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
-    if host.is_empty() || path.contains(['?', '#']) {
+    if host.is_empty() {
         return None;
     }
     Some(format!("/{path}").trim_end_matches('/').to_owned())
@@ -176,18 +211,40 @@ mod tests {
     }
 
     #[test]
-    fn a_switch_is_on_only_for_true() {
+    fn a_switch_is_true_or_false_and_nothing_else() {
         let var = crate::testing::vars(&[
             ("ON", " TRUE "),
             ("ALSO_ON", "true"),
-            ("OFF", "1"),
+            ("OFF", "False"),
             ("EMPTY", ""),
+            ("ONE", "1"),
+            ("YES", "yes"),
+            ("TYPO", "ture"),
         ]);
-        assert!(is_true(&var, "ON"));
-        assert!(is_true(&var, "ALSO_ON"));
-        assert!(!is_true(&var, "OFF"));
-        assert!(!is_true(&var, "EMPTY"));
-        assert!(!is_true(&var, "MISSING"));
+        assert_eq!(switch(&var, "ON"), Ok(true));
+        assert_eq!(switch(&var, "ALSO_ON"), Ok(true));
+        assert_eq!(switch(&var, "OFF"), Ok(false));
+        assert_eq!(switch(&var, "EMPTY"), Ok(false));
+        assert_eq!(switch(&var, "MISSING"), Ok(false));
+        assert_eq!(
+            switch(&var, "ONE"),
+            Err("must be true or false, not \"1\"".to_owned())
+        );
+        assert!(switch(&var, "YES").is_err());
+        assert!(switch(&var, "TYPO").is_err());
+    }
+
+    #[test]
+    fn a_list_that_is_set_names_something() {
+        let var = crate::testing::vars(&[("LIST", " a, ,b "), ("COMMAS", " , ,"), ("EMPTY", "")]);
+        assert_eq!(
+            list(&var, "LIST"),
+            Ok(Some(vec!["a".to_owned(), "b".to_owned()]))
+        );
+        assert_eq!(list(&var, "EMPTY"), Ok(None));
+        assert_eq!(list(&var, "MISSING"), Ok(None));
+        let refused = list(&var, "COMMAS").unwrap_err();
+        assert!(refused.starts_with("names nothing"), "{refused}");
     }
 
     #[test]
@@ -219,6 +276,8 @@ mod tests {
         assert_eq!(base_path("ftp://id.example"), None);
         assert_eq!(base_path("https:///cs"), None);
         assert_eq!(base_path("https://id.example/cs?x=1"), None);
+        assert_eq!(base_path("https://id.example?x=1"), None);
+        assert_eq!(base_path("https://id.example#x"), None);
     }
 
     #[test]

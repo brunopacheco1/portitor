@@ -183,6 +183,9 @@ pub enum ConfigError {
     Missing(&'static str, &'static str),
     /// A variable has a value that cannot be used.
     Invalid(&'static str, String),
+    /// A variable has a value that cannot be used: its name, and what
+    /// is wrong with the value.
+    Refused(&'static str, String),
     /// `PORTITOR_POLICY_CREDENTIALS` cannot be used; the text says why.
     PolicyCredentials(String),
 }
@@ -193,6 +196,7 @@ impl std::fmt::Display for ConfigError {
             Self::Removed(setting) => setting.fmt(f),
             Self::Missing(name, what) => write!(f, "{name}: required ({what})"),
             Self::Invalid(name, value) => write!(f, "{name} has an invalid value {value:?}"),
+            Self::Refused(name, problem) => write!(f, "{name}: {problem}"),
             Self::PolicyCredentials(why) => f.write_str(why),
         }
     }
@@ -247,7 +251,9 @@ impl Config {
     /// # Errors
     ///
     /// `PORTITOR_PARTICIPANT_ID` or `PORTITOR_PUBLIC_URL` is not set or
-    /// empty, a number is not a number, a number of seconds is above
+    /// empty, the id is not a `did:web` DID, the URL is not an `http(s)`
+    /// URL (or has a query or fragment), `PORTITOR_ALLOW_HTTP` is neither
+    /// `true` nor `false`, a number is not a number, a number of seconds is above
     /// [`MAX_SETTING_SECONDS`] (one year), `PORTITOR_DATA_TOKEN_SECONDS` is
     /// 0, `PORTITOR_POLICY_CREDENTIALS` cannot be used, or one of the
     /// [`REMOVED_SETTINGS`] is set.
@@ -268,6 +274,25 @@ impl Config {
                 "the connector's public address, for example https://connector.example.com",
             ));
         };
+        // checked as the identity component and the issuer check theirs:
+        // the id is in every message and token, and the callback
+        // addresses are built from the URL
+        if let Err(error) = portitor_dcp::did_web_url(&participant_id) {
+            return Err(ConfigError::Refused(
+                "PORTITOR_PARTICIPANT_ID",
+                format!("{participant_id:?} is not a did:web DID: {error}"),
+            ));
+        }
+        if settings::base_path(&public_url).is_none() {
+            return Err(ConfigError::Refused(
+                "PORTITOR_PUBLIC_URL",
+                format!(
+                    "{public_url:?} is not an http(s) URL without a query or fragment, such as https://connector.example.com"
+                ),
+            ));
+        }
+        let allow_http = settings::switch(&var, "PORTITOR_ALLOW_HTTP")
+            .map_err(|problem| ConfigError::Refused("PORTITOR_ALLOW_HTTP", problem))?;
         let data_token_seconds = seconds_var(
             &var,
             "PORTITOR_DATA_TOKEN_SECONDS",
@@ -292,7 +317,7 @@ impl Config {
             public_url,
             datasets_file: settings::text(&var, "PORTITOR_DATASETS_FILE").map(PathBuf::from),
             harvest_interval_seconds,
-            allow_http: settings::is_true(&var, "PORTITOR_ALLOW_HTTP"),
+            allow_http,
             db_file: match settings::text(&var, "PORTITOR_DB_FILE") {
                 Some(file) => PathBuf::from(file),
                 None => PathBuf::from(DEFAULT_DB_FILE),

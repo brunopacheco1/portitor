@@ -9,7 +9,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use portitor_runtime::settings::{
-    self, ALLOW_HTTP_CALLBACKS, RemovedSetting, comma_list, is_true, path_list, refuse_removed,
+    self, ALLOW_HTTP_CALLBACKS, RemovedSetting, comma_list, refuse_removed,
 };
 
 /// The default scope aliases that mean "credentials of this type", on top
@@ -138,10 +138,13 @@ impl Config {
                 "not an http(s) URL",
             ));
         }
-        let trusted_issuers = comma_list(&required("PORTITOR_TRUSTED_ISSUERS")?);
-        if trusted_issuers.is_empty() {
+        // a list that is set must name something (`settings::list`)
+        let list = |name: &'static str| settings::list(&var, name).map_err(|e| invalid(name, &e));
+        let switch =
+            |name: &'static str| settings::switch(&var, name).map_err(|e| invalid(name, &e));
+        let Some(trusted_issuers) = list("PORTITOR_TRUSTED_ISSUERS")? else {
             return Err(invalid("PORTITOR_TRUSTED_ISSUERS", "required"));
-        }
+        };
         for issuer in &trusted_issuers {
             portitor_dcp::did_web_url(issuer)
                 .map_err(|e| invalid("PORTITOR_TRUSTED_ISSUERS", &format!("{issuer}: {e}")))?;
@@ -149,15 +152,15 @@ impl Config {
         let management = ManagementConfig::from_vars(DEFAULT_MANAGEMENT_BIND, &var);
         let key_file = PathBuf::from(required("PORTITOR_IDENTITY_KEY_FILE")?);
         let retired_key_files =
-            path_list(&text("PORTITOR_IDENTITY_RETIRED_KEY_FILES").unwrap_or_default());
+            paths(list("PORTITOR_IDENTITY_RETIRED_KEY_FILES")?.unwrap_or_default());
         // the one STS client is the participant's own connector, so it is
         // named by the participant's DID unless set
         let sts_client_id =
             text("PORTITOR_STS_CLIENT_ID").unwrap_or_else(|| participant_id.clone());
         let sts_client_secret_file = PathBuf::from(required("PORTITOR_STS_CLIENT_SECRET_FILE")?);
-        let scope_type_aliases =
-            text("PORTITOR_SCOPE_TYPE_ALIASES").unwrap_or_else(|| DEFAULT_TYPE_ALIASES.to_owned());
-        let allow_http = is_true(&var, "PORTITOR_ALLOW_HTTP");
+        let scope_type_aliases = list("PORTITOR_SCOPE_TYPE_ALIASES")?
+            .unwrap_or_else(|| comma_list(DEFAULT_TYPE_ALIASES));
+        let allow_http = switch("PORTITOR_ALLOW_HTTP")?;
         let certificate_chain_file =
             text("PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE").map(PathBuf::from);
         let gaiax = gaiax_config(&text, certificate_chain_file.is_some(), allow_http)?;
@@ -174,7 +177,7 @@ impl Config {
             sts_client_id,
             sts_client_secret_file,
             trusted_issuers,
-            scope_type_aliases: comma_list(&scope_type_aliases),
+            scope_type_aliases,
             allow_http,
             certificate_chain_file,
             gaiax,
@@ -239,6 +242,11 @@ fn removed(setting: RemovedSetting) -> ConfigError {
     invalid(setting.name, setting.advice)
 }
 
+/// The file paths of a list setting.
+fn paths(items: Vec<String>) -> Vec<PathBuf> {
+    items.into_iter().map(PathBuf::from).collect()
+}
+
 fn invalid(name: &'static str, problem: &str) -> ConfigError {
     ConfigError {
         name,
@@ -289,6 +297,27 @@ mod tests {
             assert_eq!(error.name, *old);
             assert!(error.to_string().contains(new), "{error}");
         }
+    }
+
+    /// A list that is set names something, and a switch is `true` or
+    /// `false`: anything else stops the start.
+    #[test]
+    fn a_list_of_commas_or_a_switch_that_is_not_true_or_false_is_refused() {
+        for (name, value) in [
+            ("PORTITOR_SCOPE_TYPE_ALIASES", ","),
+            ("PORTITOR_TRUSTED_ISSUERS", " , "),
+            ("PORTITOR_IDENTITY_RETIRED_KEY_FILES", ",,"),
+            ("PORTITOR_ALLOW_HTTP", "1"),
+            ("PORTITOR_ALLOW_HTTP", "yes"),
+        ] {
+            let mut vars = MINIMAL.to_vec();
+            vars.push((name, value));
+            let error = read(&vars).unwrap_err();
+            assert_eq!(error.name, name, "{error}");
+        }
+        let mut vars = MINIMAL.to_vec();
+        vars.push(("PORTITOR_ALLOW_HTTP", "FALSE"));
+        assert!(!read(&vars).unwrap().allow_http);
     }
 
     /// The rule of every setting: spaces around a value are dropped, and
@@ -456,9 +485,8 @@ mod tests {
         assert!(read(&vars).is_err());
         let mut vars = MINIMAL.to_vec();
         vars.push(("PORTITOR_TRUSTED_ISSUERS", " , "));
-        assert_eq!(
-            read(&vars).unwrap_err(),
-            invalid("PORTITOR_TRUSTED_ISSUERS", "required")
-        );
+        let error = read(&vars).unwrap_err();
+        assert_eq!(error.name, "PORTITOR_TRUSTED_ISSUERS");
+        assert!(error.problem.starts_with("names nothing"), "{error}");
     }
 }

@@ -454,6 +454,37 @@ fn config_with(
     portitor_connector::Config::from_vars(portitor_runtime::testing::vars(&all))
 }
 
+/// The id must be a did:web DID and the URL an http(s) URL, as for the
+/// identity component and the issuer: a wrong one would only fail later,
+/// in front of a partner. A switch is `true` or `false`.
+#[test]
+fn a_wrong_id_url_or_switch_stops_the_start() {
+    for (name, value) in [
+        ("PORTITOR_PARTICIPANT_ID", "p.example"),
+        ("PORTITOR_PARTICIPANT_ID", "did:key:z6Mk"),
+        ("PORTITOR_PUBLIC_URL", "p.example"),
+        ("PORTITOR_PUBLIC_URL", "ftp://p.example"),
+        ("PORTITOR_PUBLIC_URL", "https://p.example/dsp?x=1"),
+        ("PORTITOR_PUBLIC_URL", "https://p.example#x"),
+        ("PORTITOR_ALLOW_HTTP", "1"),
+        ("PORTITOR_ALLOW_HTTP", "yes"),
+    ] {
+        let error = config_with(&[(name, value)]).unwrap_err();
+        assert!(
+            matches!(&error, portitor_connector::ConfigError::Refused(n, _) if *n == name),
+            "{name}={value}: {error}"
+        );
+        assert!(error.to_string().starts_with(name), "{error}");
+    }
+    for (name, value) in [
+        ("PORTITOR_PUBLIC_URL", "http://localhost:8080/base/"),
+        ("PORTITOR_PARTICIPANT_ID", "did:web:p.example:connector"),
+        ("PORTITOR_ALLOW_HTTP", "False"),
+    ] {
+        assert!(config_with(&[(name, value)]).is_ok(), "{name}={value}");
+    }
+}
+
 /// The rule of every setting: spaces around a value are dropped, and an
 /// empty value means "not set", so the default is used.
 #[test]
