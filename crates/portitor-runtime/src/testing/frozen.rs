@@ -16,6 +16,21 @@
 //!   sources ([`settings_in_code`]), so nobody has to remember to keep a
 //!   second list up to date.
 //!
+//! What the guard does not see, so a reviewer still has to:
+//!
+//! - It checks that a frozen setting's name is in the sources, not that
+//!   the setting is still read. A name that stays only in an error text
+//!   passes.
+//! - A name that is not written whole between double quotes on one line
+//!   (built with `concat!` or `format!`), or that follows an escaped
+//!   quote (`\"`) on its line, is not found.
+//! - The public routes are compared with the hand-written
+//!   `docs/api/openapi.json`. A new public route that is added to the
+//!   router but not to that file is not noticed; only the management
+//!   descriptions are generated from the handlers.
+//! - Sources are read up to their unit tests (`#[cfg(test)]` on a
+//!   `mod`); files named `tests.rs` are left out.
+//!
 //! The functions here return an error text instead of panicking; the
 //! tests print it.
 
@@ -202,13 +217,23 @@ fn add_settings_of_folder(folder: &Path, names: &mut Names) -> Result<(), String
 }
 
 fn add_settings_of_file(text: &str, names: &mut Names) {
+    // whether the last attribute seen was `#[cfg(test)]`, with only
+    // other attributes after it
+    let mut for_tests = false;
     for line in text.lines() {
         let line = line.trim_start();
-        if line.starts_with("#[cfg(test)]") {
-            return;
-        }
-        if line.starts_with("//") {
+        if line.starts_with("//") || line.is_empty() {
             continue;
+        }
+        if line.starts_with("#[cfg(test)]") {
+            for_tests = true;
+        } else if for_tests && is_module_start(line) {
+            // the unit tests: the rest of the file is no release code.
+            // `#[cfg(test)]` on a single item (a function, a `use`) does
+            // not end the reading
+            return;
+        } else if !line.starts_with("#[") {
+            for_tests = false;
         }
         // the pieces between double quotes are at the odd positions:
         // `f("A", "B")` splits into `f(`, `A`, `, `, `B`, `)`
@@ -218,6 +243,17 @@ fn add_settings_of_file(text: &str, names: &mut Names) {
             }
         }
     }
+}
+
+/// Whether `line` starts a module (`mod tests {`, `pub(crate) mod x {`).
+fn is_module_start(line: &str) -> bool {
+    let line = match line.strip_prefix("pub") {
+        Some(rest) => rest
+            .trim_start_matches(|character| character != ' ')
+            .trim_start(),
+        None => line,
+    };
+    line.starts_with("mod ")
 }
 
 /// Whether `text` looks like one of our environment variables.
@@ -453,13 +489,24 @@ mod tests {
                     // \"PORTITOR_COMMENT\"\n\
                     let b = (\"OTEL_B_2\", \"PORTITOR_C is required\", \"portitor\");\n\
                     #[cfg(test)]\n\
+                    fn only_for_tests() {}\n\
+                    let d = var(\"PORTITOR_D\");\n\
+                    #[cfg(test)]\n\
+                    #[allow(clippy::unwrap_used)]\n\
+                    mod tests {\n\
                     let c = \"PORTITOR_TEST_ONLY\";\n";
         add_settings_of_file(file, &mut found);
         // a name in a comment at the end of a code line is found too:
-        // rare, and it errs on the side of asking
+        // rare, and it errs on the side of asking. `#[cfg(test)]` on one
+        // item does not end the reading; on the test module it does
         assert_eq!(
             found,
-            names(&["OTEL_B_2", "PORTITOR_A", "PORTITOR_IN_A_COMMENT_AT_THE_END"])
+            names(&[
+                "OTEL_B_2",
+                "PORTITOR_A",
+                "PORTITOR_D",
+                "PORTITOR_IN_A_COMMENT_AT_THE_END"
+            ])
         );
     }
 

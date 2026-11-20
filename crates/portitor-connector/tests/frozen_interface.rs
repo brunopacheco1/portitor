@@ -38,17 +38,6 @@ use portitor_runtime::testing::frozen;
 mod common;
 use common::{NoSender, PROVIDER, authenticating};
 
-/// Whether the management API may have routes that are not in the frozen
-/// list yet.
-///
-/// `true` only while release 0.13 is put together: the management call
-/// that reads a provider's catalog (TD-38) is written on another branch.
-/// **To finish:** add its routes to the list "portitor-connector,
-/// management port" in `docs/STABILITY.md`, then set this to `false`.
-/// From then on a new management route fails the test until it is
-/// listed, as on the other ports.
-const MANAGEMENT_ROUTES_MAY_BE_UNLISTED: bool = false;
-
 /// Names the code holds that are no settings of a release build.
 const NOT_FROZEN: &[&str] = &[
     // removed in 0.2; the connector only refuses to start when it is set
@@ -129,17 +118,12 @@ async fn frozen_public_routes() {
 /// and "portitor-connector, management port") are the routes of the
 /// generated management `OpenAPI` description, and the management port
 /// serves each of them. See the top of this file for what to do when it
-/// fails, and [`MANAGEMENT_ROUTES_MAY_BE_UNLISTED`].
+/// fails.
 #[tokio::test]
 async fn frozen_management_routes() {
     let frozen_routes = frozen::management_routes(&stability(), "portitor-connector").unwrap();
     let description = portitor_connector::management::openapi_json();
-    let mut documented = frozen::documented_management_routes(&description).unwrap();
-    if MANAGEMENT_ROUTES_MAY_BE_UNLISTED {
-        // look only at the frozen routes: a route that is documented but
-        // not frozen yet passes
-        documented.retain(|route| frozen_routes.contains(route));
-    }
+    let documented = frozen::documented_management_routes(&description).unwrap();
     let (_, negotiator) = portitor_connector::build(&config(), ports()).unwrap();
     let key = ApiKey::new("test-only-0123456789abcdef0123456789abcdef").unwrap();
     let api = portitor_connector::management::router(negotiator, key);
