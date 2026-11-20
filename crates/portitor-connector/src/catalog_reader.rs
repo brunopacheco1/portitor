@@ -305,6 +305,15 @@ struct TypeOnly {
 /// Checks that `body` is a JSON object whose `@type` is `expected`; an
 /// object without `@type` passes unless `required`.
 fn check_type(body: &[u8], expected: &str, required: bool) -> Result<(), ReadFailure> {
+    // JSON is UTF-8 (RFC 8259, section 8.1). Checked here for the whole
+    // body: the reader below passes over the members it does not keep
+    // without looking at the bytes of their texts, and the body is
+    // handed on as `application/json`.
+    if std::str::from_utf8(body).is_err() {
+        return Err(ReadFailure::NotDsp(
+            "the provider's answer is not JSON: it is not UTF-8 text".to_owned(),
+        ));
+    }
     // serde reads a struct from a JSON array too (its fields in order),
     // so `["Catalog"]` would pass below: only an object is read
     let first = body.iter().find(|byte| !byte.is_ascii_whitespace());
@@ -317,7 +326,7 @@ fn check_type(body: &[u8], expected: &str, required: bool) -> Result<(), ReadFai
         Ok(read) => read,
         Err(error) => {
             return Err(ReadFailure::NotDsp(format!(
-                "the provider's answer is not a JSON object: {error}"
+                "the provider's answer is not a JSON object with a text @type: {error}"
             )));
         }
     };
@@ -379,6 +388,8 @@ mod tests {
             b"",
             b"<html>",
             br#"{"@type":"Catalog""#,
+            // not UTF-8, in a member that is not read
+            b"{\"@type\":\"Catalog\",\"x\":\"\xff\"}",
         ] {
             let checked = check_type(wrong, "Catalog", true);
             assert!(matches!(checked, Err(ReadFailure::NotDsp(_))), "{wrong:?}");

@@ -212,8 +212,8 @@ pub(crate) async fn ask_issuer(
     send(identity, &service.base_url, request, access_token).await
 }
 
-/// Refuses a `holderPid` that starts with [`GAIAX_HOLDER_PID_PREFIX`].
-/// The identity stores its Gaia-X credentials under such ids and finds
+/// Refuses a `holderPid` that is empty or only spaces, and one that
+/// starts with [`GAIAX_HOLDER_PID_PREFIX`]. The identity stores its Gaia-X credentials under such ids and finds
 /// them by that prefix (`replace_gaiax_credentials` deletes every one), so
 /// an issuer's delivery under it would be replaced at the next Gaia-X run
 /// or served as a Gaia-X credential.
@@ -222,6 +222,9 @@ pub(crate) async fn ask_issuer(
 /// The reason, for a `400 Bad Request`.
 pub(crate) fn check_holder_pid(holder_pid: Option<&str>) -> Result<(), String> {
     match holder_pid {
+        Some(pid) if pid.trim().is_empty() => {
+            Err("holderPid must not be empty: leave it out for a new id".to_owned())
+        }
         Some(pid) if pid.starts_with(GAIAX_HOLDER_PID_PREFIX) => Err(format!(
             "holderPid must not start with {GAIAX_HOLDER_PID_PREFIX}: the identity keeps its Gaia-X credentials under it"
         )),

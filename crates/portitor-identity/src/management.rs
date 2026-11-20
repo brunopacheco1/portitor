@@ -52,7 +52,8 @@ pub struct NewRequest {
     #[schema(example = json!(["membership-vc11"]))]
     credential_ids: Vec<String>,
     /// The holder's id for the request, which the issuer sends back as
-    /// `holderPid` in its `CredentialMessage`. A new id if left out.
+    /// `holderPid` in its `CredentialMessage`. A new id if left out; an
+    /// empty one is refused.
     #[schema(example = "urn:uuid:5f7a3c1e-0d2b-4c6e-9a8f-1b2c3d4e5f60")]
     holder_pid: Option<String>,
 }

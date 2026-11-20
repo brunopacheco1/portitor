@@ -1253,6 +1253,9 @@ Export is **off** unless `OTEL_EXPORTER_OTLP_ENDPOINT`,
 no Prometheus scrape endpoint: the components push over OTLP, to an
 OpenTelemetry Collector or any receiver that takes OTLP/HTTP (Prometheus
 3 with `--web.enable-otlp-receiver`, Jaeger).
+The OpenTelemetry SDK reads the `OTEL_*` values as written: a space
+around an endpoint makes it invalid, and export stays off with an ERROR
+line (`telemetry: export is off`).
 
 **Switch it on.** Set the receiver's base URL; the components add
 `/v1/traces` and `/v1/metrics`:
@@ -1792,6 +1795,11 @@ new images.
 12. The management OpenAPI files of the three services list HTTP 403 on
     every route that needs the API key. No service answers 403 in 0.13:
     it is reserved for 1.x (ADR 0025).
+13. **Behaviour change, management API clients: an empty id is
+    refused.** `datasetId` of `POST /v1/negotiations` (connector) and
+    `holderPid` of `POST /v1/credential-requests` (identity) that are
+    empty or only spaces answer 400. Leave `holderPid` out if the
+    identity should make a new id; before, an empty one did that too.
 
 Rollback to 0.12: put the old names back in the configuration and the
 old field names in your clients; for the database, as above.

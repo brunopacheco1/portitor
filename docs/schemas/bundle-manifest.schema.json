@@ -8,9 +8,10 @@
   "required": ["version", "issued", "authority", "profile", "files"],
   "properties": {
     "version": {
-      "description": "The bundle version; also the name of its folder.",
+      "description": "The bundle version; also the name of its folder. Not \"latest\" in any letter case: that name is the pointer to the newest version.",
       "type": "string",
-      "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$"
+      "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$",
+      "not": { "pattern": "^[Ll][Aa][Tt][Ee][Ss][Tt]$" }
     },
     "issued": {
       "description": "When the version was issued (dcterms:issued, W3C DCAT 3): an xsd:dateTime in UTC, to the second, without fractions. A connector following the newest version never takes one issued before the version it uses.",
@@ -113,14 +114,14 @@
               }
             },
             {
-              "description": "A role of a later version of this format: any type that is not one of the four above, with any other fields. A reader that does not know the type skips the file: it does not fetch it and does not enforce what it holds.",
+              "description": "A role of a later version of this format: any type that is not one of the four above in any letter case (\"Datasets\" is a mistake, not a later role), with any other fields. A reader that does not know the type skips the file: it does not fetch it and does not enforce what it holds.",
               "type": "object",
               "required": ["type"],
               "properties": {
                 "type": {
                   "type": "string",
                   "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$",
-                  "not": { "enum": ["datasets", "messages", "vocabulary", "context"] }
+                  "not": { "pattern": "^([Dd][Aa][Tt][Aa][Ss][Ee][Tt][Ss]|[Mm][Ee][Ss][Ss][Aa][Gg][Ee][Ss]|[Vv][Oo][Cc][Aa][Bb][Uu][Ll][Aa][Rr][Yy]|[Cc][Oo][Nn][Tt][Ee][Xx][Tt])$" }
                 }
               }
             }

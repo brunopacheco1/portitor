@@ -705,6 +705,98 @@ async fn a_newer_version_with_a_file_of_an_unknown_role_is_taken_and_the_file_is
     authority.stop().await;
 }
 
+/// Adds two files of later roles whose media types this version does
+/// not read (ADR 0005, amended in 0.13: any `type/subtype` of RFC 6838,
+/// section 4.2), one with the longest role name allowed (64 letters).
+fn add_files_with_other_media_types(manifest: &mut serde_json::Value) {
+    let files = manifest["files"].as_array_mut().unwrap();
+    files.push(serde_json::json!({
+        "path": "rules/limits.json",
+        "sha256": portitor_dcp::bundle::sha256_hex(b"never read"),
+        "mediaType": "application/json",
+        "role": {"type": "r".repeat(64)}
+    }));
+    files.push(serde_json::json!({
+        "path": "rules/terms.xml",
+        "sha256": portitor_dcp::bundle::sha256_hex(b"never read either"),
+        "mediaType": "application/vnd.example.rules-v2+xml",
+        "role": {"type": "terms", "media": ["any"], "since": 2}
+    }));
+}
+
+/// The 0.13 change that the manifest tests of `portitor-dcp` cover for
+/// the manifest alone, here through the connector: files whose media
+/// type is outside this version's three are skipped like any file of an
+/// unknown role, and the rest of the bundle is used.
+#[tokio::test]
+async fn skipped_files_may_have_media_types_this_version_does_not_read() {
+    let authority = Authority::start(true).await;
+    let settings = folder_settings(&authority);
+    let started = start(&settings).await.unwrap();
+
+    authority.publish_from_a_later_build_tool(
+        "2026.12.0",
+        "2026-12-01T00:00:00Z",
+        add_files_with_other_media_types,
+    );
+    let (job, changed) = started.harvester.check(Trigger::Interval).await;
+    assert_eq!(job.outcome, JobOutcome::Succeeded, "{}", job.summary);
+    assert!(changed);
+    assert!(job.summary.contains("2 files skipped"), "{}", job.summary);
+    let rules = started.harvester.copy().current();
+    assert!(rules.dataset_check().is_some(), "the datasets shapes");
+    let skipped = rules.skipped_files();
+    assert_eq!(skipped.len(), 2);
+    assert_eq!(skipped[0].path, "rules/limits.json");
+    assert_eq!(skipped[0].role_type, "r".repeat(64));
+    assert_eq!(skipped[1].path, "rules/terms.xml");
+    assert_eq!(skipped[1].role_type, "terms");
+    // neither was fetched: the cache holds only what is used
+    let cached = settings.cache_dir.join("2026.12.0");
+    assert!(cached.join("shapes/public.ttl").is_file());
+    assert!(!cached.join("rules").exists());
+    authority.stop().await;
+}
+
+/// Writes the role of the datasets shapes as `Datasets`.
+fn write_the_datasets_role_in_other_letters(manifest: &mut serde_json::Value) {
+    for file in manifest["files"].as_array_mut().unwrap() {
+        if file["role"]["type"] == "datasets" {
+            file["role"]["type"] = serde_json::json!("Datasets");
+        }
+    }
+}
+
+/// A known role written in other letters (`Datasets`) is a mistake, not
+/// a role of a later version. Skipping the file would leave datasets
+/// unchecked with only a warning, so the new version is refused and the
+/// version in use stays.
+#[tokio::test]
+async fn a_version_whose_datasets_role_is_written_in_other_letters_is_not_taken() {
+    let authority = Authority::start(true).await;
+    let settings = folder_settings(&authority);
+    let started = start(&settings).await.unwrap();
+
+    authority.publish_from_a_later_build_tool(
+        "2026.12.0",
+        "2026-12-01T00:00:00Z",
+        write_the_datasets_role_in_other_letters,
+    );
+    let (job, changed) = started.harvester.check(Trigger::Interval).await;
+    assert_eq!(job.outcome, JobOutcome::Failed, "{}", job.summary);
+    assert!(!changed);
+    assert!(
+        job.summary.contains("the type is written datasets")
+            && job.summary.contains("keeping version 2026.11.0"),
+        "{}",
+        job.summary
+    );
+    assert_eq!(started.harvester.in_use().version, VERSION);
+    let rules = started.harvester.copy().current();
+    assert!(rules.dataset_check().is_some(), "the old rules still check");
+    authority.stop().await;
+}
+
 /// Following `latest`: a newer version in which this connector knows no
 /// role would give no rules at all. It is refused like any invalid
 /// bundle, and the version in use stays, also after a restart.

@@ -1554,7 +1554,7 @@
               "string",
               "null"
             ],
-            "description": "The dataset id. Optional if the offer has a `target`; offers in a\ncatalog have none, as the dataset holds them.",
+            "description": "The dataset id. Optional if the offer has a `target`; offers in a\ncatalog have none, as the dataset holds them. An empty one is\nrefused.",
             "example": "urn:uuid:dataset-1"
           },
           "offer": {

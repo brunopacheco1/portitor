@@ -197,7 +197,9 @@ section 7 for the issuer,
 
 One rule for every setting: spaces around a value are dropped, and an
 empty value means "not set". A required setting that is empty stops the
-start; an optional one takes its default.
+start; an optional one takes its default. The `OTEL_*` values are read
+by the OpenTelemetry SDK as written: an empty endpoint also means "not
+set", but spaces around a value are not dropped.
 
 ### Settings of every binary
 

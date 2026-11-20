@@ -69,6 +69,17 @@ fn ports() -> Ports {
     authenticating(Ports::new(Arc::new(NoSender)), PROVIDER)
 }
 
+/// `request` as sent by the tests' consumer (the test verifier takes
+/// `Bearer <did>` at its word).
+async fn from_the_consumer(
+    mut request: axum::http::Request<axum::body::Body>,
+) -> axum::http::Request<axum::body::Body> {
+    let caller = common::bearer(common::CONSUMER).parse().unwrap();
+    let headers = request.headers_mut();
+    headers.insert(axum::http::header::AUTHORIZATION, caller);
+    request
+}
+
 /// The settings in `docs/STABILITY.md` ("Settings of every binary" and
 /// "Settings of portitor-connector") are the environment variables the
 /// connector's code names: its own crate, `portitor-bundle` and
@@ -101,6 +112,13 @@ async fn frozen_public_routes() {
         frozen::repository_file(env!("CARGO_MANIFEST_DIR"), "docs/api/openapi.json").unwrap();
     let documented = frozen::openapi_routes(&description).unwrap();
     let router = portitor_connector::router(&config(), ports()).unwrap();
+    // Every request of the check comes from a named caller. Without
+    // one, the connector answers 404 on every DSP path before it looks
+    // at the method (ADR 0016), also on the path of a route that is
+    // gone when another route's `{providerPid}` takes its place: `POST
+    // .../negotiations/request` would count as served by `GET
+    // .../negotiations/{providerPid}`.
+    let router = router.layer(axum::middleware::map_request(from_the_consumer));
     let result = frozen::check_routes(
         "public routes of portitor-connector",
         &frozen_routes,

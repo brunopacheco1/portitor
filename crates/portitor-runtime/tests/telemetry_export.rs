@@ -426,6 +426,33 @@ async fn a_signal_endpoint_alone_exports_that_signal() {
     assert!(!lines_in_span(&stdout)[0].contains("trace_id"), "{stdout}");
 }
 
+/// The rule of every setting (0.13) for the `OTEL_*` settings that
+/// `docs/STABILITY.md` lists: an empty value, or one of spaces only,
+/// means "not set", so nothing is exported.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_empty_endpoint_is_no_endpoint() {
+    for name in [
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    ] {
+        for empty in ["", "  "] {
+            let (stdout, stderr) = run_child_output("normal", &[(name, empty.to_owned())]).await;
+            let lines = lines_in_span(&stdout);
+            assert_eq!(lines.len(), 1, "{name}={empty:?}: {stdout}");
+            assert!(!lines[0].contains("trace_id"), "{name}={empty:?}");
+            assert!(
+                !stdout.contains("telemetry: export"),
+                "{name}={empty:?}: {stdout}"
+            );
+            assert!(
+                !stderr.contains("OpenTelemetry"),
+                "{name}={empty:?}: {stderr}"
+            );
+        }
+    }
+}
+
 /// A receiver that is down, answers 5xx or never answers: the child keeps
 /// serving, and its shutdown ends within the budget (the child checks
 /// both, see `failing_work`).

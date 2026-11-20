@@ -419,7 +419,8 @@ pub struct StartNegotiation {
     #[schema(example = "did:web:provider.example")]
     counter_party_id: String,
     /// The dataset id. Optional if the offer has a `target`; offers in a
-    /// catalog have none, as the dataset holds them.
+    /// catalog have none, as the dataset holds them. An empty one is
+    /// refused.
     #[schema(example = "urn:uuid:dataset-1")]
     dataset_id: Option<String>,
     /// The offer from the provider's catalog (a DSP 2025-1 `Offer`), copied
@@ -518,6 +519,13 @@ async fn start(
         Ok(Json(r)) => r,
         Err(e) => return problem(StatusCode::BAD_REQUEST, &e.body_text()),
     };
+    if req
+        .dataset_id
+        .as_deref()
+        .is_some_and(|id| id.trim().is_empty())
+    {
+        return problem(StatusCode::BAD_REQUEST, "datasetId must not be empty");
+    }
     match (req.offer.target.as_deref(), req.dataset_id.take()) {
         (Some(target), Some(dataset_id)) if target != dataset_id => {
             return problem(

@@ -168,6 +168,14 @@ after 1.0 they could only be made in 2.0. What to do:
     `..` is refused with 400.
   - **Bundle: a role type that is a known one in other letter case**
     (`Messages`) is refused as a mistake, not skipped as a later role.
+    The manifest's JSON Schema says the same, and it now also refuses
+    the version `latest` in any letter case, as the code always did.
+  - **Management API: an empty id is refused.** `datasetId` of
+    `POST /v1/negotiations` (connector) and `holderPid` of
+    `POST /v1/credential-requests` (identity) that are empty or only
+    spaces answer 400. Before, a `datasetId` of spaces started a
+    negotiation, an empty `holderPid` got a new id and one of spaces
+    was stored. Leave `holderPid` out for a new id.
   - **Transfer request while the finalization is on its way** (TD-44):
     nothing is written unless the caller is also the agreement's
     assignee (it always was in practice), and ADR 0007 now says what
@@ -176,6 +184,14 @@ after 1.0 they could only be made in 2.0. What to do:
   - The interop scripts stop the containers of an earlier `KEEP=1` run
     before they delete its files, clean up from their first line, and
     say why they stop when `curl` or `openssl` fails.
+
+### Fixed
+
+- Connector management API, `POST /v1/catalog/request` and
+  `POST /v1/catalog/dataset/request`: a provider's answer that is not
+  UTF-8 text inside a member the connector does not read was handed on
+  with HTTP 200 as `application/json`. It is now refused with 502, as
+  any other answer that is not JSON (RFC 8259, section 8.1).
 
 ### Documentation
 
