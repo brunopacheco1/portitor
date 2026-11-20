@@ -212,8 +212,17 @@ pub struct Manifest {
 }
 
 /// One file of a bundle.
+///
+/// Read in two steps, as [`Role`] is: first as the manifest writes it
+/// ([`FileEntryAsWritten`], the media type still a text), then the media
+/// type is read by the rule of the file's role ([`media_type_for`]).
+/// `try_from` tells serde to do exactly that.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(
+    rename_all = "camelCase",
+    deny_unknown_fields,
+    try_from = "FileEntryAsWritten"
+)]
 pub struct FileEntry {
     /// The path inside the bundle folder, with `/` between folders, for
     /// example `shapes/public.ttl`. See [`check_path`] for the rules.
@@ -224,6 +233,88 @@ pub struct FileEntry {
     pub media_type: MediaType,
     /// What the file is for.
     pub role: Role,
+}
+
+/// A file entry exactly as JSON writes it: step 1 of reading a
+/// [`FileEntry`]. Strict: a field the format does not have is an error.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FileEntryAsWritten {
+    path: String,
+    sha256: String,
+    media_type: String,
+    role: Role,
+}
+
+// Step 2 of reading a `FileEntry`: the media type, by the role's rule.
+impl TryFrom<FileEntryAsWritten> for FileEntry {
+    type Error = String;
+
+    fn try_from(written: FileEntryAsWritten) -> Result<Self, String> {
+        let media_type = media_type_for(&written.role, &written.media_type)
+            .map_err(|reason| format!("{}: mediaType: {reason}", written.path))?;
+        Ok(Self {
+            path: written.path,
+            sha256: written.sha256,
+            media_type,
+            role: written.role,
+        })
+    }
+}
+
+/// The media type `text` of a file with the role `role`.
+///
+/// - A known role: one of the three media types this version reads,
+///   nothing else.
+/// - A role this version does not know ([`Role::Unknown`]): any text
+///   with the shape of a media type ([`is_media_type_shape`]). The file
+///   is skipped, so its media type is not used; a later role may need a
+///   type outside today's three (for example `application/json`), and
+///   that must not make a 1.0 connector refuse the whole bundle (ADR
+///   0005, amended in 0.13).
+///
+/// # Errors
+/// What is wrong with `text`.
+fn media_type_for(role: &Role, text: &str) -> Result<MediaType, String> {
+    if let Some(known) = MediaType::from_text(text) {
+        return Ok(known);
+    }
+    if role.is_known() {
+        return Err(format!(
+            "{text:?} is not text/turtle, application/n-triples or application/ld+json"
+        ));
+    }
+    if is_media_type_shape(text) {
+        Ok(MediaType::Other)
+    } else {
+        Err("not a media type (type/subtype, RFC 6838 section 4.2)".to_owned())
+    }
+}
+
+/// Whether `text` has the shape of a media type without parameters:
+/// `type/subtype`, each a restricted name of RFC 6838 section 4.2.
+#[must_use]
+pub fn is_media_type_shape(text: &str) -> bool {
+    match text.split_once('/') {
+        Some((type_name, subtype_name)) => {
+            is_restricted_name(type_name) && is_restricted_name(subtype_name)
+        }
+        None => false,
+    }
+}
+
+/// RFC 6838 section 4.2, `restricted-name`: 1 to 127 characters, the
+/// first a letter or a digit, the others letters, digits or one of
+/// `! # $ & - ^ _ . +`. So no space, no `/`, no `;` and nothing that is
+/// not ASCII: safe to log.
+fn is_restricted_name(name: &str) -> bool {
+    let mut characters = name.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    name.len() <= 127
+        && first.is_ascii_alphanumeric()
+        && characters.all(|c| c.is_ascii_alphanumeric() || "!#$&-^_.+".contains(c))
 }
 
 /// The media types a bundle file may have. RDF/XML is not one of them
@@ -239,6 +330,12 @@ pub enum MediaType {
     /// JSON-LD (here only for JSON-LD contexts).
     #[serde(rename = "application/ld+json")]
     JsonLd,
+    /// A media type this version does not read. Only a file whose role
+    /// is [`Role::Unknown`] has it, and such a file is skipped, so the
+    /// text is not kept. Never written and never read by this name: the
+    /// two `skip` attributes make serde refuse both.
+    #[serde(skip_serializing, skip_deserializing)]
+    Other,
 }
 
 impl MediaType {
@@ -249,7 +346,18 @@ impl MediaType {
             Self::Turtle => "text/turtle",
             Self::NTriples => "application/n-triples",
             Self::JsonLd => "application/ld+json",
+            // the real text was not kept; this is HTTP's "some bytes"
+            Self::Other => "application/octet-stream",
         }
+    }
+
+    /// The media type written as `text`, if it is one of the three this
+    /// version reads (exactly as [`MediaType::as_str`] writes them).
+    #[must_use]
+    pub fn from_text(text: &str) -> Option<Self> {
+        [Self::Turtle, Self::NTriples, Self::JsonLd]
+            .into_iter()
+            .find(|known| known.as_str() == text)
     }
 }
 
@@ -1430,6 +1538,55 @@ mod tests {
         serde_json::to_vec(&json).unwrap()
     }
 
+    /// The media type of a file with an unknown role may be outside the
+    /// three (it is kept as [`MediaType::Other`]); a file with a known
+    /// role keeps the closed list.
+    #[test]
+    fn an_unknown_role_may_have_another_media_type_and_a_known_role_may_not() {
+        let unknown_role = serde_json::json!({"type": "policies"});
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&with_a_file_of_role(&unknown_role)).unwrap();
+        json["files"][2]["mediaType"] = "application/odrl+json".into();
+        let parsed = Manifest::parse(&serde_json::to_vec(&json).unwrap()).unwrap();
+        assert_eq!(parsed.files[2].media_type, MediaType::Other);
+        // one of the three is kept as it is
+        json["files"][2]["mediaType"] = "text/turtle".into();
+        let parsed = Manifest::parse(&serde_json::to_vec(&json).unwrap()).unwrap();
+        assert_eq!(parsed.files[2].media_type, MediaType::Turtle);
+        // not the shape of a media type: refused, also for an unknown role
+        json["files"][2]["mediaType"] = "application/odrl+json; v=2".into();
+        let error = Manifest::parse(&serde_json::to_vec(&json).unwrap()).unwrap_err();
+        assert!(error.to_string().contains("RFC 6838"), "{error}");
+        // the same media type on a file with a known role: refused
+        json["files"][2]["mediaType"] = "application/odrl+json".into();
+        json["files"][2]["role"] = serde_json::json!({"type": "vocabulary"});
+        let error = Manifest::parse(&serde_json::to_vec(&json).unwrap()).unwrap_err();
+        assert!(
+            error.to_string().contains("policies/odrl.jsonld"),
+            "{error}"
+        );
+        // a manifest is never written with it
+        assert!(serde_json::to_string(&MediaType::Other).is_err());
+        assert!(serde_json::from_str::<MediaType>("\"Other\"").is_err());
+    }
+
+    #[test]
+    fn restricted_names_follow_rfc_6838() {
+        for good in [
+            "text/turtle",
+            "a/b",
+            "application/vnd.x-y_z.1+json",
+            "1a/2b!#$&^",
+        ] {
+            assert!(is_media_type_shape(good), "{good}");
+        }
+        for bad in [
+            "", "text", "text/", "/x", "a/b/c", "a /b", "a/b;c=d", "+a/b", "a/.b", "\u{e9}/b",
+        ] {
+            assert!(!is_media_type_shape(bad), "{bad}");
+        }
+    }
+
     /// ADR 0005, amended in 0.13: a file whose role type is not known
     /// is skipped, with whatever fields the role has; the other files
     /// are used.
@@ -1586,7 +1743,7 @@ mod tests {
     }
 
     /// The other fields of a file with an unknown role are checked as
-    /// for every file; only the fit of media type and role is not.
+    /// for every file; of its media type only the shape is.
     #[test]
     fn a_file_of_an_unknown_role_is_still_a_strict_file_entry() {
         let good = with_a_file_of_role(&serde_json::json!({"type": "policies"}));
@@ -1596,7 +1753,8 @@ mod tests {
             |m| m["files"][2]["path"] = "../x".into(),
             |m| m["files"][2]["path"] = "shapes/public.ttl".into(),
             |m| m["files"][2]["sha256"] = "ABC".into(),
-            |m| m["files"][2]["mediaType"] = "application/rdf+xml".into(),
+            // not the shape of a media type (it has a parameter)
+            |m| m["files"][2]["mediaType"] = "application/rdf+xml; charset=utf-8".into(),
         ];
         for (index, mutate) in mutations.into_iter().enumerate() {
             let mut changed = good.clone();
@@ -1604,7 +1762,12 @@ mod tests {
             let bytes = serde_json::to_vec(&changed).unwrap();
             assert!(Manifest::parse(&bytes).is_err(), "mutation {index}");
         }
-        for media_type in ["text/turtle", "application/n-triples"] {
+        // any media type of the right shape, also outside the three
+        for media_type in [
+            "text/turtle",
+            "application/n-triples",
+            "application/rdf+xml",
+        ] {
             let mut changed = good.clone();
             changed["files"][2]["mediaType"] = media_type.into();
             assert!(Manifest::parse(&serde_json::to_vec(&changed).unwrap()).is_ok());

@@ -180,8 +180,9 @@ fn broken_manifests_fail_the_schema_and_the_rust_type() {
 }
 
 /// ADR 0005, amended in 0.13: a role object with a type this version
-/// does not know is valid, with any other fields and any of the three
-/// media types; the reader skips the file.
+/// does not know is valid, with any other fields and any media type of
+/// the shape of RFC 6838 (one of the three or another); the reader skips
+/// the file.
 #[test]
 fn a_file_with_an_unknown_role_passes_the_schema_and_the_rust_type() {
     let validator = validator();
@@ -194,6 +195,11 @@ fn a_file_with_an_unknown_role_passes_the_schema_and_the_rust_type() {
             "text/turtle",
             "application/n-triples",
             "application/ld+json",
+            // outside today's three: a later role may need them
+            "application/json",
+            "application/odrl+json",
+            "application/vnd.example.rules-v2+xml",
+            "Text/X-Rules_1",
         ] {
             let mut manifest = full_example();
             manifest["files"][0]["role"] = role.clone();
@@ -207,6 +213,60 @@ fn a_file_with_an_unknown_role_passes_the_schema_and_the_rust_type() {
             let skipped = parsed.files_of_unknown_role();
             assert_eq!(skipped.len(), 1, "{role}");
             assert_eq!(skipped[0].role_type, role["type"].as_str().unwrap());
+        }
+    }
+}
+
+/// The media type of a file with an unknown role is open, but it must
+/// have the shape of a media type (RFC 6838 section 4.2, no parameters);
+/// for a file with a known role only the three are valid. The schema and
+/// the Rust type agree on each case.
+#[test]
+fn media_types_are_open_only_for_unknown_roles_and_only_in_shape() {
+    let validator = validator();
+    let long_name = "a".repeat(128);
+    let not_media_types = [
+        json!(""),
+        json!("turtle"),
+        json!("text/"),
+        json!("/turtle"),
+        json!("text/turtle; charset=utf-8"),
+        json!("text/tur tle"),
+        json!("text/a/b"),
+        json!("-text/turtle"),
+        json!("text/\u{e9}"),
+        json!(format!("text/{long_name}")),
+        json!(7),
+        json!(null),
+    ];
+    for media_type in not_media_types {
+        let mut manifest = full_example();
+        manifest["files"][0]["role"] = json!({"type": "rules"});
+        manifest["files"][0]["mediaType"] = media_type.clone();
+        assert!(!validator.is_valid(&manifest), "schema: {media_type}");
+        let parsed = Manifest::parse(&serde_json::to_vec(&manifest).unwrap());
+        assert!(parsed.is_err(), "Rust type: {media_type}");
+    }
+    // the longest names pass both
+    let longest = format!("{}/{}", "a".repeat(127), "b".repeat(127));
+    let mut manifest = full_example();
+    manifest["files"][0]["role"] = json!({"type": "rules"});
+    manifest["files"][0]["mediaType"] = json!(longest);
+    assert!(validator.is_valid(&manifest));
+    assert!(Manifest::parse(&serde_json::to_vec(&manifest).unwrap()).is_ok());
+    // a known role keeps the closed list: every file of the example, with
+    // a media type that an unknown role may have
+    let files = full_example()["files"].as_array().unwrap().len();
+    for index in 0..files {
+        for media_type in ["application/json", "application/rdf+xml", "Text/Turtle"] {
+            let mut manifest = full_example();
+            manifest["files"][index]["mediaType"] = json!(media_type);
+            assert!(
+                !validator.is_valid(&manifest),
+                "schema: file {index} as {media_type}"
+            );
+            let parsed = Manifest::parse(&serde_json::to_vec(&manifest).unwrap());
+            assert!(parsed.is_err(), "Rust type: file {index} as {media_type}");
         }
     }
 }

@@ -369,11 +369,12 @@ fn documents_of<'a>(files: &[BundleFile<'a>]) -> Result<Vec<Document<'a>>, Rules
         let format = match file.entry.media_type {
             MediaType::Turtle => Format::Turtle,
             MediaType::NTriples => Format::NTriples,
-            MediaType::JsonLd => {
+            // `Other` is the media type of a file with an unknown role,
+            // which is skipped and never comes here
+            MediaType::JsonLd | MediaType::Other => {
                 return Err(RulesError::File {
                     path: path.clone(),
-                    reason: "shapes and vocabularies must be Turtle or N-Triples, not JSON-LD"
-                        .to_owned(),
+                    reason: "shapes and vocabularies must be Turtle or N-Triples".to_owned(),
                 });
             }
         };

@@ -1096,6 +1096,26 @@ or allow extra fields. So the rule is written out:
 
 Reading the text twice costs little here: a role is a few dozen bytes.
 
+### `#[serde(try_from = "...")]`: read as written, then check
+
+```rust
+#[derive(Deserialize)]
+#[serde(try_from = "FileEntryAsWritten")]
+pub struct FileEntry { /* ... media_type: MediaType, role: Role */ }
+
+impl TryFrom<FileEntryAsWritten> for FileEntry {
+    type Error = String;
+    fn try_from(written: FileEntryAsWritten) -> Result<Self, String> { /* ... */ }
+}
+```
+
+A second, shorter way to read in two steps. serde first reads the JSON
+into `FileEntryAsWritten` (the same fields, the media type still a
+text), then calls `try_from` to make the real type; its error becomes
+the read error. Used where one field's rule depends on another: which
+media types a bundle file may have depends on its role
+(`crates/portitor-dcp/src/bundle.rs`).
+
 ## Macros: `name!(...)`
 
 A name with `!` is a macro: code that writes code at compile time.

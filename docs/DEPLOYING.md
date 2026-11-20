@@ -391,7 +391,10 @@ messages against them. A dataset that passes is served with
   to enforce it. A bundle in which the connector knows no role at all
   is refused like any invalid bundle (the version in use stays; with
   no version, the start stops). Everything else in a manifest is still
-  read strictly: a field the format does not have is an error.
+  read strictly: a field the format does not have is an error. Such a
+  file may have any media type (`type/subtype`, RFC 6838); a file with
+  a role the connector knows must be `text/turtle`,
+  `application/n-triples` or `application/ld+json`.
 - A bundle that was read but fails a check (signature, key, authority,
   version or a digest) stops the start; the cache does not replace it.
   So does a bundle that cannot be loaded at all (no download and no
