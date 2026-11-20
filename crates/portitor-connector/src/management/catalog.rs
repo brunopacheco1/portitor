@@ -39,7 +39,9 @@ use request::{check_kind_and_protocol, check_scopes};
 /// read. The catalog's `participantId` must be the `counterPartyId` of
 /// the request: the catalog of another participant, or one without a
 /// `participantId` (DSP 2025-1 requires it), is answered with 502 and
-/// not handed on. If the provider sends its catalog in pages (DSP 2025-1, "Catalog
+/// not handed on. No setting turns this check off. The two ids are
+/// compared as written, with one exception: in a `did:web` DID the
+/// escaped colon before a port may be `%3A` or `%3a`. If the provider sends its catalog in pages (DSP 2025-1, "Catalog
 /// HTTPS Binding", "Pagination"), this is the first page only, and the
 /// provider's `Link` headers are copied to the answer.
 #[utoipa::path(

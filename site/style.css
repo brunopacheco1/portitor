@@ -88,6 +88,11 @@ main { counter-reset: chapter; }
 section[id] h2::before {
   counter-increment: chapter;
   content: counter(chapter, upper-roman);
+  /* The numeral is decoration. The second form gives it an empty
+     alternative text, so a screen reader reads "Objectives", not
+     "I Objectives". A browser that does not know this form drops the
+     line and keeps the one above. */
+  content: counter(chapter, upper-roman) / "";
   display: block;
   margin-bottom: .6rem;
   color: var(--bronze);
@@ -133,8 +138,12 @@ table { border-collapse: collapse; width: 100%; min-width: 36rem; background: va
 th, td { text-align: left; vertical-align: top; padding: .7rem .9rem; border: 1px solid var(--line); }
 thead th { font-size: .85rem; font-weight: 600; letter-spacing: .08em; color: var(--muted); border-bottom: 2px solid var(--ornament); }
 td code { white-space: nowrap; }
-/* a table outside a .table box (the HTTP interface page) scrolls by itself */
-.wrap > table { display: block; min-width: 0; overflow-x: auto; background: none; }
+/* The HTTP interface page: the box scrolls, and the table inside keeps
+   its own width and has no fill. The table itself stays a table
+   (display: block on it would hide its rows and columns from some
+   screen readers). */
+.table.plain { margin: 0; }
+.table.plain > table { width: auto; min-width: 0; background: none; }
 
 .roadmap { list-style: none; padding: 0; margin: 2rem 0 0; max-width: 48rem; }
 .roadmap li { display: flex; gap: .9rem; padding: .55rem 0; border-bottom: 1px solid var(--line); }

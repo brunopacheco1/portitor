@@ -12,9 +12,11 @@ on:
   schedule:
     - cron: '23 5 * * 1' # new advisories appear without code changes
 
-# a newer push to the same pull request replaces the run in progress; pushes to main always finish
+# Runs of one pull request share a group: a newer push replaces the run in progress.
+# Every other run (a push to main, a scheduled or a manual run) is a group of its own,
+# named by its run id, so it is never cancelled and never waits for another run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -111,22 +113,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # the rule is in scripts/ci_gate.sh, one copy for the three gates; a
+      # broken rule fails here, and so fails this required check
+      - name: The gate's rule passes its self-test
+        run: scripts/ci_gate.sh self-test
       - name: Every job passed, or was skipped on purpose
         env:
           NEEDS: ${{ toJSON(needs) }}
-          IS_PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
-        run: |
-          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
-          jq -e '.changes.result == "success"' <<< "$NEEDS" > /dev/null ||
-            { echo "::error::the changes job did not succeed"; exit 1; }
-          jq -e 'all(.[]; .result == "success" or .result == "skipped")' <<< "$NEEDS" > /dev/null ||
-            { echo "::error::a job failed or was cancelled"; exit 1; }
-          if jq -e '.changes.outputs.code != "false"' <<< "$NEEDS" > /dev/null; then
-            jq -e '.deny.result == "success" and .vet.result == "success"' <<< "$NEEDS" > /dev/null ||
-              { echo "::error::the change needs cargo-deny and cargo-vet, and one of them was skipped"; exit 1; }
-            # the dependency review exists on pull requests only
-            if [[ $IS_PULL_REQUEST == true ]]; then
-              jq -e '.review.result == "success"' <<< "$NEEDS" > /dev/null ||
-                { echo "::error::the change needs the dependency review, and it was skipped"; exit 1; }
-            fi
-          fi
+          GATED_BY: code # the output of `changes` that says whether the jobs below are needed
+          # the dependency review exists on pull requests only
+          NEEDED_JOBS: ${{ github.event_name == 'pull_request' && 'deny vet review' || 'deny vet' }}
+        run: scripts/ci_gate.sh check

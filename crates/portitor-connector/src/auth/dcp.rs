@@ -748,6 +748,10 @@ impl DcpVerifier {
         list_credential
             .verify(issuer, now, LEEWAY)
             .map_err(|e| format!("status list {url}: {e}"))?;
+        // At DEBUG: with a cache time of 0 this is one line for each
+        // credential checked. The EDC interop test reads it to see that
+        // the list was fetched (scripts/edc-interop.sh, step 8e).
+        tracing::debug!(%url, issuer = %list_credential.issuer, "status list fetched and verified");
         // only now, fetched and verified, may it be kept
         let list_credential = Arc::new(list_credential);
         self.status_lists

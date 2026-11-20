@@ -75,3 +75,25 @@ fn the_status_list_shows_the_revocation() {
         assert_eq!(status_list::check(entry, &list).unwrap(), expected);
     }
 }
+
+/// The recorded list after the revocation has one bit set, the first
+/// (the leftmost bit of the first byte). Every other index reads as
+/// clear, in the same byte and in the next one, so both the bit order
+/// inside a byte and the step from one byte to the next are pinned.
+#[test]
+fn only_the_revoked_index_is_set_in_the_list_after_the_revocation() {
+    let credential = Credential::parse(CREDENTIAL.trim()).unwrap();
+    let revoked = &credential.status[0];
+    let list_credential = Credential::parse(LIST_AFTER.trim()).unwrap();
+    let list = status_list::list_in(&list_credential, revoked).unwrap();
+    assert_eq!(status_list::check(revoked, &list).unwrap(), Status::Set);
+    for index in ["1", "7", "8", "9", "15", "16", "131071"] {
+        let mut other = revoked.clone();
+        other.status_list_index = index.to_owned();
+        assert_eq!(
+            status_list::check(&other, &list).unwrap(),
+            Status::Clear,
+            "index {index}"
+        );
+    }
+}

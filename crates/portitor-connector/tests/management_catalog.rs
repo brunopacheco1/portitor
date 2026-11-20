@@ -1112,6 +1112,35 @@ async fn a_catalog_that_names_another_participant_is_a_bad_gateway() {
     assert!(answer.body.get("dataset").is_none(), "{}", answer.body);
 }
 
+/// A `did:web` with a port may write the escaped colon as `%3A` or as
+/// `%3a`: the DID resolver reads both as one DID, and so does the
+/// catalog check. The caller's spelling and the provider's may differ;
+/// another port is another participant.
+#[tokio::test]
+async fn a_catalog_whose_participant_id_differs_only_in_the_case_of_the_port_escape_is_returned() {
+    let mut catalog = played_catalog();
+    catalog["participantId"] = json!("did:web:provider.example%3A8443");
+    let response = ok_response("", catalog.to_string().as_bytes());
+    let app = consumer_over_http(true);
+
+    let (base, _) = raw_provider(response.clone(), false).await;
+    let mut request = catalog_request(&base);
+    request["counterPartyId"] = json!("did:web:provider.example%3a8443");
+    let answer = post(&app, "/v1/catalog/request", &request).await;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    assert_eq!(answer.body, catalog);
+
+    let (base, _) = raw_provider(response, false).await;
+    let mut request = catalog_request(&base);
+    request["counterPartyId"] = json!("did:web:provider.example%3a8444");
+    let answer = post(&app, "/v1/catalog/request", &request).await;
+    let detail = problem_detail(&answer, StatusCode::BAD_GATEWAY);
+    assert!(
+        detail.contains("the catalog of another participant"),
+        "{detail}"
+    );
+}
+
 /// DSP 2025-1 requires `participantId` of a catalog
 /// (`catalog-schema.json`, `RootCatalog`): one without it, or with one
 /// that is not a text, is not a Catalog.

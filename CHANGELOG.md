@@ -39,22 +39,39 @@ and no route changed. Two checks are stricter; what to do:
 
 ### Changed
 
+- Connector: a new DEBUG log line, `status list fetched and verified`
+  (with the list's URL and issuer), each time a status list credential
+  is fetched; nothing at the default level `info`.
+- EDC interop test, step 8: Portitor's negotiation without the
+  credential must end `TERMINATED` and EDC must have no new agreement;
+  the connector's log must show that it fetched the EDC Issuer Service's
+  status list; after the revocation the run needs proof of why Portitor
+  refused, or fails.
 - **Behaviour change, all three: an item of a list setting may be at
   most 4096 bytes.** This holds for every comma-separated `PORTITOR_*`
   setting (DIDs, DCP scopes, credential types, file paths). A service
-  with a longer item does not start; the error names the setting and
-  the item.
+  with a longer item does not start; the error names the setting, the
+  item's position in the list and its length. It shows no part of the
+  item, which may be a secret pasted by mistake.
 - **Behaviour change, connector management API: the catalog must be the
   provider's own.** `POST /v1/catalog/request` answers 502 when the
   provider's catalog has no `participantId` (DSP 2025-1 requires it;
   0.13 handed such a catalog on) or one that differs from the
-  `counterPartyId` of the request. No new route, member or status code.
+  `counterPartyId` of the request. The two are compared as written,
+  with one exception: in a `did:web` DID the escaped colon before a port
+  may be `%3A` or `%3a`, as for the DID resolver. There is no setting to
+  turn the check off: a provider whose DSP `participantId` is not the
+  DID given as `counterPartyId` cannot be read with this call. No new
+  route, member or status code.
   `POST /v1/catalog/dataset/request` is unchanged.
+- Tests: the issuer's bundle tests name their scratch folders by process
+  id and a counter, so two tests, or two runs at once, never share one.
 - The code of the two catalog calls is split into smaller modules
   (`management/catalog/`, `catalog_reader/`). No change in behaviour;
   the OpenAPI description is the same.
 - CI: a change to prose only (`site/`, `_http/`, `.vscode/`, `*.md` in the root and under `docs/` except `STABILITY.md` and `ARCHITECTURE.md`) no longer runs the build, the tests, SonarQube Cloud, the TCKs and the dependency checks; a change to fuzzing only skips the build and the TCKs. Any other path runs everything (`scripts/ci_changes.sh`, with a self-test). The licence check and `scripts/check_docs.py` always run. Each of `CI`, `TCK` and `Dependencies` ends with a gate job (`CI gate`, `TCK gate`, `Dependencies gate`); only gate jobs are required checks (CONTRIBUTING, "Required checks").
-- CI: a newer push to a pull request cancels the run in progress in `CI`, `TCK`, `EDC interop` and `Gaia-X`; every job has a timeout; the built DSP TCK jar is cached under its pinned commit; ORT runs on `main` only when a manifest or its configuration changed.
+- CI: the rule of the three gate jobs is one script, `scripts/ci_gate.sh`, with a self-test that every gate job runs first; the self-test of `scripts/ci_changes.sh` also covers `detect`, in a temporary git repository (merge base, a new branch, renames, an empty diff, paths with spaces).
+- CI: a newer push to a pull request cancels the run in progress in `CI`, `TCK`, `EDC interop` and `Gaia-X`; a run on `main`, a scheduled and a manual run are never cancelled and never wait for another run; every job has a timeout; the built DSP TCK jar is cached under its pinned commit; ORT runs on `main` only when a manifest or its configuration changed.
 - CI: the EDC interop test also runs for changes to the root `Cargo.toml`, `.dockerignore`, `scripts/demo-bundle.sh` and `examples/bundle/`; the Gaia-X test for the root `Cargo.toml` and `.dockerignore`; pull request fuzzing for the root `Cargo.toml` and its own workflow.
 - Release: the dry run also runs when the root `Cargo.toml` changes, so the release pull request builds and tests on arm64 and writes the SBOMs before the tag.
 - **The website has an ancient Roman theme**, built on the two meanings
@@ -72,12 +89,16 @@ and no route changed. Two checks are stricter; what to do:
   settled (ADR 0007, note of 0.14; TD-44). The negotiation is
   `FINALIZED`, so nothing was given up. The metric keeps its name; an
   INFO log line says when a message is not counted.
+- The same metric no longer counts a message whose outcome the store
+  could not record (WARN `outgoing message not recorded`). Such a
+  message is still saved as pending and is sent again after a restart;
+  it is counted then, if it fails again.
 
 ### Security
 
 - Release: the workflow refuses a signed tag whose commit is not on `main`.
 - CI: `SONAR_TOKEN` is given to the scan step only, not to the build and tests of the dependencies; checkouts no longer keep the workflow token in `.git/config` (except the tag check, which fetches).
-- CI: a CodeQL finding now fails the CodeQL job.
+- CI: a CodeQL finding now fails the CodeQL job, on a pull request, on `main` and in the weekly run: `scripts/codeql-gate.sh` fails on every result that is not in `.github/codeql/accepted-findings.json` (TESTING, "CodeQL"; CONTRIBUTING, "Pull requests").
 
 ### Documentation
 

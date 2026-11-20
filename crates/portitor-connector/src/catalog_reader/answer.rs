@@ -43,8 +43,14 @@ const SHOWN_CHARACTERS: usize = 200;
 /// `participantId`, a text, under `required`). The specification does
 /// not say that a consumer compares `participantId` with the provider it
 /// asked; Portitor does, so that the caller is not handed the catalog of
-/// another participant under the name it asked for. The ids are compared
-/// as written.
+/// another participant under the name it asked for. There is no setting
+/// to turn this off.
+///
+/// The two ids are compared as DIDs (`portitor_dcp::same_did`): equal as
+/// written, or two `did:web` DIDs that differ only in the letter case of
+/// the escaped colon before the port (`%3A`, `%3a`), which the DID
+/// resolver reads as one DID too. Nothing is trimmed and no letter case
+/// is changed elsewhere.
 pub(super) fn check_catalog(body: &[u8], provider_id: &str) -> Result<(), ReadFailure> {
     check_json_object(body)?;
     let head: CatalogHead = match serde_json::from_slice(body) {
@@ -59,7 +65,7 @@ pub(super) fn check_catalog(body: &[u8], provider_id: &str) -> Result<(), ReadFa
         return Err(wrong_type("Catalog"));
     }
     match head.participant_id {
-        Some(participant_id) if participant_id == provider_id => Ok(()),
+        Some(participant_id) if portitor_dcp::same_did(&participant_id, provider_id) => Ok(()),
         Some(participant_id) => Err(other_participant(&participant_id, provider_id)),
         None => Err(ReadFailure::NotDsp(
             "the provider's answer is not a DSP 2025-1 Catalog (it has no participantId)"
@@ -176,10 +182,13 @@ mod tests {
             not_dsp(check_catalog(other, PROVIDER)),
             "the provider's answer is the catalog of another participant: its participantId is \"did:web:someone-else.example\", not the counterPartyId \"did:web:provider.example\""
         );
-        // compared as written: other letters or a longer id are another id
+        // compared as written: other letters, a longer id or a space
+        // around it are another id
         for different in [
             &br#"{"@type":"Catalog","participantId":"did:web:Provider.example"}"#[..],
             br#"{"@type":"Catalog","participantId":"did:web:provider.example:x"}"#,
+            br#"{"@type":"Catalog","participantId":"did:web:provider.example "}"#,
+            br#"{"@type":"Catalog","participantId":" did:web:provider.example"}"#,
             br#"{"@type":"Catalog","participantId":""}"#,
         ] {
             let reason = not_dsp(check_catalog(different, PROVIDER));
@@ -201,8 +210,45 @@ mod tests {
         }
     }
 
+    /// The one difference that is not another id: the letter case of the
+    /// escaped colon before the port of a `did:web`. The DID resolver
+    /// reads `%3A` and `%3a` as the same DID (`portitor_dcp::did_web_url`),
+    /// so the catalog check does too, in both directions.
+    #[test]
+    fn a_did_that_differs_only_in_the_case_of_the_port_escape_is_the_same_provider() {
+        let upper = "did:web:provider.example%3A8443";
+        let lower = "did:web:provider.example%3a8443";
+        let names_upper =
+            br#"{"@type":"Catalog","participantId":"did:web:provider.example%3A8443"}"#;
+        let names_lower =
+            br#"{"@type":"Catalog","participantId":"did:web:provider.example%3a8443"}"#;
+        assert_eq!(check_catalog(names_upper, lower), Ok(()));
+        assert_eq!(check_catalog(names_lower, upper), Ok(()));
+        // another port is another participant, and so is the same number
+        // written as a path segment
+        for different in [
+            &br#"{"@type":"Catalog","participantId":"did:web:provider.example%3a8444"}"#[..],
+            br#"{"@type":"Catalog","participantId":"did:web:provider.example:8443"}"#,
+        ] {
+            let reason = not_dsp(check_catalog(different, upper));
+            assert!(reason.contains("another participant"), "{reason}");
+        }
+    }
+
+    /// The id is the provider's text and is shown escaped (`{:?}`): a
+    /// line break in it does not start a new line in the caller's
+    /// problem detail or in a log.
+    #[test]
+    fn the_participant_id_in_the_error_is_escaped() {
+        let with_line_break = br#"{"@type":"Catalog","participantId":"a\nb\u001b[31m"}"#;
+        let reason = not_dsp(check_catalog(with_line_break, PROVIDER));
+        assert!(reason.contains(r#""a\nb\u{1b}[31m""#), "{reason}");
+        assert!(!reason.contains('\n'), "{reason}");
+        assert!(!reason.contains('\u{1b}'), "{reason}");
+    }
+
     /// The id comes from the provider and goes into the answer to the
-    /// caller: only its start is shown.
+    /// caller: only its start is shown, cut between characters.
     #[test]
     fn a_long_participant_id_is_cut_in_the_error() {
         let long = format!(
@@ -212,6 +258,17 @@ mod tests {
         let reason = not_dsp(check_catalog(long.as_bytes(), PROVIDER));
         assert!(reason.contains(&"x".repeat(200)), "{reason}");
         assert!(!reason.contains(&"x".repeat(201)), "{reason}");
+        // a character of several bytes across the 200th byte: the cut is
+        // by characters, so this neither panics nor shows half of one
+        let wide = format!(
+            r#"{{"@type":"Catalog","participantId":"a{}"}}"#,
+            "€".repeat(300)
+        );
+        let reason = not_dsp(check_catalog(wide.as_bytes(), PROVIDER));
+        assert!(
+            reason.contains(&format!("\"a{}\"", "€".repeat(199))),
+            "{reason}"
+        );
     }
 
     /// DSP 2025-1 `dataset-schema.json` does not require `@type`, and a

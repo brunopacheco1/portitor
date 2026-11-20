@@ -71,11 +71,17 @@ jobs:
           # the maintainer's public keys, as published by GitHub (HTTPS only, redirects included)
           curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL "https://github.com/${GITHUB_REPOSITORY_OWNER}.gpg" | gpg --import
           git verify-tag "$TAG"
-          # a release is cut from main only: a signed tag on a commit that is not merged
-          # (a branch, a pull request) publishes nothing
+          # A guard against mistakes, not a security control: a release is cut from main
+          # only, so a signed tag put by mistake on a commit that is not merged (a branch,
+          # the head of a pull request before a squash merge) publishes nothing.
+          # It cannot stop someone who may push a v* tag on purpose: on a tag push GitHub
+          # reads this workflow file from the tagged commit, and that commit can remove
+          # this step. The controls are outside this file: the required reviewer of the
+          # `release` environment and the tag ruleset for v* (docs/RELEASING.md,
+          # "One-time setup").
           git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
           if ! git merge-base --is-ancestor "${TAG}^{commit}" refs/remotes/origin/main; then
-            echo "::error::$TAG is on commit $(git rev-parse "${TAG}^{commit}"), which is not on main; tag the merge commit on main"; exit 1
+            echo "::error::$TAG is on commit $(git rev-parse "${TAG}^{commit}"), which is not on main; tag the commit on main (after a squash merge: the squash commit, not the head of the pull request)"; exit 1
           fi
           CARGO_VERSION=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
           if [ "$CARGO_VERSION" != "$VERSION" ]; then

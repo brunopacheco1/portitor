@@ -32,7 +32,7 @@ All commands run from the repository root. Deploying for real is in
 | The same in Docker Compose | `scripts/demo-compose.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
 | The container scripts with Podman instead of Docker | `CONTAINER_ENGINE=podman` and the script, see [below](#docker-or-podman) | no: by hand, last run noted there |
 | Images build and start | `docker build --target portitor-connector` / `--target portitor-identity` / `--target portitor-issuer`; the connector and the issuer refuse to start without their settings, the identity serves its DID document | every PR that changes more than prose (`CI`) |
-| Static analysis | CodeQL, OpenSSF Scorecard, ORT | CodeQL: every PR; Scorecard: on `main`; ORT: when a manifest changes |
+| Static analysis | CodeQL (see [below](#codeql)), OpenSSF Scorecard, ORT | CodeQL: every PR, every push to `main` and weekly; a finding that is not on the accepted list fails the job (`CodeQL`). Scorecard: on `main`; ORT: when a manifest changes |
 
 "Prose" is the short list of paths that no job reads; which jobs a
 change needs is decided by `scripts/ci_changes.sh`, and the checks a
@@ -825,11 +825,11 @@ each offers data only with `InteropTestCredential.level` `eq` `basic`.
 |---|---|---|
 | 8a | The Issuer Service gets its participant context (Identity API) and, through its admin API, both participants as holders, an attestation and the credential definition | its DID document, over HTTPS and HTTP, names its key as `assertionMethod` and an `IssuerService`; its issuer metadata lists `interop-test-credential` |
 | 8b | The offers: Portitor's third dataset (`.../portitor-interop-issuer`), and a second offer of the EDC asset | each catalog, as the other side read it, has the left operand `InteropTestCredential.level` |
-| 8c | Refused: before anyone holds the credential, each consumer negotiates the other's offer | EDC's negotiation ends `TERMINATED`; Portitor's does not reach `FINALIZED` |
+| 8c | Refused: before anyone holds the credential, each consumer negotiates the other's offer | both negotiations end `TERMINATED` (one still open after 60 seconds fails the step); EDC has no `FINALIZED` negotiation more than before |
 | 8d | Portitor's identity asks the Issuer Service (`POST /v1/credential-requests`); the EDC IdentityHub does the same (Identity API) | both requests `ISSUED`; each holds one `InteropTestCredential` from `did:web:edc-issuer.gaiax.test`; its status list bit is not set |
-| 8e | EDC negotiates Portitor's offer and pulls | `FINALIZED`, `STARTED`, the bytes equal `data/portitor-provider-issuer.csv` |
-| 8f | Portitor negotiates EDC's offer and pulls | `FINALIZED`, the agreement has the constraint, `STARTED`, the bytes equal `data/edc-provider.csv` |
-| 8g | The Issuer Service revokes the EDC participant's credential (`POST .../credentials/{id}/revoke`); EDC negotiates Portitor's offer again | the status list bit is set; the negotiation ends `TERMINATED` with no `code=`; Portitor's log has `credential refused` for the revoked credential |
+| 8e | EDC negotiates Portitor's offer and pulls | `FINALIZED`; the connector's log has a new DEBUG line `status list fetched and verified` for the Issuer Service's list (`RUST_LOG` in `interop/edc/compose.yaml`); `STARTED`, the bytes equal `data/portitor-provider-issuer.csv` |
+| 8f | Portitor negotiates EDC's offer and pulls | `FINALIZED`, the agreement has the constraint, EDC has one `FINALIZED` negotiation more than before, `STARTED`, the bytes equal `data/edc-provider.csv` |
+| 8g | The Issuer Service revokes the EDC participant's credential (`POST .../credentials/{id}/revoke`); EDC negotiates Portitor's offer again | the status list bit is set; the negotiation ends `TERMINATED` with no `code=`; and one of two: Portitor's log has a new `credential refused` line with the type and `revoked`, or (a warning, not a failure) the IdentityHub's record of the credential changed its `state`, so it presented none. With neither, the step fails |
 
 Step 9 is the revocation by `portitor-issuer` (before 0.14: step 8).
 The script's header comment uses the same letters.
@@ -1152,6 +1152,47 @@ parsers and targets is in
 [SECURITY-ASSURANCE](SECURITY-ASSURANCE.md#parsers-and-fuzz-targets). In CI, ClusterFuzzLite fuzzes every pull request briefly
 (`cflite_pr.yml`) and runs longer each week (`cflite_batch.yml`). A crash
 is a bug: add the input that caused it as a regression test.
+
+## CodeQL
+
+The workflow `CodeQL` (`.github/workflows/codeql.yml`) analyses the Rust
+code and the GitHub Actions workflows with GitHub's default queries, on
+every pull request, on every push to `main` and once a week. Rust is
+analysed without a build (`build-mode: none`).
+
+The analysis itself succeeds whenever it ran, with or without findings.
+So its last step runs `scripts/codeql-gate.sh <rust|actions> <folder with .sarif>`,
+which fails the job on every result that is not in
+`.github/codeql/accepted-findings.json`, whatever its severity. The list
+names a rule, a file, how many findings of that rule the file may have,
+and the reason. One finding more than the count fails. A count that is
+higher than what was found is only reported: a pull request run may
+hold fewer findings than a run on `main`.
+
+The accepted list today: six findings of the rule `rust/unsafe-deserialization`, entered as proposed false positives with their reasons; the maintainer has not yet decided whether they stay on the list or the query is left out of the analysis.
+
+What to do with a finding is in
+[CONTRIBUTING](../CONTRIBUTING.md#pull-requests).
+
+To run it by hand, download the CodeQL bundle from
+<https://github.com/github/codeql-action/releases>, unpack it, and from
+the repository root:
+
+```sh
+codeql database create codeql-db --language=rust --build-mode=none
+mkdir -p codeql-out
+codeql database analyze codeql-db \
+  codeql/rust-queries:codeql-suites/rust-code-scanning.qls \
+  --format=sarif-latest --output=codeql-out/rust.sarif
+scripts/codeql-gate.sh rust codeql-out
+```
+
+The script needs `jq`. It ends with 0 when nothing new was found, 1 on
+a finding that is not accepted, 2 on a wrong call or a missing file.
+Do not commit `codeql-db` or `codeql-out`.
+
+Last local run: CodeQL bundle 2.27.5, Rust: 6 findings, all
+on the accepted list.
 
 ## Manual tests
 

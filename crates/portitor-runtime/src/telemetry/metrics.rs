@@ -311,6 +311,10 @@ pub fn outbox_resent(outbox: Outbox) {
 /// `outbox` stopped trying to deliver a message.
 pub fn outbox_given_up(outbox: Outbox) {
     instruments().outbox_given_up.add(1, &outbox.attributes());
+    // tests only (never in a release build): a test cannot read an
+    // OpenTelemetry counter, so the count is also kept where it can
+    #[cfg(any(test, feature = "test-support"))]
+    super::testing::note_given_up(outbox);
 }
 
 /// A harvest run of `kind` (`datasets` or `bundle`) ended with `outcome`
@@ -409,6 +413,16 @@ mod tests {
         dsp_request_refused(Refusal::Unauthenticated);
         outbox_resent(Outbox::Negotiation(Role::Consumer));
         outbox_given_up(Outbox::CredentialDelivery);
+        // the test seam saw it, for this thread only
+        assert_eq!(
+            super::super::testing::given_up_on_this_thread(),
+            [Outbox::CredentialDelivery]
+        );
+        let elsewhere = std::thread::spawn(super::super::testing::given_up_on_this_thread);
+        let Ok(counted_elsewhere) = elsewhere.join() else {
+            panic!("the other thread panicked");
+        };
+        assert!(counted_elsewhere.is_empty());
         harvest_run_ended("datasets", "succeeded");
         datasets_rejected("dsp", 2);
         bundle_in_use("1.0.0", true);
