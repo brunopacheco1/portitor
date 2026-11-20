@@ -17,6 +17,11 @@ versions may change behaviour and configuration.
 - Close-out of 0.12: the roadmap and the website mark 0.12 released and
   0.13 as the current release; the website quickstart clones v0.12.0.
   CONTRIBUTING gives `cargo vet diff` with `--mode local`.
+- Identity and issuer management APIs: every route that needs the API
+  key documents HTTP 403 in the OpenAPI files, reserved for tokens with
+  limited rights in 1.x (ADR 0025, freeze point 2). 1.0 never answers
+  403: the API key grants every right. The descriptions say that the
+  API key is an opaque string (freeze point 1).
 
 ## [0.12.0] - 2026-11-19
 

@@ -245,6 +245,7 @@ impl From<StoredOffer> for OfferView {
         (status = 202, description = "Sent, but the issuer's answer is unknown (no answer in time, or a server error): the request stays open, so its delivery is accepted; `sendError` says why", body = RequestCreated),
         (status = 400, description = "Invalid body, the issuer is not trusted, or it does not offer a credential asked for", body = Problem, content_type = "application/problem+json"),
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.", body = Problem, content_type = "application/problem+json"),
         (status = 409, description = "A request with this holderPid exists", body = Problem, content_type = "application/problem+json"),
         (status = 502, description = "The issuer refused the request (HTTP 4xx); nothing is kept", body = Problem, content_type = "application/problem+json"),
     ),
@@ -336,6 +337,7 @@ fn ask_error(e: &AskError) -> Response {
     responses(
         (status = 200, description = "The requests", body = [RequestView]),
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = [])),
     tag = "Credentials"
@@ -360,6 +362,7 @@ async fn list_requests(State(identity): State<Arc<Identity>>) -> Response {
     responses(
         (status = 200, description = "The request", body = RequestView),
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "No such request", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = [])),
@@ -395,6 +398,7 @@ async fn get_request(
     responses(
         (status = 200, description = "The credentials", body = [CredentialView]),
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = [])),
     tag = "Credentials"
@@ -421,6 +425,7 @@ async fn list_credentials(State(identity): State<Arc<Identity>>) -> Response {
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "No such credential", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = [])),
@@ -444,6 +449,7 @@ async fn delete_credential(
     responses(
         (status = 200, description = "The offers", body = [OfferView]),
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = [])),
     tag = "Credentials"
@@ -471,6 +477,7 @@ async fn list_offers(State(identity): State<Arc<Identity>>) -> Response {
         (status = 202, description = "Sent, but the issuer's answer is unknown: the request stays open; `sendError` says why", body = RequestCreated),
         (status = 400, description = "Invalid body, the issuer is not trusted, or it does not offer a credential asked for", body = Problem, content_type = "application/problem+json"),
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "No such offer from this issuer", body = Problem, content_type = "application/problem+json"),
         (status = 502, description = "The issuer refused the request (HTTP 4xx); nothing is kept", body = Problem, content_type = "application/problem+json"),
     ),
@@ -555,6 +562,7 @@ impl From<GaiaxRun> for GaiaxRunView {
     responses(
         (status = 202, description = "Started", body = GaiaxRunView),
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "Gaia-X onboarding is off (PORTITOR_GAIAX_COMPLIANCE_URL not set)", body = Problem, content_type = "application/problem+json"),
         (status = 409, description = "A run is on", body = Problem, content_type = "application/problem+json"),
     ),
@@ -580,6 +588,7 @@ async fn start_compliance_run(State(identity): State<Arc<Identity>>) -> Response
     responses(
         (status = 200, description = "The runs", body = [GaiaxRunView]),
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = [])),
     tag = "Gaia-X"
@@ -599,7 +608,7 @@ async fn list_compliance_runs(State(identity): State<Arc<Identity>>) -> Response
 #[openapi(
     info(
         title = "Portitor identity management API",
-        description = "Credential requests, credentials and offers of the participant this identity component holds, and its Gaia-X compliance runs. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only.",
+        description = "Credential requests, credentials and offers of the participant this identity component holds, and its Gaia-X compliance runs. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only. The API key is an opaque string: a client must not parse it, and a 1.x release may accept other forms of token. HTTP 403 is reserved for such tokens; 1.0 never answers it.",
         license(name = "Apache-2.0", identifier = "Apache-2.0"),
     ),
     paths(

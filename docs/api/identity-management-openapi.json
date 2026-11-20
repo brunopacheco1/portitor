@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Portitor identity management API",
-    "description": "Credential requests, credentials and offers of the participant this identity component holds, and its Gaia-X compliance runs. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only.",
+    "description": "Credential requests, credentials and offers of the participant this identity component holds, and its Gaia-X compliance runs. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only. The API key is an opaque string: a client must not parse it, and a 1.x release may accept other forms of token. HTTP 403 is reserved for such tokens; 1.0 never answers it.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
@@ -154,6 +154,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -211,6 +221,16 @@
           },
           "401": {
             "description": "Missing or wrong API key",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -286,6 +306,16 @@
               }
             }
           },
+          "403": {
+            "description": "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "404": {
             "description": "No such request",
             "content": {
@@ -334,6 +364,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -368,6 +408,16 @@
           },
           "401": {
             "description": "Missing or wrong API key",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -424,6 +474,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -451,6 +511,16 @@
           },
           "401": {
             "description": "Missing or wrong API key",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -517,6 +587,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -576,6 +656,16 @@
           },
           "401": {
             "description": "Missing or wrong API key",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.",
             "content": {
               "application/problem+json": {
                 "schema": {
