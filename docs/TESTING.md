@@ -15,23 +15,32 @@ All commands run from the repository root. Deploying for real is in
 
 | Check | Command | Runs in CI |
 |---|---|---|
-| Format | `cargo fmt --all --check` | every PR (`CI`) |
-| Lint | `cargo clippy --workspace --all-targets -- -D warnings` | every PR (`CI`) |
-| Unit and integration tests | `cargo test --workspace` | every PR (`CI`) |
-| Coverage | `cargo llvm-cov --workspace` | every PR (`CI`, sent to SonarQube Cloud) |
-| Dependencies: advisories, licences, sources | `cargo deny check` | every PR |
-| Dependencies: every crate version audited or exempted | `cargo vet --locked`, see [CONTRIBUTING](../CONTRIBUTING.md#dependency-audits-cargo-vet) | every PR (`Dependencies`) |
+| Format | `cargo fmt --all --check` | every PR that changes more than prose (`CI`) |
+| Lint | `cargo clippy --workspace --all-targets -- -D warnings` | every PR that changes more than prose (`CI`) |
+| Unit and integration tests | `cargo test --workspace` | every PR that changes more than prose (`CI`) |
+| Coverage | `cargo llvm-cov --workspace` | every PR that changes more than prose (`CI`, sent to SonarQube Cloud) |
+| Dependencies: advisories, licences, sources | `cargo deny check` | every PR that changes more than prose, and weekly (`Dependencies`) |
+| Dependencies: every crate version audited or exempted | `cargo vet --locked`, see [CONTRIBUTING](../CONTRIBUTING.md#dependency-audits-cargo-vet) | every PR that changes more than prose (`Dependencies`) |
 | Licence headers | `reuse lint` | every PR (`REUSE compliance`) |
-| DSP conformance (TCK) | see [below](#dsp-conformance-tck) | every PR (`TCK`) |
-| DCP conformance: identity component, connector as verifier, issuer (TCK) | see [below](#dcp-conformance-tck) | every PR (`TCK`) |
-| Interoperability with EDC v1.0.0-RC8, with Gaia-X compliance | `scripts/edc-interop.sh`, see [below](#edc-interop-test) | PRs that touch `crates/`, `Cargo.lock`, the `Dockerfile`, `interop/edc/`, `interop/gaiax/compose.yaml`, the scripts it uses or its workflow, and nightly (`EDC interop`) |
-| Gaia-X compliance between Portitor participants, against a local Gaia-X compliance service in test mode | `scripts/gaiax-e2e.sh`, see [below](#gaia-x-end-to-end-test) | PRs that touch `crates/`, `Cargo.lock`, the `Dockerfile`, `interop/gaiax/`, the scripts or the workflow, and nightly (`Gaia-X`) |
-| Fuzzing | see [below](#fuzzing) | every PR (short), weekly (long) |
-| Two participants authenticate with DCP, agree a contract and transfer a file | `scripts/demo.sh`, see [below](#two-connectors) | every PR (`CI`) |
-| The same in Docker Compose | `scripts/demo-compose.sh`, see [below](#two-connectors) | every PR (`CI`) |
+| Documentation matches the code (C4 diagrams, OpenAPI versions) | `python3 scripts/check_docs.py` | every PR (`CI`) |
+| DSP conformance (TCK) | see [below](#dsp-conformance-tck) | every PR that changes more than prose (`TCK`) |
+| DCP conformance: identity component, connector as verifier, issuer (TCK) | see [below](#dcp-conformance-tck) | every PR that changes more than prose (`TCK`) |
+| Interoperability with EDC v1.0.0-RC8, with Gaia-X compliance | `scripts/edc-interop.sh`, see [below](#edc-interop-test) | PRs that touch `crates/`, `Cargo.toml`, `Cargo.lock`, the `Dockerfile`, `.dockerignore`, `interop/edc/`, `interop/gaiax/compose.yaml`, `examples/bundle/`, the scripts it uses or its workflow, and nightly (`EDC interop`) |
+| Gaia-X compliance between Portitor participants, against a local Gaia-X compliance service in test mode | `scripts/gaiax-e2e.sh`, see [below](#gaia-x-end-to-end-test) | PRs that touch `crates/`, `Cargo.toml`, `Cargo.lock`, the `Dockerfile`, `.dockerignore`, `examples/issuer-credentials.json`, `interop/gaiax/`, the scripts or the workflow, and nightly (`Gaia-X`) |
+| Fuzzing | see [below](#fuzzing) | PRs that touch `crates/`, `fuzz/`, `.clusterfuzzlite/`, `Cargo.toml` or `Cargo.lock` (short), weekly (long) |
+| Two participants authenticate with DCP, agree a contract and transfer a file | `scripts/demo.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
+| The same in Docker Compose | `scripts/demo-compose.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
 | The container scripts with Podman instead of Docker | `CONTAINER_ENGINE=podman` and the script, see [below](#docker-or-podman) | no: by hand, last run noted there |
-| Images build and start | `docker build --target portitor-connector` / `--target portitor-identity` / `--target portitor-issuer`; the connector and the issuer refuse to start without their settings, the identity serves its DID document | every PR (`CI`) |
-| Static analysis | CodeQL, OpenSSF Scorecard, ORT | every PR or on `main` |
+| Images build and start | `docker build --target portitor-connector` / `--target portitor-identity` / `--target portitor-issuer`; the connector and the issuer refuse to start without their settings, the identity serves its DID document | every PR that changes more than prose (`CI`) |
+| Static analysis | CodeQL, OpenSSF Scorecard, ORT | CodeQL: every PR; Scorecard: on `main`; ORT: when a manifest changes |
+
+"Prose" is the short list of paths that no job reads; which jobs a
+change needs is decided by `scripts/ci_changes.sh`, and the checks a
+pull request must pass are the gate jobs: see
+[CONTRIBUTING](../CONTRIBUTING.md#required-checks). To see what CI will
+do with a change:
+
+    git diff --name-only --no-renames main...HEAD | scripts/ci_changes.sh classify
 
 You need: Rust (the version in `.github/workflows/ci.yml`; at least the
 `rust-version` in `Cargo.toml`), and for some checks `cargo-deny`, `cargo-vet`,

@@ -102,6 +102,8 @@ of work with no release yet.
 | [R-43](#r-43) | Negative credential constraints can be met with another credential | Security | Open | not named |
 | [R-44](#r-44) | One slow holder delays every issuer delivery | Security | Open | not named |
 | [R-45](#r-45) | No request limit per partner | Security | Open | not named |
+| [R-46](#r-46) | The EDC Issuer Service names a request status address that is not found | Interoperability, upstream | Open | report upstream; the next EDC release |
+| [R-47](#r-47) | The EDC Issuer Service's admin API may change with the next release candidate | Interoperability | Accepted | EDC 1.0.0 |
 | [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | Open | research, with TD-03 |
 | [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | Open | research; code 1.5 |
 | [TD-03](#td-03) | A provider in several data spaces, each with its own rules | Technical debt | Accepted | profiles in one connector: after 1.0 |
@@ -126,13 +128,13 @@ of work with no release yet.
 | [TD-29](#td-29) | No OTLP logs export, no gRPC, no compression | Technical debt | Open | Later |
 | [TD-31](#td-31) | No audit trail of data pulls and management actions | Technical debt | Open | 1.1 (data pulls); 1.5 |
 | [TD-35](#td-35) | No negotiation started by the provider | Technical debt, interoperability | Open | after 1.0 |
-| [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | Open | 0.14; 1.x (Helm chart) |
+| [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | Mitigated | 1.x (Helm chart) |
 | [TD-40](#td-40) | Database calls block the async runtime | Technical debt | Accepted | measure each release |
-| [TD-42](#td-42) | Four near-copies of the negotiation and transfer logic | Technical debt | Open | 0.14 (note); 1.x (merge) |
+| [TD-42](#td-42) | Four near-copies of the negotiation and transfer logic | Technical debt | Open | 1.x (merge) |
 | [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | Open | none |
 
-Counts on 2026-11-20: 34 risks and 28 technical debts are not closed
-(Open 31, Mitigated 18, Accepted 13); 11 risks and 17 technical debts
+Counts on 2026-11-20: 36 risks and 28 technical debts are not closed
+(Open 31, Mitigated 19, Accepted 14); 11 risks and 17 technical debts
 are closed.
 
 ## Risks
@@ -171,8 +173,10 @@ are closed.
 - **Why it matters.** Every change is reviewed by one person. Bus
   factor of one.
 - **Current state: Accepted** (maintainer, 2026-11-11). Signed commits,
-  required CI checks, CodeQL and Sonar gate every merge. A repository
-  successor is set ([GOVERNANCE](../GOVERNANCE.md)).
+  required CI checks, CodeQL and Sonar gate every merge. An account
+  successor is set, who can take over the repositories; the signing
+  key and the container registry go with the maintainer's account
+  ([GOVERNANCE, "Continuity"](../GOVERNANCE.md#continuity)).
 - **Next.** Find a second maintainer; not a 1.0 blocker (maintainer,
   2026-11-15).
 
@@ -258,7 +262,8 @@ are closed.
 - **What.** The EDC interop test runs EDC 1.0.0-RC8
   (`interop/edc/runtimes/gradle.properties`). The IdentityHub Identity
   API the test uses is in the package `v1.unstable` in RC8
-  ([TESTING](TESTING.md#edc-interop-test)). EDC's reading of a
+  ([TESTING](TESTING.md#edc-interop-test)); for the Issuer Service's
+  admin API see [R-47](#r-47). EDC's reading of a
   specification can change
   ([ADR 0011](adr/0011-interoperability-targets.md)).
 - **Why it matters.** Interoperability with the final EDC release is not
@@ -656,6 +661,47 @@ are closed.
 - **Next.** Document rate limits per client at the reverse proxy; a
   limit in Portitor only if measurements show the need.
 
+<a id="r-46"></a>
+### R-46 The EDC Issuer Service names a request status address that is not found
+
+- **What.** The Issuer Service of EDC IdentityHub 1.0.0-RC8 answers a
+  credential request with a `Location` header that leaves out the path
+  of its issuance API (`CredentialRequestApiController.java`, line 100,
+  builds `/v1/participants/{context}/requests/{id}` without
+  `web.http.issuance.path`). `portitor-identity` asks for the request
+  status there (DCP v1.0.1, 6.8) and gets 404. Found in 0.14 by step 8
+  of the EDC interop test
+  ([TESTING](TESTING.md#a-second-issuer-the-edc-issuer-service)).
+- **Why it matters.** `GET /v1/credential-requests/{holderPid}` on the
+  identity's management API shows `issuerStatusError` for a request that
+  went well. An operator may read it as a failure.
+- **Current state: Open.** The credential arrives all the same, as the
+  issuer delivers it to the Storage API. Portitor has no workaround:
+  guessing the path of another issuer's API would be wrong for the next
+  issuer. The test prints the gap as known and does not fail on it;
+  [DEPLOYING](DEPLOYING.md#an-edc-issuer-service-as-the-issuer) tells
+  the operator.
+- **Next.** The maintainer reports it to EDC IdentityHub
+  ([Upstream reports](#upstream-reports), 15). Check again with the
+  next EDC release ([R-09](#r-09)).
+
+<a id="r-47"></a>
+### R-47 The EDC Issuer Service's admin API may change with the next release candidate
+
+- **What.** Step 8 of the EDC interop test sets the Issuer Service up
+  through its admin API (holders, an attestation, a credential
+  definition, revocation). In RC8 that API is in a package EDC names
+  `unstable`, and its calls to suspend and resume a credential answer 501
+  ([TESTING](TESTING.md#a-second-issuer-the-edc-issuer-service)).
+- **Why it matters.** A new EDC release candidate can break the test
+  script. Only the test is affected: Portitor's components speak DCP to
+  an issuer and never call that API.
+- **Current state: Accepted.** The cost is a change to
+  `scripts/edc-interop.sh` when EDC is updated, as with the Identity API
+  ([R-09](#r-09); TESTING, "From RC7 to RC8").
+- **Next.** Read the admin API again at each EDC update. Suspension is
+  not tested until EDC implements it.
+
 ## Technical debt
 
 <a id="td-01"></a>
@@ -1046,16 +1092,19 @@ are closed.
   Q7). There is a Compose example and no Helm chart.
 - **Why it matters.** The learning curve to deploy and troubleshoot
   should be as small as possible (maintainer, 2026-11-18).
-- **Current state: Open.** Done in 0.14: this file has a "Top risks"
-  box and closed items are one line each; the roadmap's released
-  sections are one table; ARCHITECTURE describes the system as it is;
-  [docs/adr/README.md](adr/README.md) indexes the ADRs. The reorder of
-  DEPLOYING is a separate part of 0.14.
+- **Current state: Mitigated.** Done in 0.14: DEPLOYING is in
+  deployment order (issuer, identity, connector) and starts with a
+  ["First deployment"](DEPLOYING.md#first-deployment) path; what an
+  operator does after the first day (health, logs, metrics, backup, key
+  rotation, upgrades) is its own guide, [OPERATING](OPERATING.md); the
+  README no longer repeats the routes and settings. This file has a
+  "Top risks" box and closed items are one line each; the roadmap's
+  released sections are one table; ARCHITECTURE describes the system as
+  it is; [docs/adr/README.md](adr/README.md) indexes the ADRs.
 - **Decision (maintainer, 2026-11-18).** DEPLOYING is written for an
   operations team; running the demo on a laptop belongs in TESTING.
-- **Next.** ROADMAP 0.14: DEPLOYING in deployment order, with a short
-  "first deployment" path at the top. A Helm chart in a 1.x release
-  (ROADMAP "Code quality in 1.x").
+- **Next.** A Helm chart in a 1.x release (ROADMAP "Code quality in
+  1.x"). Until then there is the Compose example.
 
 <a id="td-40"></a>
 ### TD-40 Database calls block the async runtime
@@ -1094,9 +1143,10 @@ are closed.
 - **Why it matters.** A fix in one may be needed in the other three.
 - **Current state: Open.**
   [READING-THE-CODE](READING-THE-CODE.md#the-three-siblings) names the
-  four files side by side.
-- **Next.** ROADMAP 0.14: a note in TESTING, "changed one, check the
-  other three". ROADMAP "Code quality in 1.x": one shared core, best
+  four files side by side, and from 0.14 TESTING has the rule "changed
+  one, check the other three"
+  ([Unit and integration tests](TESTING.md#unit-and-integration-tests)).
+- **Next.** ROADMAP "Code quality in 1.x": one shared core, best
   before 1.1 adds push; the in-memory stores move into the tests.
 
 <a id="td-45"></a>
@@ -1145,10 +1195,10 @@ entries are in [CHANGELOG](../CHANGELOG.md) under the release named.
 | <a id="td-34"></a>TD-34 | A repeated transfer request started a second transfer | 0.12 | [ADR 0013](adr/0013-transfer-and-data-plane.md), amended 2026-11-18 |
 | <a id="td-36"></a>TD-36 | DSP details: who may terminate, 401 or 404, agreement timestamp, `consumerPid` check, catalog pages | 0.12; the answer limit in 0.13 | [ADR 0006](adr/0006-negotiation-storage.md) and [ADR 0016](adr/0016-dsp-caller-authentication.md), amended 2026-11-18; CHANGELOG 0.13.0 |
 | <a id="td-37"></a>TD-37 | DCP details: `token` claim required, presentations as JWT strings only, no `/.well-known/dspace-trust` | 0.12 | [ADR 0016](adr/0016-dsp-caller-authentication.md), amended 2026-11-18 |
-| <a id="td-38"></a>TD-38 | No management call to read a provider's catalog | 0.13 | CHANGELOG 0.13.0; `docs/api/management-openapi.json`; [ARCHITECTURE](ARCHITECTURE.md#diagrams-c4-model) |
+| <a id="td-38"></a>TD-38 | No management call to read a provider's catalog | 0.13; the `participantId` check in 0.14 | CHANGELOG 0.13.0 and 0.14.0; `docs/api/management-openapi.json`; [ARCHITECTURE](ARCHITECTURE.md#diagrams-c4-model) |
 | <a id="td-41"></a>TD-41 | A panic stopped the whole process (`panic = "abort"`) | 0.12 | [SECURITY-ASSURANCE](SECURITY-ASSURANCE.md), "What a panic does"; [ADR 0002](adr/0002-technology-stack.md), amended in 0.12 |
 | <a id="td-43"></a>TD-43 | The Gaia-X documents name several versions of the rules | 0.14 | [ARCHITECTURE](ARCHITECTURE.md#specification-versions) |
-| <a id="td-44"></a>TD-44 | A transfer request sent at once after the agreement could be refused | 0.13 | [ADR 0007](adr/0007-outbox-and-proof-of-delivery.md), "Amendment for 0.13" |
+| <a id="td-44"></a>TD-44 | A transfer request sent at once after the agreement could be refused | 0.13; the metric in 0.14 | [ADR 0007](adr/0007-outbox-and-proof-of-delivery.md), "Amendment for 0.13" and "Note added in 0.14"; CHANGELOG 0.14.0 |
 
 ### Left over from closed items
 
@@ -1199,7 +1249,12 @@ plan.
   its credentials: DCP 6.3 gives no such check to a holder or a
   verifier, and EDC compares no URL (ADR 0016).
 - **TD-38.** The catalog call refuses `querySpec` with 400: DSP 2025-1
-  leaves the content of a `filter` to each implementation.
+  leaves the content of a `filter` to each implementation. From 0.14 it
+  answers 502 when the catalog has no `participantId` or one that
+  differs from the request's `counterPartyId`
+  ([OPERATING](OPERATING.md#from-013-to-014)); a provider that uses
+  another participant id per profile
+  ([ADR 0024](adr/0024-several-data-spaces.md)) is then refused.
 - **TD-41.** A message or a credential request that meets the same bug
   on every try is tried again for as long as the process runs, with
   pauses up to 5 minutes. Each try is logged and counted. A restart
@@ -1209,7 +1264,8 @@ plan.
   against; they are records. ARCHITECTURE is the place that says what
   was checked.
 - **TD-44.** The benchmark that found it was not run again after the
-  fix.
+  fix. Until 0.14 a finalization event settled this way was still
+  counted in `portitor.outbox.message.given_up`; from 0.14 it is not.
 
 <a id="upstream-reports"></a>
 ## Upstream reports
@@ -1235,3 +1291,4 @@ works around a finding links its report.
 | 12 | DCP | How a credential whose subject is not the holder, such as the Gaia-X compliance credential, is bound to its holder (ADR 0022) | [DCP 278](https://github.com/eclipse-dataspace-dcp/decentralized-claims-protocol/issues/278) |
 | 13 | Gaia-X | The same binding question | Not filed: the place is the ICAM working group on GitLab, where the maintainer has no account (2026-11-16) |
 | 14 | EDC Connector | The subject check on every credential | On hold under [R-10](#r-10) |
+| 15 | EDC IdentityHub 1.0.0-RC8, Issuer Service | The `Location` of a credential request leaves out the issuance API path, so the request status (DCP 6.8) answers 404 ([R-46](#r-46)) | Not filed yet (found 2026-11-20) |
