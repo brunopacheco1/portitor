@@ -655,7 +655,7 @@ run time (shapes, ontology, contexts), hence the nightly run.
 
 | Date | Portitor | EDC | Compliance service | Where |
 |---|---|---|---|---|
-| *to be filled in by the integrator after the first green run* | *commit and version, to be filled in* | v1.0.0-RC8 (Connector, IdentityHub) | gx-compliance v2.16.0 | *link to the `EDC interop` workflow run* |
+| 2026-11-20 | 0.13.0, release branch commit `4c8c6d0` (pull request 72, before the tag) | v1.0.0-RC8 (Connector, IdentityHub) | gx-compliance v2.16.0 | GitHub Actions with Docker, [run 44734964661](https://github.com/brunopacheco1/portitor/actions/runs/44734964661) |
 
 Before 0.13 (without the Gaia-X steps): the nightly run of 2026-11-20 on
 `main` (after 0.12.0), EDC v1.0.0-RC7, workflow `EDC interop` run 55.
