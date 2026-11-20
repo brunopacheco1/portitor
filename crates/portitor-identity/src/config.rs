@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The identity component's settings, read from environment variables
-//! (`DEPLOYING.md`, section 4, "Run the identity next to the connector").
+//! (`docs/DEPLOYING.md`, "Step 2: identity", "Identity settings").
 
 use std::ffi::OsString;
 use std::path::PathBuf;

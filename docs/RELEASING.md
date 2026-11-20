@@ -75,8 +75,14 @@ pull request, or record why it stays.
   tell the truth: new components, ports, adapters, containers or outside
   systems are drawn, removed ones are gone. Edit them in draw.io.
 - [ARCHITECTURE.md](ARCHITECTURE.md), [DEPLOYING.md](DEPLOYING.md),
-  [TESTING.md](TESTING.md) and the README match what the release does
-  (settings, ports, images, flows).
+  [OPERATING.md](OPERATING.md), [TESTING.md](TESTING.md) and the README
+  match what the release does (settings, ports, images, flows, logs,
+  metrics, upgrade notes). The settings and routes have their home in
+  DEPLOYING and the OpenAPI files; the README only links to them.
+- [READING-THE-CODE.md](READING-THE-CODE.md) names only files and
+  functions that exist (`check_docs.py` does not check paths in
+  Markdown), and the [ADR index](adr/README.md) has a row for every
+  ADR, with its current status.
 - The OpenAPI files in `docs/api/`: the generated management descriptions
   are current (their tests fail otherwise); the hand-written
   `openapi.json` (DSP), `identity-openapi.json` (DID document, STS,

@@ -204,3 +204,16 @@ migration 10, so there is no new migration.
   until then.
 - Store adapters (a later PostgreSQL one too) must implement the version
   compare-and-update and list negotiations with a pending message.
+
+## Note added in 0.14 (2026-11-20)
+
+The text above is kept as it was decided. One sentence of the 0.13
+amendment no longer holds: it says that, for a consumer whose callback
+address cannot be reached, "the outbox then still logs and counts the
+event as given up". From 0.14 a finalization event that a transfer
+request settled is not counted in `portitor.outbox.message.given_up`.
+The outbox logs at INFO that the message was not delivered and that the
+process was settled without it (`Outbox::settled_without_delivery` and
+`count_if_given_up` in `portitor-connector/src/outbox.rs`;
+[TD-44](../RISKS_AND_TECHNICAL_DEBTS.md#td-44)). The rule itself is
+unchanged.

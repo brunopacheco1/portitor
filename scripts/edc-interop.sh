@@ -50,17 +50,19 @@
 #        with one claim (level). Its issuer metadata lists it.
 #     b. Each provider offers data only with InteropTestCredential.level
 #        eq "basic": Portitor's third dataset, and a second offer of the
-#        EDC provider. Before anyone holds the credential, each consumer
-#        negotiates the other's offer: refused.
-#     c. Portitor's identity asks the EDC Issuer Service for the
+#        EDC provider. Each catalog, as the other side read it, has the
+#        constraint.
+#     c. Before anyone holds the credential, each consumer negotiates
+#        the other's offer: refused.
+#     d. Portitor's identity asks the EDC Issuer Service for the
 #        credential (POST /v1/credential-requests) and stores what it
 #        delivers; the EDC IdentityHub does the same (Identity API).
-#     d. EDC negotiates Portitor's offer: FINALIZED, PULL transfer, fetch.
+#     e. EDC negotiates Portitor's offer: FINALIZED, PULL transfer, fetch.
 #        Portitor checked a credential an EDC issuer signed, with its
 #        Bitstring Status List.
-#     e. Portitor negotiates EDC's offer: FINALIZED, PULL transfer, fetch.
+#     f. Portitor negotiates EDC's offer: FINALIZED, PULL transfer, fetch.
 #        EDC checked the credential Portitor's identity presented.
-#     f. The EDC Issuer Service revokes the EDC participant's credential
+#     g. The EDC Issuer Service revokes the EDC participant's credential
 #        (admin API). EDC negotiates Portitor's offer again: TERMINATED.
 #  9. Revocation by portitor-issuer: once it revokes a participant's
 #     MembershipCredential (POST /v1/credentials/{id}/revoke), the other

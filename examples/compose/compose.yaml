@@ -20,7 +20,7 @@
 # participants at the issuer, has each identity ask it for its credentials
 # and runs the demo checks (scripts/demo-steps.sh). KEEP=1 leaves it
 # running: then use the consumer's management API on
-# http://127.0.0.1:18091 (see the README), with the key in
+# http://127.0.0.1:18091 (docs/DEPLOYING.md, "Management API"), with the key in
 # run/consumer/management.key, and negotiate with the provider at
 # http://provider:8080/dsp/2025-1. The issuer's management API is on
 # http://127.0.0.1:18071, with the key in run/issuer/management.key; the

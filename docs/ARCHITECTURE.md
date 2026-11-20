@@ -582,7 +582,8 @@ DSP messages are checked through the `MessageGuard` port of
 they are sent; a refused message is not sent and its process ends);
 otherwise `AllowAll` lets every message through. Incoming catalog
 requests are not checked; the `CatalogRequestMessage` the connector
-sends for the management API's catalog call is (`catalog_reader.rs`).
+sends for the management API's catalog call is
+(`catalog_reader/request.rs`).
 The catalog's `@context` is always the DSP 2025-1 context alone,
 with or without a bundle; the bundle's `context` files only serve to
 read messages whose `@context` names their URL.

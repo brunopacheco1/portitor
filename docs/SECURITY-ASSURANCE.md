@@ -142,7 +142,8 @@ dataspace participants over HTTPS.
 ### Threat model review 0.11 (2026-11-17)
 
 **Method.** The maintainer kept the table above and asked for a STRIDE
-pass over each trust boundary (maintainer, 2026-11-17, ROADMAP 0.11).
+pass over each trust boundary (maintainer, 2026-11-17; the 0.11 plan,
+now one row of [ROADMAP, "Released"](ROADMAP.md#released)).
 For each boundary and each STRIDE category (Spoofing, Tampering,
 Repudiation, Information disclosure, Denial of service, Elevation of
 privilege) the tables below name the threat in one line and how it is
@@ -441,5 +442,6 @@ Notes:
 ## OpenSSF Baseline
 
 Target: **level 1** (Baseline version 2026-08-28) for all of 0.x ([ADR 0012](adr/0012-openssf-baseline.md)). The
-self-assessment, control by control, is added here in the 0.13 release
-candidate, so it assesses the final state of 0.x.
+self-assessment, control by control, is added here in the 0.14 release
+candidate, so it assesses the final state of 0.x
+([ROADMAP 0.14](ROADMAP.md#014-documentation-and-assurance-release-candidate-for-10)).

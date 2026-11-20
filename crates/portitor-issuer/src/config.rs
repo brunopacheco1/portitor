@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The issuer's settings, read from environment variables
-//! (`DEPLOYING.md`, section 7, "Run the issuer"). The names follow the identity
-//! component's.
+//! (`docs/DEPLOYING.md`, "Step 1: issuer", "Issuer settings"). The names follow
+//! the identity component's.
 
 use std::ffi::OsString;
 use std::path::PathBuf;

@@ -823,8 +823,7 @@ each offers data only with `InteropTestCredential.level` `eq` `basic`.
 | 8g | The Issuer Service revokes the EDC participant's credential (`POST .../credentials/{id}/revoke`); EDC negotiates Portitor's offer again | the status list bit is set; the negotiation ends `TERMINATED` with no `code=`; Portitor's log has `credential refused` for the revoked credential |
 
 Step 9 is the revocation by `portitor-issuer` (before 0.14: step 8).
-The script's header comment has six letters, not seven: its 8b is rows
-8b and 8c here, and its 8c to 8f are rows 8d to 8g.
+The script's header comment uses the same letters.
 
 What the test shows: `portitor-identity` gets a credential from an EDC
 Issuer Service over DCP; the Portitor connector verifies a credential an
