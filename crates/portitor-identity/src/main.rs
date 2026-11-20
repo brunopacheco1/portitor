@@ -18,6 +18,7 @@ use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::health;
 use portitor_runtime::management::management_port;
+use portitor_runtime::panics::spawn_supervised;
 use portitor_runtime::request_size::RequestLimits;
 use portitor_runtime::serve::{
     MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, run_component, serve_with_trusted_routes, with_limits,
@@ -63,9 +64,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         None => None,
     };
+    // how long another party's DID document is reused (R-41)
+    let did_cache_seconds = portitor_runtime::did::cache_seconds_from_env()?;
     let ports = Ports {
         store: Arc::new(store),
-        directory: Arc::new(WebDirectory::new(config.allow_http)?),
+        directory: Arc::new(WebDirectory::new(config.allow_http, did_cache_seconds)?),
         issuers: Arc::new(HttpIssuerClient::new(config.allow_http)?),
         compliance,
     };
@@ -75,13 +78,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!(kid = %kid, "retired key listed in the DID document; it does not sign");
     }
     if let Some(chain) = identity.certificate_chain() {
-        tokio::spawn(portitor_identity::certificate::watch(chain));
+        // supervised: started again after a panic (portitor_runtime::panics)
+        spawn_supervised("certificate_watch", move || {
+            portitor_identity::certificate::watch(Arc::clone(&chain))
+        });
     }
     if identity.gaiax_on() {
         tracing::info!("Gaia-X onboarding on (PORTITOR_GAIAX_COMPLIANCE_URL)");
-        tokio::spawn(portitor_identity::gaiax::run_schedule(Arc::clone(
-            &identity,
-        )));
+        let scheduled = Arc::clone(&identity);
+        spawn_supervised("gaiax_schedule", move || {
+            portitor_identity::gaiax::run_schedule(Arc::clone(&scheduled))
+        });
     }
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
 

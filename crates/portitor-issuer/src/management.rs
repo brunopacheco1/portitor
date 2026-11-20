@@ -338,6 +338,10 @@ fn offered_objects(
     if offered.is_empty() {
         return Err("no credential to offer".to_owned());
     }
+    // The metadata's objects carry `offerReason: reissue` only because the
+    // metadata schema requires the property (definitions.rs,
+    // METADATA_OFFER_REASON). An offer says the operator's reason, or none:
+    // credential-offer-message-schema.json does not require it.
     for object in &mut offered {
         object.offer_reason = reason.map(str::to_owned);
     }

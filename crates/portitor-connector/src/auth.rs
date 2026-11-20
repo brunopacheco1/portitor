@@ -40,7 +40,7 @@ use portitor_dsp::policy::{CallerCredentials, CredentialTypes, HeldCredential, M
 use portitor_dsp::transfer::TransferError;
 use portitor_runtime::BoxFuture;
 use portitor_runtime::api_key::problem;
-use portitor_runtime::did::ResolveError;
+use portitor_runtime::did::{CACHE_SETTING as DID_CACHE_SETTING, ResolveError};
 use portitor_runtime::settings::{bounded_number, comma_list};
 use portitor_runtime::telemetry::metrics::{self, Refusal};
 
@@ -119,7 +119,7 @@ pub enum VerifyError {
     /// The caller is refused: no token or a bad one, a replayed token, an
     /// invalid or revoked credential, an untrusted issuer, or a service
     /// of the caller that answered with a final error (such as 404).
-    /// [`require_caller`] answers HTTP 401.
+    /// [`require_caller`] answers HTTP 404, or 401 on the catalog routes.
     Rejected(String),
     /// The check could not finish: a service it needs (the caller's DID
     /// document or Credential Service, an issuer's DID document or status
@@ -309,15 +309,17 @@ pub type AnyVerifier = Arc<dyn CallerVerifier>;
 /// Middleware for every DSP route: runs the verifier, and either passes
 /// the request on with its [`Caller`], or answers:
 ///
-/// - HTTP 401 with a DSP error that says no more than "unauthorized"
-///   when the caller is refused ([`VerifyError::Rejected`]);
+/// - when the caller is refused ([`VerifyError::Rejected`]): HTTP 404 on
+///   the negotiation and transfer routes, HTTP 401 on the catalog routes
+///   ([`refusal_status`]), with a DSP error that says no more than
+///   "unauthorized";
 /// - HTTP 503 with a problem body when the check could not finish
 ///   because a service it needs is down ([`VerifyError::Unavailable`]).
-///   A partner's outbox tries a 503 again, but takes a 401 as final
-///   (ADR 0007), so a short outage at its issuer does not end a
+///   A partner's outbox tries a 503 again, but takes a 401 or a 404 as
+///   final (ADR 0007), so a short outage at its issuer does not end a
 ///   negotiation.
 ///
-/// The reason goes to the log only.
+/// The reason goes to the log only (WARN), never the token.
 pub async fn require_caller(
     State(verifier): State<AnyVerifier>,
     mut request: Request,
@@ -341,9 +343,13 @@ pub async fn require_caller(
         Err(error) => {
             let path = request.uri().path();
             let reason = error.reason();
-            tracing::warn!(%path, %reason, "DSP request refused: caller not authenticated");
+            let protocol = protocol_of(path);
+            let status = refusal_status(protocol).as_u16();
+            // the caller sees 404 on most routes, which looks like a
+            // missing process: this line is where an operator finds why
+            tracing::warn!(%path, %reason, status, "DSP request refused: caller not authenticated");
             metrics::dsp_request_refused(Refusal::Unauthenticated);
-            unauthorized(path)
+            unauthorized(protocol)
         }
     }
 }
@@ -357,19 +363,87 @@ fn check_unavailable() -> Response {
     )
 }
 
-/// HTTP 401 with the DSP error type of the endpoint at `path`
-/// (DSP 2025-1: `CatalogError`, `ContractNegotiationError`,
-/// `TransferError`). No process ids: the caller is unknown.
-fn unauthorized(path: &str) -> Response {
-    const REASON: &str = "unauthorized";
-    let status = StatusCode::UNAUTHORIZED;
-    if path.contains("/negotiations") {
-        let error = ContractNegotiationError::new("", "", "401", REASON);
-        (status, Json(error)).into_response()
-    } else if path.contains("/transfers") {
-        (status, Json(TransferError::new("", "", "401", REASON))).into_response()
+/// Which of the three DSP protocols the endpoint at `path` belongs to.
+/// Each has its own error type and its own rule for a refused caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Protocol {
+    Catalog,
+    Negotiation,
+    Transfer,
+}
+
+/// The protocol of the DSP endpoint at `path`, read from the first path
+/// segment after the DSP prefix (or the callback prefix, for the
+/// consumer's endpoints). Only that segment counts: later ones are ids,
+/// the caller's text, and may hold any word. Anything else is taken as
+/// the catalog, whose answer tells the least.
+fn protocol_of(path: &str) -> Protocol {
+    match first_segment_below_prefix(path) {
+        "negotiations" => Protocol::Negotiation,
+        "transfers" => Protocol::Transfer,
+        _ => Protocol::Catalog,
+    }
+}
+
+/// The first path segment of `path` after the DSP prefix, or after the
+/// callback prefix for the consumer's endpoints:
+/// `/dsp/2025-1/callback/transfers/x/start` gives `transfers`. A path
+/// with neither prefix is read from its start. Empty when nothing
+/// follows the prefix.
+fn first_segment_below_prefix(path: &str) -> &str {
+    // the callback prefix first: it starts with the DSP prefix
+    let below_prefix = if let Some(rest) = path.strip_prefix(crate::CALLBACK_PATH) {
+        rest
+    } else if let Some(rest) = path.strip_prefix(crate::DSP_PATH) {
+        rest
     } else {
-        (status, Json(CatalogError::new("401", REASON))).into_response()
+        path
+    };
+    let segments = below_prefix.trim_start_matches('/');
+    // up to the next `/`, or all of it when there is none
+    match segments.split_once('/') {
+        Some((first, _later_segments)) => first,
+        None => segments,
+    }
+}
+
+/// The HTTP status for a caller that is refused at an endpoint of
+/// `protocol`:
+///
+/// - negotiation and transfer routes, also the consumer's callbacks: 404.
+///   DSP 2025-1, "Contract Negotiation HTTPS Binding" and "Transfer
+///   Process HTTPS Binding", "Unauthorized Access": "If the client is not
+///   authorized, the Consumer or Provider MUST return an HTTP 404 (Not
+///   Found) response." A caller so cannot tell whether a process exists.
+/// - catalog routes: 401. The "Catalog HTTPS Binding" only asks for "an
+///   appropriate HTTP code", and 401 says more.
+///
+/// Eclipse EDC 1.0.0-RC7 does the same (`DspRequestHandlerImpl`,
+/// `unauthorizedStatus`). ADR 0016, amended in 0.12.
+fn refusal_status(protocol: Protocol) -> StatusCode {
+    match protocol {
+        Protocol::Catalog => StatusCode::UNAUTHORIZED,
+        Protocol::Negotiation | Protocol::Transfer => StatusCode::NOT_FOUND,
+    }
+}
+
+/// The answer to a refused caller: the status [`refusal_status`] gives,
+/// with the DSP error type of `protocol` (DSP 2025-1: `CatalogError`,
+/// `ContractNegotiationError`, `TransferError`). The error's `code` is
+/// the HTTP status. No process ids: the caller is unknown.
+fn unauthorized(protocol: Protocol) -> Response {
+    const REASON: &str = "unauthorized";
+    let status = refusal_status(protocol);
+    let code = status.as_str();
+    match protocol {
+        Protocol::Catalog => (status, Json(CatalogError::new(code, REASON))).into_response(),
+        Protocol::Negotiation => {
+            let error = ContractNegotiationError::new("", "", code, REASON);
+            (status, Json(error)).into_response()
+        }
+        Protocol::Transfer => {
+            (status, Json(TransferError::new("", "", code, REASON))).into_response()
+        }
     }
 }
 
@@ -542,6 +616,11 @@ pub struct AuthSettings {
     /// (`PORTITOR_STATUS_LIST_CACHE_SECONDS`, default 300, at most 3600;
     /// 0: fetched on every check). See [`dcp::status_list_cache`].
     pub status_list_cache_seconds: u64,
+    /// How long a resolved DID document is reused, in seconds
+    /// (`PORTITOR_DID_CACHE_SECONDS`, default 300, at most 3600; 0:
+    /// fetched on every use). While a document is kept, a key removed
+    /// from it is still accepted (R-41). See [`portitor_runtime::did`].
+    pub did_cache_seconds: u64,
 }
 
 impl std::fmt::Debug for AuthSettings {
@@ -557,6 +636,7 @@ impl std::fmt::Debug for AuthSettings {
             .field("scopes", &self.scopes)
             .field("allow_http", &self.allow_http)
             .field("status_list_cache_seconds", &self.status_list_cache_seconds)
+            .field("did_cache_seconds", &self.did_cache_seconds)
             .finish_non_exhaustive()
     }
 }
@@ -645,6 +725,8 @@ impl AuthSettings {
         }
         let status_list_cache_seconds =
             status_list_cache_seconds(text("PORTITOR_STATUS_LIST_CACHE_SECONDS").as_deref())?;
+        let did_cache_seconds =
+            portitor_runtime::did::cache_seconds(text(DID_CACHE_SETTING).as_deref())?;
         Ok(Some(Self {
             participant_id: participant_id.to_owned(),
             sts_url,
@@ -658,6 +740,7 @@ impl AuthSettings {
             scopes,
             allow_http,
             status_list_cache_seconds,
+            did_cache_seconds,
         }))
     }
 
@@ -799,6 +882,39 @@ mod tests {
         std::fs::write(&secret, "s3cret\n").unwrap();
         let path = secret.to_string_lossy().into_owned();
         (dir, path)
+    }
+
+    /// `PORTITOR_DID_CACHE_SECONDS`: 300 by default, 0 for no cache, at
+    /// most 3600; the same rules as the status list cache.
+    #[test]
+    fn the_did_cache_setting_is_bounded() {
+        let (dir, secret) = secret_file("did-cache");
+        let me = "did:web:me.example";
+        let base = [
+            ("PORTITOR_STS_URL", "https://me.example/sts/token"),
+            ("PORTITOR_STS_CLIENT_SECRET_FILE", secret.as_str()),
+            ("PORTITOR_TRUSTED_ISSUERS", "did:web:a"),
+        ];
+        let read = |value: Option<&str>| {
+            let mut with = base.to_vec();
+            if let Some(value) = value {
+                with.push(("PORTITOR_DID_CACHE_SECONDS", value));
+            }
+            AuthSettings::from_vars(me, false, vars(&with))
+                .map(|settings| settings.unwrap().did_cache_seconds)
+        };
+        assert_eq!(read(None), Ok(300));
+        assert_eq!(read(Some("")), Ok(300));
+        assert_eq!(read(Some("0")), Ok(0));
+        assert_eq!(read(Some(" 3600 ")), Ok(3600));
+        for refused in ["3601", "-1", "5m"] {
+            let err = read(Some(refused)).unwrap_err();
+            assert!(
+                err.starts_with("PORTITOR_DID_CACHE_SECONDS"),
+                "{refused}: {err}"
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -1049,29 +1165,71 @@ mod tests {
         }
     }
 
+    /// DSP 2025-1, "Unauthorized Access" in the negotiation and transfer
+    /// HTTPS bindings: 404. The catalog binding: "an appropriate HTTP
+    /// code", here 401 (as Eclipse EDC, `unauthorizedStatus`).
     #[tokio::test]
-    async fn refusals_have_the_endpoint_error_type() {
-        for (path, kind) in [
-            ("/dsp/2025-1/catalog/request", "CatalogError"),
+    async fn refusals_have_the_endpoint_error_type_and_status() {
+        let (unauthorized_401, not_found) = (StatusCode::UNAUTHORIZED, StatusCode::NOT_FOUND);
+        for (path, kind, status) in [
+            (
+                "/dsp/2025-1/catalog/request",
+                "CatalogError",
+                unauthorized_401,
+            ),
+            (
+                "/dsp/2025-1/catalog/datasets/d1",
+                "CatalogError",
+                unauthorized_401,
+            ),
+            // a dataset id that looks like another protocol's path
+            (
+                "/dsp/2025-1/catalog/datasets/negotiations",
+                "CatalogError",
+                unauthorized_401,
+            ),
             (
                 "/dsp/2025-1/negotiations/request",
                 "ContractNegotiationError",
+                not_found,
             ),
-            ("/dsp/2025-1/callback/transfers/x/start", "TransferError"),
+            (
+                "/dsp/2025-1/callback/negotiations/x/agreement",
+                "ContractNegotiationError",
+                not_found,
+            ),
+            ("/dsp/2025-1/transfers/x", "TransferError", not_found),
+            // process ids that look like another protocol's path
+            (
+                "/dsp/2025-1/transfers/negotiations",
+                "TransferError",
+                not_found,
+            ),
+            (
+                "/dsp/2025-1/negotiations/catalog/events",
+                "ContractNegotiationError",
+                not_found,
+            ),
+            (
+                "/dsp/2025-1/callback/transfers/x/start",
+                "TransferError",
+                not_found,
+            ),
         ] {
-            let response = unauthorized(path);
-            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let response = unauthorized(protocol_of(path));
+            assert_eq!(response.status(), status, "{path}");
             let body = axum::body::to_bytes(response.into_body(), 4096)
                 .await
                 .unwrap();
             let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            assert_eq!(body["@type"], kind);
-            assert_eq!(body["code"], "401");
+            assert_eq!(body["@type"], kind, "{path}");
+            assert_eq!(body["code"], status.as_str(), "{path}");
+            assert_eq!(body["reason"][0], "unauthorized", "{path}");
         }
     }
 
     #[tokio::test]
-    async fn a_check_that_could_not_finish_answers_503_and_a_refusal_401() {
+    async fn a_check_that_could_not_finish_answers_503_and_a_refusal_401_or_404() {
         use axum::routing::get;
         use tower::ServiceExt as _;
 
@@ -1095,28 +1253,32 @@ mod tests {
             }
         }
 
-        for (error, expected) in [
-            (
-                VerifyError::Unavailable("status list: no answer within 10s".to_owned()),
-                StatusCode::SERVICE_UNAVAILABLE,
-            ),
-            (
-                VerifyError::Rejected("a credential is revoked".to_owned()),
-                StatusCode::UNAUTHORIZED,
-            ),
+        const CATALOG: &str = "/dsp/2025-1/catalog/request";
+        const NEGOTIATION: &str = "/dsp/2025-1/negotiations/p1";
+        const TRANSFER: &str = "/dsp/2025-1/transfers/p1";
+        let down = VerifyError::Unavailable("status list: no answer within 10s".to_owned());
+        let refused = VerifyError::Rejected("a credential is revoked".to_owned());
+        for (error, path, expected) in [
+            // a check that could not finish: 503 on every route
+            (down.clone(), CATALOG, StatusCode::SERVICE_UNAVAILABLE),
+            (down.clone(), NEGOTIATION, StatusCode::SERVICE_UNAVAILABLE),
+            (down, TRANSFER, StatusCode::SERVICE_UNAVAILABLE),
+            (refused.clone(), CATALOG, StatusCode::UNAUTHORIZED),
+            (refused.clone(), NEGOTIATION, StatusCode::NOT_FOUND),
+            (refused, TRANSFER, StatusCode::NOT_FOUND),
         ] {
             let verifier: AnyVerifier = Arc::new(Fails(error));
             let app = axum::Router::new()
-                .route("/dsp/2025-1/catalog/request", get(|| async { "ok" }))
+                .route(CATALOG, get(|| async { "ok" }))
+                .route(NEGOTIATION, get(|| async { "ok" }))
+                .route(TRANSFER, get(|| async { "ok" }))
                 .route_layer(axum::middleware::from_fn_with_state(
                     verifier,
                     require_caller,
                 ));
-            let request = Request::get("/dsp/2025-1/catalog/request")
-                .body(axum::body::Body::empty())
-                .unwrap();
+            let request = Request::get(path).body(axum::body::Body::empty()).unwrap();
             let response = app.oneshot(request).await.unwrap();
-            assert_eq!(response.status(), expected);
+            assert_eq!(response.status(), expected, "{path}");
         }
     }
 

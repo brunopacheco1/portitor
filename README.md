@@ -45,6 +45,7 @@ Website: <https://bruno.pacheco.lu/portitor/> (objectives, minimum functionality
 - Reading the Rust code: [docs/RUST-IDIOMS.md](docs/RUST-IDIOMS.md)
 - HTTP interfaces: [docs/api/](docs/api/) (OpenAPI 3.1: connector, management, identity, issuer)
 - Security: [SECURITY.md](SECURITY.md), [docs/SECURITY-ASSURANCE.md](docs/SECURITY-ASSURANCE.md)
+- Measured numbers (data plane, stored history, catalog, cost of DCP): [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md), [GOVERNANCE.md](GOVERNANCE.md),
   [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 
@@ -84,6 +85,11 @@ The DSP endpoints follow the HTTPS bindings of
 | `GET /data/{flowId}` | The data of a started transfer, for the bearer token in its data address |
 | `GET /health` | Returns `ok` while the process runs |
 
+A caller whose DCP token or credentials are refused gets a DSP error
+without a reason: HTTP 404 on the negotiation and transfer routes, HTTP
+401 on the catalog routes (from 0.12,
+[ADR 0016](docs/adr/0016-dsp-caller-authentication.md)).
+
 Configuration (environment variables):
 
 | Variable | Default | Meaning |
@@ -114,6 +120,7 @@ Configuration (environment variables):
 | `PORTITOR_DCP_SCOPES` | `org.eclipse.dspace.dcp.vc.type:MembershipCredential` | Comma-separated scopes asked from callers' credential services, and granted to the counter-party in our tokens |
 | `PORTITOR_POLICY_CREDENTIALS` | none (`MembershipCredential` only) | Comma-separated credential types that offers may constrain, each `Type` (scope `org.eclipse.dspace.dcp.vc.type:<Type>:read`) or `Type=<scope>` ([ADR 0019](docs/adr/0019-credential-constraints.md)) |
 | `PORTITOR_STATUS_LIST_CACHE_SECONDS` | `300` | How long a verified status list credential is reused, in seconds; `0` fetches it on every check, at most `3600`. A revocation takes up to that long to be seen ([DEPLOYING](docs/DEPLOYING.md#status-list-cache)) |
+| `PORTITOR_DID_CACHE_SECONDS` | `300` | How long a resolved DID document is reused, in seconds; `0` fetches it on every use, at most `3600`. A key removed from a document is still accepted for up to that long. The identity and the issuer read the same setting ([DEPLOYING](docs/DEPLOYING.md#did-document-cache)) |
 | `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` | none (no Gaia-X compliance credential accepted) | Comma-separated `did:web` DIDs of the Gaia-X compliance services you trust, for example `did:web:compliance.lab.gaia-x.eu:v2`; separate from `PORTITOR_TRUSTED_ISSUERS` ([ADR 0022](docs/adr/0022-gaia-x-compliance-in-policies.md)) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | none (no traces or metrics) | Base URL of an OTLP/HTTP receiver: traces and metrics are sent there with OpenTelemetry. The other `OTEL_*` variables are in [DEPLOYING](docs/DEPLOYING.md#traces-and-metrics) ([ADR 0023](docs/adr/0023-observability.md)) |
 
@@ -141,6 +148,9 @@ by the caller, starts it at once and sends the consumer a data address:
 while the transfer is started and for `PORTITOR_DATA_TOKEN_SECONDS` after
 the start; the connector then streams the source's answer (2xx only, with
 its `Content-Type`). A request for a dataset without a source is refused.
+A transfer request sent again by the same consumer with the same
+`consumerPid` starts nothing new: the answer is the transfer it already
+has (from 0.12).
 
 Policies (minimal ODRL, [ADR 0009](docs/adr/0009-minimal-odrl-policies.md),
 [ADR 0019](docs/adr/0019-credential-constraints.md)):
@@ -166,6 +176,12 @@ Policies (minimal ODRL, [ADR 0009](docs/adr/0009-minimal-odrl-policies.md),
   `and`, `andSequence`, `or` and `xone` combine them.
 - Anything else is refused (fail closed): a dataset whose offer uses it
   is rejected by the harvest and left out of the catalog.
+- Policies are read strictly (from 0.12): a field Portitor does not
+  read, for example a `duty` inside a permission or `unit` on a
+  constraint, is an error that names it, never dropped. The harvest
+  rejects such a dataset; a partner's message with such an offer or
+  agreement gets HTTP 400. In a message, an offer's `assigner` must be
+  the provider and its `assignee` the consumer, when present.
 - As provider, the connector agrees only if the requested offer has the
   same terms as the catalog offer with that `@id`, and its constraints
   hold now for the consumer's credentials. For credential constraints it

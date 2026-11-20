@@ -27,8 +27,9 @@ use portitor_dcp::credential::{Credential, Presentation};
 use portitor_dcp::gaiax::digest_sri_of;
 use portitor_dcp::{DidDocument, Jws, Purpose, SigningKey};
 use portitor_identity::config::{Config, GaiaxConfig};
-use portitor_identity::gaiax::{HttpGaiaxCompliance, renewal_due, run_now};
+use portitor_identity::gaiax::{GaiaxCompliance, HttpGaiaxCompliance, renewal_due, run_now};
 use portitor_identity::store::{RunOutcome, SqliteStore};
+use portitor_runtime::BoxFuture;
 use portitor_runtime::system::{new_uuid, now_secs, xsd_date_time};
 use serde_json::{Map, Value, json};
 use tower::ServiceExt as _;
@@ -54,6 +55,9 @@ struct FakeService {
     refuse: AtomicBool,
     /// The `vcid` of each request.
     asked: Mutex<Vec<String>>,
+    /// When set: sign the answer with this other party's key, under its
+    /// key id, while the answer still names [`COMPLIANCE`] as its issuer.
+    signs_as: Mutex<Option<Party>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -142,12 +146,10 @@ async fn standard_compliance(
     headers.insert("typ".to_owned(), Value::from("vc+jwt"));
     headers.insert("cty".to_owned(), Value::from("vc"));
     headers.insert("iss".to_owned(), Value::from(COMPLIANCE));
-    headers.insert("kid".to_owned(), Value::from(service.party.kid()));
-    let jwt = service
-        .party
-        .key
-        .sign_with_headers(&headers, &answer)
-        .unwrap();
+    let other_signer = service.signs_as.lock().unwrap();
+    let signer = other_signer.as_ref().unwrap_or(&service.party);
+    headers.insert("kid".to_owned(), Value::from(signer.kid()));
+    let jwt = signer.key.sign_with_headers(&headers, &answer).unwrap();
     (StatusCode::CREATED, jwt)
 }
 
@@ -235,12 +237,22 @@ async fn setup() -> Setup {
 /// [`setup`], with `compliance_did` as `PORTITOR_GAIAX_COMPLIANCE_DID`
 /// (the fake service signs as [`COMPLIANCE`]).
 async fn setup_trusting(compliance_did: &str) -> Setup {
+    setup_through(compliance_did, |adapter| Arc::new(adapter)).await
+}
+
+/// [`setup_trusting`], where the identity reaches the service through
+/// the port that `port_around` makes from the real adapter.
+async fn setup_through(
+    compliance_did: &str,
+    port_around: impl FnOnce(HttpGaiaxCompliance) -> Arc<dyn GaiaxCompliance>,
+) -> Setup {
     let service = Arc::new(FakeService {
         party: Party::new(COMPLIANCE),
         holder: Mutex::new(None),
         wrong_digest: AtomicBool::new(false),
         refuse: AtomicBool::new(false),
         asked: Mutex::new(Vec::new()),
+        signs_as: Mutex::new(None),
     });
     let app = Router::new()
         .route(
@@ -259,7 +271,7 @@ async fn setup_trusting(compliance_did: &str) -> Setup {
         &files.config(&url, compliance_did),
         Arc::new(SqliteStore::in_memory().unwrap()),
         SigningKey::from_pem(KEY).unwrap(),
-        Some(Arc::new(adapter)),
+        Some(port_around(adapter)),
     )
     .unwrap();
     world.directory.add(&service.party);
@@ -451,6 +463,123 @@ async fn an_answer_from_another_service_is_refused() {
         "{error}"
     );
     assert!(held_gaiax(world).is_empty());
+}
+
+/// DCP v1.0.1, section 5.4.3, step 4, on the holder's side: the
+/// compliance service's DID document lists a key of another DID under
+/// `assertionMethod`. An answer in the service's name that is signed
+/// with that key is refused, and nothing is stored.
+#[tokio::test]
+async fn an_answer_signed_with_another_dids_key_is_refused_and_nothing_is_stored() {
+    let setup = setup().await;
+    let world = &setup.world;
+    let other = Party::new(NOTARY);
+    let mut services_document = setup.service.party.document.clone();
+    services_document
+        .verification_method
+        .push(other.document.verification_method[0].clone());
+    services_document
+        .assertion_method
+        .extend(other.document.assertion_method.clone());
+    world
+        .directory
+        .documents
+        .lock()
+        .unwrap()
+        .insert(COMPLIANCE.to_owned(), Arc::new(services_document));
+    *setup.service.signs_as.lock().unwrap() = Some(other);
+
+    let run = run_now(&world.identity).await.unwrap();
+    assert_eq!(run.outcome, RunOutcome::Failed);
+    let error = run.error.unwrap();
+    assert!(
+        error.contains("the signing key belongs to another DID than the issuer"),
+        "{error}"
+    );
+    assert!(held_gaiax(world).is_empty());
+
+    // with the same document, an answer under the service's own key passes
+    *setup.service.signs_as.lock().unwrap() = None;
+    let run = run_now(&world.identity).await.unwrap();
+    assert_eq!(run.outcome, RunOutcome::Succeeded, "{:?}", run.error);
+}
+
+/// A port to the compliance service with a bug: its first call panics.
+/// Every later call goes to the real adapter.
+struct PanicsOnce {
+    adapter: HttpGaiaxCompliance,
+    panicked: AtomicBool,
+}
+
+impl GaiaxCompliance for PanicsOnce {
+    fn request_compliance<'a>(
+        &'a self,
+        vcid: &'a str,
+        presentation: &'a str,
+    ) -> BoxFuture<'a, Result<String, String>> {
+        let panicked_before = self.panicked.swap(true, Ordering::SeqCst);
+        assert!(panicked_before, "the first call panics");
+        self.adapter.request_compliance(vcid, presentation)
+    }
+}
+
+/// A run the operator starts works in the background
+/// (`portitor_runtime::panics::report_panic`). If it panics, it stores
+/// nothing and frees the lock, so the next run can start and succeeds;
+/// the management API keeps answering. The run that panicked stays
+/// `RUNNING` in the list until the next start of the process marks it
+/// failed.
+#[tokio::test]
+async fn a_run_that_panics_does_not_block_the_next_run() {
+    let setup = setup_through(COMPLIANCE, |adapter| {
+        Arc::new(PanicsOnce {
+            adapter,
+            panicked: AtomicBool::new(false),
+        })
+    })
+    .await;
+    let world = &setup.world;
+    let authed = |request: axum::http::request::Builder| {
+        request
+            .header(header::AUTHORIZATION, format!("Bearer {API_KEY}"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    let start = || authed(Request::post("/v1/gaiax/compliance"));
+    let (status, panicking) = call(&world.management, start()).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{panicking}");
+
+    // the second run starts once the first one has panicked and let go
+    // of the lock; until then the answer is 409 (a run is on)
+    let second_ended = async {
+        loop {
+            let (status, _) = call(&world.management, start()).await;
+            if status == StatusCode::ACCEPTED {
+                break;
+            }
+            assert_eq!(status, StatusCode::CONFLICT);
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        loop {
+            let (_, listed) = call(
+                &world.management,
+                authed(Request::get("/v1/gaiax/compliance")),
+            )
+            .await;
+            if listed[0]["outcome"] != "RUNNING" {
+                return listed;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    };
+    let Ok(runs) = tokio::time::timeout(std::time::Duration::from_secs(30), second_ended).await
+    else {
+        panic!("the second run did not start and end within 30 s");
+    };
+    assert_eq!(runs[0]["outcome"], "SUCCEEDED", "{runs}");
+    assert_eq!(runs[1]["id"], panicking["id"]);
+    assert_eq!(runs[1]["outcome"], "RUNNING", "{runs}");
+    assert_eq!(held_gaiax(world).len(), 4, "only the second run stored");
 }
 
 /// The service's reason for a refusal is in the run's error, as the

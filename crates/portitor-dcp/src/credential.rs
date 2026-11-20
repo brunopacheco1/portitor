@@ -24,7 +24,7 @@ use serde_json::{Map, Value};
 
 use self::json::{Body, agree, date, first_context, number, payload_of, text, types};
 use crate::status_list::StatusEntry;
-use crate::{DidDocument, Error, Jws, Purpose};
+use crate::{DidDocument, Error, Jws, Purpose, VerificationMethod};
 
 /// The VC Data Model 1.1 context.
 pub const VC1_CONTEXT: &str = "https://www.w3.org/2018/credentials/v1";
@@ -323,10 +323,7 @@ impl Credential {
         now: u64,
         leeway: u64,
     ) -> Result<(), CredentialError> {
-        if issuer.id != self.issuer {
-            return Err(CredentialError::Invalid("DID document is not the issuer's"));
-        }
-        verify_signature(&self.jwt, issuer, Purpose::AssertionMethod)?;
+        self.verify_issuer_signature(issuer)?;
         self.validity.check(now, leeway)
     }
 
@@ -345,11 +342,44 @@ impl Credential {
         now: u64,
         leeway: u64,
     ) -> Result<(), CredentialError> {
+        self.verify_issuer_signature(issuer)?;
+        self.stated_validity.check(now, leeway)
+    }
+
+    /// Checks that the credential is signed by its own issuer: `issuer`
+    /// is the DID document of [`Credential::issuer`], and the signing key
+    /// is a verification method of that DID with the `assertionMethod`
+    /// relationship.
+    ///
+    /// DCP v1.0.1, section 5.4.3, step 4: "The Verifier MUST assert that
+    /// the DID in the `VerificationMethod` of the Verifiable Credential
+    /// has the same value as the `issuer` of the Verifiable Credential."
+    /// A DID document may list a verification method of another DID; a
+    /// credential signed with such a key is refused. Eclipse EDC
+    /// 1.0.0-RC7 checks the same on the JWT's key id
+    /// (`IssuerKeyIdValidationRule`: `kid` starts with `iss` and `#`).
+    fn verify_issuer_signature(&self, issuer: &DidDocument) -> Result<(), CredentialError> {
         if issuer.id != self.issuer {
             return Err(CredentialError::Invalid("DID document is not the issuer's"));
         }
-        verify_signature(&self.jwt, issuer, Purpose::AssertionMethod)?;
-        self.stated_validity.check(now, leeway)
+        let key = verify_signature(&self.jwt, issuer, Purpose::AssertionMethod)?;
+        if !is_method_of(&key.id, &self.issuer) {
+            return Err(CredentialError::Invalid(
+                "the signing key belongs to another DID than the issuer",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Whether the verification method `method_id` belongs to `did`. A full
+/// id is `<did>#<fragment>`, for example `did:web:example.com#key-1`; an
+/// id written as the fragment only (`#key-1`) is relative to the DID
+/// document it stands in (W3C DID Core, "Relative DID URLs").
+fn is_method_of(method_id: &str, did: &str) -> bool {
+    match method_id.split_once('#') {
+        Some((owner, _fragment)) => owner.is_empty() || owner == did,
+        None => false,
     }
 }
 
@@ -541,11 +571,19 @@ fn credential_jwt(entry: &Value, profile: Profile) -> Result<&str, CredentialErr
     }
 }
 
-fn verify_signature(jwt: &str, doc: &DidDocument, purpose: Purpose) -> Result<(), CredentialError> {
+/// Checks the signature of `jwt` with the key of `doc` that its `kid`
+/// names and that has the relationship `purpose`. Returns that
+/// verification method, for a caller that also checks whose key it is
+/// (`verify_issuer_signature`).
+fn verify_signature<'a>(
+    jwt: &str,
+    doc: &'a DidDocument,
+    purpose: Purpose,
+) -> Result<&'a VerificationMethod, CredentialError> {
     let jws = Jws::parse(jwt)?;
     let key = doc.key_for(jws.kid(), purpose)?;
     jws.verify(&key.public_key_jwk)?;
-    Ok(())
+    Ok(key)
 }
 
 mod json;

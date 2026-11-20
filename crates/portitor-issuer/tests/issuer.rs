@@ -25,7 +25,10 @@ use portitor_dcp::{
 };
 use portitor_issuer::config::Config;
 use portitor_issuer::management::openapi_json;
-use portitor_issuer::store::{CredentialRequest, IssuerStore, SqliteStore};
+use portitor_issuer::store::{
+    CredentialRequest, Delivery, DeliveryState, IssueOutcome, IssueRules, IssuedWithDelivery,
+    IssuerStore, Participant, Planned, Revocation, SignCredentials, SqliteStore, StoreError,
+};
 use portitor_issuer::{Issuer, Ports, definitions, delivery, issue};
 use portitor_runtime::BoxFuture;
 use portitor_runtime::api_key::ApiKey;
@@ -44,10 +47,74 @@ const API_KEY: &str = "test-only-api-key-0123456789abcdef0123456789ab";
 
 const DEFINITIONS: &str = r#"[
   {"id": "membership-vc11", "credentialType": "MembershipCredential",
-   "profile": "vc11-sl2021/jwt", "validityDays": 365, "claims": ["role"]},
+   "profile": "vc11-sl2021/jwt", "validityDays": 365,
+   "credentialSchema": "https://example.com/membership-credential-schema.json",
+   "claims": ["role"]},
   {"id": "membership-vc20", "credentialType": "MembershipCredential",
-   "profile": "vc20-bssl/jwt", "validityDays": 30, "claims": ["role", "level"]}
+   "profile": "vc20-bssl/jwt", "validityDays": 30,
+   "credentialSchema": "https://example.com/membership-credential-schema.json",
+   "claims": ["role", "level"]}
 ]"#;
+
+/// The DCP v1.0.1 JSON Schemas the issuer's own answers are checked
+/// against, by the URL the schemas use to refer to each other. They are
+/// the copies kept for `crates/portitor-dcp/tests/spec.rs`.
+const DCP_SCHEMAS: &[(&str, &str)] = &[
+    (
+        "https://w3id.org/dspace-dcp/v1.0/common/context-schema.json",
+        include_str!("../../portitor-dcp/tests/schemas/context-schema.json"),
+    ),
+    (
+        "https://w3id.org/dspace-dcp/v1.0/issuance/credential-object-schema.json",
+        include_str!("../../portitor-dcp/tests/schemas/credential-object-schema.json"),
+    ),
+    (
+        "https://w3id.org/dspace-dcp/v1.0/issuance/issuer-metadata-schema.json",
+        include_str!("../../portitor-dcp/tests/schemas/issuer-metadata-schema.json"),
+    ),
+    (
+        "https://w3id.org/dspace-dcp/v1.0/issuance/credential-offer-message-schema.json",
+        include_str!("../../portitor-dcp/tests/schemas/credential-offer-message-schema.json"),
+    ),
+];
+
+/// Serves [`DCP_SCHEMAS`], so the tests need no network. The Presentation
+/// Exchange schema `issuancePolicy` points to is not part of the DCP
+/// release; any value passes in its place.
+struct LocalSchemas;
+
+impl jsonschema::Retrieve for LocalSchemas {
+    fn retrieve(
+        &self,
+        uri: &jsonschema::Uri<String>,
+    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+        let uri = uri.as_str();
+        if uri.starts_with("https://identity.foundation/presentation-exchange/") {
+            return Ok(json!(true));
+        }
+        let found = DCP_SCHEMAS.iter().find(|(id, _)| *id == uri);
+        let (_, raw) = found.ok_or("unknown schema")?;
+        Ok(serde_json::from_str(raw)?)
+    }
+}
+
+/// What the DCP schema `file` reports for `message`; empty when it passes.
+fn dcp_schema_errors(file: &str, message: &Value) -> Vec<String> {
+    let (_, raw) = DCP_SCHEMAS
+        .iter()
+        .find(|(id, _)| id.ends_with(file))
+        .unwrap();
+    let schema: Value = serde_json::from_str(raw).unwrap();
+    let validator = jsonschema::options()
+        .with_retriever(LocalSchemas)
+        .build(&schema)
+        .unwrap();
+    let mut errors = Vec::new();
+    for error in validator.iter_errors(message) {
+        errors.push(format!("{} at {}", error, error.instance_path()));
+    }
+    errors
+}
 
 /// Another participant: a DID, a key, and its DID document with a
 /// credential service.
@@ -260,6 +327,15 @@ impl World {
     }
 
     fn with(setup: Setup) -> Self {
+        Self::with_store_port(setup, |store| store)
+    }
+
+    /// As [`World::with`], but the issuer reaches the store through
+    /// `port(store)`: a test can put a store that misbehaves in between.
+    fn with_store_port(
+        setup: Setup,
+        port: impl FnOnce(Arc<SqliteStore>) -> Arc<dyn IssuerStore>,
+    ) -> Self {
         let directory = Arc::new(FakeDirectory::default());
         let holder = Party::new(HOLDER);
         let stranger = Party::new(STRANGER);
@@ -285,7 +361,7 @@ impl World {
         };
         let store = Arc::new(setup.store);
         let ports = Ports {
-            store: Arc::clone(&store) as _,
+            store: port(Arc::clone(&store)),
             directory: Arc::clone(&directory) as _,
             sender: Arc::clone(&sender) as _,
         };
@@ -525,6 +601,70 @@ async fn did_document_and_metadata() {
     assert_eq!(metadata["type"], "IssuerMetadata");
     assert_eq!(metadata["issuer"], ISSUER);
     assert_eq!(metadata["credentialsSupported"][1]["id"], "membership-vc20");
+}
+
+/// TD-33: what `GET /metadata` answers passes DCP's own
+/// `issuer-metadata-schema.json` (DCP v1.0.1, section 6.7), which wants
+/// `credentialType`, `credentialSchema`, `offerReason`, `bindingMethods`
+/// and `profile` in every credential object.
+#[tokio::test]
+async fn the_metadata_answer_passes_the_dcp_schema() {
+    let world = World::new();
+    let (status, metadata) = call(
+        &world.app,
+        Request::get("/issuer/metadata")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let errors = dcp_schema_errors("issuer-metadata-schema.json", &metadata);
+    assert!(errors.is_empty(), "{errors:?}\n{metadata:#}");
+
+    let supported = metadata["credentialsSupported"].as_array().unwrap();
+    assert_eq!(supported.len(), 2);
+    for object in supported {
+        assert_eq!(
+            object["credentialSchema"],
+            "https://example.com/membership-credential-schema.json"
+        );
+        assert_eq!(object["offerReason"], "reissue");
+        assert_eq!(object["bindingMethods"], json!(["did:web"]));
+    }
+
+    // the check is real: without one required property the schema objects
+    for property in ["credentialSchema", "offerReason"] {
+        let mut incomplete = metadata.clone();
+        let first = incomplete["credentialsSupported"][0]
+            .as_object_mut()
+            .unwrap();
+        first.remove(property);
+        let errors = dcp_schema_errors("issuer-metadata-schema.json", &incomplete);
+        assert!(!errors.is_empty(), "{property} is required");
+    }
+}
+
+/// Every definitions file in the repository (the demos, the TCK run, the
+/// EDC interop test) has the `credentialSchema` 0.12 requires, and the
+/// metadata built from it passes the DCP schema.
+#[test]
+fn the_definitions_files_of_the_repository_are_valid() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for file in [
+        "examples/issuer-credentials.json",
+        "tck/issuer-credentials.json",
+        "interop/edc/config/issuer-credentials.json",
+    ] {
+        let text = std::fs::read_to_string(root.join(file)).unwrap();
+        let definitions = match portitor_issuer::definitions::parse(&text) {
+            Ok(definitions) => definitions,
+            Err(e) => panic!("{file}: {e}"),
+        };
+        let metadata = portitor_issuer::definitions::metadata(ISSUER, &definitions);
+        let json = serde_json::to_value(&metadata).unwrap();
+        let errors = dcp_schema_errors("issuer-metadata-schema.json", &json);
+        assert!(errors.is_empty(), "{file}: {errors:?}");
+    }
 }
 
 #[tokio::test]
@@ -1084,6 +1224,118 @@ async fn after_a_restart_waiting_work_is_done_and_revocations_kept() {
     }
 }
 
+/// A store whose `request` panics for one request, as a bug in deciding
+/// that request would; everything else goes to the real store.
+struct PanicsOnRequest {
+    inner: Arc<SqliteStore>,
+    issuer_pid: &'static str,
+}
+
+impl IssuerStore for PanicsOnRequest {
+    fn request(&self, issuer_pid: &str) -> Result<Option<CredentialRequest>, StoreError> {
+        assert_ne!(issuer_pid, self.issuer_pid, "deciding this request panics");
+        self.inner.request(issuer_pid)
+    }
+
+    fn add_participant(&self, participant: &Participant) -> Result<bool, StoreError> {
+        self.inner.add_participant(participant)
+    }
+    fn participant(&self, did: &str) -> Result<Option<Participant>, StoreError> {
+        self.inner.participant(did)
+    }
+    fn participants(&self) -> Result<Vec<Participant>, StoreError> {
+        self.inner.participants()
+    }
+    fn delete_participant(&self, did: &str) -> Result<bool, StoreError> {
+        self.inner.delete_participant(did)
+    }
+    fn add_request(&self, request: &CredentialRequest) -> Result<bool, StoreError> {
+        self.inner.add_request(request)
+    }
+    fn received_requests(&self) -> Result<Vec<String>, StoreError> {
+        self.inner.received_requests()
+    }
+    fn reject(&self, issuer_pid: &str) -> Result<bool, StoreError> {
+        self.inner.reject(issuer_pid)
+    }
+    fn issue(
+        &self,
+        issuer_pid: &str,
+        planned: &[Planned],
+        rules: IssueRules,
+        sign: &mut SignCredentials<'_>,
+    ) -> Result<IssueOutcome, StoreError> {
+        self.inner.issue(issuer_pid, planned, rules, sign)
+    }
+    fn due_deliveries(&self, now: u64) -> Result<Vec<Delivery>, StoreError> {
+        self.inner.due_deliveries(now)
+    }
+    fn next_delivery_at(&self) -> Result<Option<u64>, StoreError> {
+        self.inner.next_delivery_at()
+    }
+    fn retry_later(&self, issuer_pid: &str, attempts: u32, at: u64) -> Result<(), StoreError> {
+        self.inner.retry_later(issuer_pid, attempts, at)
+    }
+    fn end_delivery(&self, issuer_pid: &str, state: DeliveryState) -> Result<(), StoreError> {
+        self.inner.end_delivery(issuer_pid, state)
+    }
+    fn issued(&self, holder: Option<&str>) -> Result<Vec<IssuedWithDelivery>, StoreError> {
+        self.inner.issued(holder)
+    }
+    fn revoke(&self, id: &str, now: u64) -> Result<Revocation, StoreError> {
+        self.inner.revoke(id, now)
+    }
+    fn revoked_indexes(
+        &self,
+        profile: portitor_dcp::credential::Profile,
+    ) -> Result<Vec<u64>, StoreError> {
+        self.inner.revoked_indexes(profile)
+    }
+}
+
+/// One request whose decision panics on every round does not block the
+/// outbox: the other waiting request is decided and its credentials are
+/// sent; the panicking one stays `RECEIVED`.
+#[tokio::test]
+async fn a_request_whose_decision_panics_does_not_block_the_outbox() {
+    let world = World::with_store_port(Setup::in_memory(), |store| {
+        Arc::new(PanicsOnRequest {
+            inner: store,
+            issuer_pid: "i-1",
+        })
+    });
+    world.register(HOLDER, json!({})).await;
+    for (issuer_pid, holder_pid) in [("i-1", "h-1"), ("i-2", "h-2")] {
+        let waiting = CredentialRequest {
+            issuer_pid: issuer_pid.to_owned(),
+            holder_did: HOLDER.to_owned(),
+            holder_pid: holder_pid.to_owned(),
+            credential_ids: vec!["membership-vc20".to_owned()],
+            access_token: Some("holder-access-token".to_owned()),
+            status: RequestStatus::Received,
+            received_at: now_secs(),
+        };
+        assert!(world.store.add_request(&waiting).unwrap());
+    }
+
+    // i-1 comes first and panics; i-2 is still decided and sent
+    let outbox = tokio::spawn(delivery::run_outbox(Arc::clone(&world.issuer)));
+    for _ in 0..500 {
+        if !world.sender.sent().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(!outbox.is_finished(), "the outbox ended");
+    outbox.abort();
+    let sent = world.sender.sent();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].body["holderPid"], "h-2");
+    let status = |issuer_pid| world.store.request(issuer_pid).unwrap().unwrap().status;
+    assert_eq!(status("i-1"), RequestStatus::Received);
+    assert_eq!(status("i-2"), RequestStatus::Issued);
+}
+
 /// A key change with the old public key listed as retired
 /// (`PORTITOR_ISSUER_RETIRED_KEY_FILES`, TD-05): the credentials and
 /// status lists the old key signed keep verifying while it is listed;
@@ -1289,10 +1541,41 @@ async fn offers_go_to_registered_participants_only() {
     assert_eq!(sent[0].body["credentials"][0]["id"], "membership-vc20");
     assert_eq!(sent[0].body["credentials"][0]["offerReason"], "reissue");
     assert_eq!(sent[0].body["credentials"][0]["profile"], "vc20-bssl/jwt");
+    // the offer passes DCP's credential-offer-message-schema.json (6.6.1)
+    let errors = dcp_schema_errors("credential-offer-message-schema.json", &sent[0].body);
+    assert!(errors.is_empty(), "{errors:?}");
 
     world.sender.fail_with(Some("HTTP 503 Service Unavailable"));
     let (status, _) = call(&world.management, offer(HOLDER, json!(null))).await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
+}
+
+/// An offer sent without a reason has no `offerReason`: the `reissue` of
+/// the metadata (there because the metadata schema requires it) is not
+/// copied into it. The offer still passes its DCP schema.
+#[tokio::test]
+async fn an_offer_without_a_reason_does_not_take_the_metadata_reason() {
+    let world = World::new();
+    world.register(HOLDER, json!({})).await;
+    let request = authed(Request::post("/v1/offers"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({"participantDid": HOLDER}).to_string()))
+        .unwrap();
+    let (status, _) = call(&world.management, request).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let sent = world.sender.sent();
+    let offered = sent[0].body["credentials"].as_array().unwrap();
+    assert_eq!(offered.len(), 2);
+    for object in offered {
+        assert!(object.get("offerReason").is_none(), "{object}");
+        assert_eq!(
+            object["credentialSchema"],
+            "https://example.com/membership-credential-schema.json"
+        );
+    }
+    let errors = dcp_schema_errors("credential-offer-message-schema.json", &sent[0].body);
+    assert!(errors.is_empty(), "{errors:?}");
 }
 
 /// `docs/api/issuer-management-openapi.json` is what the code generates.
@@ -1442,6 +1725,104 @@ fn unknown_arguments_exit_with_2() {
         assert_eq!(output.status.code(), Some(2), "{args:?}");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("takes no arguments"), "{stderr}");
+    }
+}
+
+/// A TEST ONLY P-256 key, for starting the binary.
+const TEST_KEY: &str =
+    include_str!("../../portitor-identity/tests/fixtures/test-only-identity-key.pem");
+
+/// Starts the `portitor-issuer` binary with `definitions` as its
+/// definitions file and `more_settings` in its environment, and waits
+/// until it stops: whether it ended well, and what it logged. Every
+/// start here is one that must stop before the issuer listens; a process
+/// that is still there after 30 seconds is stopped and fails the test.
+fn start_and_wait_for_the_stop(
+    definitions: &str,
+    more_settings: &[(&str, &str)],
+) -> (bool, String) {
+    let dir = TempDir::new("issuer-start");
+    let key_file = dir.write("test-only-key.pem", TEST_KEY);
+    let definitions_file = dir.write("credentials.json", definitions);
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_portitor-issuer"))
+        // nothing of the test machine's own settings
+        .env_clear()
+        .env("PORTITOR_PARTICIPANT_ID", ISSUER)
+        .env(
+            "PORTITOR_ISSUER_SERVICE_URL",
+            "https://issuer.example/issuer",
+        )
+        .env("PORTITOR_ISSUER_KEY_FILE", key_file)
+        .env("PORTITOR_ISSUER_CREDENTIALS_FILE", definitions_file)
+        .env("PORTITOR_DB_FILE", dir.path().join("issuer.db"))
+        .env("PORTITOR_BIND", "127.0.0.1:0")
+        .envs(more_settings.iter().copied())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let started = std::time::Instant::now();
+    while child.try_wait().unwrap().is_none() {
+        if started.elapsed() > Duration::from_secs(30) {
+            child.kill().unwrap();
+            panic!("the issuer started instead of stopping");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let output = child.wait_with_output().unwrap();
+    let mut logged = String::from_utf8_lossy(&output.stdout).into_owned();
+    logged.push_str(&String::from_utf8_lossy(&output.stderr));
+    (output.status.success(), logged)
+}
+
+/// From 0.12 every definition needs a `credentialSchema` (TD-33; DCP
+/// v1.0.1, section 6.7). A definitions file without one, as written for
+/// 0.11, or with one that is not an absolute URL as text, stops the
+/// issuer at start, and the log names the setting, the entry and the
+/// field.
+#[test]
+fn the_issuer_does_not_start_without_a_valid_credential_schema() {
+    let entry = |credential_schema: &str| {
+        format!(
+            r#"[{{"id": "membership-vc20", "credentialType": "MembershipCredential",
+                 "profile": "vc20-bssl/jwt", "validityDays": 365{credential_schema}}}]"#
+        )
+    };
+    let required = "\\\"membership-vc20\\\": credentialSchema is required";
+    let not_a_url = "\\\"membership-vc20\\\": credentialSchema must be an absolute http";
+    for (credential_schema, reason) in [
+        ("", required),
+        (r#", "credentialSchema": null"#, required),
+        (r#", "credentialSchema": """#, not_a_url),
+        (r#", "credentialSchema": "membership.json""#, not_a_url),
+        (
+            r#", "credentialSchema": ["https://example.com/m.json"]"#,
+            "invalid type",
+        ),
+    ] {
+        let (ended_well, logged) = start_and_wait_for_the_stop(&entry(credential_schema), &[]);
+        assert!(!ended_well, "{credential_schema}: {logged}");
+        assert!(
+            logged.contains("PORTITOR_ISSUER_CREDENTIALS_FILE"),
+            "{credential_schema}: {logged}"
+        );
+        assert!(logged.contains(reason), "{credential_schema}: {logged}");
+    }
+}
+
+/// The issuer reads `PORTITOR_DID_CACHE_SECONDS` at start (it resolves
+/// the holders' DIDs): a value out of bounds stops it, and the log names
+/// the setting.
+#[test]
+fn the_issuer_does_not_start_with_a_did_cache_time_out_of_bounds() {
+    for value in ["3601", "-1", "5m"] {
+        let settings = [("PORTITOR_DID_CACHE_SECONDS", value)];
+        let (ended_well, logged) = start_and_wait_for_the_stop(DEFINITIONS, &settings);
+        assert!(!ended_well, "{value}: {logged}");
+        assert!(
+            logged.contains("PORTITOR_DID_CACHE_SECONDS has an invalid value"),
+            "{value}: {logged}"
+        );
     }
 }
 

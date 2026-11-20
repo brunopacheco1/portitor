@@ -61,8 +61,8 @@
 //! check that took too long, are temporary failures
 //! ([`VerifyError::Unavailable`], HTTP 503): the caller may be fine. Any
 //! other failure refuses the caller ([`VerifyError::Rejected`], HTTP
-//! 401), also a 404 or an invalid document from the caller's or the
-//! issuer's server.
+//! 404, or 401 on the catalog routes), also a 404 or an invalid document
+//! from the caller's or the issuer's server.
 //!
 //! Status list credentials are cached for a short time, by URL
 //! ([`status_list_cache`]; ADR 0016, amended in 0.11). Tokens and
@@ -90,7 +90,7 @@ use portitor_dcp::status_list::{self, Status, StatusEntry};
 use portitor_dcp::{Claims, DidDocument, JtiCache, unverified_claims, validate_self_issued};
 use portitor_dsp::policy::HeldCredential;
 use portitor_runtime::BoxFuture;
-use portitor_runtime::did::{DEFAULT_TTL, DidWebResolver};
+use portitor_runtime::did::DidWebResolver;
 use portitor_runtime::http::{HttpError, HttpSender, bearer_token};
 use portitor_runtime::system::now_secs;
 use serde_json::Value;
@@ -188,9 +188,11 @@ impl DcpVerifier {
     ///
     /// The HTTP client cannot be built.
     pub fn new(settings: &AuthSettings, sts: Arc<dyn SecureTokenService>) -> Result<Self, String> {
+        // how long a DID document is reused (PORTITOR_DID_CACHE_SECONDS)
+        let did_cache = Duration::from_secs(settings.did_cache_seconds);
         Ok(Self {
             participant_id: settings.participant_id.clone(),
-            resolver: DidWebResolver::new(settings.allow_http, DEFAULT_TTL)?,
+            resolver: DidWebResolver::new(settings.allow_http, did_cache)?,
             http: HttpSender::new(settings.allow_http)?,
             sts,
             trusted_issuers: settings.trusted_issuers.clone(),

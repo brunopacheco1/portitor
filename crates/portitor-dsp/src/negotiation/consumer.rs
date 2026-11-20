@@ -224,8 +224,9 @@ impl<S: ConsumerStore, D: ConsumerDecider, E: Environment> ConsumerService<S, D,
     ///
     /// # Errors
     ///
-    /// The offer has no target, no permission and no prohibition, or the
-    /// store failed.
+    /// The offer has no target, no permission and no prohibition, names
+    /// other parties than this consumer and `provider_id`, or the store
+    /// failed.
     pub fn start(
         &self,
         provider_address: &str,
@@ -239,6 +240,10 @@ impl<S: ConsumerStore, D: ConsumerDecider, E: Environment> ConsumerService<S, D,
         // offer in a message has a permission or a prohibition
         if offer.permission.is_empty() && offer.prohibition.is_empty() {
             return Err(bad("", "", "the offer has no permission or prohibition"));
+        }
+        if let Err(reason) = crate::policy::check_parties(&offer, provider_id, &self.participant_id)
+        {
+            return Err(bad("", "", reason));
         }
         let state = next_state(None, Transition::Request, Role::Consumer)
             .map_err(|e| bad("", "", &e.to_string()))?;
@@ -338,6 +343,14 @@ impl<S: ConsumerStore, D: ConsumerDecider, E: Environment> ConsumerService<S, D,
     pub fn offer(&self, consumer_pid: &str, msg: &ContractOfferMessage) -> Handled {
         self.handle(consumer_pid, |negotiation| {
             check_ids(negotiation, &msg.provider_pid, msg.consumer_pid.as_deref())?;
+            // an offer that names its parties must name this provider and us
+            if let Err(reason) = crate::policy::check_parties(
+                &msg.offer,
+                &negotiation.provider_id,
+                &self.participant_id,
+            ) {
+                return Err(bad(&msg.provider_pid, &negotiation.consumer_pid, reason));
+            }
             receive(negotiation, Transition::Offer)?;
             negotiation.offer = msg.offer.clone();
             Ok(())
@@ -350,10 +363,14 @@ impl<S: ConsumerStore, D: ConsumerDecider, E: Environment> ConsumerService<S, D,
     ///
     /// Unknown negotiation, mismatched ids, an agreement for another
     /// dataset, from another provider (its `assigner`) or for another
-    /// consumer (its `assignee`), invalid transition, or store failure.
+    /// consumer (its `assignee`), an agreement without a `timestamp`,
+    /// invalid transition, or store failure.
     pub fn agreement(&self, consumer_pid: &str, msg: &ContractAgreementMessage) -> Handled {
         self.handle(consumer_pid, |negotiation| {
             check_ids(negotiation, &msg.provider_pid, Some(&msg.consumer_pid))?;
+            if let Err(reason) = check_timestamp(msg.agreement.timestamp.as_deref()) {
+                return Err(bad(&msg.provider_pid, &negotiation.consumer_pid, reason));
+            }
             if msg.agreement.target != negotiation.dataset_id() {
                 return Err(bad(
                     &msg.provider_pid,
@@ -746,6 +763,58 @@ fn transition_failure(negotiation: &ConsumerNegotiation, e: TransitionError) -> 
         &negotiation.consumer_pid,
         &e.to_string(),
     )
+}
+
+/// An agreement's `timestamp` must be there and be a date and time (DSP
+/// 2025-1, "Contract Agreement Message": "An Agreement MUST contain a
+/// `timestamp` property defined as an XSD `DateTime` type"). The JSON
+/// Schema (`contract-schema.json`, `Agreement`) gives its pattern but
+/// does not list it as required, so the rule is checked here. Eclipse
+/// EDC refuses such an agreement too
+/// (`JsonObjectToContractAgreementMessageTransformer`).
+///
+/// # Errors
+///
+/// The reason, for the DSP error.
+fn check_timestamp(timestamp: Option<&str>) -> Result<(), &'static str> {
+    let Some(timestamp) = timestamp else {
+        return Err("the agreement has no timestamp");
+    };
+    if is_xsd_date_time(timestamp) {
+        Ok(())
+    } else {
+        Err("the agreement's timestamp is not an XSD dateTime")
+    }
+}
+
+/// Whether `text` is an `xsd:dateTime`: a date and a time, with or
+/// without a time zone (XML Schema lets the zone be left out).
+/// `portitor_time` only reads a time with a zone, so a text without one
+/// is tried again as UTC.
+///
+/// `xsd:dateTime` may also write the midnight that ends a day as
+/// `24:00:00`, with only zeros after it. `portitor_time` reads hours 0
+/// to 23, so that form is checked as `00:00:00` of the same day: only
+/// whether the text is valid matters here, not the instant.
+fn is_xsd_date_time(text: &str) -> bool {
+    let text = &match text.split_once("T24:00:00") {
+        Some((date, rest)) if zeros_then_zone(rest) => format!("{date}T00:00:00{rest}"),
+        _ => text.to_owned(),
+    };
+    let as_utc = format!("{text}Z");
+    portitor_time::timestamp_seconds(text).is_some()
+        || portitor_time::timestamp_seconds(&as_utc).is_some()
+}
+
+/// Whether what follows `24:00:00` is at most a fraction of zeros
+/// (`.000`) before the time zone, as `xsd:dateTime` asks.
+fn zeros_then_zone(rest: &str) -> bool {
+    let zone_at = rest.find(['Z', '+', '-']).unwrap_or(rest.len());
+    let fraction = &rest[..zone_at];
+    fraction.is_empty()
+        || fraction
+            .strip_prefix('.')
+            .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b == b'0'))
 }
 
 /// The message must name this negotiation. The first provider message may

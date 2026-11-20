@@ -2,12 +2,12 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Portitor identity",
-    "description": "The public HTTP interface of portitor-identity (ADR 0015): the participant's did:web DID document, the Secure Token Service for its own connector, the DCP v1.0.1 credential service (presentation, storage and offer APIs), and the certificate chain and Gaia-X credentials of ADR 0021. Message bodies follow the DCP v1.0.1 JSON Schemas (copies in crates/portitor-dcp/tests/schemas, linked from each operation). The management API is described separately in identity-management-openapi.json. Written by hand; a test checks that every operation here is served.",
+    "description": "The public HTTP interface of portitor-identity (ADR 0015): the participant's did:web DID document, the Secure Token Service for its own connector, the DCP v1.0.1 credential service (presentation, storage and offer APIs), and the certificate chain and Gaia-X credentials of ADR 0021. Message bodies follow the DCP v1.0.1 JSON Schemas (copies in crates/portitor-dcp/tests/schemas, linked from each operation). The management API is described separately in identity-management-openapi.json. Three answers are the same on every route and are a problem document (application/problem+json), as every error here except the STS's: 413 when the request body is over the route's limit, 503 when the request took longer than 60 seconds, and 500 when a handler hit a bug (a panic; the server goes on, the error is logged and counted in portitor.http.request.panicked). Written by hand; a test checks that every operation here is served.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.11.0"
+    "version": "0.12.0"
   },
   "externalDocs": {
     "description": "Decentralized Claims Protocol v1.0.1",
@@ -88,7 +88,9 @@
             }
           },
           "400": { "description": "The request is not a valid token request" },
-          "401": { "description": "Unknown client or wrong secret" }
+          "401": { "description": "Unknown client or wrong secret" },
+          "413": { "description": "The form is larger than 64 KiB (problem document)" },
+          "500": { "description": "The key could not sign the token" }
         }
       }
     },
@@ -129,6 +131,8 @@
           },
           "400": { "description": "Not a valid query" },
           "401": { "description": "The caller or its access token was refused" },
+          "413": { "description": "The body is larger than PORTITOR_MAX_REQUEST_BYTES (default 2 MiB)" },
+          "500": { "description": "The store failed, or the presentation could not be signed" },
           "501": { "description": "The query uses a presentation definition" }
         }
       }
@@ -166,7 +170,9 @@
         "responses": {
           "200": { "description": "Stored" },
           "400": { "description": "Not a valid delivery, or not one the participant asked for" },
-          "401": { "description": "The caller was refused" }
+          "401": { "description": "The caller was refused" },
+          "413": { "description": "The body is larger than PORTITOR_MAX_REQUEST_BYTES (default 2 MiB)" },
+          "500": { "description": "The store failed" }
         }
       }
     },
@@ -203,7 +209,9 @@
         "responses": {
           "200": { "description": "Recorded" },
           "400": { "description": "Not a valid offer" },
-          "401": { "description": "The caller was refused" }
+          "401": { "description": "The caller was refused" },
+          "413": { "description": "The body is larger than PORTITOR_MAX_REQUEST_BYTES (default 2 MiB)" },
+          "500": { "description": "The store failed" }
         }
       }
     },

@@ -1,0 +1,37 @@
+meta {
+  name: 6. Completion (consumer is done)
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{dsp}}/transfers/{{transferProviderPid}}/completion
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+    "@type": "TransferCompletionMessage",
+    "providerPid": "{{transferProviderPid}}",
+    "consumerPid": "{{transferConsumerPid}}"
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body["@type"]: eq TransferProcess
+}
+
+docs {
+  DSP 2025-1 Transfer Process, HTTPS binding: POST /transfers/:providerPid/completion.
+  This is the DSP endpoint: the body is a TransferCompletionMessage with both process
+  ids, and the answer is 200 with the TransferProcess (state COMPLETED). The management
+  request "management/Complete transfer" is another API: no body, 202.
+  Fits a STARTED transfer; the data token stops working.
+}

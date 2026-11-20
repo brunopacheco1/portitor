@@ -156,6 +156,25 @@ address the consumer's application uses at `/data/{flowId}` (ADRs
 [0016](adr/0016-dsp-caller-authentication.md),
 [0019](adr/0019-credential-constraints.md)).
 
+Two APIs carry this flow, and they have different callers. The
+**management API** (port 8081, API key, `/v1/...`) is for the operator
+of a connector and its own systems; no specification defines it. The
+**DSP API** (port 8080, DCP token, `/dsp/2025-1/...`) is for the other
+connector; DSP 2025-1 defines it. One management call makes the
+connector send one DSP message, so some paths look alike:
+
+| The operator calls its own connector (management) | The connector then calls the other one (DSP) | Steps |
+|---|---|---|
+| `POST /v1/negotiations` | `POST /negotiations/request` | 8, 10 |
+| `POST /v1/transfers` | `POST /transfers/request` | 17, 18 |
+| `POST /v1/transfers/{consumerPid}/completion` | `POST /transfers/{providerPid}/completion` | 27, 28 |
+| `POST /v1/transfers/{consumerPid}/termination` | `POST /transfers/{providerPid}/termination` | not drawn |
+
+The management call takes no DSP message: the connector builds it,
+gets a token and saves it before sending (ADR 0007). An operator does
+not call the other connector's DSP API by hand, because that call must
+carry a token that proves it comes from its connector.
+
 ![Dynamic: negotiating a contract and transferring data](diagrams/dynamic-negotiate-transfer.drawio.svg)
 
 Gaia-X (optional): the identity gets its compliance credential from a
@@ -241,6 +260,14 @@ issuer serves it, the connector verifies it through the authority's DID
 document and keeps it in a cache ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)).
 
 ![C4 Code: schema and vocabulary bundle](diagrams/c4-bundle-code.drawio.svg)
+
+One more C4 Code diagram is not a hexagon but a map of types: where an
+offer or an agreement enters Portitor, the types that read it strictly (a
+field they do not know is an error, never dropped), and the checks that
+rely on that
+([ADR 0009](adr/0009-minimal-odrl-policies.md), amendment of 2026-11-18).
+
+![C4 Code: strict policy reading](diagrams/c4-policy-code.drawio.svg)
 
 ## Who holds the credentials
 
@@ -393,7 +420,9 @@ adapters in `auth/dcp.rs` and `auth/sts.rs`:
 - `CallerVerifier`, run by a middleware on every DSP route (provider
   endpoints and consumer callbacks; not `/.well-known/dspace-version`,
   `/health` or the data plane). The DCP adapter reads the
-  `Authorization: Bearer` ID token, resolves the caller's `did:web` DID,
+  `Authorization: Bearer` ID token, resolves the caller's `did:web` DID
+  (a DID document is reused for `PORTITOR_DID_CACHE_SECONDS`, in every
+  component, from 0.12),
   validates the token (`portitor_dcp::validate_self_issued`: key with
   `capabilityInvocation`, `aud` = our DID, `iss` = `sub`, `exp`/`iat`/`nbf`,
   `jti` not replayed), then sends a `PresentationQueryMessage` for
@@ -404,9 +433,12 @@ adapters in `auth/dcp.rs` and `auth/sts.rs`:
   a verified list is reused for `PORTITOR_STATUS_LIST_CACHE_SECONDS`, from
   0.11),
   and requires a `MembershipCredential` from a trusted issuer about the
-  caller. One credential that fails its checks makes its presentation
+  caller (each credential signed with a key of its issuer's own DID,
+  DCP v1.0.1, 5.4.3, step 4). One credential that fails its checks makes its presentation
   invalid and refuses the caller (DCP v1.0.1, 5.4.3, step 8). The verified DID and credentials go to the handler as `Caller`;
-  a refusal is HTTP 401 with a DSP error and no detail. When an offer or
+  a refusal is a DSP error with no detail: HTTP 404 on the negotiation
+  and transfer routes, HTTP 401 on the catalog routes (ADR 0016, amended
+  in 0.12). When an offer or
   agreement has credential constraints (ADR 0019), the provider's handler
   derives their scopes (`portitor_dsp::policy::credential_scopes`) and
   asks the verifier again (`CallerVerifier::credentials`): a second query,

@@ -1,0 +1,20 @@
+meta {
+  name: OpenAPI description (no key)
+  type: http
+  seq: 14
+}
+
+get {
+  url: {{identityMgmtUrl}}/v1/openapi.json
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  The identity management API's OpenAPI description, generated from the code
+  (docs/api/identity-management-openapi.json is a copy).
+}

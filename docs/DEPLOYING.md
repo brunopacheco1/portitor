@@ -146,8 +146,31 @@ All configuration is by environment variable. The full table is in the
 | `PORTITOR_POLICY_CREDENTIALS` | unset, unless your offers constrain credential claims: the credential types they use, comma-separated, each `Type` or `Type=<scope>` (see [Credential constraints](#credential-constraints)) |
 | `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` | unset, unless your offers require Gaia-X compliance: comma-separated `did:web` DIDs of the compliance services you trust (see [Gaia-X compliance](#gaia-x-compliance)) |
 | `PORTITOR_STATUS_LIST_CACHE_SECONDS` | leave the default, `300` (5 minutes): how long a status list credential is reused; `0` fetches it on every check. At most `3600` (one hour); a larger value, or one that is not a whole number, stops the start. See [Status list cache](#status-list-cache) |
+| `PORTITOR_DID_CACHE_SECONDS` | leave the default, `300` (5 minutes): how long a resolved DID document is reused; `0` fetches it on every use. At most `3600` (one hour); a larger value, or one that is not a whole number, stops the start. See [DID document cache](#did-document-cache) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (no traces or metrics), or your OTLP receiver's base URL; see [Traces and metrics](#traces-and-metrics) for this and the other `OTEL_*` variables |
 | `RUST_LOG` | `info` (default); `debug` only while diagnosing |
+
+### DID document cache
+
+Every component resolves other parties' `did:web` DIDs: the connector
+(each caller's, each credential issuer's, and the authority's for the
+bundle key), the identity (callers' and issuers') and the issuer
+(holders'). Each reuses a DID document it fetched for
+`PORTITOR_DID_CACHE_SECONDS` (default 300 seconds), in memory. Set the
+same value on the connector, the identity and the issuer.
+
+- **The trade-off.** A key that its owner removed from the document,
+  for example after a leak, is still accepted until the cached document
+  is fetched again; a new key is refused for as long. With `0` every
+  use fetches the document: a change is seen at once, at the cost of
+  one fetch more per caller and per credential issuer on every DSP
+  request, and no answer at all while a partner's DID host is down.
+- At most `3600` (one hour). A larger value, or one that is not a whole
+  number, stops the start.
+- At most 1,000 documents are kept. A lookup that failed is never
+  kept. A restart empties the cache.
+- A partner that must drop a leaked key at once should tell you; a
+  restart of your components, or a low value here, shortens the wait.
 
 ### Status list cache
 
@@ -282,7 +305,8 @@ file (`PORTITOR_DATASETS_FILE`), in the same format as before.
   the run ends `unchanged` and nothing else is touched. To publish a
   change, replace the file; it is taken at the next run (or restart).
 - Each dataset is checked on its own: JSON object, DSP `Dataset` form,
-  the DSP catalog rules, the supported ODRL constraints, a valid
+  the DSP catalog rules, offers with only the policy terms and ODRL
+  constraints the connector reads ([Known limits](#known-limits)), a valid
   `portitor:source` and, with a bundle, the SHACL shapes for its
   `dct:accessRights` level. A dataset that passes is added or updated. A
   dataset that fails is rejected with its error; its previous good
@@ -555,6 +579,7 @@ participant.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (no traces or metrics) | your OTLP receiver's base URL, if you collect them ([Traces and metrics](#traces-and-metrics)) |
 | `PORTITOR_SCOPE_TYPE_ALIASES` | `org.eclipse.edc.vc.type` | comma-separated scope aliases that mean "credentials of this type", besides DCP's `org.eclipse.dspace.dcp.vc.type` |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | unset | **unset** (`true` allows plain-HTTP DIDs and URLs, tests only) |
+| `PORTITOR_DID_CACHE_SECONDS` | `300` | leave the default; how long a resolved DID document (a caller's, an issuer's) is reused, `0` to `3600`, `0` for no cache ([DID document cache](#did-document-cache)) |
 | `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` | unset | Gaia-X only: path of the PEM chain of the identity key, the key's certificate first ([Gaia-X onboarding](#gaia-x-onboarding-optional)) |
 | `PORTITOR_GAIAX_COMPLIANCE_URL` | unset (Gaia-X off) | base URL of a Gaia-X compliance service, for example `https://compliance.lab.gaia-x.eu/v2`; needs the settings around it |
 | `PORTITOR_GAIAX_COMPLIANCE_DID` | unset | Gaia-X only: the `did:web` DID of that service, for example `did:web:compliance.lab.gaia-x.eu:v2`; an answer signed by any other DID is refused |
@@ -909,8 +934,11 @@ is the key's thumbprint, so a new key file gives a new key id.
   it (`credential refused`, INFO). So a participant must delete a revoked
   credential once its reissued one arrives (section 4). Credentials from
   other issuers are skipped. When refused it
-  answers HTTP 401 with a DSP error that says only "unauthorized"; the
-  reason is in the log. When the check cannot finish because a server
+  answers with a DSP error that says only "unauthorized": HTTP 404 on
+  the negotiation and transfer routes (DSP 2025-1 HTTPS bindings,
+  "Unauthorized Access"; Eclipse EDC does the same), HTTP 401 on the
+  catalog routes. The reason is in the log (`DSP request refused: caller
+  not authenticated`, WARN). When the check cannot finish because a server
   it fetches from does not answer, or answers 408, 429 or 5xx, it
   answers HTTP 503 instead, so the partner tries again later. Each negotiation and transfer is bound to the DID
   that started it: another caller is told it does not exist. As
@@ -1079,22 +1107,28 @@ is the key's thumbprint, so a new key file gives a new key id.
 | `message breaks the dataspace's message rules; not sent, terminating` (WARN) | With bundle message shapes: our own message failed them (`error` lists the SHACL reasons), so it was not sent and the negotiation or transfer is terminated; `..., process not started` for a consumer's first request, `termination breaks ...; not sent` for a termination | Check the offer or policy against the authority's rules |
 | `outbound DSP message breaks the dataspace's message rules; not sent` (WARN) | The same breach, logged by the check itself with `message_type` and `reasons` | As above |
 | `inbound DSP message breaks the dataspace's message rules; answered 400` (INFO) | A partner's negotiation or transfer message failed the bundle's message shapes; it got HTTP 400 and nothing changed | Nothing, unless the partner asks |
+| `inbound DSP message is not valid; answered 400` (INFO) | A partner's negotiation or transfer message could not be read; `reason` says why. `unknown field ...` in an offer or agreement: a policy term the connector does not read (for example a `duty` inside a permission), refused on purpose. The partner got HTTP 400 and nothing changed | Nothing, unless you want that offer: then ask the partner for one with only the terms listed under [Known limits](#known-limits) |
 | `message had arrived before` (INFO) | A send failed, but the partner's state shows it had received the message (a lost answer, or a resend after a restart); the negotiation goes on | Nothing |
 | `sending pending negotiation messages again` (INFO, at start) | Messages saved but not acknowledged before the last stop are being sent | Nothing |
 | `counter-party not reachable; process not started` (WARN) | The first request of a negotiation or transfer we started as consumer failed (tried as above); it ends without a message, as the provider never knew it | Same as above |
 | `termination not acknowledged` (WARN) | The partner did not take a termination; DSP allows this, the negotiation is terminated anyway | Nothing, unless it repeats for one partner |
 | `no CA certificates: https calls will fail` (WARN, at start) | The CA bundle was not found (for example `SSL_CERT_DIR` points to an empty folder) | Fix the mount or the variable |
 | `negotiation store failed` (ERROR) | The SQLite file could not be read or written; partners get HTTP 500 | Check disk space and the `/data` volume |
-| `DSP request refused: caller not authenticated` (WARN) | A DSP request got HTTP 401; `reason` says why (token, presentation, credential or status list) | If a partner should be admitted: check its credential, its issuer against `PORTITOR_TRUSTED_ISSUERS`, and clock skew (60 s allowed) |
+| `DSP request refused: caller not authenticated` (WARN) | A DSP request was refused: the caller got HTTP 404 on a negotiation or transfer route, HTTP 401 on a catalog route (`status` says which). `reason` says why (token, presentation, credential or status list); the caller is not told | If a partner should be admitted: check its credential, its issuer against `PORTITOR_TRUSTED_ISSUERS`, and clock skew (60 s allowed) |
+| A partner says a negotiation or transfer call got HTTP 404 `unauthorized`, or its side ended with `no such negotiation` although the process exists | From 0.12 a caller that is not authenticated gets 404 on the negotiation and transfer routes, as DSP 2025-1 asks (Eclipse EDC does the same). The 404 does not say why | Look in **your** log for `DSP request refused: caller not authenticated` at that time: its `reason` names the failed check. A 404 with reason `no such negotiation` or `no such transfer` and no such log line means the process id is unknown, or belongs to another participant |
+| `counter-party not reachable; terminating` (WARN) with `HTTP 404` in `error` | The partner answered 404 to your message: it does not know the process, or it refused your credentials (a Portitor from 0.12 and Eclipse EDC answer 404 for both). The message is not sent again | Ask the partner for the reason in its log; check that your credential is valid and not revoked, and that the partner trusts its issuer |
 | `DSP request not checked: a service the check needs is unavailable; answered 503` (WARN) | A server the check fetches from (the partner's DID document or Credential Service, its issuer's DID document or status list, your STS) did not answer, or answered 408, 429 or 5xx; `reason` names it. The partner tries again | If it repeats: check your STS, then ask the partner about its services |
 | `no token: ...` in a send failure (WARN) | The STS did not give a token for an outgoing DSP request | Check the identity component, `PORTITOR_STS_URL` and the shared secret |
 | `own identity checked: DID document and STS agree` (INFO, at start) | The connector's DID document resolves and the STS signs for it | Nothing |
+| `panic` (ERROR) | A bug: code stopped at `place` (file, line and column). One of the next two lines follows | Report it with `place` and the version |
+| `a request handler panicked; answered 500` (ERROR) | The request on `route` got HTTP 500; the other requests went on | Report it; if it repeats for one partner, its message triggers the bug |
+| `a background task panicked; it starts again` / `...; its message is sent again` / `...; its work is left as saved` (ERROR) | The task `task` stopped at a bug. A task that runs all the time starts again after a pause (`restart_in_seconds`): 5 seconds, twice as long after each further panic in a row, at most 5 minutes. A DSP message whose sending panicked (`outbox_delivery`) is sent again after the same pauses (`again_in_seconds`). A credential decision stays saved and is tried again on the issuer's next outbox round (at most a minute); the other requests and deliveries go on | Report it. A line that repeats for the same `pid` or `issuer_pid` is a message or request that meets the bug every time: it stays as it is until a fixed version runs |
 | `portitor-connector stopped` (ERROR) | The process could not start or stopped with an error; the message says why | Fix the cause; the container restarts |
 | `harvesting datasets` (INFO, at start) | The datasets file and the interval in use | Nothing |
 | `no datasets file (PORTITOR_DATASETS_FILE): the catalog is empty` (INFO) | No datasets file is set | Set it, if you offer datasets |
 | `harvest run` (INFO) | One per run: `job`, `trigger`, `outcome` and the counts | Nothing |
 | `harvest run` (WARN, `outcome=failed`) | The source could not be read; the catalog is unchanged | Check the file, its mount and its JSON |
-| `harvest: dataset rejected` (WARN) | One dataset failed a check: `position`, `dataset`, `check`, `error` | Fix the dataset in the source; the next run takes it |
+| `harvest: dataset rejected` (WARN) | One dataset failed a check: `position`, `dataset`, `check`, `error`. With check `odrl` and `offer "..." is not understood: unknown field ...`: the offer has a policy term the connector does not read, or a misspelled key | Fix the dataset in the source; the next run takes it. For an unknown field: correct the key, or remove the term ([Known limits](#known-limits)) |
 | `harvest: dataset has no portitor:source; its transfers will be refused` (WARN) | A dataset was added or changed without a data source | Add `portitor:source`, unless the dataset is not transferred |
 | `harvest skipped: a run is going on` (INFO) | A timer tick came while a run was going on | Nothing, unless it repeats: then lengthen the interval |
 | `harvest: cannot store the run; ...` (ERROR) | The database could not be written; the catalog keeps what it had | Check disk space and the `/data` volume |
@@ -1247,15 +1281,18 @@ dots into underscores and adds the unit, for example
 | `http.client.request.duration` | histogram, `s` | `http.request.method`, `server.address` and `server.port` (only for calls inside the participant: the own STS and data sources), `http.response.status_code` (when answered), `error.type` (4xx, 5xx, `timeout` or `_OTHER` when unanswered, or when the body of a 2xx answer cannot be read) | all |
 | `portitor.negotiation.ended` | counter, `{negotiation}` | `portitor.dsp.role` (`provider`, `consumer`), `portitor.dsp.state` (`FINALIZED`, `TERMINATED`) | connector |
 | `portitor.transfer.ended` | counter, `{transfer}` | `portitor.dsp.role`, `portitor.dsp.state` (`COMPLETED`, `TERMINATED`) | connector |
-| `portitor.dsp.request.refused` | counter, `{request}` | `error.type`: `unauthenticated` (HTTP 401), `invalid_message` or `message_rules` (the bundle's message shapes; both HTTP 400) | connector |
+| `portitor.dsp.request.refused` | counter, `{request}` | `error.type`: `unauthenticated` (HTTP 404, or 401 on the catalog routes), `invalid_message` or `message_rules` (the bundle's message shapes; both HTTP 400) | connector |
 | `portitor.outbox.message.resent` | counter, `{message}` | `portitor.outbox.name` (`dsp`, `credential_delivery`), and for `dsp` `portitor.dsp.process` (`negotiation`, `transfer`) and `portitor.dsp.role` | connector, issuer |
 | `portitor.outbox.message.given_up` | counter, `{message}` | as above | connector, issuer |
 | `portitor.harvest.run.ended` | counter, `{run}` | `portitor.harvest.kind` (`datasets`, `bundle`), `portitor.harvest.outcome` (`succeeded`, `partial`, `unchanged`, `failed`) | connector |
 | `portitor.harvest.dataset.rejected` | counter, `{dataset}` | `portitor.harvest.check` (the check of the job log) | connector |
+| `portitor.http.request.panicked` | counter, `{request}` | `http.route` (when a route matched). A request handler panicked (a bug); the request got HTTP 500 | all |
+| `portitor.task.panicked` | counter, `{task}` | `portitor.task.name`: `outbox_delivery`, `dataset_harvest`, `bundle_harvest`, `identity_check` (connector), `certificate_watch`, `gaiax_schedule`, `gaiax_run` (identity), `issuer_outbox`, `credential_decision` (issuer) | all |
 | `portitor.bundle.in_use` | gauge, `{bundle}` | `portitor.bundle.version`: 1 for the version in force, 0 for one replaced since the start | connector, with a bundle |
 
-A resend is a retry of a message, or a message saved before a restart
-and sent again; a give-up is a message the outbox stopped trying (the
+A resend is a retry of a message, a message saved before a restart
+and sent again, or a DSP message sent again after its sending
+panicked; a give-up is a message the outbox stopped trying (the
 negotiation or transfer is then terminated or not started, as the log
 says; for the issuer, the delivery is `FAILED`). Every service also
 reports its `service.name`, `service.version` and the SDK's resource
@@ -1313,9 +1350,12 @@ the same way: the old key stays listed until it is revoked
 6. Remove the file from the setting and restart. The old key id leaves
    the DID document; what the old key signed no longer verifies.
 
-Verifiers cache DID documents (Portitor for 5 minutes), so a new key id
-may be refused for that long after step 3 by a verifier that has not
-seen the new document. Do step 3 when the component is quiet.
+Verifiers cache DID documents (Portitor for
+`PORTITOR_DID_CACHE_SECONDS`, 5 minutes by default; see
+[DID document cache](#did-document-cache)), so a new key id may be
+refused for that long after step 3 by a verifier that has not seen the
+new document. Do step 3 when the component is quiet. For the same
+reason a key removed in step 6 is still accepted for that long.
 
 **A leaked or lost key.** Never list a leaked key as retired: anyone
 with it could sign in your name while it is listed. Change the key
@@ -1492,6 +1532,61 @@ move your probes back to `/health` first.
    counts as unset in all three components: the management API is off
    and the port serves only the health checks.
 
+#### From 0.11 to 0.12
+
+Back up the connector's database file before the upgrade: 0.12 adds
+three indexes to it (schema version 11), and a 0.11 connector does not
+open a file of a newer version. The identity's and the issuer's files
+do not change.
+
+1. **Issuer, breaking: `credentialSchema` in the definitions file.**
+   Before you upgrade the issuer, add `"credentialSchema": "<URL>"` to
+   every entry of the file `PORTITOR_ISSUER_CREDENTIALS_FILE` names: the
+   absolute `http://` or `https://` URL of the JSON schema of that
+   credential's `credentialSubject`. A 0.12 issuer does not start with
+   an entry that lacks it; the line says which
+   (`"<id>": credentialSchema is required`). The issuer only publishes
+   the URL in its metadata, which DCP's schema requires; nothing fetches
+   it ([section 7](#7-run-the-issuer-dataspace-authority-only),
+   "Configuration"; ADR 0018, amended in 0.12). If your dataspace has no
+   schema for a credential yet, agree on the URL where it will be
+   published and use that. Credentials issued before stay valid, and
+   participants change nothing.
+2. **New setting, optional:** `PORTITOR_DID_CACHE_SECONDS` on the
+   connector, the identity and the issuer. The default, 300 seconds, is
+   what every version before did
+   ([DID document cache](#did-document-cache)).
+3. **Behaviour change, verifier and identity:** a credential is refused
+   when the key that signed it is listed in its issuer's DID document
+   under the id of another DID (DCP v1.0.1, 5.4.3, step 4; ADR 0016,
+   amended in 0.12). Credentials from `portitor-issuer` and from EDC
+   IdentityHub are signed with a key of the issuer's own DID, so they
+   are not affected.
+4. **Behaviour change, connector: policies are read strictly.** A
+   policy term the connector does not read is refused by name, where
+   0.11 dropped it without a word. At the first start of 0.12 every
+   stored dataset is checked again. A dataset whose offer has a field
+   the connector does not know (a `duty` inside a permission, a `unit`
+   on a constraint, a misspelled key, `assigner` or `assignee`) leaves
+   the catalog until its source is corrected; the harvest job says
+   which field, under the check `odrl`. Check your datasets before the
+   upgrade ([Known limits](#known-limits)). Agreements made before stay
+   valid.
+5. **Behaviour change, connector: 404 for a refused caller.** A caller
+   that cannot be authenticated gets HTTP 404, not 401, on the
+   negotiation and transfer routes; the catalog still answers 401, and
+   503 is unchanged. If you monitor 401 answers, also watch the log
+   line `DSP request refused: caller not authenticated` and its
+   `status` field.
+6. **Behaviour change, all three: a panic no longer stops the
+   process.** The request that met the bug gets HTTP 500 and the rest
+   go on. Watch the metrics `portitor.http.request.panicked` and
+   `portitor.task.panicked`: each count is a bug to report. Keep the
+   restart policy. The binaries are about 13% larger.
+7. **Faster, nothing to do:** a transfer start no longer slows down as
+   negotiations pile up, and small answers no longer wait 43 ms
+   ([BENCHMARKS](BENCHMARKS.md)).
+
 ## 7. Run the issuer (dataspace authority only)
 
 The issuer issues and revokes the dataspace's credentials with the
@@ -1524,8 +1619,9 @@ DID.
   issue credentials in the dataspace's name: replace it at once, without
   listing it, and reissue every credential.
 - [ ] **Credential definitions.** A JSON file listing what the issuer can
-  issue (ADR 0018, "Credential definitions"); the issuer checks it at
-  start and refuses to start if it is wrong.
+  issue (ADR 0018, "Credential definitions"), each with the URL of its
+  schema (`credentialSchema`); the issuer checks it at start and refuses
+  to start if it is wrong.
 - [ ] **Management API key.** As for the connector. It registers
   participants and revokes credentials, so guard it like the issuer key.
 - [ ] **Storage.** A persistent volume for `/data`: participants,
@@ -1552,6 +1648,7 @@ DID.
 | `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | keep; the same for the management port |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (no traces or metrics) | your OTLP receiver's base URL, if you collect them ([Traces and metrics](#traces-and-metrics)) |
 | `PORTITOR_ALLOW_HTTP_CALLBACKS` | unset | **unset**; `true` only for local tests with plain-HTTP DIDs |
+| `PORTITOR_DID_CACHE_SECONDS` | `300` | keep; how long a holder's resolved DID document is reused, `0` to `3600`, `0` for no cache ([DID document cache](#did-document-cache)) |
 | `PORTITOR_ISSUER_BUNDLE_KEY_FILE` | unset | with a bundle: the **public** bundle key as a JWK (as `bundle build` prints it), so the private key stays offline; a PKCS#8 PEM is accepted too. Listed in the DID document as `<did>#bundle-key` under `assertionMethod`. The start fails if it is the credential key |
 | `PORTITOR_ISSUER_BUNDLE_DIR` | unset | with a bundle: the folder of built bundles, served read only at `GET /bundles/{version}/{path}` on the public port, and its `latest.json` at `GET /bundles/latest.json` |
 | `PORTITOR_ISSUER_MAX_ACTIVE_PER_HOLDER` | `10` | keep; the most credentials of one definition a participant may hold that are neither revoked nor expired. A request beyond it ends `REJECTED`. It keeps one participant from filling a status list (131,072 positions) |
@@ -1562,14 +1659,30 @@ The credential definitions file (ADR 0018):
 ```json
 [
   {"id": "membership-vc20", "credentialType": "MembershipCredential",
+   "credentialSchema": "https://issuer.example.com/schemas/membership-credential.json",
    "profile": "vc20-bssl/jwt", "validityDays": 365, "claims": ["role"]}
 ]
 ```
 
-`id` is what holders ask for (it appears in the issuer metadata), and must
-stay the same across restarts. `profile` is `vc11-sl2021/jwt` or
-`vc20-bssl/jwt`. `claims` names the participant claims copied into
-`credentialSubject`; a claim the participant lacks is left out.
+| Field | Required | Meaning |
+|---|---|---|
+| `id` | yes | what holders ask for (it appears in the issuer metadata); must stay the same across restarts, and be unique in the file |
+| `credentialType` | yes | the credential type, for example `MembershipCredential` |
+| `credentialSchema` | yes, from 0.12 | the URL of the JSON schema of the credential's `credentialSubject` (DCP v1.0.1, 6.6.2): an absolute `http://` or `https://` URL. The issuer publishes it in its metadata and does nothing else with it: it does not fetch it and does not check credentials against it |
+| `profile` | yes | `vc11-sl2021/jwt` or `vc20-bssl/jwt` |
+| `validityDays` | yes | how long an issued credential is valid, `1` to `3650` |
+| `claims` | no | the participant claims copied into `credentialSubject`; a claim the participant lacks is left out. Not `id` |
+
+Any other field, a missing required one, or a value outside these rules
+stops the start, with a line that names the entry, for example
+`PORTITOR_ISSUER_CREDENTIALS_FILE: credential definitions:
+"membership-vc20": credentialSchema is required (the URL of the
+credential's schema)`.
+
+The issuer metadata (`GET <issuer service>/metadata`) lists each entry
+with `offerReason: "reissue"`. DCP's schema requires the property there;
+it does not mean the issuer is offering anything (ADR 0018, amended in
+0.12).
 
 Management API (`Authorization: Bearer <key>`; described in
 [api/issuer-management-openapi.json](api/issuer-management-openapi.json)):
@@ -1704,7 +1817,8 @@ known risk and technical debt, with its status and target release):
 - Partners are admitted by one credential type (`MembershipCredential`,
   `PORTITOR_DCP_SCOPES`); offers may add credential claims (ADR 0019),
   but the catalog still shows every offer to every member. Credential
-  schemas (`credentialSchema`) are not checked.
+  schemas are not checked: the issuer publishes each definition's
+  `credentialSchema` URL and no component fetches it.
 - STS tokens are not cached: each DSP request costs one STS call, and each
   incoming one a presentation query.
 - Status lists are reused for up to `PORTITOR_STATUS_LIST_CACHE_SECONDS`
@@ -1717,12 +1831,21 @@ known risk and technical debt, with its status and target release):
   (ADR 0009). As consumer, the connector does not accept a provider's
   offer (DSP `OFFERED`) that has credential constraints; requests it
   sends itself are not affected.
-- Policy terms the connector does not know are dropped without an
-  error when a policy is read, from your datasets file or from a
-  partner's offer: for example a `duty` inside a permission, or `unit`
-  on a constraint. Check each offer in your own catalog after a harvest,
-  and read a partner's offer in its catalog answer before you request it
-  ([TD-32](RISKS_AND_TECHNICAL_DEBTS.md#td-32)).
+- Policies are read strictly: a policy term the connector does not
+  read is refused, never dropped
+  ([ADR 0009](adr/0009-minimal-odrl-policies.md), amendment of
+  2026-11-18). Examples: a `duty` inside a permission, `unit` on a
+  constraint, a misspelled key. In your datasets file, that dataset is
+  rejected (check `odrl`) and the others are harvested. In a partner's
+  offer, contract request or agreement, the message is answered 400
+  with the DSP error naming the field, and the negotiation does not
+  move. Eclipse EDC ignores such fields, so an offer that EDC accepts
+  can be refused here. The fields read are `@id`, `@type`, `target`,
+  `assigner`, `assignee`, `profile`, `permission`, `prohibition` and
+  `obligation` (and `timestamp` on an agreement); `action` and
+  `constraint` in a rule; `leftOperand`, `operator` and `rightOperand`,
+  or one of `and`, `andSequence`, `or`, `xone`, in a constraint. An
+  offer in your datasets file has no `target`, `assigner` or `assignee`.
 - Negotiations start from the consumer only; a provider cannot start
   one with an offer ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)). A
   transfer request sent twice starts two transfers
@@ -1730,12 +1853,28 @@ known risk and technical debt, with its status and target release):
 - To read a provider's catalog you call it yourself with an STS token;
   the management API has no call for it yet
   ([TD-38](RISKS_AND_TECHNICAL_DEBTS.md#td-38)).
-- A panic (a bug) stops the whole process, so run each container with a
-  restart policy, as the `docker run` examples do
-  ([TD-41](RISKS_AND_TECHNICAL_DEBTS.md#td-41)).
+- A panic (a bug) no longer stops the process (from 0.12): the request
+  it happened in gets HTTP 500, a background task starts again after a
+  pause (5 seconds, doubling up to 5 minutes while it keeps
+  panicking), a DSP message whose sending panicked is sent again after
+  the same pauses, and all are logged at ERROR and counted
+  (`portitor.http.request.panicked`, `portitor.task.panicked`). Alert on
+  these counts. Still run each container with a restart policy, as the
+  `docker run` examples do: a failed start, a stopped management server
+  and a kill for lack of memory end the process
+  ([SECURITY-ASSURANCE](SECURITY-ASSURANCE.md#what-a-panic-does),
+  [TD-41](RISKS_AND_TECHNICAL_DEBTS.md#td-41)).
 - Every request waits for its database write to reach the disk, one
-  write at a time per database file; the limit under load is not
-  measured yet ([TD-40](RISKS_AND_TECHNICAL_DEBTS.md#td-40)).
+  write at a time per database file. Measured for 0.12: with 100 pulls
+  in flight, new negotiations did not slow the data plane beyond the
+  agreed limit, at one per second or as fast as they go
+  ([BENCHMARKS](BENCHMARKS.md#td-40-do-negotiations-slow-the-data-plane-down),
+  [TD-40](RISKS_AND_TECHNICAL_DEBTS.md#td-40)).
+- Each pull in flight uses memory in the connector and two connections
+  (one from the consumer, one to your data source); see
+  [BENCHMARKS](BENCHMARKS.md#data-plane) for the numbers before you
+  plan for hundreds of pulls at once, and raise the open files limit
+  (`ulimit -n`) above twice that number.
 - No metrics scrape endpoint: metrics and traces are pushed over OTLP
   ([Traces and metrics](#traces-and-metrics)).
 - Gaia-X: tested against a local Gaia-X compliance service in test mode

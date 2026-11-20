@@ -28,6 +28,8 @@ tracing.workspace = true
 utoipa.workspace = true
 
 [dev-dependencies]
+# checks the issuer's own metadata and offers against the DCP JSON Schemas (TD-33)
+jsonschema.workspace = true
 # in-memory traces for the trace context tests (ADR 0023)
 portitor-runtime = { path = "../portitor-runtime", features = ["test-support"] }
 # x509::p256_public_key_pem writes the retired key files of the key rotation tests

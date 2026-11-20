@@ -81,7 +81,7 @@ checks this file:
 | [R-26](#r-26) | ODRL `dateTime` definition read from memory | Interoperability | 0.3 (ADR 0009, 2026-11-12) | Open | 0.13 |
 | [R-27](#r-27) | CI downloads from Maven Central and GitHub | Delivery | 0.8 (2026-11-15) | Mitigated | — |
 | [R-28](#r-28) | 0.8 Gaia-X code had no fuzz target | Security | 0.8 (sweep for this file, 2026-11-15) | Addressed | 0.8 |
-| [R-29](#r-29) | DCP costs about 2 ms per request and 13 times fewer requests under load | Performance | 0.5 (ADR 0002 section 7, 2026-11-13) | Open | 0.11 (with TD-06) |
+| [R-29](#r-29) | DCP costs about 2 ms per request and 13 times fewer requests under load | Performance | 0.5 (ADR 0002 section 7, 2026-11-13) | Open (measured again in 0.12) | with TD-07 |
 | [R-30](#r-30) | DSP callers were not authenticated | Security | 0.3 (ADR 0007, 2026-11-12) | Addressed | done in 0.5 |
 | [R-31](#r-31) | RSA timing advisory in the pure-Rust `rsa` crate | Security, dependency | 0.0 (ADR 0002, 2026-11-11) | Addressed | done in 0.0 |
 | [R-32](#r-32) | XML parser advisories through RDF/XML code lists and rudof | Security, dependency | 0.6 spike (2026-11-14) | Addressed | done in 0.7 |
@@ -93,7 +93,7 @@ checks this file:
 | [R-38](#r-38) | No specification names an S3 data address | Interoperability | plan after 0.13 (maintainer, 2026-11-15) | Open | 1.1 |
 | [R-39](#r-39) | No specification defines agreements that depend on an upstream agreement | Interoperability | plan after 0.13 (maintainer, 2026-11-15) | Open | 1.3 |
 | [R-40](#r-40) | No shared list of EHDS purposes | Interoperability | plan after 0.13 (maintainer, 2026-11-15) | Open | 1.2 |
-| [R-41](#r-41) | A key removed from a DID document is still trusted for up to 5 minutes | Security | 0.11 threat model review (F-04, 2026-11-17) | Open | — |
+| [R-41](#r-41) | A key removed from a DID document is still trusted for up to 5 minutes | Security | 0.11 threat model review (F-04, 2026-11-17) | Mitigated (0.12) | — |
 | [R-42](#r-42) | The STS shares the identity's public port | Security | 0.11 threat model review (F-05, 2026-11-17) | Open | — |
 | [R-43](#r-43) | Negative credential constraints can be met with another credential | Security | 0.11 threat model review (F-07, 2026-11-17) | Open | — |
 | [R-44](#r-44) | One slow holder delays every issuer delivery | Security | 0.11 threat model review (F-09, 2026-11-17) | Open | — |
@@ -129,18 +129,20 @@ checks this file:
 | [TD-29](#td-29) | No OTLP logs export, no gRPC, no compression | Technical debt | 0.9 (ADR 0023, DEPLOYING, 2026-11-15) | Open | Later |
 | [TD-30](#td-30) | The outbox resends a message the counter-party refused | Technical debt | 0.9 (outbox metrics, 2026-11-15) | Addressed | done in 0.11 |
 | [TD-31](#td-31) | No audit trail of data pulls and management actions | Technical debt | 0.11 threat model review (F-02, 2026-11-17) | Open | research with TD-04 (0.12) |
-| [TD-32](#td-32) | Policy terms that are not understood are dropped without an error | Technical debt, security | 2026-11-18 review (D1) | Open | 0.12 |
-| [TD-33](#td-33) | The issuer's metadata does not pass the DCP JSON schema | Technical debt, interoperability | 2026-11-18 review (C1) | Open | 0.12 |
-| [TD-34](#td-34) | A repeated transfer request starts a second transfer | Technical debt, interoperability | 2026-11-18 review (D3) | Open | 0.12 |
+| [TD-32](#td-32) | Policy terms that are not understood are dropped without an error | Technical debt, security | 2026-11-18 review (D1) | Addressed (0.12) | — |
+| [TD-33](#td-33) | The issuer's metadata does not pass the DCP JSON schema | Technical debt, interoperability | 2026-11-18 review (C1) | Addressed (0.12) | — |
+| [TD-34](#td-34) | A repeated transfer request starts a second transfer | Technical debt, interoperability | 2026-11-18 review (D3) | Addressed (0.12) | — |
 | [TD-35](#td-35) | No negotiation started by the provider | Technical debt, interoperability | 2026-11-18 review (D2) | Open | 0.13, if not expensive |
-| [TD-36](#td-36) | DSP details: who may terminate, 401 or 404, agreement timestamp, `consumerPid` check, no catalog pages | Technical debt, interoperability | 2026-11-18 review (D4, D5) | Open | 0.12 |
-| [TD-37](#td-37) | DCP details: `token` claim required, presentations as JWT strings only, no `/.well-known/dspace-trust` | Technical debt, interoperability | 2026-11-18 review (C2) | Open | 0.12 |
+| [TD-36](#td-36) | DSP details: who may terminate, 401 or 404, agreement timestamp, `consumerPid` check, no catalog pages | Technical debt, interoperability | 2026-11-18 review (D4, D5) | Addressed (0.12); catalog pages open | 0.13 (catalog pages, with TD-38) |
+| [TD-37](#td-37) | DCP details: `token` claim required, presentations as JWT strings only, no `/.well-known/dspace-trust` | Technical debt, interoperability | 2026-11-18 review (C2) | Addressed (0.12) | — |
 | [TD-38](#td-38) | No management call to read a provider's catalog | Technical debt, usability | 2026-11-18 review (Q1) | Open | 0.13 |
 | [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | 2026-11-18 review (Q2, Q7) | Open | 0.13; 1.x (Helm chart) |
-| [TD-40](#td-40) | Database calls block the async runtime | Technical debt | 2026-11-18 review (Q3) | Open | 0.12 (measure) |
-| [TD-41](#td-41) | A panic stops the whole process (`panic = "abort"`) | Technical debt, security | 2026-11-18 review (Q4) | Open | 0.12 (decision) |
+| [TD-40](#td-40) | Database calls block the async runtime | Technical debt | 2026-11-18 review (Q3) | Accepted (0.12, measured) | measure again each release |
+| [TD-41](#td-41) | A panic stopped the whole process (`panic = "abort"`) | Technical debt, security | 2026-11-18 review (Q4) | Addressed (0.12) | — |
 | [TD-42](#td-42) | Four near-copies of the negotiation and transfer logic | Technical debt | 2026-11-18 review (Q5) | Open | 0.13 (note); 1.x (merge) |
 | [TD-43](#td-43) | The Gaia-X documents name several versions of the rules | Technical debt | 2026-11-18 review (G1) | Open | 0.13 |
+| [TD-44](#td-44) | A transfer request sent at once after the agreement can be refused | Technical debt, interoperability | 0.12 benchmark (2026-11-19) | Open | 0.13 (decision) |
+| [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | 0.12 benchmark (2026-11-19) | Open | — |
 
 Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
 31 technical debts (Open 18, Accepted 5, Addressed 8).
@@ -679,8 +681,12 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
 - **Current state: Open.** DID documents are cached 5 minutes, and from
   0.11 status lists too (TD-06, `PORTITOR_STATUS_LIST_CACHE_SECONDS`,
   default 5 minutes); tokens and presentations are not (TD-07).
-- **Next.** Measure again with the status list cache (TD-06 done in
-  0.11).
+- **Measured again in 0.12** ([BENCHMARKS](BENCHMARKS.md), "DCP cost"),
+  with the status list cache: 1.6 ms per request for one client, and 8
+  times fewer requests under load with 50 clients (2,935 against 23,751
+  per second), where 0.5 measured 13 times.
+- **Next.** What is left is the STS token and the presentation query of
+  each request ([TD-07](#td-07)).
 
 <a id="r-30"></a>
 ### R-30 DSP callers were not authenticated
@@ -824,10 +830,10 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
 - **Why it matters.** A participant that removes a leaked key from its
   DID document is still accepted with that key by Portitor verifiers for
   up to 5 minutes.
-- **Current state: Open.** DEPLOYING ("Rotating a key") says verifiers
-  cache the document 5 minutes.
-- **Next.** Decide with the retired keys work of 0.11 (TD-05) whether
-  the cache time becomes a setting; say the limit in SECURITY-ASSURANCE.
+- **Current state: Mitigated (0.12).** The time is a setting,
+  `PORTITOR_DID_CACHE_SECONDS`, in the three components: default 300, at
+  most 3600, `0` turns the cache off (ADR 0016, amended 2026-11-18). The
+  window is still there at the default.
 
 <a id="r-42"></a>
 ### R-42 The STS shares the identity's public port
@@ -1125,6 +1131,11 @@ certificate and compliance run at each key change (ADR 0021).
 - **Why it matters.** Long or large transfers, and data spaces that use
   push (Simpl-Open documents S3 push and Kafka).
 - **Current state: Open.**
+- **Measured in 0.12** ([BENCHMARKS](BENCHMARKS.md), "Data plane"): a
+  download that is still running when its token ends is not cut; all
+  bytes arrive. A new request with the old token gets 401. So a long
+  pull works, and a pull that must start again after the token's life
+  does not.
 - **Next.** ROADMAP 1.1: push as a second data plane behind the
   Signaling port.
 
@@ -1441,35 +1452,39 @@ certificate and compliance run at each key change (ADR 0021).
   permission carries a duty it never saw. In the datasets file, a typing
   error or a term Portitor does not support vanishes instead of stopping
   the harvest. Both go against the fail closed rule of ADR 0009.
-- **Current state: Open.** DEPLOYING "Known limits" names it.
-- **Decision (maintainer, 2026-11-18).** Strict: a policy term that is
-  not understood stops the harvest of that dataset, as the other
-  harvest checks do (ADR 0020). The same strict reading is planned for
-  a partner's offer or agreement: the message is refused.
-- **The SHACL shapes do not catch it** (checked 2026-11-18), so the
-  check belongs in Portitor's own policy reader:
-  - shapes are there only with a bundle, and the HealthDCAT-AP shapes
-    only ask that `odrl:hasPolicy` points to an `odrl:Policy`; the
-    example bundle has no message shapes;
-  - SHACL lets extra properties pass unless a shape is closed, and
-    `portitor-shacl` refuses a shape that uses `sh:closed` (ADR 0005);
-  - a `duty` is a valid ODRL term, so a data space's shape would allow
-    it: the problem is what Portitor understands, not what the data
-    space allows;
-  - a misspelled JSON key is not in the JSON-LD context, so it is gone
-    before SHACL sees the data.
-- **Next.** ROADMAP 0.12. How EDC treats such an offer is checked
-  first.
+- **Current state: Addressed (0.12).** The policy reader refuses a field
+  it does not read, and names it (`deny_unknown_fields` on `Offer`,
+  `Rule`, `AtomicConstraint` and `Agreement`, and a constraint reader
+  written by hand, `crates/portitor-dsp/src/lib.rs`; ADR 0009, amended
+  2026-11-18). In the datasets file the harvest of that dataset stops
+  (check `odrl`); a partner's message gets HTTP 400 with the DSP error
+  and changes no state. A `duty` inside a permission is refused. An
+  offer's `assigner` and `assignee` are read in a message and must be
+  the provider and the consumer; they are refused in the datasets file.
+- **Decision (maintainer, 2026-11-18).** Strict, for the datasets file
+  and for partners' messages.
+- **How Eclipse EDC differs (checked in 1.0.0-RC7).** EDC ignores a
+  field it does not know and reads `duty`
+  (`JsonObjectToPermissionTransformer`). Portitor is stricter on
+  purpose. What is left of the risk: a partner whose policies carry
+  `duty`, `remedy` or `consequence` cannot negotiate with Portitor.
+- **Why the SHACL shapes could not do it** (checked 2026-11-18): shapes
+  are optional, SHACL lets extra properties pass unless a shape is
+  closed and `portitor-shacl` refuses `sh:closed` (ADR 0005), a `duty`
+  is a valid ODRL term, and a misspelled JSON key is gone before SHACL
+  sees the data.
+- **Seen, not changed.** As consumer, Portitor does not check that a
+  provider's offer keeps the negotiation's `target`. A logical
+  constraint (`and`, `or`, `xone`) with one member, written as an object
+  and not a list, is refused, as before.
 - **Second layer, research (maintainer, 2026-11-18).** The bundle could
   also carry shapes for policies, so a data space can say which
   actions, left operands and values its offers may use. This adds to
-  the check above and does not replace it: a bundle is optional, and a
-  misspelled key never reaches SHACL. To find out before any code
-  (ROADMAP "Research before code", needed by 1.2): whether published
-  ODRL shapes exist to reuse; whether shapes in a bundle already reach
-  the policy inside a dataset and inside a message; and which SHACL
-  core parts `portitor-shacl` must add, as it refuses `sh:in` and
-  `sh:closed` today, the two a list of allowed terms needs.
+  the check above and does not replace it (ROADMAP "Research before
+  code", needed by 1.2): whether published ODRL shapes exist to reuse;
+  whether shapes in a bundle already reach the policy inside a dataset
+  and inside a message; and which SHACL core parts `portitor-shacl`
+  must add, as it refuses `sh:in` and `sh:closed` today.
 
 <a id="td-33"></a>
 ### TD-33 The issuer's metadata does not pass the DCP JSON schema
@@ -1484,11 +1499,20 @@ certificate and compliance run at each key change (ADR 0021).
   example, not Portitor's answer. The DCP TCK passes.
 - **Why it matters.** A holder that validates the metadata can refuse
   it.
-- **Current state: Open.**
-- **Next.** ROADMAP 0.12: answer the schema, and test Portitor's own
-  answer against it. Which value `credentialSchema` gets while schemas
-  are not supported ([TD-14](#td-14)) is taken from what EDC's issuer
-  sends, not invented.
+- **Current state: Addressed (0.12).** The metadata carries
+  `credentialSchema` and `offerReason`, and a test validates Portitor's
+  own answer and its offers against the DCP schemas
+  (`crates/portitor-issuer/tests/issuer.rs`). `credentialSchema` is a
+  new required URL in each entry of the issuer's definitions file, as
+  EDC IdentityHub takes it from the credential definition; the issuer
+  publishes it and does not fetch it ([TD-14](#td-14)). `offerReason` is
+  `reissue`, the value of the DCP example and of EDC (ADR 0018, amended
+  2026-11-18). Breaking for the issuer's configuration: DEPLOYING, "From
+  0.11 to 0.12".
+- **Left open.** DCP 6.7.1 says each entry "MUST contain all OPTIONAL
+  properties", which read word for word includes `issuancePolicy`. The
+  JSON schema does not require it, and Portitor leaves it out: a policy
+  would say a presentation is needed before issuance ([TD-14](#td-14)).
 
 <a id="td-34"></a>
 ### TD-34 A repeated transfer request starts a second transfer
@@ -1500,8 +1524,18 @@ certificate and compliance run at each key change (ADR 0021).
   `providerPid` ([review](reviews/2026-11-18-specifications-and-code-quality.md), D3).
 - **Why it matters.** A consumer that sends the request again after a
   timeout gets a second transfer and a second data access token.
-- **Current state: Open.**
-- **Next.** ROADMAP 0.12.
+- **Current state: Addressed (0.12).** A request with the `consumerPid`
+  of a transfer the same caller already asked for gets that transfer
+  again: no new data flow, token or message
+  (`crates/portitor-dsp/src/transfer/provider.rs`; ADR 0013, amended
+  2026-11-18). Eclipse EDC does the same (`findForCorrelationId`). A
+  repeat that names another agreement, format or callback address gets
+  HTTP 400. The lookup uses the caller's checked DID, so one consumer
+  never reaches another's transfer.
+- **Left.** A file written before 0.12 may hold two transfers for one
+  repeated request. Both stay, and the one stored first answers
+  (migration 9 is an index, not a unique one, so such a file still
+  opens).
 
 <a id="td-35"></a>
 ### TD-35 No negotiation started by the provider
@@ -1544,10 +1578,32 @@ certificate and compliance run at each key change (ADR 0021).
 - **Why it matters.** None breaks a test today; each is a place where
   another connector may behave differently, and the catalog answer grows
   with the number of datasets.
-- **Current state: Open.**
-- **Next.** ROADMAP 0.12, with the EDC tests: see what EDC does, then
-  fix or record each choice in the ADR it belongs to. Catalog pages only
-  if the benchmarks show the need.
+- **Current state: Addressed (0.12), but for catalog pages.** What
+  Eclipse EDC 1.0.0-RC7 does was read first:
+  - Who may terminate: unchanged, either party in every state that is
+    not final. EDC does the same (`canBeTerminated`), and the text of
+    the specification allows it. The test comment is corrected (ADR
+    0006, amended 2026-11-18).
+  - 401 or 404: a refused caller now gets 404 on the negotiation and
+    transfer routes, callbacks included, and 401 on the catalog, as the
+    DSP bindings say and as EDC answers (ADR 0016, amended 2026-11-18).
+    The reason is in Portitor's log only. A partner cannot tell "refused"
+    from "unknown process" from its own side: that is the rule's aim,
+    and it makes troubleshooting need both logs (DEPLOYING,
+    troubleshooting table).
+  - As consumer, an agreement without a `timestamp`, or with one that is
+    not an `xsd:dateTime`, is refused. The requirement is in the text of
+    the specification, not in its JSON schema.
+  - A new request on a running negotiation must name the stored
+    `consumerPid`.
+- **Open: catalog pages.** The benchmark of 0.12
+  ([BENCHMARKS](BENCHMARKS.md)) measured a catalog of 10,000 datasets:
+  2.6 MB in 13 ms, 150 MB of memory on the provider. A national gateway
+  lists about 1,100 datasets, so pages are not needed for the provider.
+  But Portitor's own HTTP client reads at most 64 kB of an answer
+  (`MAX_ANSWER`), about 250 datasets: this limits the management call
+  that reads a partner's catalog ([TD-38](#td-38)), and is decided with
+  it.
 
 <a id="td-37"></a>
 ### TD-37 DCP details: `token` claim required, presentations as JWT strings only, no `/.well-known/dspace-trust`
@@ -1565,9 +1621,20 @@ certificate and compliance run at each key change (ADR 0021).
     credentials it signs.
 - **Why it matters.** Refusing is the safe side, but the choices are not
   written down, and the last point is unknown.
-- **Current state: Open.**
-- **Next.** ROADMAP 0.12: check the last point; record the others in
-  ADR 0016, or change them if EDC needs it.
+- **Current state: Addressed (0.12).** Recorded in ADR 0016 (amended
+  2026-11-18), each with its reason and with what Eclipse EDC 1.0.0-RC7
+  does: the `token` claim stays required (EDC: `TokenNotNullRule`);
+  presentations stay JWT strings; `/.well-known/dspace-trust` is not
+  served (not in the published DCP v1.0.1, and not in EDC).
+- **The last point, checked.** DCP 6.3 says the issuer "will use the
+  base URL for the `issuer` field"; it gives no check to a holder or a
+  verifier, and everywhere else the issuer is a DID. EDC compares no
+  URL. No URL check was added. One real gap was found and closed: DCP
+  5.4.3, step 4, asks that the key that signed a credential belongs to
+  the DID of its `issuer`. Until 0.11 a key listed in the issuer's DID
+  document under another DID's id was accepted; from 0.12 it is refused
+  (`Credential::verify`, `crates/portitor-dcp/src/credential.rs`), as
+  EDC does (`IssuerKeyIdValidationRule`).
 
 <a id="td-38"></a>
 ### TD-38 No management call to read a provider's catalog
@@ -1616,14 +1683,21 @@ certificate and compliance run at each key change (ADR 0021).
 - **Why it matters.** Under load every request thread can wait for one
   write to reach the disk. It shows as "slow, no error", which is hard
   to troubleshoot. Related: [TD-08](#td-08).
-- **Current state: Open.** Not measured. DEPLOYING "Known limits" names
-  it.
-- **Next.** ROADMAP 0.12: the benchmarks measure it; move the calls to
-  blocking threads only if the numbers show the need, otherwise record
-  the limit with its number.
+- **Current state: Accepted (0.12, measured).** The rule was set before
+  measuring (maintainer, 2026-11-18): move the calls to blocking threads
+  if, with 100 pulls running and 1 negotiation per second, the data
+  plane's p99 time to first byte more than doubles or passes 100 ms.
+  Measured ([BENCHMARKS](BENCHMARKS.md), "TD-40"): 9.2 ms alone, 8.5 ms
+  with 1 negotiation per second, 14.5 ms with 260 per second, the most
+  the test machine produced. The rule was not met, so the calls stay
+  where they are. The lock and the disk limit negotiations (p99 92 ms at
+  260 per second), not pulls. Real platforms see a few negotiations per
+  day (BENCHMARKS, "Reference load").
+- **Next.** Measure again in each release; look again if the p99 passes
+  100 ms, or with [TD-08](#td-08).
 
 <a id="td-41"></a>
-### TD-41 A panic stops the whole process (`panic = "abort"`)
+### TD-41 A panic stopped the whole process (`panic = "abort"`)
 
 - **What.** The release profile sets `panic = "abort"` (`Cargo.toml`).
   A panic in one request ends the process and every request in flight;
@@ -1633,11 +1707,25 @@ certificate and compliance run at each key change (ADR 0021).
 - **Why it matters.** One request that finds a panic is a denial of
   service until the container is started again. The outbox is durable,
   so no message is lost.
-- **Current state: Open.** The choice was not written down. DEPLOYING
-  runs the containers with `--restart unless-stopped` and now says why
-  in "Known limits".
-- **Next.** ROADMAP 0.12: decide to keep it (and say so in
-  SECURITY-ASSURANCE) or to drop the setting.
+- **Current state: Addressed (0.12)** (maintainer, 2026-11-18: drop the
+  setting). A panic in a request handler answers HTTP 500 for that
+  request and the others go on; one ERROR log line names the place in
+  the code, never the message; the metric
+  `portitor.http.request.panicked` counts it
+  (`crates/portitor-runtime/src/panics.rs`; SECURITY-ASSURANCE, "What a
+  panic does"). Background tasks are watched: schedules start again
+  after a pause (5 seconds, doubling up to 5 minutes while they keep
+  panicking), and the process stops if the management server ends
+  (`portitor.task.panicked`). The code that recovers a poisoned lock now
+  runs in release builds and has a test per store.
+- **Cost.** The release binaries are about 13% larger (connector 12.9 to
+  14.7 MB; ADR 0002, amended in 0.12).
+- **Left.** A message or a credential request that meets the same bug
+  on every try is tried again for as long as the process runs: a DSP
+  message after a pause (5 seconds, doubling up to 5 minutes), a
+  credential request on each round of the issuer's outbox. Each try is
+  logged and counted, and the other work goes on. A restart policy is
+  still advised (DEPLOYING, "Known limits").
 
 <a id="td-42"></a>
 ### TD-42 Four near-copies of the negotiation and transfer logic
@@ -1670,3 +1758,48 @@ certificate and compliance run at each key change (ADR 0021).
 - **Next.** ROADMAP 0.13, documentation review: one place that says
   which Compliance Document and ICAM version were checked, and the same
   name everywhere.
+
+<a id="td-44"></a>
+### TD-44 A transfer request sent at once after the agreement can be refused
+
+- **What.** The provider marks a negotiation `FINALIZED` only when the
+  consumer has acknowledged the finalization event (outbox with proof of
+  delivery, ADR 0007). The consumer marks it `FINALIZED` when it
+  receives the event, a moment earlier. A transfer request that arrives
+  in between finds no finalized agreement: the provider answers HTTP 400
+  and the consumer's transfer ends `TERMINATED`. The benchmark of 0.12
+  saw it 2 to 4 times in 6,000 to 10,000 transfers started without a
+  pause, 16 at a time ([BENCHMARKS](BENCHMARKS.md)). The provider logs
+  nothing for this refusal.
+- **Why it matters.** A person who starts a transfer by hand never meets
+  it. A program that starts the transfer in the same second can, and
+  sees a transfer refused for no visible reason.
+- **Current state: Open.** Not changed in 0.12: each way to close it
+  touches ADR 0007 and needs the maintainer's choice.
+- **Options.** (1) The provider treats a transfer request under an
+  agreement whose finalization is on its way as proof that the event
+  arrived, as a consumer's next negotiation message already is. The
+  cost: a consumer that asks before it received the event is served too.
+  (2) The provider accepts the request while the finalization is on its
+  way and leaves the state to the outbox. The cost: if the delivery
+  fails in the end, a transfer exists under a terminated negotiation.
+  (3) Leave it, log the refusal, and say in DEPLOYING that a client
+  tries again.
+- **Next.** ROADMAP 0.13: decide; whatever is chosen, the provider logs
+  the refusal.
+
+<a id="td-45"></a>
+### TD-45 Each running pull holds about 0.8 MB of memory
+
+- **What.** With 1,000 pulls running at once the provider used 923 MB,
+  about 0.7 to 0.9 MB for each ([BENCHMARKS](BENCHMARKS.md), "Data
+  plane"). One pull of 10 GiB stays flat at 19 MB, so the memory goes
+  with the number of pulls, not with their size. Each pull also needs
+  two open files (the caller's connection and the one to the source).
+- **Why it matters.** The data plane is where the load is expected
+  (maintainer, 2026-11-18). An operator must size memory and the open
+  files limit for the number of pulls at once.
+- **Current state: Open.** DEPLOYING "Known limits" gives the numbers.
+- **Next.** Find where the memory goes (buffers of the proxy, of the
+  HTTP client, of TLS) before changing anything; measure again in each
+  release.

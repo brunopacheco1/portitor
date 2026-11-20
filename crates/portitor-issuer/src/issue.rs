@@ -61,14 +61,38 @@ pub fn decide(issuer: &Issuer, issuer_pid: &str) {
 
 /// Decides every request still `RECEIVED`: after a restart, and on each
 /// round of the outbox, for a decision that failed.
+///
+/// Each request is decided on its own ([`decide_guarded`]): a panic in
+/// one decision does not keep the others, or the deliveries the outbox
+/// sends after this, from happening.
 pub fn decide_waiting(issuer: &Issuer) {
     match issuer.store.received_requests() {
         Ok(waiting) => {
             for issuer_pid in waiting {
-                decide(issuer, &issuer_pid);
+                decide_guarded(issuer, &issuer_pid);
             }
         }
         Err(error) => tracing::error!(%error, "cannot read the waiting credential requests"),
+    }
+}
+
+/// [`decide`], with a panic in it (a bug) logged and counted
+/// (`portitor.task.panicked`, task `credential_decision`) instead of
+/// ending the outbox.
+///
+/// There is no state for "the decision panicked": the request stays
+/// `RECEIVED`, the store's transaction is rolled back, and the next
+/// round of the outbox (at most a minute later) tries it again. A
+/// request that panics every time is therefore logged and counted on
+/// every round until the bug is fixed; the other requests are not held
+/// up by it.
+fn decide_guarded(issuer: &Issuer, issuer_pid: &str) {
+    let deciding = || decide(issuer, issuer_pid);
+    if portitor_runtime::panics::report_sync_panic("credential_decision", deciding).is_err() {
+        tracing::error!(
+            issuer_pid,
+            "deciding this credential request panicked; it stays RECEIVED and is tried again"
+        );
     }
 }
 
@@ -278,6 +302,7 @@ mod tests {
             credential_type: "MembershipCredential".to_owned(),
             profile: Profile::Vc20,
             validity_days: 1,
+            credential_schema: "https://example.com/membership-credential-schema.json".to_owned(),
             claims: claims.iter().map(|claim| (*claim).to_owned()).collect(),
         }
     }

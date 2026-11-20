@@ -297,9 +297,10 @@ pub struct TransferView {
     /// The format asked for.
     format: String,
     /// Where to fetch the data, with the access token (DSP 2025-1
-    /// `DataAddress`): send `GET <endpoint>` with `Authorization: <the
-    /// authorization property>`. Present while the transfer is `STARTED`
-    /// or `SUSPENDED`; the token works only while it is `STARTED`.
+    /// `DataAddress`): send `GET <endpoint>` with `Authorization: Bearer
+    /// <the authorization property>` (its `authType` property says
+    /// `bearer`). Present while the transfer is `STARTED` or `SUSPENDED`;
+    /// the token works only while it is `STARTED`.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<Object>)]
     data_address: Option<Value>,

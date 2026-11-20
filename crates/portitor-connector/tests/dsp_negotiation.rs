@@ -28,13 +28,16 @@ use common::{Audiences, CONSUMER, PROVIDER, from, recording};
 const BASE: &str = "/dsp/2025-1/negotiations";
 const CALLBACK: &str = "https://consumer.example/cb";
 
-/// Records every POST; answers with `Ok` unless `fail` is set. Holds
-/// POSTs whose URL ends with `hold` until `release`. Answers a GET of the
-/// consumer's state with `reported`, if set.
+/// Records every POST; answers with `Ok` unless `fail` is set (no answer
+/// at all) or `refuses_with` is (the consumer's answer, such as
+/// `HTTP 404 Not Found`). Holds POSTs whose URL ends with `hold` until
+/// `release`. Answers a GET of the consumer's state with `reported`, if
+/// set.
 #[derive(Default)]
 struct FakeSender {
     sent: Mutex<Vec<(String, Value)>>,
     fail: bool,
+    refuses_with: Option<&'static str>,
     hold: Option<&'static str>,
     release: Notify,
     reported: Option<&'static str>,
@@ -50,7 +53,9 @@ impl Sender for FakeSender {
             if self.hold.is_some_and(|h| url.ends_with(h)) {
                 self.release.notified().await;
             }
-            if self.fail {
+            if let Some(refusal) = self.refuses_with {
+                Err(refusal.to_owned())
+            } else if self.fail {
                 Err("unreachable".to_owned())
             } else {
                 Ok(Value::Null)
@@ -342,6 +347,14 @@ async fn counter_offer_on_an_existing_negotiation() {
     let (s, err) = call(&app, post(&format!("{BASE}/{pid}/request"), &again)).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
     assert!(err["reason"][0].as_str().unwrap().contains("path"));
+    // and the consumer pid must be the one the negotiation started with
+    let mut other_consumer_pid = request(CALLBACK);
+    other_consumer_pid["providerPid"] = json!(pid);
+    other_consumer_pid["consumerPid"] = json!("urn:uuid:consumer-2");
+    let uri = format!("{BASE}/{pid}/request");
+    let (s, err) = call(&app, post(&uri, &other_consumer_pid)).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert_eq!(err["reason"][0], "process ids do not match");
 }
 
 #[tokio::test]
@@ -435,6 +448,33 @@ async fn unreachable_consumer_ends_in_termination() {
     state(&app, &pid, "TERMINATED").await;
 }
 
+/// A consumer that answers 404 will not take the message: since 0.12 it
+/// is also the answer of a partner that refuses our credentials (ADR
+/// 0016). The agreement is sent once, not tried again, and the
+/// negotiation ends (ADR 0007). The TCK build tries a 404 again
+/// (`outbox.rs`, `tck_retries`).
+#[tokio::test]
+async fn a_consumer_that_answers_404_is_not_sent_the_message_again() {
+    let sender = Arc::new(FakeSender {
+        refuses_with: Some("HTTP 404 Not Found"),
+        ..FakeSender::default()
+    });
+    let app = app(ports(&sender));
+    let pid = start(&app).await;
+    state(&app, &pid, "TERMINATED").await;
+
+    // one try of the agreement and one of the termination; two each with `tck`
+    let tries_each = if cfg!(feature = "tck") { 2 } else { 1 };
+    sent(&sender, 2 * tries_each).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(sender.count(), 2 * tries_each);
+    assert_eq!(sender.get(0).1["@type"], "ContractAgreementMessage");
+    assert_eq!(
+        sender.get(2 * tries_each - 1).1["@type"],
+        "ContractNegotiationTerminationMessage"
+    );
+}
+
 /// The consumer's verification arrives while its acknowledgement of our
 /// agreement is still on its way: it proves the agreement arrived, so it
 /// is accepted at once (ADR 0007).
@@ -524,9 +564,11 @@ async fn only_the_consumer_that_started_a_negotiation_sees_it() {
     let uri = format!("{BASE}/{pid}");
     let anonymous = Request::get(&uri).body(Body::empty()).unwrap();
     let (s, err) = call(&app, anonymous).await;
-    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    // DSP 2025-1, "Contract Negotiation HTTPS Binding", "Unauthorized
+    // Access": a client that is not authorized gets 404
+    assert_eq!(s, StatusCode::NOT_FOUND);
     assert_eq!(err["@type"], "ContractNegotiationError");
-    assert_eq!(err["code"], "401");
+    assert_eq!(err["code"], "404");
     let stranger = from(Request::get(&uri), "did:web:stranger.example");
     let (s, _) = call(&app, stranger.body(Body::empty()).unwrap()).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
@@ -576,4 +618,241 @@ async fn a_stranger_cannot_change_a_negotiation() {
         assert_eq!(err["@type"], "ContractNegotiationError", "{path}");
         state(&app, &pid, "AGREED").await;
     }
+}
+
+/// Policies are read strictly (ADR 0009, amendment of 2026-11-18): a
+/// contract request whose offer has a term Portitor does not read gets
+/// HTTP 400 with a `ContractNegotiationError` that names the field (DSP
+/// 2025-1, Contract Negotiation HTTPS binding, "Error responses"), and
+/// nothing changes: no negotiation, no message sent.
+#[tokio::test]
+async fn a_request_with_an_unknown_policy_term_is_refused_by_name() {
+    let sender = Arc::new(FakeSender::default());
+    let app = app(ports(&sender));
+
+    // a duty inside the permission: a real ODRL term, not enforceable here
+    let mut with_duty = request(CALLBACK);
+    with_duty["offer"]["permission"][0]["duty"] = json!([{"action": "attribute"}]);
+    // a field ODRL defines on a constraint
+    let mut with_unit = request(CALLBACK);
+    with_unit["offer"]["permission"][0]["constraint"] = json!([{"leftOperand": "dateTime",
+        "operator": "lteq", "rightOperand": "2030-12-31", "unit": "http://example.com/unit"}]);
+    // a field of the offer itself
+    let mut with_uid = request(CALLBACK);
+    with_uid["offer"]["uid"] = json!("urn:offer:1");
+
+    for (message, field) in [(with_duty, "duty"), (with_unit, "unit"), (with_uid, "uid")] {
+        let (status, error) = call(&app, post(&format!("{BASE}/request"), &message)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{field}: {error}");
+        assert_eq!(error["@type"], "ContractNegotiationError");
+        assert_eq!(error["consumerPid"], "urn:uuid:consumer-1");
+        assert_eq!(error["code"], "400");
+        let reason = error["reason"][0].to_string();
+        assert!(
+            reason.contains(&format!("unknown field `{field}`")),
+            "{field}: {reason}"
+        );
+    }
+    assert_eq!(sender.count(), 0);
+
+    // the same on a negotiation that exists: its state and offer stay
+    let mut waiting = ports(&sender);
+    waiting.decider = Shared(Arc::new(WaitDecider));
+    let app = portitor_connector::router(&config(false), waiting).unwrap();
+    let pid = start(&app).await;
+    let mut counter = with(request(CALLBACK), &json!({"providerPid": pid}));
+    counter["offer"]["permission"][0]["duty"] = json!([{"action": "attribute"}]);
+    let (status, error) = call(&app, post(&format!("{BASE}/{pid}/request"), &counter)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(error["providerPid"], pid);
+    assert!(
+        error["reason"][0]
+            .to_string()
+            .contains("unknown field `duty`")
+    );
+    state(&app, &pid, "REQUESTED").await;
+    assert_eq!(sender.count(), 0);
+}
+
+/// An offer may name its parties (Eclipse EDC sends `assigner`, the DSP
+/// TCK both). They are read and checked: another provider or another
+/// consumer is refused with HTTP 400, and the right ones are accepted.
+#[tokio::test]
+async fn the_parties_an_offer_names_must_be_the_provider_and_the_caller() {
+    let sender = Arc::new(FakeSender::default());
+    let app = app(ports(&sender));
+
+    let mut other_provider = request(CALLBACK);
+    other_provider["offer"]["assigner"] = json!("did:web:someone-else.example");
+    let (status, error) = call(&app, post(&format!("{BASE}/request"), &other_provider)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(
+        error["reason"][0],
+        "the offer's assigner is not the provider"
+    );
+
+    let mut other_consumer = request(CALLBACK);
+    other_consumer["offer"]["assignee"] = json!("did:web:someone-else.example");
+    let (status, error) = call(&app, post(&format!("{BASE}/request"), &other_consumer)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(
+        error["reason"][0],
+        "the offer's assignee is not the consumer"
+    );
+    assert_eq!(sender.count(), 0);
+
+    // as Eclipse EDC sends it: empty rule lists, the assigner and the target
+    let mut named = request(CALLBACK);
+    named["offer"]["assigner"] = json!(PROVIDER);
+    named["offer"]["assignee"] = json!(CONSUMER);
+    named["offer"]["prohibition"] = json!([]);
+    named["offer"]["obligation"] = json!([]);
+    let (status, ack) = call(&app, post(&format!("{BASE}/request"), &named)).await;
+    assert_eq!(status, StatusCode::CREATED, "{ack}");
+    sent(&sender, 1).await;
+    let (url, agreement) = sender.get(0);
+    assert!(url.ends_with("/agreement"), "{url}");
+    assert_eq!(agreement["agreement"]["assigner"], PROVIDER);
+    assert_eq!(agreement["agreement"]["assignee"], CONSUMER);
+}
+
+/// A counter-request that names another `consumerPid` is refused (TD-36)
+/// and changes nothing: the negotiation keeps its consumer pid and its
+/// state, and nothing is sent.
+#[tokio::test]
+async fn a_counter_request_with_another_consumer_pid_changes_nothing() {
+    let sender = Arc::new(FakeSender::default());
+    let mut waiting = ports(&sender);
+    waiting.decider = Shared(Arc::new(WaitDecider));
+    let app = app(waiting);
+    let pid = start(&app).await;
+
+    let other_pid = json!({"providerPid": pid, "consumerPid": "urn:uuid:consumer-2"});
+    let counter = with(request(CALLBACK), &other_pid);
+    let (status, error) = call(&app, post(&format!("{BASE}/{pid}/request"), &counter)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(error["@type"], "ContractNegotiationError");
+    assert_eq!(error["code"], "400");
+    assert_eq!(error["reason"][0], "process ids do not match");
+
+    let (status, negotiation) = call(&app, get(&format!("{BASE}/{pid}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(negotiation["consumerPid"], "urn:uuid:consumer-1");
+    assert_eq!(negotiation["state"], "REQUESTED");
+    assert_eq!(sender.count(), 0);
+}
+
+/// A message without a token changes nothing: the negotiation it names
+/// keeps its state (DSP 2025-1, "Unauthorized Access": 404).
+#[tokio::test]
+async fn a_message_without_a_token_does_not_change_a_negotiation() {
+    let sender = Arc::new(FakeSender::default());
+    let mut waiting = ports(&sender);
+    waiting.decider = Shared(Arc::new(WaitDecider));
+    let app = app(waiting);
+    let pid = start(&app).await;
+
+    let terminate = with(
+        ids(&pid),
+        &json!({"@type": "ContractNegotiationTerminationMessage"}),
+    );
+    let anonymous = Request::post(format!("{BASE}/{pid}/termination"))
+        .header("content-type", "application/json")
+        .body(Body::from(terminate.to_string()))
+        .unwrap();
+    let (status, error) = call(&app, anonymous).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{error}");
+    assert_eq!(error["reason"][0], "unauthorized");
+    // the answer is the one for a negotiation that does not exist
+    assert_eq!(error["providerPid"], "");
+    state(&app, &pid, "REQUESTED").await;
+    assert_eq!(sender.count(), 0);
+}
+
+/// The body of a contract request as text, with `offer` in place of the
+/// offer: only text can hold one key twice.
+fn request_text(offer: &str) -> String {
+    format!(
+        r#"{{"@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+            "@type": "ContractRequestMessage", "consumerPid": "urn:uuid:consumer-1",
+            "callbackAddress": "{CALLBACK}", "offer": {offer}}}"#
+    )
+}
+
+/// A policy field given twice would have one of its two values dropped
+/// unseen, and the two parties may not keep the same one (ADR 0009,
+/// amendment of 2026-11-18: no term is dropped). The request is refused
+/// and no negotiation starts.
+#[tokio::test]
+async fn a_request_with_a_policy_field_given_twice_is_refused() {
+    let sender = Arc::new(FakeSender::default());
+    let app = app(ports(&sender));
+    let permission_twice = r#"{"@id": "CAT0101:offer:use", "@type": "Offer", "target": "CAT0101",
+        "permission": [{"action": "use", "constraint": [
+            {"leftOperand": "dateTime", "operator": "lteq", "rightOperand": "2020-12-31"}]}],
+        "permission": [{"action": "use"}]}"#;
+    let request = from(Request::post(format!("{BASE}/request")), CONSUMER)
+        .header("content-type", "application/json")
+        .body(Body::from(request_text(permission_twice)))
+        .unwrap();
+    let (status, answer) = call(&app, request).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+    assert_eq!(answer["@type"], "ContractNegotiationError");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(sender.count(), 0);
+}
+
+/// A port to the consumer with a bug: sending panics while `.1` is set.
+/// Otherwise it is the sender in `.0`.
+struct PanicsWhileSet(Arc<FakeSender>, std::sync::atomic::AtomicBool);
+
+impl Sender for PanicsWhileSet {
+    fn post<'a>(&'a self, url: &'a str, body: &'a Value) -> BoxFuture<'a, Result<Value, String>> {
+        let panic_now = self.1.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(!panic_now, "a bug in the sender");
+        self.0.post(url, body)
+    }
+
+    fn get<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Value, String>> {
+        // the consumer's state, asked through the trait (`FakeSender` has
+        // a `get` of its own for the messages it recorded)
+        Sender::get(self.0.as_ref(), url)
+    }
+}
+
+/// A panic while a message is sent (TD-41) ends only that delivery
+/// (`outbox.rs`, `deliver`): the request was answered, the server goes
+/// on, the negotiation keeps its state, and the message stays saved. It
+/// is sent at the next start, as after any stop (ADR 0007).
+#[tokio::test]
+async fn a_send_that_panics_leaves_the_message_saved_for_the_next_start() {
+    use portitor_connector::store::SqliteNegotiations;
+    use portitor_dsp::negotiation::provider::NegotiationStore as _;
+
+    let sender = Arc::new(FakeSender::default());
+    let with_a_bug = Arc::new(PanicsWhileSet(
+        Arc::clone(&sender),
+        std::sync::atomic::AtomicBool::new(true),
+    ));
+    let file = Arc::new(SqliteNegotiations::in_memory().unwrap());
+    let (mut p, _) = recording(Ports::new(with_a_bug.clone() as Arc<dyn Sender>), PROVIDER);
+    p.use_sqlite(&file);
+    let (app, connector) = portitor_connector::build(&config(false), p).unwrap();
+
+    let pid = start(&app).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    state(&app, &pid, "REQUESTED").await;
+    assert_eq!(sender.count(), 0, "nothing went out");
+    let saved = file.pending().unwrap();
+    assert_eq!(saved.len(), 1, "the agreement is still to be sent");
+    assert_eq!(saved[0].provider_pid, pid);
+
+    // the next start, with the bug gone
+    with_a_bug
+        .1
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(connector.resume().unwrap(), 1);
+    state(&app, &pid, "AGREED").await;
+    assert_eq!(sender.count(), 1);
+    assert_eq!(sender.get(0).1["@type"], "ContractAgreementMessage");
 }

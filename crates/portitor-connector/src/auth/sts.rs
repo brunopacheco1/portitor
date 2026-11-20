@@ -221,6 +221,7 @@ mod tests {
             scopes: vec!["org.eclipse.dspace.dcp.vc.type:MembershipCredential".into()],
             allow_http: true,
             status_list_cache_seconds: 0,
+            did_cache_seconds: 300,
         }
     }
 

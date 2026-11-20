@@ -255,6 +255,29 @@ Limits of this result:
   token with each request) and the catalog is larger, so the
   "without DCP" row is not directly comparable to the table above.
 
+### Measured again for 0.12 (2026-11-19)
+
+From 0.12 the numbers of each release are in
+[BENCHMARKS](../BENCHMARKS.md), with the method and the commands. What
+changed against the tables above (same kind of machine, glibc release
+builds):
+
+| Measure | 0.5 | 0.12 | Target |
+|---|---|---|---|
+| Binary size, connector / identity / issuer | 9.1 / 7.7 MB / — | 14.7 / 10.6 / 10.2 MB | — |
+| Connector start to first healthy response | 19 ms | 24 ms | < 1 s |
+| Idle memory (RSS), connector / identity / issuer | 8.1 / 7.1 MB / — | 14.4 / 13.1 / 12.3 MB | < 30 MB |
+| Peak memory, 50 clients for 20 s, connector with DCP / without | 23.3 / 11.4 MB | 42.0 / 18.2 MB | — |
+| 50 clients with DCP: requests per second (times fewer than without DCP) | 1,667 (13) | 2,935 (8) | — |
+
+The growth since 0.5 is what releases 0.6 to 0.11 added (SHACL, the
+bundle, harvest, telemetry). Of the binary size, 1.8, 1.2 and 1.2 MB
+(13%) come from 0.12 itself: the release profile no longer sets
+`panic = "abort"`
+([SECURITY-ASSURANCE](../SECURITY-ASSURANCE.md#what-a-panic-does)), so
+the code that unwinds a panic is in the binary. Every target still
+holds. Image sizes were not measured for 0.12.
+
 ## 8. Consequences
 
 - One language and one Cargo workspace; each component is a module (crate)

@@ -168,6 +168,138 @@ It changes "Which requests need a token" above:
 - The log line for a 503 is `DSP request not checked: a service the
   check needs is unavailable; answered 503` (WARN), with the reason.
 
+### Amended in 0.12: three DCP details, recorded (2026-11-18)
+
+The review of 2026-11-18 (finding C2,
+[TD-37](../RISKS_AND_TECHNICAL_DEBTS.md#td-37)) found three choices of
+the verifier that were not written down. None changes; each is recorded
+here with its reason.
+
+- **The caller's ID token must carry the `token` claim.** DCP v1.0.1
+  makes the claim optional (section 4.3.1: a Self-Issued ID Token "MAY
+  contain an access token as a `token` claim"). The verifier refuses a
+  token without it, or with an empty one
+  (`crates/portitor-connector/src/auth/dcp.rs`, `check_token`). Reason:
+  every DSP request needs the caller's credentials ("What a provider
+  requires" above), and the access token is the only way to ask the
+  caller's Credential Service for them (section 5.1, step 6). Without
+  it the check cannot be done, so the request is refused (401 on the
+  catalog routes, 404 on the others, see below). Eclipse
+  EDC Connector 1.0.0-RC7 does the same: `TokenNotNullRule` ("The
+  'token' claim is mandatory and must not be null") is a rule of every
+  self-issued token (`DcpCoreExtension`), and `DcpIdentityService`
+  sends the claim's value to the caller's Credential Service.
+- **Presentations are read as JWT strings only.**
+  `presentation-response-message-schema.json` also allows a JSON object
+  in `presentation`. Portitor supports the two DCP profiles,
+  `vc11-sl2021/jwt` and `vc20-bssl/jwt` (DCP appendix A), and both
+  secure a presentation as a JWT. An answer with an object is refused
+  (`presentation_jwts`). An object would be a presentation with an
+  embedded proof (JSON-LD), which no supported profile uses; reading
+  one needs a new profile and an ADR.
+- **`/.well-known/dspace-trust` is not served.** The path is defined
+  only in `specifications/dsp.profile.md` of the DCP repository (tag
+  `v1.0.1`). That file is not part of the published specification:
+  `index.html` at that tag does not include it. It asks "catalogs that
+  support the Credential Issuance Protocol" to answer there; a
+  connector does not issue credentials. Eclipse EDC 1.0.0-RC7 does not
+  serve it either: the text `dspace-trust` appears in neither the
+  Connector nor the IdentityHub source (searched 2026-11-18). What an
+  issuer offers is read from its Issuer Metadata API (section 6.7).
+
+### Amended in 0.12: a credential's key must belong to its issuer (2026-11-18)
+
+TD-37 also asked whether Portitor must check "that the issuer's base
+URL equals the `issuer` of the credentials it signs". What was found:
+
+- The sentence is in DCP v1.0.1, section 6.3 ("Issuer Service Base
+  URL"): "The Credential Issuer will use the base URL for the `issuer`
+  field in all Verifiable Credentials it issues". It says what an
+  issuer does. It gives no check to a holder or a verifier, and it does
+  not fit the rest of the specification, where the issuer is a DID: the
+  `issuer` of the issuer metadata and of an offer is "the Credential
+  Issuer DID" (sections 6.6.1 and 6.7.1), and the verifier compares a
+  DID (section 5.4.3, step 4). EDC IdentityHub 1.0.0-RC7 writes the
+  issuer's DID into the credentials it issues and compares no URL
+  anywhere. So Portitor has no URL check, and does not add one.
+- What the specification and EDC do require is about the issuer's DID,
+  and Portitor already did it:
+  - verifier: the credential is checked with a key from the DID
+    document of its `issuer`, and for VC 1.1 the JWT's `iss` must equal
+    `vc.issuer` (`portitor-dcp/src/credential.rs`);
+  - holder (Storage API): the delivering issuer is the one the request
+    was sent to, each credential's `issuer` is that issuer, and it is
+    signed with that issuer's key (`portitor-identity/src/storage.rs`;
+    EDC `CredentialWriterImpl` checks the same);
+  - holder: an offer's `issuer` is the DID of the token that brought
+    it, and the issuer metadata's `issuer` is the DID that was asked
+    (EDC checks the first, not the second).
+- **One gap, closed in 0.12.** Section 5.4.3, step 4: "The Verifier
+  MUST assert that the DID in the `VerificationMethod` of the
+  Verifiable Credential has the same value as the `issuer` of the
+  Verifiable Credential." A DID document can list a verification
+  method of another DID. Until 0.11 a credential signed with such a
+  key was accepted when the issuer's document listed it under
+  `assertionMethod`. From 0.12 it is refused: the id of the signing
+  key's verification method must start with the issuer's DID and `#`,
+  or be written as the fragment only (`Credential::verify`, used by the
+  verifier and by the holder's Storage API). EDC checks the same on the
+  key id: `IssuerKeyIdValidationRule` in the Connector (`kid` starts
+  with `iss` and `#`) and the key resolver of `CredentialWriterImpl` in
+  IdentityHub.
+
+### Amended in 0.12: the DID document cache time is a setting (2026-11-18)
+
+"Cost and caching" above says DID documents are cached "default 5
+minutes", but the time was fixed in the code (0.11 threat model review,
+F-04; [R-41](../RISKS_AND_TECHNICAL_DEBTS.md#r-41)). From 0.12:
+
+- `PORTITOR_DID_CACHE_SECONDS` sets how long a resolved DID document is
+  reused: default 300, at most 3600; `0` turns the cache off, so every
+  use fetches the document. The same rules as
+  `PORTITOR_STATUS_LIST_CACHE_SECONDS`; a value outside them stops the
+  start.
+- It applies to every component that resolves DIDs: the connector (the
+  verifier, and the authority's document for the bundle key), the
+  identity and the issuer. Each reads the same variable.
+- The cost of a long time: a key its owner removed from the document is
+  still accepted for up to that long, and a new key may be refused for
+  up to that long. The cost of `0`: one more fetch for each DSP request
+  (the caller's document), plus one for each issuer of its credentials.
+- As before, at most 1,000 documents are kept, and a failed lookup is
+  never kept. The readiness check of the connector's own identity
+  always fetches (no cache), as before.
+
+### Amended in 0.12: a refused caller gets 404 on negotiation and transfer routes (2026-11-18)
+
+The 2026-11-18 review of specifications and code quality (D5,
+[TD-36](../RISKS_AND_TECHNICAL_DEBTS.md#td-36)) found that a refused
+caller got 401 on every route. The maintainer decided on 2026-11-18 to
+follow the specification and Eclipse EDC. It changes "A refused request
+gets HTTP 401" in "Which requests need a token" above:
+
+- On the negotiation and transfer routes, the consumer's callbacks
+  included, a refused caller gets **HTTP 404** with the endpoint's DSP
+  error (`code` "404", `reason` "unauthorized"). DSP 2025-1, "Contract
+  Negotiation HTTPS Binding" and "Transfer Process HTTPS Binding",
+  section "Unauthorized Access": "If the client is not authorized, the
+  Consumer or Provider MUST return an HTTP 404 (Not Found) response."
+- On the catalog routes it still gets **HTTP 401**. The "Catalog HTTPS
+  Binding" only asks for "an appropriate HTTP code".
+- This is what Eclipse EDC 1.0.0-RC7 answers (`DspRequestHandlerImpl`,
+  `unauthorizedStatus`: 401 for a `CatalogError`, 404 otherwise).
+- **503 stays** on every route when the check could not finish (the
+  0.11 amendment above).
+- The reason is still only in the log: `DSP request refused: caller not
+  authenticated` (WARN) with `path`, `reason` and the `status` answered.
+  No token content is logged. A partner cannot tell a refusal from an
+  unknown process by the status, so the operator of the connector that
+  answered must read this line (DEPLOYING, "Health and logs").
+- For a partner's outbox nothing changes: a 404 ends the tries at once,
+  as a 401 did (ADR 0007, amended in 0.11). The `tck` build tries a 404
+  again ([R-08](../RISKS_AND_TECHNICAL_DEBTS.md#r-08)); for a refusal
+  that only makes it give up a little later.
+
 ## Consequences
 
 - Running a connector now needs an identity component (or a compatible

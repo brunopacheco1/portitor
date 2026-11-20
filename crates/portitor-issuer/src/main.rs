@@ -16,6 +16,7 @@ use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::health;
 use portitor_runtime::http::HttpSender;
 use portitor_runtime::management::management_port;
+use portitor_runtime::panics::spawn_supervised;
 use portitor_runtime::request_size::RequestLimits;
 use portitor_runtime::serve::{
     MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, run_component, serve, with_limits,
@@ -74,9 +75,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let definitions = read_definitions(&config)?;
     let store = SqliteStore::open(&config.db_file)
         .map_err(|e| format!("cannot open {}: {e}", config.db_file.display()))?;
+    // how long a holder's DID document is reused (R-41)
+    let did_cache_seconds = portitor_runtime::did::cache_seconds_from_env()?;
     let ports = Ports {
         store: Arc::new(store),
-        directory: Arc::new(WebDirectory::new(config.allow_http)?),
+        directory: Arc::new(WebDirectory::new(config.allow_http, did_cache_seconds)?),
         sender: Arc::new(HttpSender::new(config.allow_http)?),
     };
     let credential_key = key.public_jwk();
@@ -125,8 +128,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         db = %config.db_file.display(),
         "portitor-issuer listening"
     );
-    // the outbox runs until the process stops
-    tokio::spawn(portitor_issuer::delivery::run_outbox(Arc::clone(&issuer)));
+    // the outbox runs until the process stops; supervised: started again
+    // after a panic (portitor_runtime::panics)
+    let outbox_issuer = Arc::clone(&issuer);
+    spawn_supervised("issuer_outbox", move || {
+        portitor_issuer::delivery::run_outbox(Arc::clone(&outbox_issuer))
+    });
     // the public routes: anyone can call them. The size limit is inside
     // the time limit, so a slow body counts against the time too
     let app = limits.on_public_port(portitor_issuer::router(issuer));

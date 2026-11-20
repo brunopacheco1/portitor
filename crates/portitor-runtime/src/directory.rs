@@ -10,12 +10,13 @@
 //! unless allowed, time and size limits, no redirects).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use portitor_dcp::DidDocument;
 use serde_json::Value;
 
 use crate::BoxFuture;
-use crate::did::{DEFAULT_TTL, DidWebResolver};
+use crate::did::DidWebResolver;
 use crate::http::{HttpSender, Sender as _};
 
 /// Port: reads other parties' public documents. Each lookup returns,
@@ -37,12 +38,16 @@ pub struct WebDirectory {
 
 impl WebDirectory {
     /// With `allow_http`, plain-HTTP DIDs and URLs are used (tests only).
+    /// A DID document is reused for `did_cache_seconds`
+    /// (`PORTITOR_DID_CACHE_SECONDS`, read with
+    /// [`crate::did::cache_seconds`]); 0 fetches it every time.
     ///
     /// # Errors
     /// The HTTP client cannot be built.
-    pub fn new(allow_http: bool) -> Result<Self, String> {
+    pub fn new(allow_http: bool, did_cache_seconds: u64) -> Result<Self, String> {
+        let did_cache = Duration::from_secs(did_cache_seconds);
         Ok(Self {
-            resolver: DidWebResolver::new(allow_http, DEFAULT_TTL)?,
+            resolver: DidWebResolver::new(allow_http, did_cache)?,
             http: HttpSender::new(allow_http)?,
         })
     }

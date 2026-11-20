@@ -1,0 +1,22 @@
+meta {
+  name: 3. Transfer state
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{dsp}}/transfers/{{transferProviderPid}}
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+  res.body["@type"]: eq TransferProcess
+}
+
+docs {
+  DSP 2025-1 Transfer Process, HTTPS binding: GET /transfers/:providerPid.
+  Expect state STARTED once the fake consumer has taken the TransferStartMessage. Only
+  the consumer that requested the transfer may read it; anyone else gets 404.
+}

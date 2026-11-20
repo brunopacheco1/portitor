@@ -1,0 +1,29 @@
+meta {
+  name: Negotiation state, refused caller (404)
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{dsp}}/negotiations/{{providerPid}}
+  body: none
+  auth: none
+}
+
+script:pre-request {
+  // Runs after the collection's script, so it replaces the good token with one the
+  // provider refuses.
+  req.setHeader("Authorization", "Bearer not-a-token");
+}
+
+assert {
+  res.status: eq 404
+  res.body["@type"]: eq ContractNegotiationError
+}
+
+docs {
+  From 0.12 a caller the provider refuses gets 404 on every negotiation and transfer
+  endpoint, as DSP 2025-1 asks ("Unauthorized Access"; ADR 0016), with a DSP error that
+  says only "unauthorized". It looks like an unknown negotiation; the provider's log has
+  the reason. The catalog endpoints answer 401.
+}

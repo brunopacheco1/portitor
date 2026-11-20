@@ -15,7 +15,6 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use axum::Json;
-use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Path, State};
 use axum::response::{IntoResponse, Response};
 use portitor_dsp::Offer;
@@ -215,7 +214,7 @@ impl Consumer {
     /// Checks the message's shape with the guard, then reads it.
     fn read<T: DeserializeOwned>(
         &self,
-        body: Result<Json<Value>, JsonRejection>,
+        body: crate::inbound::Body,
         message_type: &str,
         consumer_pid: &str,
     ) -> Result<T, Box<ContractNegotiationError>> {
@@ -327,7 +326,7 @@ pub(crate) async fn offer(
     State(consumer): State<Arc<Consumer>>,
     Extension(caller): Extension<Caller>,
     Path(cpid): Path<String>,
-    body: Result<Json<Value>, JsonRejection>,
+    body: crate::inbound::Body,
 ) -> Response {
     if let Some(refused) = consumer.refusal(&cpid, &caller.id) {
         return refused;
@@ -344,7 +343,7 @@ pub(crate) async fn agreement(
     State(consumer): State<Arc<Consumer>>,
     Extension(caller): Extension<Caller>,
     Path(cpid): Path<String>,
-    body: Result<Json<Value>, JsonRejection>,
+    body: crate::inbound::Body,
 ) -> Response {
     if let Some(refused) = consumer.refusal(&cpid, &caller.id) {
         return refused;
@@ -362,7 +361,7 @@ pub(crate) async fn event(
     State(consumer): State<Arc<Consumer>>,
     Extension(caller): Extension<Caller>,
     Path(cpid): Path<String>,
-    body: Result<Json<Value>, JsonRejection>,
+    body: crate::inbound::Body,
 ) -> Response {
     if let Some(refused) = consumer.refusal(&cpid, &caller.id) {
         return refused;
@@ -380,7 +379,7 @@ pub(crate) async fn terminate(
     State(consumer): State<Arc<Consumer>>,
     Extension(caller): Extension<Caller>,
     Path(cpid): Path<String>,
-    body: Result<Json<Value>, JsonRejection>,
+    body: crate::inbound::Body,
 ) -> Response {
     if let Some(refused) = consumer.refusal(&cpid, &caller.id) {
         return refused;

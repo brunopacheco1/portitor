@@ -183,7 +183,7 @@ mod tests {
             let _ = HttpSender::new(true).unwrap().get(&url).await;
             let resolver = DidWebResolver::new(true, Duration::ZERO).unwrap();
             let _ = resolver.resolve(&did).await;
-            let directory = WebDirectory::new(true).unwrap();
+            let directory = WebDirectory::new(true, 300).unwrap();
             let _ = directory.did_document(&did).await;
             let _ = directory.json(&url).await;
             // unobserved, even to our own service

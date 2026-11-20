@@ -320,7 +320,7 @@ fn issuer(bundle_dir: Option<PathBuf>) -> Issuer {
     };
     let ports = Ports {
         store: Arc::new(SqliteStore::in_memory().unwrap()),
-        directory: Arc::new(WebDirectory::new(false).unwrap()),
+        directory: Arc::new(WebDirectory::new(false, 300).unwrap()),
         sender: Arc::new(HttpSender::new(false).unwrap()),
     };
     Issuer::new(&config, SigningKey::generate().unwrap(), Vec::new(), ports).unwrap()

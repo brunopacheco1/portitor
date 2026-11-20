@@ -260,6 +260,12 @@ struct Dataspace {
 }
 
 async fn dataspace() -> Dataspace {
+    dataspace_caching_did_documents(300).await
+}
+
+/// [`dataspace`], with a verifier that reuses a DID document for
+/// `did_cache_seconds` (`PORTITOR_DID_CACHE_SECONDS`).
+async fn dataspace_caching_did_documents(did_cache_seconds: u64) -> Dataspace {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let world: Shared = Arc::default();
@@ -303,6 +309,7 @@ async fn dataspace() -> Dataspace {
         scopes: vec![super::super::DEFAULT_SCOPE.to_owned()],
         allow_http: true,
         status_list_cache_seconds: 0,
+        did_cache_seconds,
     };
     let me_did = me.did.clone();
     let mut verifier = DcpVerifier::new(&settings, Arc::new(LocalSts(me))).unwrap();
@@ -769,7 +776,8 @@ async fn presentations_and_credentials_are_checked() {
 }
 
 /// A revoked credential, and a server of the caller or its issuer that
-/// answers 404, refuse the caller (HTTP 401). A server that does not
+/// answers 404, refuse the caller (HTTP 404, or 401 on the catalog
+/// routes). A server that does not
 /// answer is a temporary failure (HTTP 503): the caller may be fine.
 #[tokio::test]
 async fn unreachable_services_are_temporary_and_refusals_are_not() {
@@ -1131,6 +1139,7 @@ async fn our_identity_must_match_the_sts() {
         scopes: Vec::new(),
         allow_http: true,
         status_list_cache_seconds: 0,
+        did_cache_seconds: 300,
     };
     let other = Party::new(&ds.base, "third");
     let mut verifier = DcpVerifier::new(&settings, Arc::new(LocalSts(other))).unwrap();
@@ -1702,6 +1711,7 @@ async fn readiness_checks_our_identity_in_the_background() {
         scopes: Vec::new(),
         allow_http: true,
         status_list_cache_seconds: 0,
+        did_cache_seconds: 300,
     };
     let sts = Arc::new(CountingSts {
         party: mine,
@@ -1894,4 +1904,119 @@ async fn a_cached_status_list_serves_only_its_own_issuer() {
     let err = ds.refusal().await;
     assert!(err.contains("has another issuer"), "{err}");
     assert_eq!(ds.status_fetches(), 1);
+}
+
+impl Dataspace {
+    /// How many times the DID document of the party `name` was fetched
+    /// since [`Dataspace::forget_fetches`].
+    fn did_fetches(&self, name: &str) -> usize {
+        let path = format!("/{name}/did.json");
+        self.fetched().iter().filter(|got| **got == path).count()
+    }
+
+    /// The holder changes its key: its DID document now lists a new key
+    /// only, under the same key id.
+    fn replace_the_holders_key(&self) {
+        let with_a_new_key = Party::new(&self.base, "holder").document(&self.base, true);
+        let mut world = self.world.lock().unwrap();
+        world.documents.insert("holder".into(), with_a_new_key);
+    }
+}
+
+/// `PORTITOR_DID_CACHE_SECONDS=0` reaches the verifier: every check
+/// fetches the caller's and the issuer's DID document again.
+#[tokio::test]
+async fn at_zero_every_check_fetches_the_did_documents() {
+    let ds = dataspace_caching_did_documents(0).await;
+    ds.answer_member(&json!({}));
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    let (holder_first, issuer_first) = (ds.did_fetches("holder"), ds.did_fetches("issuer"));
+    assert!(holder_first >= 1 && issuer_first >= 1);
+    assert!(ds.verify(&ds.header()).await.is_ok());
+    assert_eq!(ds.did_fetches("holder"), 2 * holder_first);
+    assert_eq!(ds.did_fetches("issuer"), 2 * issuer_first);
+}
+
+/// The default, 300 seconds: the documents are fetched once and reused
+/// by the checks that follow.
+#[tokio::test]
+async fn at_300_seconds_the_did_documents_are_fetched_once() {
+    let ds = dataspace_caching_did_documents(300).await;
+    ds.answer_member(&json!({}));
+    for _ in 0..3 {
+        assert!(ds.verify(&ds.header()).await.is_ok());
+    }
+    assert_eq!(ds.did_fetches("holder"), 1);
+    assert_eq!(ds.did_fetches("issuer"), 1);
+}
+
+/// What the setting trades (R-41): while a DID document is kept, a key
+/// its owner removed from it is still accepted. Without a cache the old
+/// key is refused at the next check.
+#[tokio::test]
+async fn a_removed_key_is_refused_at_once_only_without_a_did_cache() {
+    for (did_cache_seconds, old_key_still_accepted) in [(0, false), (300, true)] {
+        let ds = dataspace_caching_did_documents(did_cache_seconds).await;
+        ds.answer_member(&json!({}));
+        assert!(ds.verify(&ds.header()).await.is_ok());
+        ds.replace_the_holders_key();
+        // the header is signed with the key that is no longer listed
+        let accepted = ds.verify(&ds.header()).await.is_ok();
+        assert_eq!(
+            accepted, old_key_still_accepted,
+            "{did_cache_seconds} seconds"
+        );
+    }
+}
+
+/// DCP v1.0.1, section 5.4.3, step 4: the DID of the credential's
+/// verification method must be the credential's issuer. The trusted
+/// issuer's DID document lists a key of another DID (`third`) under
+/// `assertionMethod`; a credential in the issuer's name, signed with that
+/// key, refuses the caller. It is a refusal, not a temporary failure.
+#[tokio::test]
+async fn a_credential_signed_with_another_dids_key_refuses_the_caller() {
+    let ds = dataspace().await;
+    {
+        let mut world = ds.world.lock().unwrap();
+        let thirds_method = world.documents["third"]["verificationMethod"][0].clone();
+        let issuers = world.documents.get_mut("issuer").unwrap();
+        issuers["assertionMethod"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(ds.third.kid()));
+        issuers["verificationMethod"]
+            .as_array_mut()
+            .unwrap()
+            .push(thirds_method);
+    }
+    // a membership credential in the issuer's name, under the third
+    // party's key id and signature
+    let now = now_secs();
+    let in_the_issuers_name = json!({
+        "iss": ds.issuer.did, "sub": ds.holder.did, "jti": "j",
+        "nbf": now - 10, "exp": now + 300,
+        "vc": {
+            "@context": [VC1_CONTEXT],
+            "id": "urn:uuid:c-1",
+            "type": ["VerifiableCredential", MEMBERSHIP],
+            "issuer": ds.issuer.did,
+            "issuanceDate": "2026-01-01T00:00:00Z",
+            "credentialSubject": {"id": ds.holder.did}
+        }
+    });
+    let forged = ds.third.sign(&in_the_issuers_name);
+    ds.answer(&[ds.presentation(&ds.holder, &[forged])]);
+    let error = ds.verify_error().await;
+    assert!(matches!(error, VerifyError::Rejected(_)), "{error:?}");
+    assert!(
+        error
+            .to_string()
+            .contains("the signing key belongs to another DID than the issuer"),
+        "{error}"
+    );
+
+    // the same document, and a credential the issuer signed itself
+    ds.answer_member(&json!({}));
+    assert!(ds.verify(&ds.header()).await.is_ok());
 }

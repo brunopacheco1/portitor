@@ -25,14 +25,24 @@ impl TransferStore for &Store {
     fn get(&self, pid: &str) -> Result<Option<Transfer>, StoreError> {
         Ok(self.0.borrow().get(pid).cloned())
     }
-    fn insert(&self, t: &Transfer) -> Result<(), StoreError> {
+    fn requested(&self, party: &str, cpid: &str) -> Result<Option<Transfer>, StoreError> {
+        let map = self.0.borrow();
+        let mut same_request = map
+            .values()
+            .filter(|t| t.counter_party == party && t.consumer_pid == cpid);
+        Ok(same_request.next().cloned())
+    }
+    fn insert(&self, t: &Transfer) -> Result<bool, StoreError> {
         if self.1.get() {
             return Err(StoreError("disk full".to_owned()));
+        }
+        if self.requested(&t.counter_party, &t.consumer_pid)?.is_some() {
+            return Ok(false);
         }
         self.0
             .borrow_mut()
             .insert(t.provider_pid.clone(), t.clone());
-        Ok(())
+        Ok(true)
     }
     fn replace_if(&self, t: &Transfer, expected: u64) -> Result<bool, StoreError> {
         let mut map = self.0.borrow_mut();
@@ -315,6 +325,208 @@ fn a_valid_request_starts_the_data_flow_and_sends_its_address() {
     // a second acknowledgement of the same message changes nothing
     s.delivered(&out).unwrap();
     assert_eq!(state(&store), TransferState::Started);
+}
+
+/// DSP 2025-1, "Transfer Request Message": "Providers SHOULD implement
+/// idempotent behavior ... based on the value of `consumerPid`".
+#[test]
+fn a_repeated_request_gets_the_same_transfer_and_starts_nothing() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = service(&store, &flows, TransferDecision::Start);
+    let none = CallerCredentials::default();
+    let msg = request("a1", "HttpData-PULL");
+    let (first, out) = s.request(&msg, CONSUMER, &none).unwrap();
+    assert!(out.is_some(), "the first request sends the start message");
+
+    // again while the start message is on its way
+    let (again, out) = s.request(&msg, CONSUMER, &none).unwrap();
+    assert_eq!(again, first);
+    assert_eq!(out, None, "no second start message");
+
+    // again once the transfer has started: the answer shows its state now
+    let pending = store.0.borrow()[PID].pending.clone().unwrap();
+    s.delivered(&pending).unwrap();
+    let (again, out) = s.request(&msg, CONSUMER, &none).unwrap();
+    assert_eq!(again.provider_pid, first.provider_pid);
+    assert_eq!(again.state, TransferState::Started);
+    assert_eq!(out, None);
+
+    assert_eq!(store.0.borrow().len(), 1, "one transfer");
+    assert_eq!(
+        flows.calls(),
+        ["start urn:uuid:1"],
+        "one data flow, one token"
+    );
+}
+
+#[test]
+fn a_repeated_request_with_other_content_is_refused() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = service(&store, &flows, TransferDecision::Start);
+    let none = CallerCredentials::default();
+    s.request(&request("a1", "HttpData-PULL"), CONSUMER, &none)
+        .unwrap();
+
+    let mut other_callback = request("a1", "HttpData-PULL");
+    other_callback.callback_address = "https://elsewhere.example/cb".to_owned();
+    // `a-members` is another agreement of the same consumer
+    let other_agreement = request("a-members", "HttpData-PULL");
+    for (msg, credentials) in [
+        (other_callback, &none),
+        (other_agreement, &member_at("gold")),
+    ] {
+        let failure = s.request(&msg, CONSUMER, credentials).unwrap_err();
+        assert!(matches!(failure, Failure::BadRequest(_)), "{failure:?}");
+        assert!(reason(&failure).contains("already used"), "{failure:?}");
+        // the refusal does not name the existing transfer
+        assert!(!reason(&failure).contains(PID), "{failure:?}");
+    }
+    assert_eq!(store.0.borrow().len(), 1);
+    assert_eq!(flows.calls(), ["start urn:uuid:1"]);
+}
+
+/// What makes a repeat the same request: the agreement, the format and
+/// the callback address, each compared as text. One other value and the
+/// repeat is refused (ADR 0013, amended in 0.12).
+#[test]
+fn a_repeat_is_the_same_request_only_if_agreement_format_and_callback_match() {
+    let (store, flows) = (Store::default(), Flows::default());
+    started(&store, &flows);
+    let existing = store.0.borrow()[PID].clone();
+
+    let same = request("a1", "HttpData-PULL");
+    let (ack, out) = answer_again(&existing, &same).unwrap();
+    assert_eq!(ack.provider_pid, PID);
+    assert_eq!(out, None);
+
+    let mut other_callback = same.clone();
+    // the same address written another way is another address
+    other_callback.callback_address = "https://consumer.example/cb/".to_owned();
+    for other in [
+        request("a-members", "HttpData-PULL"),
+        request("a1", "HttpData-PUSH"),
+        request("a1", "httpdata-pull"),
+        other_callback,
+    ] {
+        let failure = answer_again(&existing, &other).unwrap_err();
+        assert!(matches!(failure, Failure::BadRequest(_)), "{other:?}");
+        assert!(reason(&failure).contains("already used"), "{other:?}");
+    }
+}
+
+/// A `consumerPid` stays taken when its transfer has ended: the request
+/// sent again gets the ended transfer as it is, and starts no data flow.
+#[test]
+fn a_repeated_request_after_the_transfer_ended_gets_the_ended_transfer() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = started(&store, &flows);
+    s.terminate(PID, IDS, CONSUMER).unwrap();
+    let calls_before = flows.calls();
+
+    let msg = request("a1", "HttpData-PULL");
+    let (again, out) = s
+        .request(&msg, CONSUMER, &CallerCredentials::default())
+        .unwrap();
+    assert_eq!(again.provider_pid, PID);
+    assert_eq!(again.state, TransferState::Terminated);
+    assert_eq!(out, None);
+    assert_eq!(store.0.borrow().len(), 1);
+    assert_eq!(flows.calls(), calls_before, "no new data flow");
+}
+
+/// A `consumerPid` is only unique for one consumer: another participant
+/// that uses the same value must not get, or learn of, the first one's
+/// transfer.
+#[test]
+fn another_caller_with_the_same_consumer_pid_does_not_get_the_transfer() {
+    const OTHER: &str = "did:web:someone-else";
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = service(&store, &flows, TransferDecision::Start);
+    let none = CallerCredentials::default();
+    let (first, _) = s
+        .request(&request("a1", "HttpData-PULL"), CONSUMER, &none)
+        .unwrap();
+
+    // with the first consumer's agreement: refused as any agreement that
+    // is not the caller's, before the lookup
+    let failure = s
+        .request(&request("a1", "HttpData-PULL"), OTHER, &none)
+        .unwrap_err();
+    assert!(
+        reason(&failure).contains("no finalized agreement"),
+        "{failure:?}"
+    );
+    assert!(!reason(&failure).contains(PID), "{failure:?}");
+
+    // with its own agreement: a transfer of its own
+    let (own, out) = s
+        .request(&request("a-other", "HttpData-PULL"), OTHER, &none)
+        .unwrap();
+    assert_ne!(own.provider_pid, first.provider_pid);
+    assert_eq!(own.state, TransferState::Requested);
+    assert!(out.is_some());
+    assert_eq!(store.0.borrow().len(), 2);
+    assert_eq!(store.0.borrow()[&own.provider_pid].counter_party, OTHER);
+}
+
+/// A store in which a copy of the request is saved between the lookup and
+/// the insert, as when two copies arrive together.
+struct Racing<'a>(&'a Store, Cell<bool>);
+
+impl TransferStore for &Racing<'_> {
+    fn get(&self, pid: &str) -> Result<Option<Transfer>, StoreError> {
+        self.0.get(pid)
+    }
+    fn requested(&self, party: &str, cpid: &str) -> Result<Option<Transfer>, StoreError> {
+        // the first lookup comes before the other copy is saved
+        if self.1.replace(true) {
+            self.0.requested(party, cpid)
+        } else {
+            Ok(None)
+        }
+    }
+    fn insert(&self, t: &Transfer) -> Result<bool, StoreError> {
+        self.0.insert(t)
+    }
+    fn replace_if(&self, t: &Transfer, expected: u64) -> Result<bool, StoreError> {
+        self.0.replace_if(t, expected)
+    }
+    fn pending(&self) -> Result<Vec<Transfer>, StoreError> {
+        self.0.pending()
+    }
+}
+
+#[test]
+fn two_copies_of_a_request_at_once_give_one_transfer() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let none = CallerCredentials::default();
+    let msg = request("a1", "HttpData-PULL");
+    let (first, _) = service(&store, &flows, TransferDecision::Start)
+        .request(&msg, CONSUMER, &none)
+        .unwrap();
+
+    let racing = Racing(&store, Cell::new(false));
+    let late = TransferService::new(
+        &racing,
+        Agreed,
+        &flows,
+        Always(TransferDecision::Start),
+        Catalog,
+        Env(Cell::new(1)),
+    );
+    let (again, out) = late.request(&msg, CONSUMER, &none).unwrap();
+    assert_eq!(again.provider_pid, first.provider_pid);
+    assert_eq!(out, None);
+    assert_eq!(store.0.borrow().len(), 1);
+    // the data flow started for the late copy is ended again
+    assert_eq!(
+        flows.calls(),
+        [
+            "start urn:uuid:1",
+            "start urn:uuid:2",
+            "terminate urn:uuid:2"
+        ]
+    );
 }
 
 #[test]

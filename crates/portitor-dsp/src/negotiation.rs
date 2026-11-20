@@ -164,6 +164,15 @@ pub type TransitionError = crate::TransitionError<NegotiationState, Transition>;
 /// The state after `sender` sends `transition` in state `from` (`None`: no
 /// negotiation yet), following the DSP 2025-1 state machine.
 ///
+/// Termination follows the text, not the figure: either party may
+/// terminate in every state that is not final (DSP 2025-1, "Contract
+/// Negotiation Termination Message": "The message MAY be sent at any
+/// state of a Contract Negotiation"). The state machine figure draws the
+/// transition to TERMINATED from ACCEPTED and VERIFIED for the provider
+/// only, and from AGREED for the consumer only. Eclipse EDC reads it as
+/// here (`ContractNegotiation.canBeTerminated`: any state but FINALIZED).
+/// Recorded in ADR 0006, amended 2026-11-18.
+///
 /// # Errors
 ///
 /// When the sender may not send the message, the state is terminal, or the
@@ -196,7 +205,13 @@ pub fn next_state(
 }
 
 /// An ODRL agreement: the terms both parties signed up to.
+///
+/// Read strictly, as [`Offer`]: its fields are those of `PolicyClass` and
+/// `Agreement` in the DSP 2025-1 JSON Schema
+/// (`negotiation/contract-schema.json`), and any other field is an error
+/// that names it (ADR 0009, amendment of 2026-11-18).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Agreement {
     /// Agreement identifier.
     #[serde(rename = "@id")]
@@ -391,7 +406,11 @@ mod tests {
     ];
 
     /// Every allowed (state, message, sender) and its result, from the DSP
-    /// 2025-1 state machine figure. Everything else must be refused.
+    /// 2025-1 state machine figure, without the terminations. Those do not
+    /// follow the figure but the text ("MAY be sent at any state"): the
+    /// test below allows a termination by either party in every state
+    /// that is not final (ADR 0006, amended 2026-11-18). Everything else
+    /// must be refused.
     const ALLOWED: &[(Option<S>, T, Role, S)] = &[
         (None, T::Request, C, S::Requested),
         (None, T::Offer, P, S::Offered),
@@ -415,6 +434,7 @@ mod tests {
                         .find(|(f, tt, r, _)| *f == from && *tt == t && *r == sender)
                         .map(|a| a.3)
                         .or_else(|| {
+                            // either party, in every state that is not final
                             (t == T::Terminate && from.is_some_and(|s| !s.is_terminal()))
                                 .then_some(S::Terminated)
                         });

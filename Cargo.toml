@@ -7,7 +7,7 @@ resolver = "3"
 members = ["crates/portitor-dsp", "crates/portitor-dcp", "crates/portitor-dps", "crates/portitor-time", "crates/portitor-runtime", "crates/portitor-bundle", "crates/portitor-connector", "crates/portitor-identity", "crates/portitor-issuer", "crates/portitor-shacl"]
 
 [workspace.package]
-version = "0.11.0"
+version = "0.12.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/brunopacheco1/portitor"
@@ -49,7 +49,7 @@ opentelemetry_sdk = { version = "0.33", default-features = false, features = ["t
 tracing-opentelemetry = { version = "0.34", default-features = false }
 ring = "0.17"
 # SQLite compiled in (bundled), so the static musl binary needs no system library
-rusqlite = { version = "0.42", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 serde = { version = "1", features = ["derive"] }
 # float_roundtrip: parse decimals to the exact nearest f64, as JavaScript does; without
@@ -76,4 +76,3 @@ expect_used = "warn"
 lto = "thin"
 codegen-units = 1
 strip = true
-panic = "abort"

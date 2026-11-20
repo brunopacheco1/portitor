@@ -1,0 +1,24 @@
+meta {
+  name: Issuer metadata
+  type: http
+  seq: 13
+}
+
+get {
+  url: {{issuerServiceUrl}}/metadata
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+  res.body.issuer: eq {{issuerDid}}
+  res.body.credentialsSupported: isArray
+}
+
+docs {
+  DCP 6.7, open to anyone: one CredentialObject per credential definition
+  (examples/issuer-credentials.json). From 0.12 each has credentialSchema (the URL from
+  the definition) and offerReason "reissue", as the DCP schema requires, next to
+  credentialType, bindingMethods and profile.
+}

@@ -1,0 +1,37 @@
+meta {
+  name: Register participant
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{issuerMgmtUrl}}/v1/participants
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "did": "did:web:bruno.example",
+    "claims": {
+      "memberOf": "Portitor interop dataspace"
+    }
+  }
+}
+
+assert {
+  res.status: eq 201
+  res.body.did: eq did:web:bruno.example
+}
+
+docs {
+  Registers a participant: from now on its identity may ask for credentials. The claims
+  are what the credential definitions copy into credentialSubject (here memberOf, as
+  examples/issuer-credentials.json names it); a claim may not be named id.
+  did:web:bruno.example is a made-up participant, so that "Delete participant" can
+  remove it again. 409 when the DID is registered already.
+}

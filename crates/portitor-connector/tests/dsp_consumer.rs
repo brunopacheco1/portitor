@@ -579,6 +579,75 @@ async fn pending_messages_are_sent_after_a_restart() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// An agreement whose `timestamp` is there but is not an `xsd:dateTime`
+/// (DSP 2025-1, "Contract Agreement Message") gets HTTP 400, and nothing
+/// changes: the negotiation stays REQUESTED, holds no agreement, and no
+/// verification is sent.
+#[tokio::test]
+async fn an_agreement_with_an_invalid_timestamp_is_refused_and_changes_nothing() {
+    let c = connector();
+    let cpid = started(&c, "d1").await;
+    let uri = format!("{CALLBACK}/{cpid}/agreement");
+    let not_a_date_time = "the agreement's timestamp is not an XSD dateTime";
+    for (timestamp, reason) in [
+        (json!("yesterday"), not_a_date_time),
+        (json!(""), not_a_date_time),
+        // a date alone, and a time in another form
+        (json!("2026-11-12"), not_a_date_time),
+        (json!("2026-11-12 12:00:00Z"), not_a_date_time),
+        (json!("Thu, 12 Nov 2026 12:00:00 GMT"), not_a_date_time),
+        // `null` is no timestamp
+        (Value::Null, "the agreement has no timestamp"),
+        // seconds since 1970 as a number: not a text at all
+        (json!(1_794_484_800), "invalid type"),
+    ] {
+        let mut msg = agreement_msg(&cpid, "d1");
+        msg["agreement"]["timestamp"] = timestamp.clone();
+        let (status, error) = call(&c.app, post(&uri, &msg)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{timestamp}: {error}");
+        assert_eq!(error["@type"], "ContractNegotiationError", "{timestamp}");
+        assert_eq!(error["code"], "400", "{timestamp}");
+        let said = error["reason"][0].as_str().unwrap();
+        assert!(said.contains(reason), "{timestamp}: {said}");
+        assert_eq!(state(&c.app, &cpid).await, "REQUESTED", "{timestamp}");
+    }
+    assert!(c.negotiator.get(&cpid).unwrap().agreement.is_none());
+    assert_eq!(c.provider.count(), 1, "only our first request was sent");
+}
+
+/// `xsd:dateTime` lets the time zone be left out, and may carry a
+/// fraction of a second: such an agreement is taken, and kept as sent.
+#[tokio::test]
+async fn an_agreement_whose_timestamp_has_no_time_zone_is_accepted() {
+    let c = connector();
+    let cpid = started(&c, "d1").await;
+    let mut msg = agreement_msg(&cpid, "d1");
+    msg["agreement"]["timestamp"] = json!("2026-11-12T12:00:00.250");
+    let uri = format!("{CALLBACK}/{cpid}/agreement");
+    let (status, ack) = call(&c.app, post(&uri, &msg)).await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    let held = c.negotiator.get(&cpid).unwrap().agreement.unwrap();
+    assert_eq!(held.timestamp.as_deref(), Some("2026-11-12T12:00:00.250"));
+}
+
+/// DSP 2025-1, "Contract Agreement Message": "An Agreement MUST contain a
+/// `timestamp` property defined as an XSD `DateTime` type" (TD-36).
+#[tokio::test]
+async fn an_agreement_without_a_timestamp_is_refused() {
+    let c = connector();
+    let cpid = started(&c, "d1").await;
+    let mut msg = agreement_msg(&cpid, "d1");
+    let agreement = msg["agreement"].as_object_mut().unwrap();
+    agreement.remove("timestamp");
+    let uri = format!("{CALLBACK}/{cpid}/agreement");
+    let (s, err) = call(&c.app, post(&uri, &msg)).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{err}");
+    assert_eq!(err["@type"], "ContractNegotiationError");
+    assert_eq!(err["code"], "400");
+    assert_eq!(err["reason"][0], "the agreement has no timestamp");
+    assert_eq!(state(&c.app, &cpid).await, "REQUESTED");
+}
+
 /// Invalid provider messages get a `ContractNegotiationError` and leave
 /// the state unchanged (TCK `CN_C:03-*`).
 #[tokio::test]
@@ -640,6 +709,88 @@ async fn invalid_messages_are_refused() {
     assert_eq!(c.provider.count(), 1);
 }
 
+/// Policies are read strictly (ADR 0009, amendment of 2026-11-18): a
+/// provider's offer or agreement with a term Portitor does not read gets
+/// HTTP 400 with a `ContractNegotiationError` that names the field (DSP
+/// 2025-1, Contract Negotiation HTTPS binding, "Error responses"). The
+/// negotiation stays as it was and nothing is sent, so a duty that was
+/// never read cannot be agreed to.
+#[tokio::test]
+async fn a_provider_message_with_an_unknown_policy_term_is_refused_by_name() {
+    let c = connector();
+    let cpid = started(&c, "d1").await;
+
+    // an offer whose permission carries a duty
+    let mut offer_with_duty = offer_msg(&cpid, "d1");
+    offer_with_duty["offer"]["permission"][0]["duty"] = json!([{"action": "compensate"}]);
+    // an agreement with a field ODRL defines on a constraint
+    let mut agreement_with_unit = agreement_msg(&cpid, "d1");
+    agreement_with_unit["agreement"]["permission"][0]["constraint"] = json!([{
+        "leftOperand": "dateTime", "operator": "lteq", "rightOperand": "2030-12-31",
+        "unit": "http://example.com/unit"}]);
+    // an agreement whose permission carries a duty
+    let mut agreement_with_duty = agreement_msg(&cpid, "d1");
+    agreement_with_duty["agreement"]["permission"][0]["duty"] = json!([{"action": "compensate"}]);
+
+    let cases = [
+        ("offers", offer_with_duty, "duty"),
+        ("agreement", agreement_with_unit, "unit"),
+        ("agreement", agreement_with_duty, "duty"),
+    ];
+    for (path, message, field) in cases {
+        let uri = format!("{CALLBACK}/{cpid}/{path}");
+        let (status, error) = call(&c.app, post(&uri, &message)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path} {field}: {error}");
+        assert_eq!(error["@type"], "ContractNegotiationError");
+        assert_eq!(error["consumerPid"], cpid);
+        assert_eq!(error["providerPid"], PPID);
+        assert_eq!(error["code"], "400");
+        let reason = error["reason"][0].to_string();
+        assert!(
+            reason.contains(&format!("unknown field `{field}`")),
+            "{path} {field}: {reason}"
+        );
+    }
+    // no state change, and only our first request was ever sent
+    assert_eq!(state(&c.app, &cpid).await, "REQUESTED");
+    assert_eq!(c.provider.count(), 1);
+    assert!(c.negotiator.get(&cpid).unwrap().agreement.is_none());
+}
+
+/// An offer may name its parties (the DSP TCK sends both). Another
+/// provider or another consumer is refused; the right ones are accepted.
+#[tokio::test]
+async fn the_parties_a_provider_offer_names_are_checked() {
+    let c = connector();
+    let cpid = started(&c, "d1").await;
+    let uri = format!("{CALLBACK}/{cpid}/offers");
+
+    let mut other_provider = offer_msg(&cpid, "d1");
+    other_provider["offer"]["assigner"] = json!("did:web:someone-else.example");
+    let (status, error) = call(&c.app, post(&uri, &other_provider)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(
+        error["reason"][0],
+        "the offer's assigner is not the provider"
+    );
+
+    let mut other_consumer = offer_msg(&cpid, "d1");
+    other_consumer["offer"]["assignee"] = json!("did:web:someone-else.example");
+    let (status, error) = call(&c.app, post(&uri, &other_consumer)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(
+        error["reason"][0],
+        "the offer's assignee is not the consumer"
+    );
+    assert_eq!(state(&c.app, &cpid).await, "REQUESTED");
+
+    let mut named = offer_msg(&cpid, "d1");
+    named["offer"]["assigner"] = json!(PROVIDER_DID);
+    named["offer"]["assignee"] = json!(CONSUMER);
+    let (status, ack) = call(&c.app, post(&uri, &named)).await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+}
+
 /// Only the provider the negotiation was started with may send to its
 /// callback; anyone else is told it does not exist, for every callback,
 /// and nothing changes.
@@ -676,8 +827,11 @@ async fn other_participants_cannot_use_the_callback() {
         .body(Body::empty())
         .unwrap();
     let (s, err) = call(&c.app, anonymous).await;
-    assert_eq!(s, StatusCode::UNAUTHORIZED);
-    assert_eq!(err["code"], "401");
+    // DSP 2025-1, "Contract Negotiation HTTPS Binding", "Unauthorized
+    // Access": a client that is not authorized gets 404
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(err["code"], "404");
+    assert_eq!(err["reason"][0], "unauthorized");
 }
 
 /// The same for the transfer callbacks: only the transfer's provider may

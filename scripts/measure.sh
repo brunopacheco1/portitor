@@ -6,6 +6,8 @@
 # Measures the footprint targets of ADR 0002 (binary size, start time,
 # idle and peak memory, latency under load) and the cost of DCP per DSP
 # request (ADR 0016), on this machine.
+# scripts/bench.sh measures the data plane, the stored history and the
+# catalog; the results of both are in docs/BENCHMARKS.md.
 #
 # A provider (connector and identity) serves tck/datasets.json. A consumer
 # identity gives the load tool its tokens: the dsp-load example sends

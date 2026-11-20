@@ -207,6 +207,70 @@ Where the tests are:
   verifier tests in `src/auth/dcp/tests.rs` (at 0 and 300 seconds, a
   list that ends sooner, a failed fetch, a revocation seen once the list
   is stale). `cargo test -p portitor-connector --lib auth::dcp`.
+- **DID document cache** (ADR 0016, amended in 0.12): the unit tests in
+  `crates/portitor-runtime/src/did.rs` (at 0, 300 and 3600 seconds, the
+  bounds of `PORTITOR_DID_CACHE_SECONDS`),
+  `the_did_cache_setting_is_bounded` in the connector's `src/auth.rs`
+  and the verifier tests in `src/auth/dcp/tests.rs` (a removed key is
+  refused at once only at 0).
+  `cargo test -p portitor-runtime --lib did`.
+- **Issuer metadata and offers against the DCP schemas** (TD-33):
+  `the_metadata_answer_passes_the_dcp_schema`,
+  `the_definitions_files_of_the_repository_are_valid` and the offer
+  tests in the issuer's `tests/issuer.rs` check what the issuer itself
+  answers and sends, with the schema copies in
+  `crates/portitor-dcp/tests/schemas/`.
+- **Strict policy reader** (TD-32):
+  `crates/portitor-dsp/src/policy/strict_tests.rs` reads offers and
+  agreements with an unknown field, action, operand or operator at each
+  level, a field given twice, `null`, one object in place of a list and
+  other values of `@type`. `src/harvest/tests.rs` in the connector checks
+  that only the dataset with such an offer is left out; the unknown-term
+  tests in `tests/dsp_negotiation.rs` and `tests/dsp_consumer.rs` check
+  the 400 answer that names the term.
+  `cargo test -p portitor-dsp --lib policy`.
+- **Repeated transfer request** (TD-34):
+  `crates/portitor-dsp/src/transfer/provider/tests.rs` (the same request
+  again, one that differs in agreement, format or callback, another
+  caller, two copies at once, a repeat after the transfer ended), the
+  `repeated_request` tests in the connector's `tests/dsp_transfer.rs`
+  (one transfer and one token, also in the SQLite store) and the
+  migration tests in `src/store.rs`.
+- **Refused callers and DSP details** (TD-36): `every_dsp_route_refuses_a_caller_without_a_token`
+  and `every_dsp_route_answers_503_while_the_callers_check_cannot_finish`
+  in the connector's `tests/dsp_transfer.rs` go through the list
+  `DSP_ROUTES` (404 on negotiation and transfer routes and callbacks,
+  401 on the catalog). A new DSP route must be added to that list. The
+  agreement timestamp is tested in
+  `crates/portitor-dsp/src/negotiation/consumer/tests.rs` and
+  `tests/dsp_consumer.rs`, the `consumerPid` of a counter-request in
+  `tests/dsp_negotiation.rs`.
+- **Keys of another DID** (DCP 5.4.3): `crates/portitor-dcp/src/credential/tests.rs`
+  and `a_credential_signed_with_another_dids_key_refuses_the_caller` in
+  the connector's `src/auth/dcp/tests.rs`; for the holder side,
+  `an_answer_signed_with_another_dids_key_is_refused_and_nothing_is_stored`
+  in the identity's `tests/gaiax.rs`.
+- **Panics** (TD-41): `crates/portitor-runtime/src/panics.rs` (a 500
+  answer as `application/problem+json`, other requests go on, supervised
+  tasks start again after the pause) and `src/serve.rs` (both servers
+  over real sockets). `panics_are_counted_and_logged_without_their_message`
+  in `tests/telemetry_export.rs` checks the two metrics. The background
+  tasks have their own tests: `src/health.rs`, `src/harvest/tests.rs`
+  and the outbox test in `tests/dsp_negotiation.rs` in the connector,
+  `a_run_that_panics_does_not_block_the_next_run` in the identity's
+  `tests/gaiax.rs`. A store keeps working after a panic that held its
+  lock: `src/store/poison_tests.rs` in the connector, the identity and
+  the issuer.
+- **Database migrations**: `crates/portitor-connector/src/store.rs` opens
+  a file as 0.11 wrote it, with data, and checks the indexes of 0.12
+  (migrations 9 to 11) and that the lookups use them.
+- **Settings that stop the start**: `tests/health.rs` in the identity and
+  `tests/issuer.rs` in the issuer run the binary with a
+  `PORTITOR_DID_CACHE_SECONDS` out of bounds; the issuer also with a
+  definitions file without a valid `credentialSchema`.
+- **Tests marked `#[ignore = "bug: ..."]`** describe a behaviour the code
+  does not have yet; the reason names it. Remove the mark with the fix.
+  `grep -rn 'ignore = "bug' crates` lists them.
 - **Retired keys** (TD-05): `crates/portitor-identity/tests/key_rotation.rs`,
   and `a_key_change_with_the_old_key_retired_leaves_no_gap` in the
   issuer's `tests/issuer.rs`: what the old key signed verifies while it
@@ -422,8 +486,10 @@ space's `portitor-issuer`. It checks, in this order:
    against the shapes and EDC reads it with `dct:conformsTo` and the
    HealthDCAT-AP metadata as full IRIs;
 5. revocation both ways: once the issuer revokes one participant's
-   credential (`POST /v1/credentials/{id}/revoke`), the other refuses it
-   with 401.
+   credential (`POST /v1/credentials/{id}/revoke`), the other refuses it:
+   EDC answers Portitor's catalog request with 401, and Portitor answers
+   EDC's negotiation request with 404 (DSP 2025-1 HTTPS bindings,
+   "Unauthorized Access"; from 0.12).
 
 EDC always sends a `filter` in its `CatalogRequestMessage`: an EDC
 `QuerySpec` with no filter expressions (offset 0, limit 50). Portitor
@@ -966,11 +1032,23 @@ The collection's folders:
 
 | Folder | Requests |
 |---|---|
-| `metadata`, `catalog`, `negotiation-provider` | DSP requests to the provider, each with a fresh DCP token |
-| `management` | the consumer's management API: start and read negotiations, start, read and complete transfers, harvest jobs, the OpenAPI description |
+| `metadata`, `catalog`, `negotiation-provider`, `transfer-provider` | DSP requests to the provider, each with a fresh DCP token; also a catalog request and a negotiation read without a valid token (401 and 404), a repeated transfer request (the same answer again) and the two negotiation messages the provider always refuses with 400 (it never sends an offer) |
+| `auth` | one token from the consumer's STS, to look at |
+| `management` | the consumer's management API, which is not DSP: start and read negotiations, start, read, complete and terminate transfers, harvest jobs, the health checks, the OpenAPI description |
 | `data` | fetch the data of a started transfer from the provider's data plane, with the token of its data address |
-| `identity` | an identity's management API: credentials, credential requests to the issuer, Gaia-X compliance runs |
-| `issuer` | the issuer's management API: participants and issued credentials |
+| `identity` | an identity's management API: credentials, credential requests to the issuer, offers, Gaia-X compliance runs, the health checks; and its public DID document |
+| `issuer` | the issuer's management API: participants, offers and issued credentials, the health checks; and its public DID document, metadata and status list |
+
+`transfer-provider` needs an agreement in the variable `agreementId`:
+`management/Get negotiation` saves it in `two-connectors`; its
+`folder.bru` says how to get one in `single`. Two requests need an id
+you copy by hand into the environment, because they destroy something:
+`credentialIdToDelete` (`identity/Delete credential`) and
+`credentialIdToRevoke` (`issuer/Revoke credential`). Not in the
+collection: the consumer's callback routes (only the provider of the
+negotiation or transfer may call them), the credential service and
+issuer service routes that need another participant's token, and the
+`tck` routes.
 
 A transfer in `two-connectors`: `Start negotiation`, `Get negotiation`
 (saves the agreement id), `Start transfer`, `Get transfer` (saves the
@@ -1016,4 +1094,19 @@ TCK_CONNECTOR=/tmp/portitor-connector-tck \
   scripts/measure.sh target/release/portitor-connector
 ```
 
-The results of each release are in ADR 0002, section 7.
+The results of each release are in ADR 0002, section 7, and from 0.12
+in [BENCHMARKS](BENCHMARKS.md).
+
+`scripts/bench.sh` measures the reference load of BENCHMARKS: the data
+plane under many, large and long pulls, the stored history, the
+catalog, negotiations at one per second, and whether negotiations slow
+the data plane down. Its load tool is the `bench-load` example of the
+connector (a data source that makes its bytes up, contracts through a
+consumer's management API, timed pulls, timed catalog requests). Each
+part starts its own participants with empty databases; the whole run
+takes about 20 minutes and needs 2 GB of free memory.
+
+```sh
+scripts/bench.sh                     # every part
+BENCH_LARGE_GB=1 BENCH_HISTORY=500 BENCH_RUNS=1 scripts/bench.sh large history   # a quick look
+```

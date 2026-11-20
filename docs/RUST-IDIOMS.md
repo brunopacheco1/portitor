@@ -73,9 +73,9 @@ pub enum CredentialError {
 
 The connector's DCP verifier uses this to sort its failures
 (`portitor-connector/src/auth.rs`, `VerifyError`): `?` on a text error
-gives `VerifyError::Rejected` (HTTP 401), and `?` on a failed DID
-resolution gives `Unavailable` (HTTP 503) when the server did not
-answer. Other fetches say which one they are with `fetch_failed`.
+gives `VerifyError::Rejected` (HTTP 404, or 401 on the catalog routes),
+and `?` on a failed DID resolution gives `Unavailable` (HTTP 503) when
+the server did not answer. Other fetches say which one they are with `fetch_failed`.
 
 ### A function name in `map_err`
 
@@ -297,6 +297,11 @@ fn named<T>(what: &str, text: &str, from_name: fn(&str) -> Option<T>) -> Result<
 named function passed as a value, such as `DatasetState::from_name`.
 Unlike `impl Fn(...)` it cannot capture variables, so it is a simple,
 fixed type (`portitor-connector/src/store/harvest.rs`).
+A function pointer can also sit in a struct field, and is then called
+with the field in brackets: `(access.conn)(store)`. Without them,
+`access.conn(store)` would look for a method named `conn` (`Access` in
+`portitor-runtime/src/sqlite.rs`, which tells the shared lock tests how
+to reach each store).
 
 Never write `.unwrap()` outside tests. It stops the program when the
 value is missing, and the linter refuses it.
@@ -459,6 +464,97 @@ form. `write()` returns a guard; `*guard = value` replaces the value the
 guard protects, and the guard is dropped (the lock freed) at the end of
 the line (`DatasetCopy::replace`).
 
+## Panics
+
+A panic is Rust's answer to a bug it finds while running (an index out
+of range, `expect` on an error). It *unwinds*: the function stops, and
+so does its caller, and so on up, and every value on the way is dropped
+(locks are freed, an open `SQLite` transaction is rolled back). Portitor
+stops the unwinding at the edge of one piece of work
+(`portitor-runtime/src/panics.rs`):
+
+```rust
+let mut work: Pin<Box<F>> = Box::pin(work);
+std::future::poll_fn(move |context| {
+    let step = AssertUnwindSafe(|| work.as_mut().poll(context));
+    match std::panic::catch_unwind(step) {
+        Ok(Poll::Ready(output)) => Poll::Ready(Ok(output)),
+        Ok(Poll::Pending) => Poll::Pending,
+        Err(_message) => Poll::Ready(Err(Panicked)),
+    }
+})
+```
+
+- `catch_unwind(closure)` runs the closure and returns `Err` if it
+  panicked, instead of letting the panic travel on.
+- `AssertUnwindSafe(...)` is a promise to the compiler: "data this code
+  was changing may be left half changed, and that is fine here". It is
+  fine because shared data sits behind locks that say how they recover
+  (the bullet on `PoisonError` above) and in `SQLite` transactions.
+- `poll` runs an async task up to its next wait. `catch_panic` wraps
+  each such step, so a task is covered from start to end.
+  `std::future::poll_fn(closure)` makes a task out of a closure that is
+  called for every step; `Poll::Ready(x)` is "done, with `x`",
+  `Poll::Pending` is "not yet".
+- `Pin<Box<F>>`, made by `Box::pin(work)`: the task `work` (of type `F`)
+  is put on the heap (`Box`) and may not be moved from there (`Pin`). A
+  task that is half done can hold pointers into itself, so Rust lets
+  `poll` be called only on a task that is pinned. Code that just
+  `.await`s never sees this; `catch_panic` calls `poll` by hand, so it
+  pins the task first.
+- `work.as_mut().poll(context)`: `poll` takes the pinned task by value,
+  and `as_mut()` lends it for this one call, so that `work` can be
+  polled again at the next step. `context` is how the task says "wake
+  me when I can go on"; it is only passed along.
+
+Work that is not async needs none of this: `catch_sync_panic(|| ...)`
+runs the closure inside one `catch_unwind`.
+
+Use the helpers, not `catch_unwind` itself:
+`answer_500_on_panic(router)` for HTTP handlers (already on every
+server, `serve.rs`), `spawn_supervised(name, || task())` instead of
+`tokio::spawn` for a task that runs as long as the process (the closure
+makes the task again after a panic), `report_panic(name, task)` around
+a task that does one piece of work, and `report_sync_panic(name, || ...)`
+around one piece of work in a loop that is not async (one credential
+decision of many, `decide_guarded` in `portitor-issuer/src/issue.rs`).
+
+```rust
+let mut pause: Option<Duration> = None;
+loop {
+    let started = tokio::time::Instant::now();
+    if catch_panic(start()).await.is_ok() {
+        return;
+    }
+    let wait = next_pause(pause, started.elapsed());
+    /* log, count */
+    tokio::time::sleep(wait).await;
+    pause = Some(wait);
+}
+```
+
+The restart loop of `spawn_supervised`. `next_pause` is a small pure
+function: 5 seconds after the first panic, twice the last pause after
+each further one, at most 5 minutes, and 5 seconds again after a run
+that lasted longer than that. `started.elapsed()` is how long the run
+took. `tokio::time::Instant`, not `std::time::Instant`, so that a test
+with a paused clock (`#[tokio::test(start_paused = true)]`) can read
+the pauses without waiting for them.
+
+```rust
+match catch_panic(send_and_record(outbox.as_ref(), &out)).await {
+    Ok(Some(next)) => out = next,
+    Ok(None) => return,
+    Err(Panicked) => { /* log, count, wait: the loop sends `out` again */ }
+}
+```
+
+The outbox does the same for one message (`outbox.rs`). The step gets
+`&out`, a loan: when it panics, the loop still owns `out` and can send
+it again. Had the step taken `out` itself, the message would be gone
+with the panic. `outbox.as_ref()` turns the `&Arc<O>` into the plain
+`&O` the step takes.
+
 ## `SQLite` transactions
 
 ```rust
@@ -479,6 +575,26 @@ it was (`SqliteStore::issue` in `portitor-issuer/src/store.rs`).
 `rusqlite::OptionalExtension`) turns "no row" into `None` and keeps
 other errors as errors: `Option<(String, String)>` is "the row, if there
 is one".
+
+```sql
+INSERT INTO transfer (/* columns */)
+SELECT ?1, ?2, /* ... */ ?10
+WHERE NOT EXISTS (
+    SELECT 1 FROM transfer WHERE counter_party = ?5 AND consumer_pid = ?2
+)
+```
+
+An insert with a condition, in one statement. `INSERT ... SELECT` adds
+the rows that the `SELECT` gives. This `SELECT` has no table: it gives
+one row, made of the values `?1` to `?10`, or no row at all when the
+`WHERE` is false. So the row is added only if this consumer has no
+transfer with this `consumerPid` yet. `execute` returns how many rows
+were written, and `inserted == 1` tells the caller whether its row went
+in. One statement is atomic: two copies of a request that arrive
+together cannot both pass the check, which "look first, then insert"
+in two statements would allow (`insert` in
+`portitor-connector/src/store/transfers.rs`; ADR 0013, amended in
+0.12).
 
 ## Printing for logs: `Debug`
 
@@ -606,12 +722,20 @@ stops it when the time is up (`UrlSource::get` in
 ```rust
 pub fn schedule(self: &Arc<Self>, every: Duration) -> Option<JoinHandle<()>> {
     let harvester = Arc::clone(self);
-    Some(tokio::spawn(async move {
-        /* ... */
-        let ran = tokio::task::spawn_blocking(move || runner.run(Trigger::Interval));
-    }))
+    let schedule = move || {
+        let harvester = Arc::clone(&harvester);
+        async move {
+            /* ... */
+            let ran = tokio::task::spawn_blocking(move || runner.run(Trigger::Interval));
+        }
+    };
+    Some(spawn_supervised("dataset_harvest", schedule))
 }
 ```
+
+`schedule` is a closure that makes the task: `spawn_supervised` calls
+it once now and again after a panic ("Panics" above). Each call clones
+the pointer, so every new task has its own.
 
 `self: &Arc<Self>` is a method that can be called only on a value kept in
 an `Arc`. It needs that, as the background task keeps its own pointer
@@ -653,7 +777,7 @@ let refreshing = async move {
         tokio::time::sleep(IDENTITY_REFRESH).await;
     }
 };
-tokio::spawn(refreshing.instrument(tracing::Span::none()))
+spawn_supervised("identity_check", /* a closure that makes `refreshing` */)
 ```
 
 A background task that runs until the process stops: it checks our
@@ -727,6 +851,56 @@ let response = match tokio::time::timeout(UPSTREAM_TIMEOUT, sent).await {
 `timeout` wraps the task's own `Result` in one of its own, so there are
 two: the outer says whether it ended in time, the inner what the task
 gave (`fetch` in `data_plane.rs`).
+
+```rust
+let (stop, stopped) = tokio::sync::watch::channel(false);
+/* each server: */ .with_graceful_shutdown(wait(stopped.clone()))
+/* on Ctrl-C or SIGTERM: */ let _ = stop.send(true);
+
+pub async fn wait(mut stopped: tokio::sync::watch::Receiver<bool>) {
+    let _ = stopped.wait_for(|s| *s).await;
+}
+```
+
+`tokio::sync::watch` is one value that many tasks can watch: `stop`
+(the sender) sets it, and every copy of `stopped` (the receivers) sees
+the latest value. Here the value is "stop now?", `false` at first.
+`wait_for(|s| *s)` waits until it is `true`, also when it was set
+before the wait began, which a doorbell (`Notify`) would miss. One
+`stop.send(true)` so stops the public and the management server
+(`serve.rs`).
+
+```rust
+management.await.map_err(std::io::Error::other)??;
+```
+
+`management` is a background task whose own work returns a `Result`,
+so awaiting it gives a result inside a result: the outer one is the
+task's (an error if it panicked), the inner one the server's.
+`map_err(std::io::Error::other)` gives the outer error the type of the
+inner one, the first `?` returns it, and the second `?` returns the
+server's error (`serve_with_trusted_routes` and `stop_all_when_ended`
+in `serve.rs`).
+
+```rust
+fn without_delay(listener: TcpListener) -> impl axum::serve::Listener<Addr = std::net::SocketAddr> {
+    use axum::serve::ListenerExt;
+    listener.tap_io(|connection| {
+        let _ = connection.set_nodelay(true);
+    })
+}
+```
+
+`ListenerExt` is an *extension trait*: a trait that only adds methods
+to a type from another crate, here `tap_io` on a `TcpListener`. The
+methods exist only where the trait is imported, hence the `use` inside
+the function. `tap_io(closure)` gives a listener that works as before
+and also calls the closure on every connection it accepts, before the
+connection is served. Here the closure sets `TCP_NODELAY`. `let _ =`
+drops the result on purpose: the option only changes timing. The
+return type `impl Listener<Addr = SocketAddr>` is "some listener whose
+addresses are socket addresses"; the real type is long and of no
+interest (`serve.rs`).
 
 ## Lifetimes: `'a`
 
@@ -804,7 +978,9 @@ context loader). `.into()` turns a `String` into such a boxed error
   "Option::is_none"` leaves out empty fields.
 - `#[serde(deny_unknown_fields)]`: refuse JSON with a field the type
   does not have, instead of ignoring it (the management APIs' request
-  types, so a typo is an error).
+  types, so a typo is an error; the ODRL policy types `Offer`,
+  `Agreement`, `Rule` and `AtomicConstraint`, so a term that is not
+  understood is never dropped, ADR 0009).
 - `#[serde(default)]`: a missing field gets its empty default (`[]`,
   `""`, `false`); `default = "pull_format"` calls that function instead
   (`portitor-connector/src/management.rs`).
@@ -814,6 +990,14 @@ context loader). `.into()` turns a `String` into such a boxed error
 - `#[serde(untagged)]` on an enum: try each variant in turn and take the
   first that fits the JSON. `Relationship` in `did.rs` is a key id string
   or a whole key object.
+  When no variant fits, the error says only "data did not match any
+  variant", so the reason is lost. Where the reason matters, the type is
+  read by hand instead: `Constraint` in `portitor-dsp/src/lib.rs` has
+  its own `impl Deserialize`, which reads the JSON into a
+  `serde_json::Value`, looks at the fields to pick the kind, and then
+  reads that kind (`read_constraint`). A policy field that is not
+  understood is then refused by name. `Offer::deserialize(&value)` reads
+  a type from a `&Value` without copying it.
 - `#[serde(tag = "kty")]`: the JSON field `kty` says which variant it is
   (`Jwk`: `"EC"` or `"RSA"`).
 - `#[serde(deserialize_with = "one_audience")]`: read this field with
@@ -838,6 +1022,35 @@ context loader). `.into()` turns a `String` into such a boxed error
   compiled only in the DSP TCK build.
 - `#[allow(clippy::...)]`: switches off one lint here. A comment says
   why.
+
+### Reading a type by hand: `impl<'de> Deserialize<'de>`
+
+```rust
+impl<'de> Deserialize<'de> for Constraint {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(d)?;
+        read_constraint(value).map_err(D::Error::custom)
+    }
+}
+```
+
+This is what `#[derive(Deserialize)]` writes for other types, written
+by hand (`Constraint` in `portitor-dsp/src/lib.rs`):
+
+- `D: Deserializer<'de>` is the reader of some format; for Portitor it
+  is always JSON, but serde's trait does not say so.
+- `'de` is the lifetime of the text being read. serde needs it for
+  types that borrow from that text; `Constraint` borrows nothing, so
+  the `'de` is only there because the trait asks for it.
+- `D::Error` is the error type of that reader. `D::Error::custom(text)`
+  makes one from a message (it comes from the trait
+  `serde::de::Error`, imported as `Error as _`), so
+  `.map_err(D::Error::custom)` turns the `String` of `read_constraint`
+  into the error serde expects. The message then shows up in the
+  `serde_json` error with the line and column.
+
+The body first reads the JSON whole into a `serde_json::Value`, then
+decides from its fields what it is.
 
 ## Macros: `name!(...)`
 

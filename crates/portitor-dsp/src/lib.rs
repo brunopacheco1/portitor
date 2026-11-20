@@ -230,6 +230,7 @@ pub mod guard;
 pub mod negotiation;
 pub mod policy;
 pub mod transfer;
+pub mod unique_keys;
 
 #[cfg(test)]
 mod test_support;
@@ -369,9 +370,12 @@ pub struct CatalogRequestMessage {
     pub filter: Option<Vec<serde_json::Value>>,
 }
 
-/// An atomic ODRL constraint.
+/// An atomic ODRL constraint. Its fields are those of `AtomicConstraint`
+/// in the DSP 2025-1 JSON Schema (`negotiation/contract-schema.json`);
+/// any other field (for example ODRL's `unit`) is refused when read, see
+/// [`Offer`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AtomicConstraint {
     /// Left operand, for example `spatial`.
     pub left_operand: String,
@@ -395,8 +399,17 @@ pub enum LogicalConstraint {
     Xone(Vec<Constraint>),
 }
 
+/// The fields of a logical constraint (`LogicalConstraint` in the DSP
+/// 2025-1 JSON Schema, `negotiation/contract-schema.json`). A constraint
+/// has exactly one of them and nothing else.
+const LOGICAL_OPERANDS: [&str; 4] = ["and", "andSequence", "or", "xone"];
+
 /// An ODRL constraint: atomic, or logical over other constraints.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Written to JSON without a wrapper (`untagged`). Read by hand
+/// ([`read_constraint`]), so that a field that is not understood is
+/// refused with an error that names it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum Constraint {
     /// For example `{"and": [...]}`.
@@ -405,8 +418,65 @@ pub enum Constraint {
     Atomic(AtomicConstraint),
 }
 
-/// An ODRL rule (permission, prohibition or duty).
+impl<'de> Deserialize<'de> for Constraint {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // The JSON is read whole first, because the fields present decide
+        // which kind of constraint it is.
+        // A key given twice is refused here, as the typed readers do.
+        let value = unique_keys::UniqueKeys::deserialize(d)?.0;
+        read_constraint(value).map_err(D::Error::custom)
+    }
+}
+
+/// Reads one constraint: a logical one if it has one of
+/// [`LOGICAL_OPERANDS`], an atomic one otherwise. serde's own `untagged`
+/// reading is not used here: when no variant fits it says only "data did
+/// not match any variant", and the name of the field is lost.
+///
+/// # Errors
+///
+/// What is wrong, naming the field that is not understood.
+fn read_constraint(value: serde_json::Value) -> Result<Constraint, String> {
+    let Some(fields) = value.as_object() else {
+        return Err("a constraint must be a JSON object".to_owned());
+    };
+    let is_logical = LOGICAL_OPERANDS
+        .iter()
+        .any(|operand| fields.contains_key(*operand));
+    if !is_logical {
+        // `deny_unknown_fields` on `AtomicConstraint` names the field
+        return match AtomicConstraint::deserialize(value) {
+            Ok(atomic) => Ok(Constraint::Atomic(atomic)),
+            Err(error) => Err(error.to_string()),
+        };
+    }
+    for name in fields.keys() {
+        if !LOGICAL_OPERANDS.contains(&name.as_str()) {
+            return Err(format!(
+                "unknown field `{name}` in a logical constraint, \
+                 expected one of `and`, `andSequence`, `or`, `xone`"
+            ));
+        }
+    }
+    if fields.len() != 1 {
+        return Err(
+            "a logical constraint has exactly one of `and`, `andSequence`, `or`, `xone`".to_owned(),
+        );
+    }
+    match LogicalConstraint::deserialize(value) {
+        Ok(logical) => Ok(Constraint::Logical(logical)),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// An ODRL rule (permission, prohibition or duty). Its fields are those
+/// of `Rule` and `Duty` in the DSP 2025-1 JSON Schema
+/// (`negotiation/contract-schema.json`): `action` and `constraint`. Any
+/// other field is refused when read, see [`Offer`]; this includes a
+/// `duty` inside a permission, which ODRL 2.2 defines and Portitor cannot
+/// enforce (ADR 0009, amendment of 2026-11-18).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Rule {
     /// Action, for example `use`.
     pub action: String,
@@ -415,8 +485,22 @@ pub struct Rule {
     pub constraint: Vec<Constraint>,
 }
 
-/// An ODRL offer attached to a dataset.
+/// An ODRL offer attached to a dataset or sent in a negotiation message.
+///
+/// **Read strictly** (ADR 0009, amendment of 2026-11-18): a field that is
+/// not listed here is an error that names the field
+/// (`deny_unknown_fields`), never dropped. A term Portitor did not read
+/// cannot be compared ([`policy::same_terms`]) or kept, so it must not be
+/// agreed to. The same holds for [`Rule`], [`AtomicConstraint`],
+/// [`Constraint`] and [`negotiation::Agreement`].
+///
+/// The fields are those of `PolicyClass`, `Offer` and `MessageOffer` in
+/// the DSP 2025-1 JSON Schema (`negotiation/contract-schema.json`), plus
+/// `assigner` and `assignee`: the DSP JSON-LD context defines both
+/// (`context/odrl.jsonld`), and Eclipse EDC and the DSP TCK send them in
+/// the offer of a negotiation message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Offer {
     /// Offer identifier.
     #[serde(rename = "@id")]
@@ -437,6 +521,15 @@ pub struct Offer {
     /// offer); required when the offer travels in a negotiation message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    /// The provider's participant identifier, when the offer travels in a
+    /// negotiation message and the sender names it. Kept as sent, and
+    /// checked against the provider of the negotiation
+    /// ([`policy::check_parties`]). Not allowed in a catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assigner: Option<String>,
+    /// The consumer's participant identifier; as for `assigner`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
     /// ODRL profiles the policy follows (one IRI or a list).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<serde_json::Value>,

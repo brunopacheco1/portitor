@@ -1,0 +1,26 @@
+meta {
+  name: Terminate transfer
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{mgmtUrl}}/v1/transfers/{{mgmtTransferConsumerPid}}/termination
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 202
+  res.body.consumerPid: isDefined
+}
+
+docs {
+  Ends a transfer that has not ended yet; use it instead of "Complete transfer".
+  This is the management API, not the DSP endpoint: it takes no body, and it answers
+  202 with the transfer as the connector sees it (the same shape as "Get transfer").
+  The connector then sends the DSP TransferTerminationMessage to the provider in the
+  background; the state becomes TERMINATED once the provider acknowledges it.
+  400 when the transfer has ended (COMPLETED or TERMINATED) or a message is still on
+  its way; 404 for an unknown consumerPid.
+}

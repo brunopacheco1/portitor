@@ -10,7 +10,6 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use axum::Json;
-use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -119,7 +118,7 @@ impl Provider {
     /// Checks the message's shape with the guard, then reads it.
     fn read<T: DeserializeOwned>(
         &self,
-        body: Result<Json<Value>, JsonRejection>,
+        body: crate::inbound::Body,
         message_type: &str,
         provider_pid: &str,
     ) -> Result<T, Box<ContractNegotiationError>> {
@@ -247,7 +246,7 @@ pub(crate) async fn get(
 pub(crate) async fn request_new(
     State(provider): State<Arc<Provider>>,
     Extension(caller): Extension<Caller>,
-    body: Result<Json<Value>, JsonRejection>,
+    body: crate::inbound::Body,
 ) -> Response {
     let msg: ContractRequestMessage = match provider.read(body, "ContractRequestMessage", "") {
         Ok(m) => m,
@@ -273,7 +272,7 @@ pub(crate) async fn request_counter(
     State(provider): State<Arc<Provider>>,
     Extension(caller): Extension<Caller>,
     Path(pid): Path<String>,
-    body: Result<Json<Value>, JsonRejection>,
+    body: crate::inbound::Body,
 ) -> Response {
     let msg: ContractRequestMessage = match provider.read(body, "ContractRequestMessage", &pid) {
         Ok(m) => m,
@@ -291,7 +290,7 @@ pub(crate) async fn event(
     State(provider): State<Arc<Provider>>,
     Extension(caller): Extension<Caller>,
     Path(pid): Path<String>,
-    body: Result<Json<Value>, JsonRejection>,
+    body: crate::inbound::Body,
 ) -> Response {
     let msg: ContractNegotiationEventMessage =
         match provider.read(body, "ContractNegotiationEventMessage", &pid) {
@@ -333,7 +332,7 @@ pub(crate) async fn verify(
     State(provider): State<Arc<Provider>>,
     Extension(caller): Extension<Caller>,
     Path(pid): Path<String>,
-    body: Result<Json<Value>, JsonRejection>,
+    body: crate::inbound::Body,
 ) -> Response {
     let msg: ContractAgreementVerificationMessage =
         match provider.read(body, "ContractAgreementVerificationMessage", &pid) {
@@ -349,7 +348,7 @@ pub(crate) async fn terminate(
     State(provider): State<Arc<Provider>>,
     Extension(caller): Extension<Caller>,
     Path(pid): Path<String>,
-    body: Result<Json<Value>, JsonRejection>,
+    body: crate::inbound::Body,
 ) -> Response {
     let msg: ContractNegotiationTerminationMessage =
         match provider.read(body, "ContractNegotiationTerminationMessage", &pid) {

@@ -584,6 +584,135 @@ fn checks_offers_and_agreements() {
     assert!(why.contains("differ"), "{why}");
 }
 
+/// DSP 2025-1, "Contract Agreement Message": "An Agreement MUST contain a
+/// `timestamp` property defined as an XSD `DateTime` type."
+#[test]
+fn an_agreement_without_a_timestamp_is_refused() {
+    let store = Store::default();
+    let svc = ConsumerService::new(
+        &store,
+        AcceptAndVerify,
+        Env::default(),
+        CB.to_owned(),
+        ME.to_owned(),
+    );
+    let (n, req) = svc.start(PROVIDER, "did:web:p", offer()).unwrap();
+    let cpid = n.consumer_pid;
+    svc.delivered(&req, Some(&ack("p1", &cpid))).unwrap();
+
+    for (timestamp, why) in [
+        (None, "no timestamp"),
+        (Some("yesterday"), "not an XSD dateTime"),
+        // a date alone is not a date and time
+        (Some("2026-11-12"), "not an XSD dateTime"),
+    ] {
+        let mut msg = agreement_msg("p1", &cpid);
+        msg.agreement.timestamp = timestamp.map(str::to_owned);
+        let Failure::BadRequest(error) = svc.agreement(&cpid, &msg).unwrap_err() else {
+            panic!("{timestamp:?}: not a 400");
+        };
+        let text = serde_json::to_string(&error).unwrap();
+        assert!(text.contains(why), "{timestamp:?}: {text}");
+        assert!(text.contains("ContractNegotiationError"), "{text}");
+        assert_eq!(state(&store, &cpid), NegotiationState::Requested);
+        assert!(store.0.borrow()[&cpid].agreement.is_none());
+    }
+
+    // with a time zone, without one (xsd:dateTime allows both), and with
+    // a fraction: accepted
+    for timestamp in ["2026-11-12T12:00:00", "2026-11-12T12:00:00.5+01:00"] {
+        assert!(is_xsd_date_time(timestamp), "{timestamp}");
+    }
+    let (a, _) = svc.agreement(&cpid, &agreement_msg("p1", &cpid)).unwrap();
+    assert_eq!(a.state, NegotiationState::Agreed);
+}
+
+/// The forms of `xsd:dateTime` an agreement's `timestamp` may take (W3C
+/// XML Schema Part 2, "dateTime"; the pattern of `timestamp` in DSP
+/// 2025-1 `contract-schema.json`), and texts that only look like one.
+#[test]
+fn the_forms_of_an_agreement_timestamp() {
+    for accepted in [
+        "2026-11-12T12:00:00Z",
+        "2026-11-12T12:00:00",
+        "2026-11-12T12:00:00+00:00",
+        "2026-11-12T12:00:00-00:00",
+        "2026-11-12T23:59:59+14:00",
+        "2026-11-12T00:00:00-14:00",
+        "2026-11-12T12:00:00.123456789Z",
+        // more fraction digits than a nanosecond
+        "2026-11-12T12:00:00.1234567890123Z",
+        "2026-11-12T12:00:00.5",
+        // 29 February of a leap year
+        "2028-02-29T12:00:00Z",
+        "0001-01-01T00:00:00Z",
+        "9999-12-31T23:59:59Z",
+    ] {
+        assert!(is_xsd_date_time(accepted), "{accepted}");
+    }
+    for refused in [
+        "",
+        "Z",
+        " 2026-11-12T12:00:00Z",
+        "2026-11-12T12:00:00Z ",
+        "2026-11-12T12:00:00Z\n",
+        // lower case, a space for the `T`, no separators
+        "2026-11-12t12:00:00z",
+        "2026-11-12 12:00:00Z",
+        "20261112T120000Z",
+        // a time alone, a date alone, a date with a zone
+        "12:00:00Z",
+        "2026-11-12",
+        "2026-11-12Z",
+        "2026-11-12T",
+        // not on the calendar or the clock
+        "2026-13-01T12:00:00Z",
+        "2026-00-10T12:00:00Z",
+        "2026-02-29T12:00:00Z",
+        "2026-11-31T12:00:00Z",
+        "2026-11-12T25:00:00Z",
+        "2026-11-12T12:60:00Z",
+        "2026-11-12T12:00:60Z",
+        // a zone out of range, half a zone, two zones
+        "2026-11-12T12:00:00+14:01",
+        "2026-11-12T12:00:00+15:00",
+        "2026-11-12T12:00:00+01",
+        "2026-11-12T12:00:00+0100",
+        "2026-11-12T12:00:00-",
+        "2026-11-12T12:00:00ZZ",
+        "2026-11-12T12:00:00+01:00Z",
+        // a fraction without digits, a sign, digits that are not ASCII
+        "2026-11-12T12:00:00.Z",
+        "2026-11-12T12:00:00.",
+        "2026-11-12T12:00:00,5Z",
+        "+2026-11-12T12:00:00Z",
+        "2026-11-12T12:00:0\u{0660}Z",
+        "\u{ff12}026-11-12T12:00:00Z",
+        // seconds since 1970, as a JWT would have it
+        "1794484800",
+    ] {
+        assert!(!is_xsd_date_time(refused), "{refused:?}");
+        assert_eq!(
+            check_timestamp(Some(refused)),
+            Err("the agreement's timestamp is not an XSD dateTime"),
+            "{refused:?}"
+        );
+    }
+}
+
+/// `xsd:dateTime` writes midnight at the end of a day as `24:00:00` (W3C
+/// XML Schema Part 2, "dateTime": "hh ... or 24 if the minutes and
+/// seconds are zero"); the DSP 2025-1 pattern for `timestamp` has it too
+/// (`contract-schema.json`, `Agreement`: `24:00:00(\.0+)?`).
+#[test]
+fn a_timestamp_at_the_end_of_the_day_is_accepted() {
+    assert!(is_xsd_date_time("2026-11-12T24:00:00Z"));
+    assert!(is_xsd_date_time("2026-11-12T24:00:00.000+01:00"));
+    // only with minutes and seconds of zero
+    assert!(!is_xsd_date_time("2026-11-12T24:00:01Z"));
+    assert!(!is_xsd_date_time("2026-11-12T24:30:00Z"));
+}
+
 #[test]
 fn only_the_provider_it_was_started_with_may_answer() {
     // ADR 0016: the caller's proven DID must be the negotiation's provider
@@ -615,4 +744,66 @@ fn only_the_provider_it_was_started_with_may_answer() {
     assert_eq!(status(svc.agreement(&cpid, &msg).unwrap_err()), "400");
     assert_eq!(state(&store, &cpid), NegotiationState::Requested);
     assert!(svc.agreement(&cpid, &agreement_msg("p1", &cpid)).is_ok());
+}
+
+/// An offer that names its parties must name the provider of the
+/// negotiation and this consumer: when we start with it, and when the
+/// provider sends one.
+#[test]
+fn the_parties_an_offer_names_are_checked() {
+    let store = Store::default();
+    let svc = ConsumerService::new(
+        &store,
+        AcceptAndVerify,
+        Env::default(),
+        CB.to_owned(),
+        ME.to_owned(),
+    );
+    // our own start, with an offer for another provider or consumer
+    let mut other_provider = offer();
+    other_provider.assigner = Some("did:web:x".to_owned());
+    let failure = svc
+        .start(PROVIDER, "did:web:p", other_provider)
+        .unwrap_err();
+    assert_eq!(status(failure), "400");
+    let mut other_consumer = offer();
+    other_consumer.assignee = Some("did:web:x".to_owned());
+    let failure = svc
+        .start(PROVIDER, "did:web:p", other_consumer)
+        .unwrap_err();
+    assert_eq!(status(failure), "400");
+    assert!(store.0.borrow().is_empty());
+
+    // an offer naming the right parties starts, and the request carries them
+    let mut named = offer();
+    named.assigner = Some("did:web:p".to_owned());
+    named.assignee = Some(ME.to_owned());
+    let (n, req) = svc.start(PROVIDER, "did:web:p", named).unwrap();
+    let cpid = n.consumer_pid.clone();
+    assert_eq!(req.body["offer"]["assigner"], "did:web:p");
+    assert_eq!(req.body["offer"]["assignee"], ME);
+    svc.delivered(&req, Some(&ack("p1", &cpid))).unwrap();
+
+    // the provider's offer
+    for (field, reason) in [
+        ("assigner", "the offer's assigner is not the provider"),
+        ("assignee", "the offer's assignee is not the consumer"),
+    ] {
+        let mut wrong = offer_msg("p1", &cpid);
+        if field == "assigner" {
+            wrong.offer.assigner = Some("did:web:x".to_owned());
+        } else {
+            wrong.offer.assignee = Some("did:web:x".to_owned());
+        }
+        let Failure::BadRequest(error) = svc.offer(&cpid, &wrong).unwrap_err() else {
+            panic!("{field}: not a 400");
+        };
+        assert_eq!(error.reason, [json!(reason)], "{field}");
+        assert_eq!(state(&store, &cpid), NegotiationState::Requested);
+    }
+    let mut right = offer_msg("p1", &cpid);
+    right.offer.assigner = Some("did:web:p".to_owned());
+    right.offer.assignee = Some(ME.to_owned());
+    let (a, _) = svc.offer(&cpid, &right).unwrap();
+    assert_eq!(a.state, NegotiationState::Offered);
 }

@@ -1,0 +1,21 @@
+meta {
+  name: Startup
+  type: http
+  seq: 14
+}
+
+get {
+  url: {{mgmtUrl}}/api/check/startup
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+  res.body.isSystemHealthy: eq true
+}
+
+docs {
+  ADR 0023: the startup check of the connector, EDC's HealthStatus shape. The same checks as
+  "Readiness"; 503 when one fails. No API key.
+}

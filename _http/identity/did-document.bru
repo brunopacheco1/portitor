@@ -1,0 +1,21 @@
+meta {
+  name: DID document
+  type: http
+  seq: 15
+}
+
+get {
+  url: {{identityUrl}}/.well-known/did.json
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+  res.body.id: eq {{identityDid}}
+}
+
+docs {
+  The identity's public port: the participant's did:web DID document, with its key and
+  its CredentialService entry. Anyone may read it; verifiers do, to check a token.
+}

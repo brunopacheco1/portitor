@@ -29,5 +29,6 @@ assert {
 
 docs {
   DSP 2025-1 Catalog Protocol, HTTPS binding: POST /catalog/request with a CatalogRequestMessage.
+  The whole catalog comes in one answer. An empty filter is ignored; any other filter gets 400.
   Debug: breakpoint in catalog_request (crates/portitor-connector/src/lib.rs).
 }

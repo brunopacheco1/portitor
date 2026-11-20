@@ -130,6 +130,8 @@ fn offer(target: Option<&str>) -> Offer {
         prohibition: vec![],
         obligation: vec![],
         target: target.map(str::to_owned),
+        assigner: None,
+        assignee: None,
         profile: None,
     }
 }
@@ -337,6 +339,32 @@ fn consumer_counter_offer_and_termination() {
     let (ack, out) = p.terminate(&pid, &termination(&pid), "c").unwrap();
     assert_eq!(ack.state, NegotiationState::Terminated);
     assert_eq!(out, None);
+}
+
+/// A request on a running negotiation must name the `consumerPid` the
+/// negotiation was started with, like every other message on it (TD-36).
+#[test]
+fn a_counter_request_with_another_consumer_pid_is_refused() {
+    let store = Store::default();
+    let script = Script(BTreeMap::from([(
+        NegotiationState::Requested,
+        Decision::Offer,
+    )]));
+    let p = service(&store, script);
+    let (ack, out) = p.request(None, request(None), "c", &none()).unwrap();
+    let pid = ack.provider_pid;
+    p.delivered(&out.unwrap()).unwrap();
+    assert_eq!(store.0.borrow()[&pid].state, NegotiationState::Offered);
+
+    let mut other_pid = request(Some(&pid));
+    other_pid.consumer_pid = "c2".to_owned();
+    let err = p.request(Some(&pid), other_pid, "c", &none()).unwrap_err();
+    assert!(matches!(err, Failure::BadRequest(_)), "{err:?}");
+    assert!(reason(&err).contains("process ids do not match"), "{err:?}");
+    // nothing changed: still OFFERED, with the first consumer pid
+    let stored = store.0.borrow()[&pid].clone();
+    assert_eq!(stored.state, NegotiationState::Offered);
+    assert_eq!(stored.consumer_pid, "c1");
 }
 
 #[test]
@@ -618,4 +646,52 @@ fn agrees_only_when_the_callers_credentials_meet_the_offer() {
             .unwrap();
         assert_eq!(out.unwrap().transition, expected, "{role}");
     }
+}
+
+/// An offer that names its parties (Eclipse EDC sends `assigner`, the DSP
+/// TCK both) must name this provider and the caller; the names are kept
+/// with the negotiation, not dropped.
+#[test]
+fn the_parties_an_offer_names_are_checked_and_kept() {
+    let store = Store::default();
+    let p = service(&store, AgreeToCatalogOffers);
+
+    let mut other_provider = request(None);
+    other_provider.offer.assigner = Some("did:web:someone-else".to_owned());
+    let failure = p
+        .request(None, other_provider, "did:web:consumer", &none())
+        .unwrap_err();
+    assert!(reason(&failure).contains("the offer's assigner is not the provider"));
+
+    let mut other_consumer = request(None);
+    other_consumer.offer.assignee = Some("did:web:someone-else".to_owned());
+    let failure = p
+        .request(None, other_consumer, "did:web:consumer", &none())
+        .unwrap_err();
+    assert!(reason(&failure).contains("the offer's assignee is not the consumer"));
+    assert!(store.0.borrow().is_empty());
+
+    let mut named = request(None);
+    named.offer.assigner = Some("did:web:provider".to_owned());
+    named.offer.assignee = Some("did:web:consumer".to_owned());
+    let (ack, out) = p.request(None, named, "did:web:consumer", &none()).unwrap();
+    let stored = store.0.borrow()[&ack.provider_pid].offer.clone();
+    assert_eq!(stored.assigner.as_deref(), Some("did:web:provider"));
+    assert_eq!(stored.assignee.as_deref(), Some("did:web:consumer"));
+    // the parties are not terms: the offer still equals the catalog's
+    assert_eq!(out.unwrap().transition, Transition::Agree);
+
+    // a counter-request is checked the same way
+    let waiting = Store::default();
+    let p = service(&waiting, Script(BTreeMap::new()));
+    let (ack, _) = p
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap();
+    let pid = ack.provider_pid;
+    let mut counter = request(Some(&pid));
+    counter.offer.assigner = Some("did:web:someone-else".to_owned());
+    let failure = p
+        .request(Some(&pid), counter, "did:web:consumer", &none())
+        .unwrap_err();
+    assert!(reason(&failure).contains("the offer's assigner is not the provider"));
 }

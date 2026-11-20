@@ -5,7 +5,7 @@ meta {
 }
 
 get {
-  url: {{mgmtUrl}}/v1/negotiations/{{mgmtConsumerPid}}
+  url: {{mgmtUrl}}/v1/negotiations/{{mgmtNegotiationConsumerPid}}
   body: none
   auth: inherit
 }
@@ -13,6 +13,8 @@ get {
 script:post-response {
   if (res.body && res.body.agreement) {
     bru.setVar("mgmtAgreementId", res.body.agreement["@id"]);
+    // the same agreement, for the DSP requests in "transfer-provider"
+    bru.setVar("agreementId", res.body.agreement["@id"]);
   }
 }
 
@@ -21,6 +23,10 @@ assert {
 }
 
 docs {
+  The consumer's management API (GET /v1/negotiations/{consumerPid}), not the DSP
+  endpoint GET /negotiations/{providerPid}: the path takes our consumerPid, and the
+  answer is a NegotiationView, with the agreement once the provider sent it.
   Within a second the state is FINALIZED and the negotiation holds the agreement.
-  Saves mgmtAgreementId for "Start transfer".
+  Saves mgmtAgreementId for "Start transfer", and agreementId for the DSP requests in
+  "transfer-provider".
 }

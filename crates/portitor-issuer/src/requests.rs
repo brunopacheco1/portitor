@@ -123,7 +123,15 @@ pub(crate) async fn create(
     // decided in the background; the holder follows it at the Location
     let background = Arc::clone(&issuer);
     let pid = issuer_pid.clone();
-    tokio::spawn(async move { issue::decide(&background, &pid) });
+    // a panic is logged and counted; the request stays `RECEIVED`. The
+    // outbox tries it again on each round (`issue::decide_waiting`), and
+    // a decision that panics there too is logged and counted again: the
+    // request then stays `RECEIVED` until the bug is fixed
+    let deciding = async move { issue::decide(&background, &pid) };
+    tokio::spawn(portitor_runtime::panics::report_panic(
+        "credential_decision",
+        deciding,
+    ));
     let location = format!("{}/requests/{issuer_pid}", issuer.service_url);
     (StatusCode::CREATED, [(header::LOCATION, location)]).into_response()
 }

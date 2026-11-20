@@ -25,3 +25,8 @@ delta = "0.61.1 -> 0.61.2"
 who = "Bruno Pacheco <4491850+brunopacheco1@users.noreply.github.com>"
 criteria = "safe-to-run"
 delta = "0.61.1 -> 0.61.2"
+
+[[audits.rusqlite]]
+who = "Bruno Pacheco <4491850+brunopacheco1@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.42.0 -> 0.43.0"

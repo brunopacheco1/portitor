@@ -275,7 +275,10 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
             ));
         }
         self.handle(pid, &consumer_pid, caller, credentials, |negotiation| {
-            self.check_offer(&msg.offer, pid, &consumer_pid)?;
+            // the request must name the consumer pid this negotiation was
+            // started with, like every other message on it (TD-36)
+            check_ids(negotiation, pid, &consumer_pid)?;
+            self.check_offer(&msg.offer, pid, &consumer_pid, caller)?;
             receive(negotiation, Transition::Request)?;
             negotiation.offer = msg.offer.clone();
             Ok(())
@@ -292,7 +295,7 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
         let Some(callback_address) = msg.callback_address.filter(|c| !c.is_empty()) else {
             return Err(bad("", &consumer_pid, "callbackAddress is required"));
         };
-        self.check_offer(&msg.offer, "", &consumer_pid)?;
+        self.check_offer(&msg.offer, "", &consumer_pid, caller)?;
         let state = next_state(None, Transition::Request, Role::Consumer)
             .map_err(|e| bad("", &consumer_pid, &e.to_string()))?;
         let mut negotiation = Negotiation {
@@ -609,11 +612,22 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
             .map_err(|e| e.to_string())
     }
 
-    /// The offer must name a dataset of this provider and one of its offers.
-    fn check_offer(&self, offer: &Offer, pid: &str, cpid: &str) -> Result<(), Failure> {
+    /// The offer must name a dataset of this provider and one of its
+    /// offers. If it names its parties, they must be this provider and
+    /// `caller`, the consumer that sent it.
+    fn check_offer(
+        &self,
+        offer: &Offer,
+        pid: &str,
+        cpid: &str,
+        caller: &str,
+    ) -> Result<(), Failure> {
         let Some(target) = offer.target.as_deref() else {
             return Err(bad(pid, cpid, "the offer has no target"));
         };
+        if let Err(reason) = crate::policy::check_parties(offer, &self.participant_id, caller) {
+            return Err(bad(pid, cpid, reason));
+        }
         let known = self
             .catalog
             .get(target)

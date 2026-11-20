@@ -5,16 +5,21 @@ meta {
 }
 
 post {
-  url: {{mgmtUrl}}/v1/transfers/{{mgmtTransferPid}}/completion
+  url: {{mgmtUrl}}/v1/transfers/{{mgmtTransferConsumerPid}}/completion
   body: none
   auth: inherit
 }
 
 assert {
   res.status: eq 202
+  res.body.consumerPid: isDefined
 }
 
 docs {
-  Tells the provider the transfer is done (TransferCompletionMessage); the data
-  address stops working.
+  Tells the provider the transfer is done; the data address stops working.
+  This is the management API, not the DSP endpoint: it takes no body, and it
+  answers 202 with the transfer as the connector sees it (the same shape as
+  "Get transfer"). The connector then sends the DSP TransferCompletionMessage
+  (providerPid, consumerPid) to the provider in the background; the state
+  becomes COMPLETED once the provider acknowledges it.
 }

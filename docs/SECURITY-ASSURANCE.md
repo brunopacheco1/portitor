@@ -178,7 +178,7 @@ document, issuer service, status lists and bundles.
 | S | A caller forges or replays a self-issued token, or uses another participant's process | `validate_self_issued` (key with `capabilityInvocation`, `aud`, `iss` = `sub`, expiry, `jti`) in `portitor-dcp/src/id_token.rs`; run by `require_caller` on every DSP route (`portitor-connector/src/lib.rs`, `auth.rs`) and by `portitor-runtime/src/caller.rs` for the identity and the issuer; a `MembershipCredential` from a trusted issuer (`auth/dcp.rs`, ADR 0016); each process bound to the DID that started it (`portitor-dsp/src/negotiation/provider.rs`, `transfer/provider.rs`); the issuer admits only registered DIDs and the Storage API only trusted issuers, both before resolving the DID (`portitor-issuer/src/requests.rs`, `portitor-identity/src/caller.rs`) |
 | T | A message is changed on the way | TLS at the operator's proxy (not checked, TD-19). DSP messages are not signed (DSP 2025-1 has no message signature); tokens, credentials and presentations are, and are verified (`auth/dcp.rs`); typed parsing and, with a bundle, the SHACL message guard (`portitor-connector/src/shacl.rs`) |
 | R | A partner denies it agreed, or denies it pulled data | Partly: state changes logged with process ids (`portitor-connector/src/state_events.rs`); the agreement and the counter-party's DID stored (`portitor-connector/src/store.rs`). The caller's token and presentation are not kept, and data pulls are not logged: **F-02** |
-| I | A caller learns offers, flows or reasons it should not | 401 without a reason (`auth.rs` `unauthorized`, `portitor-runtime/src/caller.rs` `refused`); the data plane answers the same 401 for an unknown flow, a wrong or expired token and a stopped flow (`portitor-connector/src/data_plane.rs`); a presentation holds only what the scopes and our access token allow (`portitor-identity/src/presentation.rs`); a request status only for the holder that made it (`portitor-issuer/src/requests.rs`). The catalog shows every offer to every member ([TD-13](RISKS_AND_TECHNICAL_DEBTS.md#td-13), known) |
+| I | A caller learns offers, flows or reasons it should not | A refusal without a reason: on DSP routes 404 for negotiations and transfers and 401 for the catalog (`auth.rs` `unauthorized`, `refusal_status`; ADR 0016, amended in 0.12), 401 on the identity and the issuer (`portitor-runtime/src/caller.rs` `refused`); the data plane answers the same 401 for an unknown flow, a wrong or expired token and a stopped flow (`portitor-connector/src/data_plane.rs`); a presentation holds only what the scopes and our access token allow (`portitor-identity/src/presentation.rs`); a request status only for the holder that made it (`portitor-issuer/src/requests.rs`). The catalog shows every offer to every member ([TD-13](RISKS_AND_TECHNICAL_DEBTS.md#td-13), known) |
 | D | A caller exhausts a component | 256 requests at once and 60 s per request on every public port (`portitor-runtime/src/serve.rs`, applied in each `main.rs`); a 20 s deadline, at most 8 presentations of 16 credentials and 2 MiB status lists per check (`auth/dcp.rs`); 10 s and 64 KiB per outgoing call (`portitor-runtime/src/http.rs`); body limits ([R-18](RISKS_AND_TECHNICAL_DEBTS.md#r-18), changed in 0.11). No limit per partner: **F-10**. The identity fetches any caller's DID before cheaper checks: **F-06**. One slow holder delays every issuer delivery: **F-09** |
 | E | A caller gets more than its credentials allow | A policy not understood fails closed (`portitor-dsp/src/policy.rs`, ADR 0009); credential constraints checked again at each transfer request (ADR 0019); credentials from untrusted issuers skipped (`auth/dcp.rs`). `neq` and `isNoneOf` can be met with another credential of the type: **F-07**. A trusted issuer is trusted for every credential type: **F-08** |
 
@@ -187,10 +187,10 @@ document, issuer service, status lists and bundles.
 | | Threat | Countered by, or finding |
 |---|---|---|
 | S | A fake DID document, or a fake compliance service | HTTPS with the system's CA certificates, no redirects, and the document's `id` must be the DID (`portitor-runtime/src/did.rs`, `http.rs`). Trust in a `did:web` rests on the DNS and web PKI of its host, by the method's design (not countered by Portitor). The identity takes a compliance answer only from `PORTITOR_GAIAX_COMPLIANCE_DID` (`portitor-identity/tests/gaiax.rs`, `an_answer_from_another_service_is_refused`) |
-| T | The document is changed, or a key its owner removed is still used | TLS; the key relationship is checked for each use (`capabilityInvocation` for tokens, `assertionMethod` for credentials, `authentication` for presentations, `auth/dcp.rs`). A removed key stays trusted until the cached document expires, 5 minutes, not configurable: **F-04** |
+| T | The document is changed, or a key its owner removed is still used | TLS; the key relationship is checked for each use (`capabilityInvocation` for tokens, `assertionMethod` for credentials, `authentication` for presentations, `auth/dcp.rs`). A removed key stays trusted until the cached document expires: `PORTITOR_DID_CACHE_SECONDS`, 5 minutes by default, `0` for no cache (from 0.12): **F-04** |
 | R | The compliance service denies what it answered | Its answer is a signed credential, checked and stored with the run (`portitor-identity/src/gaiax.rs`, table `gaiax_run`) |
 | I | The hosts we fetch from learn whom we talk to | By design of `did:web` (each verifier fetches the caller's document); not countered. The compliance service gets the participant's Gaia-X credentials, by design (ADR 0021) |
-| D | A DID host or the compliance service is slow or down | 10 s and 64 KiB per fetch; documents cached 5 minutes, at most 1,000 (`portitor-runtime/src/did.rs`); a compliance run repeats at two thirds of the credential's validity and keeps the credential it has (ADR 0021; the keeping not checked in code) |
+| D | A DID host or the compliance service is slow or down | 10 s and 64 KiB per fetch; documents cached `PORTITOR_DID_CACHE_SECONDS` (5 minutes by default), at most 1,000 (`portitor-runtime/src/did.rs`); a compliance run repeats at two thirds of the credential's validity and keeps the credential it has (ADR 0021; the keeping not checked in code) |
 | E | The caller chooses the URL we fetch (its DID, its credential service) to reach an internal service | `https://` only, no redirects, time and size limits; internal addresses are not blocked: **F-01** |
 
 #### 3. The data plane
@@ -260,7 +260,7 @@ freeze.
 | F-01 | 1, 2 | Internal addresses are not blocked on calls whose URL a partner chooses: the `callbackAddress`, the caller's DID document and credential service, and, for the issuer, a registered holder's credential service (`portitor-issuer/src/delivery.rs`). The table row "Internal services" says *(planned)*, but no release has the work | medium | The maintainer names a release; before the 0.13 freeze if the block is on by default, since turning it on later changes behaviour. Until then DEPLOYING's egress firewall advice stands | [R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17) |
 | F-02 | 1, 3, 4, 6 | No audit trail: data pulls are not logged, the caller's token is not kept with an agreement, failed management key checks and some management changes are not logged, and a management call has no person behind it | medium | Research with the TD-04 ADR (0.12): what an audit record holds, where it goes, how long it is kept (EHDS rules for health data) | [TD-31](RISKS_AND_TECHNICAL_DEBTS.md#td-31) |
 | F-03 | 4 | One API key per management API, with every right | medium | The TD-04 ADR (0.12) | [TD-04](RISKS_AND_TECHNICAL_DEBTS.md#td-04) |
-| F-04 | 2 | DID documents are cached 5 minutes, fixed (ADR 0016 says "default"; there is no setting): a key its owner removed after a leak is still accepted for up to 5 minutes. The cache is bounded (1,000) and caches no failures | low | Say it in this case and DEPLOYING; decide with the retired keys work (0.11) whether the time becomes a setting | [R-41](RISKS_AND_TECHNICAL_DEBTS.md#r-41) |
+| F-04 | 2 | DID documents are cached 5 minutes, fixed (ADR 0016 says "default"; there is no setting): a key its owner removed after a leak is still accepted for up to 5 minutes. The cache is bounded (1,000) and caches no failures. **From 0.12 the time is a setting**, `PORTITOR_DID_CACHE_SECONDS` (default 300, at most 3600, `0` for no cache; ADR 0016, amended in 0.12; DEPLOYING, "DID document cache"). With the default the 5 minutes remain | low | Say it in this case and DEPLOYING; decide with the retired keys work (0.11) whether the time becomes a setting | [R-41](RISKS_AND_TECHNICAL_DEBTS.md#r-41) |
 | F-05 | 4 | The STS (`/sts/token`) is served on the identity's public port; keeping it internal depends on the proxy's routing (DEPLOYING). The secret is long and compared in constant time, so guessing is not practical | low | A separate listen address for the STS, or a check in the deployment tests that the proxy does not route it | [R-42](RISKS_AND_TECHNICAL_DEBTS.md#r-42) |
 | F-06 | 1 | The identity's presentation API resolves the caller's DID before it checks `aud` and the access token that only our STS signs (`portitor-runtime/src/caller.rs`, `Callers::Anyone`), so anyone can make it fetch a `did.json` from a host of their choice | low | Check `aud` and the access token's signature before resolving | [R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17) |
 | F-07 | 1 | `neq` and `isNoneOf` hold if one credential of the type has another value (ADR 0019), and the holder chooses what it presents, so they cannot exclude a holder that has a second credential of that type | low | Say in ADR 0019 and DEPLOYING that negative operators are not deny lists | [R-43](RISKS_AND_TECHNICAL_DEBTS.md#r-43) |
@@ -286,6 +286,64 @@ and F-04 (the DID document cache).
 - **Least privilege:** non-root container, no shell; keys only where
   needed (ADR 0003); CI tokens are read-only by default.
 - **Open design:** code, threat model and decisions are public.
+
+## What a panic does
+
+A panic is a bug caught at run time (an index out of range, a failed
+`expect`). `unwrap` is denied by Clippy and every parser is fuzzed, so
+it should be rare. Until 0.11 the release build set `panic = "abort"`:
+any panic ended the process and every request in flight, so one request
+that found such a bug was a denial of service until the container
+started again
+([TD-41](RISKS_AND_TECHNICAL_DEBTS.md#td-41)). From 0.12 the setting is
+gone (maintainer, 2026-11-18) and a panic ends only the work it
+happened in (`crates/portitor-runtime/src/panics.rs`):
+
+- **A request handler:** the caller gets HTTP 500 with a problem
+  document (`application/problem+json`, detail `internal error`), also
+  on DSP routes; the other requests go on. This holds for every
+  HTTP server of the three components, public and management.
+- **A background task that runs for as long as the process** (the
+  dataset, bundle and identity schedules of the connector, the
+  certificate watch and Gaia-X schedule of the identity, the issuer's
+  outbox): it starts again after a pause of 5 seconds, twice as long
+  after each further panic in a row, at most 5 minutes; a task that ran
+  for more than 5 minutes starts at 5 seconds again. So a task that
+  panics on every run does not call other services (the Gaia-X
+  compliance service) every few seconds. A dataset harvest run that
+  panics is skipped; the next one runs on schedule.
+- **A background task for one piece of work** (sending one DSP message,
+  deciding one credential request, one Gaia-X run): the work stays as
+  it was saved. A DSP message is sent again after the same pauses (5
+  seconds, doubling up to 5 minutes), for as long as the process runs;
+  sending a saved message again is safe (ADR 0007). A credential
+  request stays `RECEIVED` and is tried again on each round of the
+  issuer's outbox (at most a minute apart); a request that panics every
+  time does not hold up the other requests or the deliveries.
+- **The management server's task:** if it ends, the process stops with
+  an error, as a component without health checks must not go on.
+
+Every case is one log line at ERROR and a count
+(`portitor.http.request.panicked`, `portitor.task.panicked`;
+DEPLOYING, "Traces and metrics"). The panic's message is never logged
+or sent, only the place in the code: the message can quote the value
+that caused it, which may come from a request.
+
+Data stays consistent: a database write of several statements is one
+transaction, which `rusqlite` rolls back when the panic drops it, and
+every other write is one statement. A lock held during a panic is taken
+again (Rust marks it "poisoned"); each place says why that is safe, and
+each store has a test for it (`store/poison_tests.rs`; the checks are
+in `portitor-runtime/src/sqlite.rs`, `testing`). Two caches (DID
+documents, status lists) switch themselves off instead after a panic
+inside them, until the next start: slower, never wrong.
+
+What it costs: the release binaries are about 13% larger (the code that
+unwinds; [BENCHMARKS](BENCHMARKS.md), "Footprint"). What stays: a bug
+that panics on every start, or in a task that starts again, shows as
+repeated errors, so a restart policy and an alert on the two counts are
+still needed. A panic while a download's body is streamed closes that
+one connection.
 
 ## Common weaknesses countered
 

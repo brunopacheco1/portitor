@@ -425,10 +425,20 @@ impl TransferStore for AnyTransferStore {
     fn get(&self, provider_pid: &str) -> Result<Option<Transfer>, StoreError> {
         self.0.get(provider_pid)
     }
-    fn insert(&self, transfer: &Transfer) -> Result<(), StoreError> {
-        self.0.insert(transfer)?;
-        transfer_saved_as_provider(transfer, None);
-        Ok(())
+    fn requested(
+        &self,
+        counter_party: &str,
+        consumer_pid: &str,
+    ) -> Result<Option<Transfer>, StoreError> {
+        self.0.requested(counter_party, consumer_pid)
+    }
+    fn insert(&self, transfer: &Transfer) -> Result<bool, StoreError> {
+        let inserted = self.0.insert(transfer)?;
+        // a repeated request adds nothing, so there is no state change
+        if inserted {
+            transfer_saved_as_provider(transfer, None);
+        }
+        Ok(inserted)
     }
     fn replace_if(&self, transfer: &Transfer, expected: u64) -> Result<bool, StoreError> {
         // read first: see the comment above `impl NegotiationStore`
