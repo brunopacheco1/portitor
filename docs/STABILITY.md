@@ -37,6 +37,17 @@ must not parse them or rely on their length or alphabet; a 1.x release
 may accept or issue other forms, for example a JWT
 ([ADR 0025](adr/0025-users-and-roles.md), freeze point 1).
 
+A 1.x release may refuse internal network addresses on URLs that a
+partner chooses, by default, with a setting to allow them (security
+finding F-01 in [SECURITY-ASSURANCE](SECURITY-ASSURANCE.md),
+[R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17)). 1.0 does not refuse them.
+
+Each service needs its own host name (or its own port): the connector
+serves `/dsp/2025-1`, `/data` and `/.well-known/dspace-version` at the
+root of its host. The path of `PORTITOR_PUBLIC_URL` is not used for
+routing; it is only put in front of the addresses the connector gives
+to partners.
+
 A management route may answer **HTTP 403** in 1.x, for a token that does
 not grant the action. 1.0 never answers it: the API key grants every
 right (ADR 0025, freeze point 2). `dataAddress` in the transfer view is
@@ -184,6 +195,10 @@ connector, [DEPLOYING](DEPLOYING.md) section 4 for the identity and
 section 7 for the issuer,
 [Traces and metrics](DEPLOYING.md#traces-and-metrics) for `OTEL_*`.
 
+One rule for every setting: spaces around a value are dropped, and an
+empty value means "not set". A required setting that is empty stops the
+start; an optional one takes its default.
+
 ### Settings of every binary
 
 ```text
@@ -303,6 +318,13 @@ confirmed this for 1.x at the freeze (2026-11-20,
 - **The Rust crates.** They are not published as libraries
   (`publish = false` in every `Cargo.toml`); their APIs change without
   notice.
+- **Names removed before 1.0.** A service that finds one of them set
+  refuses to start and names what to set instead; the names themselves
+  are not settings: `PORTITOR_DATASETS` (removed in 0.2),
+  `PORTITOR_ALLOW_HTTP_CALLBACKS`, `PORTITOR_IDENTITY_CERTIFICATE_CHAIN`
+  and `PORTITOR_ISSUER_CREDENTIALS_FILE` (renamed in 0.13;
+  [DEPLOYING, from 0.12 to 0.13](DEPLOYING.md#from-012-to-013)). The
+  freeze guard keeps them on its "not frozen" lists.
 - **Development aids:** the `tck` build feature and its
   `PORTITOR_TCK_AUTHORIZATION` setting and `/tck/...` routes, `scripts/`,
   the `_http/` request collection, `examples/`, and any API browser

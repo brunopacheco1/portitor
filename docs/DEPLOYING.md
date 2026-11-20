@@ -1679,6 +1679,74 @@ do not change.
    negotiations pile up, and small answers no longer wait 43 ms
    ([BENCHMARKS](BENCHMARKS.md)).
 
+#### From 0.12 to 0.13
+
+0.13 freezes the interface for 1.0 ([STABILITY](STABILITY.md)). Six
+things changed before the freeze, because after 1.0 they could only
+change in 2.0. The databases need no manual step. Change your
+configuration and your management API clients **before** you start the
+new images.
+
+1. **Breaking, all three: three settings have new names.** A service
+   that finds an old name set (to a value that is not empty) does not
+   start; the log line `... stopped` names the new one, for example
+   `PORTITOR_ALLOW_HTTP_CALLBACKS was renamed in 0.13; set
+   PORTITOR_ALLOW_HTTP instead`. The meanings did not change.
+
+   | Service | Old name | New name |
+   |---|---|---|
+   | connector, identity, issuer | `PORTITOR_ALLOW_HTTP_CALLBACKS` | `PORTITOR_ALLOW_HTTP` |
+   | identity | `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` | `PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE` |
+   | issuer | `PORTITOR_ISSUER_CREDENTIALS_FILE` | `PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE` |
+
+   `PORTITOR_STS_ALLOW_HTTP` is another setting and keeps its name.
+2. **Breaking, connector management API: `counterPartyAddress` and
+   `counterPartyId`.** `POST /v1/negotiations` takes them in place of
+   `providerAddress` and `providerId`, and the answers of
+   `/v1/negotiations` and `/v1/transfers` (start, one, list) return
+   them under the new names. They are the names of Eclipse EDC and of
+   the catalog calls. A request with an old name gets HTTP 400
+   (`unknown field`). Change every client that starts a negotiation or
+   reads these two fields. `providerPid` and `consumerPid` did not
+   change.
+3. **Breaking, connector: `PORTITOR_PARTICIPANT_ID` and
+   `PORTITOR_PUBLIC_URL` are required.** Before, a connector without
+   them started as `did:web:localhost%3A8080` at
+   `http://localhost:8080`. Now it does not start
+   (`PORTITOR_PARTICIPANT_ID: required ...`). A production connector
+   set both already; check test and development setups.
+4. **Behaviour change, all three: an empty value means "not set".**
+   Spaces around a value are dropped, and a setting that is empty (or
+   only spaces) counts as not set: a required one stops the start, an
+   optional one takes its default. The identity and the issuer mostly
+   did this already; the connector did not. What is different for a
+   setting that is **set but empty**:
+
+   | Setting | Before | From 0.13 |
+   |---|---|---|
+   | connector: `PORTITOR_PARTICIPANT_ID`, `PORTITOR_PUBLIC_URL` | an empty id or URL was used | the start stops (required) |
+   | connector: `PORTITOR_BIND`, `PORTITOR_DB_FILE`, `PORTITOR_DATASETS_FILE` | an empty address or path was used (and failed, or gave an empty catalog) | the default (`0.0.0.0:8080`, `portitor.db`, no datasets file) |
+   | connector: `PORTITOR_HARVEST_INTERVAL_SECONDS`, `PORTITOR_DATA_TOKEN_SECONDS` | the start stopped (invalid value) | the default |
+   | connector: `PORTITOR_DCP_SCOPES` | the start stopped (`set but empty`) | the default scope |
+   | connector: `PORTITOR_STS_CLIENT_SECRET_FILE` | the start stopped (cannot read the file) | the start stops (required) |
+   | identity, issuer: `PORTITOR_BIND`, `PORTITOR_DB_FILE` | an empty address or path was used (and failed) | the default |
+   | identity: `PORTITOR_SCOPE_TYPE_ALIASES` | no alias besides DCP's own | the default alias, `org.eclipse.edc.vc.type` |
+   | issuer: `PORTITOR_ISSUER_MAX_ACTIVE_PER_HOLDER` | the start stopped (invalid value) | the default, 10 |
+
+   If you set `PORTITOR_SCOPE_TYPE_ALIASES` to an empty value to switch
+   EDC's alias off, set it to `org.eclipse.dspace.dcp.vc.type` (DCP's
+   own alias) instead. The content of a secret file is read as before.
+   The connector also trims values now: a value with a space or a line
+   end around it, which failed before, works.
+5. **Bundle authorities, nothing to do:** a file whose role a connector
+   does not know may now have any media type, not only the three
+   ([Schema and vocabulary bundle](#schema-and-vocabulary-bundle)).
+6. New in 0.13, nothing to do: the catalog calls of the management API
+   ([README](../README.md#management-api)).
+
+Rollback to 0.12: put the old names back in the configuration and the
+old field names in your clients; for the database, as above.
+
 ## 7. Run the issuer (dataspace authority only)
 
 The issuer issues and revokes the dataspace's credentials with the
