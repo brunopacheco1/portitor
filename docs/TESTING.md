@@ -45,6 +45,12 @@ cargo test -p portitor-connector --features tck   # also the TCK scripts
 
 Where the tests are:
 
+- **The freeze guard** (`tests/frozen_interface.rs` in the three
+  binaries' crates): the HTTP routes and environment variables listed in
+  [STABILITY.md](STABILITY.md) are the ones the code has. A test fails
+  when a listed name leaves the code, and when the code gains a name
+  that is not listed. The top of each file says what to do then. The
+  tools are in `crates/portitor-runtime/src/testing/frozen.rs`.
 - **Domain crates** (`crates/portitor-dsp`, `crates/portitor-dcp`,
   `crates/portitor-dps`): pure functions
   and ports, tested without network or disk. Examples: the negotiation state

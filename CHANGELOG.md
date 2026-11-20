@@ -22,6 +22,17 @@ versions may change behaviour and configuration.
   limited rights in 1.x (ADR 0025, freeze point 2). 1.0 never answers
   403: the API key grants every right. The descriptions say that the
   API key is an opaque string (freeze point 1).
+- **API and configuration freeze.** New `docs/STABILITY.md`: the HTTP
+  routes, environment variables, file formats and command line that 1.0
+  keeps stable under semantic versioning, what is not part of the stable
+  interface (metric, span and log names; the Rust crates; development
+  aids), and what 1.0 does not do. Migrations stay forward only (TD-22,
+  confirmed by the maintainer, 2026-11-20). README and DEPLOYING say
+  that the management API key and the data plane token are opaque.
+- Tests: a freeze guard (`tests/frozen_interface.rs` in the three
+  binaries' crates) fails when a route or environment variable listed
+  in `docs/STABILITY.md` leaves the code, and when the code gains one
+  that is not listed.
 
 ## [0.12.0] - 2026-11-19
 

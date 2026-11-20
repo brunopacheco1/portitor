@@ -999,7 +999,11 @@ is the key's thumbprint, so a new key file gives a new key id.
   your secret store, at least 32 characters. Only an HMAC of the key is
   kept in memory, and keys are compared in constant time. The port speaks
   plain HTTP: keep it on a private network or behind TLS, and never on the
-  public proxy. To change the key, replace the file and restart.
+  public proxy. To change the key, replace the file and restart. The
+  key is an opaque string, and so is the data plane token of a
+  transfer: your systems must not parse them, and a 1.x release may
+  accept or issue other forms ([STABILITY](STABILITY.md)). This holds
+  for the keys of the identity and the issuer too.
 - **Health checks and telemetry (0.9).** The health checks answer
   without a key and name what failed, so keep the management port on
   an internal network, as for the management API. Traces and metrics
@@ -1377,7 +1381,11 @@ leaked) can be listed as retired, since only its public key is needed.
 
 Rollback: an older version refuses a database that a newer version
 migrated (`database schema version N is newer than this Portitor`). Restore
-the backup from step 2, then start the older image.
+the backup from step 2, then start the older image. What was written
+after the backup is lost. This stays so in 1.x: migrations run forward
+only, and no release migrates a database back (confirmed by the
+maintainer at the 0.13 freeze, 2026-11-20;
+[TD-22](RISKS_AND_TECHNICAL_DEBTS.md#td-22), [STABILITY](STABILITY.md#database)).
 
 Messages the connector was sending when it stopped are saved and sent
 again at start (ADR 0007), so an upgrade does not leave negotiations

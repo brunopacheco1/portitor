@@ -44,6 +44,7 @@ Website: <https://bruno.pacheco.lu/portitor/> (objectives, minimum functionality
 - Trying Gaia-X compliance: [docs/TESTING.md](docs/TESTING.md#how-to-test-gaia-x-compliance)
 - Reading the Rust code: [docs/RUST-IDIOMS.md](docs/RUST-IDIOMS.md)
 - HTTP interfaces: [docs/api/](docs/api/) (OpenAPI 3.1: connector, management, identity, issuer)
+- What 1.0 keeps stable, and what it does not do: [docs/STABILITY.md](docs/STABILITY.md)
 - Security: [SECURITY.md](SECURITY.md), [docs/SECURITY-ASSURANCE.md](docs/SECURITY-ASSURANCE.md)
 - Measured numbers (data plane, stored history, catalog, cost of DCP): [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md), [GOVERNANCE.md](GOVERNANCE.md),
@@ -212,6 +213,11 @@ through the management API. It is not part of DSP, so it has its own port
 is set. Every call needs `Authorization: Bearer <key>`, except
 `/v1/openapi.json`, `/health` and the health checks. The port itself is
 always bound, for the health checks.
+
+The key is an opaque string, and so is the data plane token in a
+transfer's `dataAddress`: a client must not parse them, and a 1.x
+release may accept or issue other forms
+([docs/STABILITY.md](docs/STABILITY.md)).
 
 | Method and path | What it does |
 |---|---|
