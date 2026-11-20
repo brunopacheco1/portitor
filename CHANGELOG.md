@@ -150,8 +150,7 @@ Interoperability and performance. Read "From 0.11 to 0.12" in
 
 - `rusqlite` 0.42.0 to 0.43.0 (SQLite itself is unchanged). An empty
   or comment-only SQL text is now an error in `rusqlite`; Portitor
-  sends none. The change was read and the cargo-vet exemption moved to
-  0.43.0 with a note.
+  sends none. The maintainer audits the change with cargo-vet.
 - CI actions: `actions/setup-java` 6.3.0, `taiki-e/install-action`
   2.90.5.
 

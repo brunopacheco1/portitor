@@ -388,9 +388,8 @@ version = "0.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusqlite]]
-version = "0.43.0"
+version = "0.42.0"
 criteria = "safe-to-deploy"
-notes = "Bumped from the exempted 0.42.0 for release 0.12. The 0.42.0 to 0.43.0 change was read on 2026-11-20: empty SQL is now an error, owned strings in place of borrowed pointers, one bounds check; no new unsafe surface, no build script change, libsqlite3-sys unchanged."
 
 [[exemptions.rustls]]
 version = "0.23.46"
