@@ -12,15 +12,23 @@
 # portitor-issuer both ways. The EDC runtimes are built from Maven Central
 # (interop/edc/runtimes); there are no EDC images.
 name: EDC interop
+# This workflow has a path filter, so it must not be a required check: a
+# pull request that does not match would wait for it for ever
+# (CONTRIBUTING.md, "Required checks"). The filter lists what the job
+# reads; keep it in step with scripts/edc-interop.sh.
 on:
   pull_request:
     paths:
       - "crates/**"
+      - "Cargo.toml" # the release profile, the dependencies' features, the lints
       - "Cargo.lock"
       - "Dockerfile"
-      - "interop/edc/**"
+      - ".dockerignore"
+      - "interop/edc/**" # Compose file, settings, data, and the EDC runtimes (the Issuer Service too)
       - "interop/gaiax/compose.yaml" # the compliance service and its graph database come from there
+      - "examples/bundle/**" # the bundle the issuer serves, signed by scripts/demo-bundle.sh
       - "scripts/edc-interop.sh"
+      - "scripts/demo-bundle.sh"
       - "scripts/container-engine.sh"
       - "scripts/require-bash.sh"
       - "scripts/gaiax-lib.sh"
@@ -30,6 +38,11 @@ on:
   schedule:
     - cron: "37 2 * * *" # nightly: EDC's side changes without our code changing
   workflow_dispatch:
+
+# a newer push to the same pull request replaces the run in progress; nightly and manual runs always finish
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -45,6 +58,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install Rust
         run: |
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal -t x86_64-unknown-linux-musl
