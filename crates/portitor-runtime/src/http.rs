@@ -10,7 +10,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use http_body_util::Full;
-use hyper::body::{Bytes, Incoming};
+/// The bytes of a body: cheap to hand on, as they are shared, not copied.
+pub use hyper::body::Bytes;
+use hyper::body::Incoming;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
@@ -137,6 +139,64 @@ pub trait Sender: Send + Sync {
     ) -> BoxFuture<'a, Result<Value, String>> {
         self.get(url)
     }
+
+    /// Like [`Sender::post_authorized`], for an answer that may be large
+    /// (a provider's catalog): the answer is read up to `limits.max_bytes`
+    /// within `limits.timeout` and returned as it came, with its `Link`
+    /// headers, and the error keeps its kind ([`HttpError`]). The default
+    /// implementation always fails (`_body` and the other arguments are
+    /// not used): a sender that cannot read a large answer (a test fake)
+    /// says so.
+    fn post_authorized_within<'a>(
+        &'a self,
+        url: &'a str,
+        _body: &'a Value,
+        _authorization: &'a str,
+        _limits: AnswerLimits,
+    ) -> BoxFuture<'a, Result<RawAnswer, HttpError>> {
+        Box::pin(async move { Err(cannot_read_large_answers(url)) })
+    }
+
+    /// Like [`Sender::get_authorized`], for an answer that may be large:
+    /// see [`Sender::post_authorized_within`].
+    fn get_authorized_within<'a>(
+        &'a self,
+        url: &'a str,
+        _authorization: &'a str,
+        _limits: AnswerLimits,
+    ) -> BoxFuture<'a, Result<RawAnswer, HttpError>> {
+        Box::pin(async move { Err(cannot_read_large_answers(url)) })
+    }
+}
+
+/// The error of the [`Sender`] default methods for large answers.
+fn cannot_read_large_answers(url: &str) -> HttpError {
+    HttpError::NotSent(format!("this sender cannot read a large answer from {url}"))
+}
+
+/// How much of a 2xx answer [`Sender::post_authorized_within`] and
+/// [`Sender::get_authorized_within`] read, and how long they wait. The
+/// caller chooses both, so each use states its own limit; every other
+/// call of [`HttpSender`] keeps [`MAX_ANSWER`] and [`SEND_TIMEOUT`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnswerLimits {
+    /// The largest answer read, in bytes. A larger one is an
+    /// [`HttpError::BadAnswer`].
+    pub max_bytes: usize,
+    /// How long to wait for the whole answer.
+    pub timeout: Duration,
+}
+
+/// A 2xx answer as it came: the bytes of its body, not parsed, and the
+/// values of its `Link` headers (RFC 8288). DSP 2025-1 uses `Link` for
+/// catalog pages ("Catalog HTTPS Binding", "Pagination").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawAnswer {
+    /// The body.
+    pub body: Bytes,
+    /// Each `Link` header's value, in the order received; empty without
+    /// one. A value that is not visible ASCII is left out.
+    pub links: Vec<String>,
 }
 
 /// How long one request of [`HttpSender`] may take, from sending until
@@ -146,7 +206,8 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The largest answer read from a counter-party. A `ContractNegotiation`
 /// is well under 1 KiB; the limit stops a counter-party from making the
-/// connector buffer an unbounded body.
+/// connector buffer an unbounded body. A call that expects more (a
+/// provider's catalog) states its own limit ([`AnswerLimits`]).
 const MAX_ANSWER: usize = 64 * 1024;
 
 /// The hyper client both binaries use: rustls, HTTP/1.
@@ -290,6 +351,31 @@ impl Sender for HttpSender {
         authorization: &'a str,
     ) -> BoxFuture<'a, Result<Value, String>> {
         Box::pin(async move { self.json(json_get(url, Some(authorization))?, url).await })
+    }
+
+    fn post_authorized_within<'a>(
+        &'a self,
+        url: &'a str,
+        body: &'a Value,
+        authorization: &'a str,
+        limits: AnswerLimits,
+    ) -> BoxFuture<'a, Result<RawAnswer, HttpError>> {
+        Box::pin(async move {
+            let request = json_post(url, body, Some(authorization)).map_err(HttpError::NotSent)?;
+            self.raw_answer(url, request, limits).await
+        })
+    }
+
+    fn get_authorized_within<'a>(
+        &'a self,
+        url: &'a str,
+        authorization: &'a str,
+        limits: AnswerLimits,
+    ) -> BoxFuture<'a, Result<RawAnswer, HttpError>> {
+        Box::pin(async move {
+            let request = json_get(url, Some(authorization)).map_err(HttpError::NotSent)?;
+            self.raw_answer(url, request, limits).await
+        })
     }
 }
 
@@ -453,6 +539,31 @@ impl HttpSender {
         let (_headers, bytes) = self.call_within(url, request, limits).await?;
         String::from_utf8(bytes.to_vec())
             .map_err(|_| HttpError::BadAnswer("the answer is not UTF-8 text".to_owned()))
+    }
+
+    /// Sends `request` and returns the 2xx answer as it came, read within
+    /// `limits`. A refusal keeps the start of its body (at most
+    /// [`ERROR_BODY_BYTES`]): a DSP error says there why.
+    async fn raw_answer(
+        &self,
+        url: &str,
+        request: hyper::Request<Full<Bytes>>,
+        limits: AnswerLimits,
+    ) -> Result<RawAnswer, HttpError> {
+        let limits = Limits {
+            max_bytes: limits.max_bytes,
+            timeout: limits.timeout,
+            error_body_bytes: ERROR_BODY_BYTES,
+        };
+        let (headers, body) = self.call_within(url, request, limits).await?;
+        let mut links = Vec::new();
+        for value in headers.get_all(hyper::header::LINK) {
+            // `to_str` fails for a value that is not visible ASCII
+            if let Ok(text) = value.to_str() {
+                links.push(text.to_owned());
+            }
+        }
+        Ok(RawAnswer { body, links })
     }
 
     /// Like [`HttpSender::json_answer`], with the error as text, as the
@@ -1044,6 +1155,62 @@ mod tests {
         }
     }
 
+    /// A large answer is read up to the caller's limit and comes back
+    /// as it was sent, with its `Link` headers; a refusal keeps the
+    /// start of its body.
+    #[tokio::test]
+    async fn http_sender_reads_an_answer_within_the_callers_limits() {
+        use axum::http::{StatusCode, header};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let paged = || async {
+            // `AppendHeaders` sends both headers; a plain array would
+            // keep only the last one of the same name
+            let links = axum::response::AppendHeaders([
+                (header::LINK, "<https://p.example/c?page=2>; rel=\"next\""),
+                (
+                    header::LINK,
+                    "<https://p.example/c?page=0>; rel=\"previous\"",
+                ),
+            ]);
+            (links, "0123456789")
+        };
+        let app = axum::Router::new()
+            .route("/paged", axum::routing::post(paged).get(paged))
+            .route(
+                "/refused",
+                axum::routing::get(|| async { (StatusCode::NOT_FOUND, "no such dataset") }),
+            );
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let sender = HttpSender::new(true).unwrap();
+        let limits = |max_bytes| AnswerLimits {
+            max_bytes,
+            timeout: Duration::from_secs(5),
+        };
+        let url = format!("http://{addr}/paged");
+        let body = serde_json::json!({});
+        let posted = sender.post_authorized_within(&url, &body, "Bearer t", limits(10));
+        let posted = posted.await.unwrap();
+        assert_eq!(&posted.body[..], b"0123456789");
+        assert_eq!(
+            posted.links,
+            [
+                "<https://p.example/c?page=2>; rel=\"next\"",
+                "<https://p.example/c?page=0>; rel=\"previous\"",
+            ]
+        );
+        let got = sender.get_authorized_within(&url, "Bearer t", limits(10));
+        assert_eq!(got.await.unwrap(), posted);
+        let too_large = sender.get_authorized_within(&url, "Bearer t", limits(9));
+        assert!(matches!(too_large.await, Err(HttpError::BadAnswer(_))));
+        let refused = format!("http://{addr}/refused");
+        let refused = sender.get_authorized_within(&refused, "Bearer t", limits(10));
+        assert_eq!(
+            refused.await.unwrap_err().to_string(),
+            "HTTP 404 Not Found: no such dataset"
+        );
+    }
+
     #[tokio::test]
     async fn default_methods_fall_back() {
         let body = serde_json::json!({});
@@ -1052,6 +1219,15 @@ mod tests {
             "posted"
         );
         assert!(Plain.get_authorized("u", "x").await.is_err());
+        // a large answer cannot be read through the plain methods
+        let limits = AnswerLimits {
+            max_bytes: 1,
+            timeout: Duration::from_secs(1),
+        };
+        let posted = Plain.post_authorized_within("u", &body, "x", limits);
+        assert!(matches!(posted.await, Err(HttpError::NotSent(_))));
+        let got = Plain.get_authorized_within("u", "x", limits);
+        assert!(matches!(got.await, Err(HttpError::NotSent(_))));
     }
 
     #[tokio::test]

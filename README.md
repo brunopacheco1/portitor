@@ -207,8 +207,8 @@ state before giving up. See
 
 ### Management API
 
-Your own systems start and follow negotiations and transfers as consumer
-through the management API. It is not part of DSP, so it has its own port
+Your own systems read a provider's catalog, and start and follow
+negotiations and transfers as consumer, through the management API. It is not part of DSP, so it has its own port
 (`PORTITOR_MANAGEMENT_BIND`) and is off unless `PORTITOR_MANAGEMENT_API_KEY_FILE`
 is set. Every call needs `Authorization: Bearer <key>`, except
 `/v1/openapi.json`, `/health` and the health checks. The port itself is
@@ -221,6 +221,8 @@ release may accept or issue other forms
 
 | Method and path | What it does |
 |---|---|
+| `POST /v1/catalog/request` | Returns a provider's catalog (DSP `Catalog`): the connector asks the provider with its own DCP token. The body is the `CatalogRequest` of Eclipse EDC's management API |
+| `POST /v1/catalog/dataset/request` | Returns one dataset of a provider (DSP `Dataset`), by its `@id`; the body is EDC's `DatasetRequest` |
 | `POST /v1/negotiations` | Starts a negotiation with a provider for an offer from its catalog |
 | `GET /v1/negotiations/{consumerPid}` | Returns a negotiation; it holds the agreement once `state` is `FINALIZED` |
 | `GET /v1/negotiations?after=&limit=` | Lists negotiations, up to 100 at a time |
@@ -235,8 +237,41 @@ release may accept or issue other forms
 | `GET /health` | Answers `ok` (no key needed) |
 | `GET /api/check/liveness`, `/readiness`, `/startup`, `/health` | Health checks in Eclipse EDC's format (no key needed, also with the management API off; [DEPLOYING](docs/DEPLOYING.md#health-and-logs)) |
 
-For example, with an offer copied unchanged from the provider's catalog
-(the provider agrees only to the catalog's terms, see above):
+First read the provider's catalog. You need no token of your own: the
+connector gets one from its STS, as for every DSP request it sends.
+
+```sh
+curl -s -X POST localhost:8081/v1/catalog/request \
+  -H "authorization: Bearer $(cat key)" -H 'content-type: application/json' -d '{
+  "counterPartyAddress": "https://provider.example/dsp/2025-1",
+  "counterPartyId": "did:web:provider.example",
+  "protocol": "dataspace-protocol-http:2025-1"}'
+```
+
+The answer is the provider's catalog as it came; each dataset lists its
+offers in `hasPolicy`. The request body follows Eclipse EDC's management
+API (`/v4/catalog/request`, EDC v1.0.0-RC8), so a client written for EDC
+can send the same body:
+
+| Member | What Portitor does with it |
+|---|---|
+| `counterPartyAddress`, `counterPartyId` | Required. The provider's DSP endpoint and its `did:web` DID: the `providerAddress` and `providerId` of a negotiation |
+| `protocol`, or `profile` (EDC's newer name) | Exactly one is required, and it must be `dataspace-protocol-http:2025-1`, the only protocol the connector speaks; anything else gets 400 |
+| `additionalScopes` | Optional. Scopes added to the configured ones (`PORTITOR_DCP_SCOPES`) in the token for the provider, for datasets it shows only to holders of a credential |
+| `querySpec` | Refused with 400. EDC sends it as the `filter` of the DSP request; DSP leaves its content to each implementation, and the connector always asks for the whole catalog |
+| `@context`, `@type` | Optional. `@context` is not read; `@type`, if present, must be `CatalogRequest` (`DatasetRequest` for a dataset) |
+| `@id` | For a dataset: required, the dataset's id. For a catalog: refused, like any other member not listed here |
+
+If the provider refuses, cannot be reached or sends something else, the
+answer is 502 and its `detail` says which (for example `the provider
+answered HTTP 401 Unauthorized`). The request is sent once and waits up
+to 30 seconds. At most 16 MiB of answer are read. If the provider sends
+its catalog in pages (DSP 2025-1, catalog HTTPS binding, "Pagination"),
+you get the first page only, with the provider's `Link` headers copied
+to the answer; the other pages are not read.
+
+Then negotiate, with an offer copied unchanged from the catalog (the
+provider agrees only to the catalog's terms, see above):
 
 ```sh
 curl -s -X POST localhost:8081/v1/negotiations \

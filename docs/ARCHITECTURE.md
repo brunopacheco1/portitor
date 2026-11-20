@@ -167,13 +167,16 @@ connector send one DSP message, so some paths look alike:
 
 | The operator calls its own connector (management) | The connector then calls the other one (DSP) | Steps |
 |---|---|---|
+| `POST /v1/catalog/request` | `POST /catalog/request` | 2 (the management call itself is not drawn) |
+| `POST /v1/catalog/dataset/request` | `GET /catalog/datasets/{id}` | not drawn |
 | `POST /v1/negotiations` | `POST /negotiations/request` | 8, 10 |
 | `POST /v1/transfers` | `POST /transfers/request` | 17, 18 |
 | `POST /v1/transfers/{consumerPid}/completion` | `POST /transfers/{providerPid}/completion` | 27, 28 |
 | `POST /v1/transfers/{consumerPid}/termination` | `POST /transfers/{providerPid}/termination` | not drawn |
 
 The management call takes no DSP message: the connector builds it,
-gets a token and saves it before sending (ADR 0007). An operator does
+gets a token and, for a negotiation or a transfer, saves it before
+sending (ADR 0007). A catalog request is sent once and not saved. An operator does
 not call the other connector's DSP API by hand, because that call must
 carry a token that proves it comes from its connector.
 

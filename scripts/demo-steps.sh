@@ -11,11 +11,14 @@
 # and offers examples/healthdcat-datasets.json.
 #
 # 1. Without a DCP token the provider refuses the catalog request (401).
-#    With a token from the consumer's STS, it checks the consumer's
-#    MembershipCredential and answers. The two datasets that pass the
-#    bundle's shapes are in it, with dct:conformsTo naming the bundle's
-#    profile and their HealthDCAT-AP metadata as full IRIs, under the plain
-#    DSP @context; bed-occupancy is not.
+#    Asked through the consumer's management API (POST
+#    /v1/catalog/request), the consumer's connector gets a token from its
+#    STS; the provider checks the consumer's MembershipCredential and
+#    answers. The two datasets that pass the bundle's shapes are in it,
+#    with dct:conformsTo naming the bundle's profile and their
+#    HealthDCAT-AP metadata as full IRIs, under the plain DSP @context;
+#    bed-occupancy is not. One dataset is read the same way (POST
+#    /v1/catalog/dataset/request).
 # 2. The provider's harvest job (its management API) shows bed-occupancy
 #    rejected by the SHACL check, with the SHACL report.
 # 3. Negotiate the hospital-admissions offer unchanged, copied from the
@@ -46,8 +49,6 @@
 #   PROVIDER_KEY_FILE    the file holding its management API key
 #   MANAGEMENT  the consumer's management API base URL
 #   KEY_FILE    the file holding the management API key
-#   STS         the consumer's STS token URL (its portitor-identity)
-#   STS_SECRET_FILE  the file holding the consumer's STS client secret
 #   CONSUMER_ID, PROVIDER_ID  the two participants' DIDs
 #   DATA        the folder of the files the provider serves (examples/data)
 #   ISSUER_MANAGEMENT  the issuer's management API base URL
@@ -57,14 +58,14 @@ set -euo pipefail
 
 : "${PROVIDER:?}" "${MANAGEMENT:?}" "${KEY_FILE:?}" "${DATA:?}"
 : "${PROVIDER_MANAGEMENT:?}" "${PROVIDER_KEY_FILE:?}"
-: "${STS:?}" "${STS_SECRET_FILE:?}" "${CONSUMER_ID:?}" "${PROVIDER_ID:?}"
+: "${CONSUMER_ID:?}" "${PROVIDER_ID:?}"
 : "${ISSUER_MANAGEMENT:?}" "${ISSUER_KEY_FILE:?}"
 HERE=${HERE:-$PROVIDER}
 DSP=dsp/2025-1
 DSP_CONTEXT=https://w3id.org/dspace/2025/1/context.jsonld
-# what the provider may read from the consumer's credential service (the
-# connector's default PORTITOR_DCP_SCOPES)
-SCOPE=org.eclipse.dspace.dcp.vc.type:MembershipCredential
+# the one protocol name the management API's catalog calls take (the
+# name Eclipse EDC's management API uses for DSP 2025-1 over HTTPS)
+PROTOCOL=dataspace-protocol-http:2025-1
 # examples/healthdcat-datasets.json, and the profile scripts/demo-bundle.sh signs
 DATASETS=https://provider.example/datasets
 ADMISSIONS=$DATASETS/hospital-admissions
@@ -117,16 +118,7 @@ until_state() { # path, states (regex): prints the record once in one of them
 wait_for "$HERE/health"
 wait_for "$MANAGEMENT/health"
 
-consumer_token() { # a self-issued ID token from the consumer's STS, for the provider
-  curl -sf -X POST "$STS" \
-    --data-urlencode grant_type=client_credentials \
-    --data-urlencode "client_id=$CONSUMER_ID" \
-    --data-urlencode "client_secret=$(cat "$STS_SECRET_FILE")" \
-    --data-urlencode "audience=$PROVIDER_ID" \
-    --data-urlencode "bearer_access_scope=$SCOPE" | jq -r '.access_token'
-}
-
-catalog_request() { # [curl flags]: the provider's catalog
+catalog_request() { # [curl flags]: the provider's catalog, asked directly
   curl -s -X POST "$HERE/$DSP/catalog/request" "$@" \
     -H 'content-type: application/json' -d '{
       "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
@@ -138,14 +130,24 @@ STATUS=$(catalog_request -o /dev/null -w '%{http_code}')
 [[ $STATUS == 401 ]] || fail "without a token the provider answered $STATUS, not 401"
 echo "the provider answered $STATUS"
 
-step "Read the provider's catalog with a token from the consumer's STS"
-# the consumer's connector gets such a token before every DSP request it
-# sends; the provider checks it, then asks the consumer's credential
-# service for its MembershipCredential
-ID_TOKEN=$(consumer_token) || fail "the consumer's STS gave no token"
-CATALOG=$(catalog_request -f -H "authorization: Bearer $ID_TOKEN") || fail "catalog request"
+step "Read the provider's catalog through the consumer's management API"
+# the consumer's connector gets a token from its STS, as before every DSP
+# request it sends; the provider checks it, then asks the consumer's
+# credential service for its MembershipCredential
+CATALOG=$(api POST /v1/catalog/request "$(jq -nc --arg addr "$PROVIDER/$DSP" \
+  --arg id "$PROVIDER_ID" --arg protocol "$PROTOCOL" \
+  '{counterPartyAddress: $addr, counterPartyId: $id, protocol: $protocol}')") ||
+  fail "catalog request"
 [[ $(jq -r '.participantId' <<<"$CATALOG") == "$PROVIDER_ID" ]] || fail "another provider: $CATALOG"
 jq -c '{"@context": .["@context"], dataset: [.dataset[] | {"@id", "dct:conformsTo"}]}' <<<"$CATALOG"
+
+step "Read one dataset the same way"
+DATASET=$(api POST /v1/catalog/dataset/request "$(jq -nc --arg addr "$PROVIDER/$DSP" \
+  --arg id "$PROVIDER_ID" --arg protocol "$PROTOCOL" --arg dataset "$ADMISSIONS" \
+  '{"@id": $dataset, counterPartyAddress: $addr, counterPartyId: $id, protocol: $protocol}')") ||
+  fail "dataset request"
+[[ $(jq -r '.["@id"]' <<<"$DATASET") == "$ADMISSIONS" ]] || fail "another dataset: $DATASET"
+jq -c '{"@id", offers: [.hasPolicy[]["@id"]]}' <<<"$DATASET"
 
 step "The catalog follows the bundle: dct:conformsTo, the metadata as full IRIs, no bed-occupancy"
 # the @context is the DSP context alone (the DSP JSON Schema allows URLs

@@ -86,8 +86,8 @@ Check each item and keep the answers in your own runbook.
 - [ ] **Clock.** Offer constraints such as a date limit are checked
   against the host clock (ADR 0009). Keep it synchronised (NTP); a
   container uses the host's clock.
-- [ ] **Management API.** Needed only if this connector starts
-  negotiations as consumer. Create a key (`openssl rand -hex 32`), keep it
+- [ ] **Management API.** Needed only if this connector reads catalogs
+  or starts negotiations as consumer. Create a key (`openssl rand -hex 32`), keep it
   in your secret store, and mount it as a file
   (`PORTITOR_MANAGEMENT_API_KEY_FILE`). Decide who may reach the management
   port; never route it through the public proxy.
@@ -1054,8 +1054,9 @@ tested with a proxy product.
   not blocked yet. Put the connector in a network zone where it cannot
   reach internal services it should not call (egress firewall or network
   policy).
-- **Management API.** It can start negotiations and transfers in your
-  name, and it shows the data access tokens of your transfers, so treat its
+- **Management API.** It can read catalogs and start negotiations and
+  transfers in your name (each call sends a request, with a token of
+  yours, to the address the caller gives), and it shows the data access tokens of your transfers, so treat its
   key like a password: a file readable only by the connector, mounted from
   your secret store, at least 32 characters. Only an HMAC of the key is
   kept in memory, and keys are compared in constant time. The port speaks
@@ -1919,9 +1920,18 @@ known risk and technical debt, with its status and target release):
   one with an offer ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)). A
   transfer request sent twice starts two transfers
   ([TD-34](RISKS_AND_TECHNICAL_DEBTS.md#td-34)).
-- To read a provider's catalog you call it yourself with an STS token;
-  the management API has no call for it yet
-  ([TD-38](RISKS_AND_TECHNICAL_DEBTS.md#td-38)).
+- Reading a provider's catalog (`POST /v1/catalog/request` and
+  `/v1/catalog/dataset/request` on the management API, from 0.13;
+  [README](../README.md#management-api)): at most 16 MiB of answer are
+  read, a fixed limit with no setting; a larger catalog gets HTTP 502.
+  The request is sent once and waits up to 30 seconds. Of a catalog
+  sent in pages (DSP 2025-1, "Pagination") only the first page is
+  returned, with the provider's `Link` headers; the other pages are
+  not read. No filter is sent: EDC's `querySpec` is refused with 400.
+  A compressed answer (`Content-Encoding: gzip`, which the connector
+  does not ask for) is not read and gets 502
+  ([TD-38](RISKS_AND_TECHNICAL_DEBTS.md#td-38),
+  [TD-36](RISKS_AND_TECHNICAL_DEBTS.md#td-36)).
 - A panic (a bug) no longer stops the process (from 0.12): the request
   it happened in gets HTTP 500, a background task starts again after a
   pause (5 seconds, doubling up to 5 minutes while it keeps

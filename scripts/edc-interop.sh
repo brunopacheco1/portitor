@@ -20,8 +20,9 @@
 #     IdentityHub through its Identity API (.../credentials/request),
 #     Portitor's identity through its management API
 #     (/v1/credential-requests).
-#  4. With Portitor's identity, the EDC provider's catalog: EDC checks
-#     Portitor's ID token and its credential (DCP presentation query).
+#  4. The EDC provider's catalog, read through the Portitor connector's
+#     management API (POST /v1/catalog/request): EDC checks Portitor's
+#     ID token and its credential (DCP presentation query).
 #  5. Portitor consumer, EDC provider: negotiation, PULL transfer, fetch.
 #  6. EDC consumer, Portitor provider: catalog (a HealthDCAT-AP dataset
 #     checked against the bundle, with dct:conformsTo and full-IRI
@@ -57,7 +58,6 @@ PORTITOR_DATASET=https://portitor.example/datasets/portitor-interop
 PROFILE=https://data.health.europa.eu/healthdcat-ap/releases/release-8/
 EDC_DID=did:web:edc-identityhub%3A7083:edc
 EDC_CONTEXT=edc
-SCOPE=org.eclipse.dspace.dcp.vc.type:MembershipCredential:read
 DSP=dsp/2025-1
 EDC_PROTOCOL=dataspace-protocol-http:2025-1
 # the header of a request with a JSON body, and the jq path to a record's state
@@ -343,30 +343,24 @@ identity_management GET /v1/credentials | jq -e 'length == 1' >/dev/null ||
 
 # --- 4. EDC checks Portitor's identity --------------------------------------
 
-portitor_token() { # audience: a self-issued ID token from Portitor's STS
-  local audience=$1
-  curl -sf -X POST "$IDENTITY/sts/token" \
-    --data-urlencode grant_type=client_credentials \
-    --data-urlencode "client_id=$PORTITOR_DID" \
-    --data-urlencode "client_secret=$(cat "$RUN/portitor/sts-client-secret")" \
-    --data-urlencode "audience=$audience" \
-    --data-urlencode "bearer_access_scope=$SCOPE" | jq -r '.access_token'
+# Asks the Portitor connector's management API for the EDC provider's
+# catalog. Prints the HTTP status of that call: 200 with the catalog, or
+# 502 with a problem whose detail has EDC's own status. The answer is in
+# $RUN/catalog.json.
+edc_catalog_for_portitor() {
+  curl -sS -o "$RUN/catalog.json" -w '%{http_code}' \
+    -X POST "$CONNECTOR_MANAGEMENT/v1/catalog/request" \
+    -H "authorization: Bearer $(cat "$RUN/portitor/connector-management.key")" \
+    -H "$CONTENT_TYPE_JSON" \
+    -d "$(jq -nc --arg addr "$EDC_DSP_INSIDE" --arg id "$EDC_DID" --arg p "$EDC_PROTOCOL" \
+      '{counterPartyAddress: $addr, counterPartyId: $id, protocol: $p}')"
 }
 
-edc_catalog_for_portitor() { # prints the HTTP status, the catalog in $RUN/catalog.json
-  local token
-  token=$(portitor_token "$EDC_DID") || fail "Portitor's STS gave no token"
-  "${COMPOSE[@]}" run --rm -q fetch -s -o /dev/stderr -w '%{http_code}' \
-    -X POST "$EDC_DSP_INSIDE/catalog/request" \
-    -H "authorization: Bearer $token" -H "$CONTENT_TYPE_JSON" \
-    -d '{"@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
-         "@type": "CatalogRequestMessage"}' 2>"$RUN/catalog.json"
-}
-
-step "The EDC provider's catalog, read with Portitor's identity"
-# the Portitor connector does the same before each DSP request it sends
+step "The EDC provider's catalog, read through Portitor's management API"
+# the Portitor connector gets a token from its STS, as before each DSP
+# request it sends
 STATUS=$(edc_catalog_for_portitor)
-[[ $STATUS == 200 ]] || fail "EDC answered $STATUS: $(cat "$RUN/catalog.json")"
+[[ $STATUS == 200 ]] || fail "the catalog call answered $STATUS: $(cat "$RUN/catalog.json")"
 EDC_OFFER=$(jq -c '[.dataset] | flatten | .[] | select(.["@id"] == "edc-interop")
   | [.hasPolicy] | flatten | .[0]' "$RUN/catalog.json")
 [[ -n $EDC_OFFER && $EDC_OFFER != null ]] || fail "no edc-interop offer: $(cat "$RUN/catalog.json")"
@@ -493,8 +487,11 @@ revoke() { # holder DID: the issuer revokes its credentials
 }
 revoke "$PORTITOR_DID"
 STATUS=$(edc_catalog_for_portitor)
-[[ $STATUS == 401 ]] || fail "after the revocation EDC answered $STATUS, not 401"
-echo "EDC answered $STATUS"
+# Portitor's management API answers 502 and names EDC's status
+DETAIL=$(jq -r '.detail // empty' "$RUN/catalog.json")
+[[ $STATUS == 502 && $DETAIL == "the provider answered HTTP 401"* ]] ||
+  fail "after the revocation the catalog call answered $STATUS, not 502 for EDC's 401: $(cat "$RUN/catalog.json")"
+echo "EDC answered 401 ($DETAIL)"
 
 step "The issuer revokes the EDC participant's credential: Portitor refuses EDC"
 revoke "$EDC_DID"
