@@ -69,7 +69,7 @@ versions may change behaviour and configuration.
 
 Six changes made before the interface freeze (maintainer, 2026-11-20);
 after 1.0 they could only be made in 2.0. What to do:
-[DEPLOYING, From 0.12 to 0.13](docs/DEPLOYING.md#from-012-to-013).
+[OPERATING, From 0.12 to 0.13](docs/OPERATING.md#from-012-to-013).
 
 - **Breaking, all three: `PORTITOR_ALLOW_HTTP_CALLBACKS` is now
   `PORTITOR_ALLOW_HTTP`.** It allows plain `http://` for every outgoing

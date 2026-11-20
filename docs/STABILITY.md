@@ -58,8 +58,8 @@ without the right to read data (freeze point 3).
 
 The public routes are described in [docs/api/](api/) (`openapi.json`,
 `identity-openapi.json`, `issuer-openapi.json`), the management routes in
-the three `*management-openapi.json` files there. The README and
-[DEPLOYING](DEPLOYING.md) say what each route does.
+the three `*management-openapi.json` files there.
+[DEPLOYING](DEPLOYING.md) says what each route does.
 
 ### portitor-connector, public port
 
@@ -183,7 +183,7 @@ POST /v1/credentials/{id}/revoke
 ### Every binary, management port
 
 The health checks and the two open routes. They need no key
-([DEPLOYING, health](DEPLOYING.md#health-and-logs)).
+([OPERATING, health](OPERATING.md#health-and-logs)).
 
 ```text
 GET /api/check/liveness
@@ -196,10 +196,12 @@ GET /v1/openapi.json
 
 ## Environment variables
 
-Meaning and defaults: the [README](../README.md#interface) for the
-connector, [DEPLOYING](DEPLOYING.md) section 4 for the identity and
-section 7 for the issuer,
-[Traces and metrics](DEPLOYING.md#traces-and-metrics) for `OTEL_*`.
+Meaning and defaults, all in DEPLOYING:
+[Settings of every component](DEPLOYING.md#settings-of-every-component),
+[Connector settings](DEPLOYING.md#connector-settings),
+[Identity settings](DEPLOYING.md#identity-settings) and
+[Issuer settings](DEPLOYING.md#issuer-settings). The `OTEL_*` settings
+are in [OPERATING, Traces and metrics](OPERATING.md#traces-and-metrics).
 
 One rule for every setting: spaces around a value are dropped, and an
 empty value means "not set". A required setting that is empty stops the
@@ -282,7 +284,7 @@ PORTITOR_ISSUER_BUNDLE_DIR
 Not in the lists above, because a library reads them and its release
 decides their names: the other `OTEL_*` variables (the OpenTelemetry Rust
 SDK; the table in
-[Traces and metrics](DEPLOYING.md#traces-and-metrics) is for the SDK
+[Traces and metrics](OPERATING.md#traces-and-metrics) is for the SDK
 version of each release), `RUST_LOG` (the log level) and `SSL_CERT_FILE`
 and `SSL_CERT_DIR` (the CA certificates,
 [Private CAs](DEPLOYING.md#private-cas)). A change to one of them is
@@ -293,7 +295,7 @@ named in the CHANGELOG.
 | File | Set with | Format |
 |---|---|---|
 | Datasets file | `PORTITOR_DATASETS_FILE` | A JSON list of DCAT datasets with their ODRL offers and `portitor:source` ([ADR 0020](adr/0020-dataset-harvest.md), [DEPLOYING](DEPLOYING.md#dataset-harvest)). Policies are read strictly ([ADR 0009](adr/0009-minimal-odrl-policies.md)); a 1.x release may understand more terms |
-| Credential definitions | `PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE` | A JSON list ([DEPLOYING, issuer configuration](DEPLOYING.md#configuration-1), `examples/issuer-credentials.json`) |
+| Credential definitions | `PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE` | A JSON list ([DEPLOYING, credential definitions file](DEPLOYING.md#credential-definitions-file), `examples/issuer-credentials.json`) |
 | Bundle | `PORTITOR_BUNDLE_URL`, `portitor-issuer bundle build` | A folder per version with `manifest.json` and `manifest.jws`, and `latest.json` ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)); the manifest follows [bundle-manifest.schema.json](schemas/bundle-manifest.schema.json) |
 | Gaia-X participant file | `PORTITOR_GAIAX_PARTICIPANT_FILE` | JSON ([DEPLOYING, Gaia-X onboarding](DEPLOYING.md#gaia-x-onboarding-optional)) |
 | Private keys | `PORTITOR_IDENTITY_KEY_FILE`, `PORTITOR_ISSUER_KEY_FILE` | One P-256 key, unencrypted PKCS#8 PEM |
@@ -313,7 +315,7 @@ database that a newer one migrated. To go back, restore the backup taken
 before the upgrade; what was written since is lost. The maintainer
 confirmed this for 1.x at the freeze (2026-11-20,
 [TD-22](RISKS_AND_TECHNICAL_DEBTS.md#td-22);
-[DEPLOYING, upgrade and rollback](DEPLOYING.md#upgrade-and-rollback)).
+[OPERATING, upgrade and rollback](OPERATING.md#upgrade-and-rollback)).
 
 ## Not part of the stable interface
 
@@ -331,7 +333,7 @@ confirmed this for 1.x at the freeze (2026-11-20,
   are not settings: `PORTITOR_DATASETS` (removed in 0.2),
   `PORTITOR_ALLOW_HTTP_CALLBACKS`, `PORTITOR_IDENTITY_CERTIFICATE_CHAIN`
   and `PORTITOR_ISSUER_CREDENTIALS_FILE` (renamed in 0.13;
-  [DEPLOYING, from 0.12 to 0.13](DEPLOYING.md#from-012-to-013)). The
+  [OPERATING, from 0.12 to 0.13](OPERATING.md#from-012-to-013)). The
   freeze guard keeps them on its "not frozen" lists.
 - **Development aids:** the `tck` build feature and its
   `PORTITOR_TCK_AUTHORIZATION` setting and `/tck/...` routes, `scripts/`,
