@@ -75,9 +75,9 @@ start_issuer() { # name address management-address
   openssl rand -hex 32 >"$dir/management.key"
   env PORTITOR_PARTICIPANT_ID="$(did_web "$address")" PORTITOR_BIND="$address" \
     PORTITOR_ISSUER_SERVICE_URL="http://$address/issuer" PORTITOR_ISSUER_KEY_FILE="$dir/key.pem" \
-    PORTITOR_ISSUER_CREDENTIALS_FILE=examples/issuer-credentials.json \
+    PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE=examples/issuer-credentials.json \
     PORTITOR_DB_FILE="$dir/issuer.db" PORTITOR_MANAGEMENT_BIND="$management" \
-    PORTITOR_MANAGEMENT_API_KEY_FILE="$dir/management.key" PORTITOR_ALLOW_HTTP_CALLBACKS=true \
+    PORTITOR_MANAGEMENT_API_KEY_FILE="$dir/management.key" PORTITOR_ALLOW_HTTP=true \
     "$BIN/portitor-issuer" >"$WORK/$name.log" 2>&1 &
   PIDS+=($!)
 }
@@ -92,7 +92,7 @@ start_identity() { # name address management-address trusted-issuers
     PORTITOR_DB_FILE="$dir/identity.db" PORTITOR_MANAGEMENT_BIND="$management" \
     PORTITOR_MANAGEMENT_API_KEY_FILE="$dir/management.key" \
     PORTITOR_STS_CLIENT_SECRET_FILE="$dir/sts-client-secret" \
-    PORTITOR_TRUSTED_ISSUERS="$trusted" PORTITOR_ALLOW_HTTP_CALLBACKS=true \
+    PORTITOR_TRUSTED_ISSUERS="$trusted" PORTITOR_ALLOW_HTTP=true \
     "$BIN/portitor-identity" >"$WORK/$name.log" 2>&1 &
   PIDS+=($!)
 }
@@ -125,7 +125,7 @@ start_connector() { # name address management-address identity-name identity-add
     PORTITOR_PUBLIC_URL="http://$address" PORTITOR_DB_FILE="$WORK/$name/connector.db" \
     PORTITOR_STS_URL="http://$identity_address/sts/token" \
     PORTITOR_STS_CLIENT_SECRET_FILE="$WORK/$identity/sts-client-secret" \
-    PORTITOR_TRUSTED_ISSUERS="$trusted" PORTITOR_ALLOW_HTTP_CALLBACKS=true \
+    PORTITOR_TRUSTED_ISSUERS="$trusted" PORTITOR_ALLOW_HTTP=true \
     PORTITOR_STATUS_LIST_CACHE_SECONDS=0 PORTITOR_MANAGEMENT_BIND="$management" \
     PORTITOR_MANAGEMENT_API_KEY_FILE="$WORK/$name/management.key" \
     "$@" "$BIN/portitor-connector" >"$WORK/$name.log" 2>&1 &
@@ -170,7 +170,7 @@ exchange() { # label consumer-connector consumer-management consumer-identity co
   [[ $(jq -r '.participantId' "$WORK/catalog.json") == "$provider_did" ]] || fail "$label: other participant"
   offer=$(jq -c '.dataset[] | select(.["@id"] == "weather-stations") | .hasPolicy[0]' "$WORK/catalog.json")
   body=$(jq -nc --arg addr "http://$provider/dsp/2025-1" --arg id "$provider_did" --argjson offer "$offer" \
-    '{providerAddress: $addr, providerId: $id, datasetId: "weather-stations", offer: $offer}')
+    '{counterPartyAddress: $addr, counterPartyId: $id, datasetId: "weather-stations", offer: $offer}')
   pid=$(api "$connector" "$management" POST /v1/negotiations "$body" | jq -r '.consumerPid') || fail "$label: start"
   view=$(until_state "$connector" "$management" "/v1/negotiations/$pid" 'FINALIZED|TERMINATED')
   [[ $(jq -r '.state' <<<"$view") == FINALIZED ]] || fail "$label: negotiation $(jq -c . <<<"$view")"

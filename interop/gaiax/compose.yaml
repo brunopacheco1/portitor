@@ -38,7 +38,7 @@ x-portitor: &portitor
   restart: on-failure
 x-portitor-environment: &portitor-environment
   PORTITOR_TRUSTED_ISSUERS: did:web:issuer%3A8070
-  PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+  PORTITOR_ALLOW_HTTP: "true"
   # only the run's test CA: the test reaches nothing else over HTTPS
   SSL_CERT_DIR: /ca
 
@@ -106,10 +106,10 @@ services:
       PORTITOR_PARTICIPANT_ID: did:web:issuer%3A8070
       PORTITOR_ISSUER_SERVICE_URL: http://issuer:8070/issuer
       PORTITOR_ISSUER_KEY_FILE: /config/issuer-key.pem
-      PORTITOR_ISSUER_CREDENTIALS_FILE: /credentials/issuer-credentials.json
+      PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE: /credentials/issuer-credentials.json
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8071
       PORTITOR_MANAGEMENT_API_KEY_FILE: /config/management.key
-      PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+      PORTITOR_ALLOW_HTTP: "true"
       # it delivers to the Gaia-X participants' credential services over HTTPS
       SSL_CERT_DIR: /ca
     volumes:
@@ -133,7 +133,7 @@ services:
       PORTITOR_MANAGEMENT_API_KEY_FILE: /config/identity-management.key
       PORTITOR_STS_CLIENT_SECRET_FILE: /config/sts-client-secret
       # Gaia-X (ADR 0021)
-      PORTITOR_IDENTITY_CERTIFICATE_CHAIN: /config/certificate-chain.pem
+      PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE: /config/certificate-chain.pem
       PORTITOR_GAIAX_COMPLIANCE_URL: https://compliance.gaiax.test
       PORTITOR_GAIAX_COMPLIANCE_DID: did:web:compliance.gaiax.test
       PORTITOR_GAIAX_PARTICIPANT_FILE: /config/participant.json
@@ -185,7 +185,7 @@ services:
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8091
       PORTITOR_MANAGEMENT_API_KEY_FILE: /config/identity-management.key
       PORTITOR_STS_CLIENT_SECRET_FILE: /config/sts-client-secret
-      PORTITOR_IDENTITY_CERTIFICATE_CHAIN: /config/certificate-chain.pem
+      PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE: /config/certificate-chain.pem
       PORTITOR_GAIAX_COMPLIANCE_URL: https://compliance.gaiax.test
       PORTITOR_GAIAX_COMPLIANCE_DID: did:web:compliance.gaiax.test
       PORTITOR_GAIAX_PARTICIPANT_FILE: /config/participant.json

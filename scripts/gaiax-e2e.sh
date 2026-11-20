@@ -12,7 +12,7 @@
 #  1. A test CA made for this run, and from it: the TLS certificate of the
 #     public names (*.gaiax.test), the compliance service's certificate
 #     (RSA, PS256), the test notary's, and one for each Gaia-X participant's
-#     identity key (PORTITOR_IDENTITY_CERTIFICATE_CHAIN).
+#     identity key (PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE).
 #  2. The test notary (scripts/gaiax_test_notary.py) signs each Gaia-X
 #     participant's registration number credential (gx:VatID); each gets
 #     a participant file (PORTITOR_GAIAX_PARTICIPANT_FILE).
@@ -261,7 +261,7 @@ negotiate() { # name: the participant negotiates the offer; prints the ended neg
   local name=$1 pid view state=
   pid=$(connector_api "$name" POST /v1/negotiations "$(jq -nc --arg addr "$PROVIDER_DSP_INSIDE" \
     --arg id "$PROVIDER_DID" --arg dataset "$DATASET" --argjson offer "$OFFER" \
-    '{providerAddress: $addr, providerId: $id, datasetId: $dataset, offer: $offer}')" |
+    '{counterPartyAddress: $addr, counterPartyId: $id, datasetId: $dataset, offer: $offer}')" |
     jq -r '.consumerPid') || fail "the $name starts the negotiation"
   for _ in $(seq 1 120); do
     view=$(connector_api "$name" GET "/v1/negotiations/$pid") || fail "read the $name's negotiation"

@@ -77,8 +77,12 @@ jobs:
           docker rm "$id"
           grep -q "BEGIN CERTIFICATE" ca.crt
           # without the DCP settings it refuses to start, and says why (it
-          # starts, and writes its SQLite file in /data, in the Compose demo)
-          if docker run --rm portitor-connector:ci > smoke.log 2>&1; then
+          # starts, and writes its SQLite file in /data, in the Compose demo).
+          # The id and the URL are set: they are required too, and checked first
+          if docker run --rm \
+            -e PORTITOR_PARTICIPANT_ID=did:web:connector.example \
+            -e PORTITOR_PUBLIC_URL=https://connector.example \
+            portitor-connector:ci > smoke.log 2>&1; then
             echo "::error::the connector started without PORTITOR_STS_URL"; exit 1
           fi
           cat smoke.log
@@ -99,7 +103,7 @@ jobs:
             -e PORTITOR_CREDENTIAL_SERVICE_URL=http://localhost:8090 \
             -e PORTITOR_STS_CLIENT_SECRET_FILE=/run/secrets/portitor/sts-client-secret \
             -e PORTITOR_TRUSTED_ISSUERS=did:web:issuer.example \
-            -e PORTITOR_ALLOW_HTTP_CALLBACKS=true \
+            -e PORTITOR_ALLOW_HTTP=true \
             portitor-identity:ci
           # did:web:localhost%3A8090 resolves to http://localhost:8090/.well-known/did.json
           for _ in $(seq 50); do curl -sf http://127.0.0.1:8090/.well-known/did.json > did.json && break; sleep 0.2; done

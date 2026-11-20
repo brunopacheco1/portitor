@@ -345,7 +345,7 @@ fn issuer(bundle_dir: Option<PathBuf>) -> Issuer {
         participant_id: AUTHORITY.to_owned(),
         key_file: "unused".into(),
         retired_key_files: Vec::new(),
-        credentials_file: "unused".into(),
+        credential_definitions_file: "unused".into(),
         issuer_service_url: "https://issuer.example/issuer".to_owned(),
         bind: "unused".to_owned(),
         db_file: "unused".into(),

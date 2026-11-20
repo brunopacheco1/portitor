@@ -68,7 +68,9 @@
           "pattern": "^[0-9a-f]{64}$"
         },
         "mediaType": {
-          "enum": ["text/turtle", "application/n-triples", "application/ld+json"]
+          "description": "A media type without parameters: type/subtype, each a restricted name of RFC 6838 section 4.2. For the four known roles only three are valid (see allOf below).",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$"
         },
         "role": {
           "oneOf": [
@@ -136,7 +138,7 @@
           }
         },
         {
-          "description": "Shapes and vocabularies are RDF. The media type of a file with a role of a later version is one of the three, whichever.",
+          "description": "Shapes and vocabularies are RDF. A file with a role of a later version may have any media type of the shape above: a reader that does not know the role skips the file.",
           "if": {
             "properties": {
               "role": {

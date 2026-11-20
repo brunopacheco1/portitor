@@ -53,6 +53,8 @@ const MANAGEMENT_ROUTES_MAY_BE_UNLISTED: bool = false;
 const NOT_FROZEN: &[&str] = &[
     // removed in 0.2; the connector only refuses to start when it is set
     "PORTITOR_DATASETS",
+    // renamed in 0.13 to PORTITOR_ALLOW_HTTP; refused in the same way
+    "PORTITOR_ALLOW_HTTP_CALLBACKS",
     // read only by a build with the `tck` feature (the DSP TCK)
     "PORTITOR_TCK_AUTHORIZATION",
 ];
@@ -67,7 +69,7 @@ fn config() -> Config {
         public_url: "https://provider.example".into(),
         datasets_file: None,
         harvest_interval_seconds: 0,
-        allow_http_callbacks: false,
+        allow_http: false,
         db_file: "unused.db".into(),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),

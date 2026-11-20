@@ -37,6 +37,17 @@ must not parse them or rely on their length or alphabet; a 1.x release
 may accept or issue other forms, for example a JWT
 ([ADR 0025](adr/0025-users-and-roles.md), freeze point 1).
 
+A 1.x release may refuse internal network addresses on URLs that a
+partner chooses, by default, with a setting to allow them (security
+finding F-01 in [SECURITY-ASSURANCE](SECURITY-ASSURANCE.md),
+[R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17)). 1.0 does not refuse them.
+
+Each service needs its own host name (or its own port): the connector
+serves `/dsp/2025-1`, `/data` and `/.well-known/dspace-version` at the
+root of its host. The path of `PORTITOR_PUBLIC_URL` is not used for
+routing; it is only put in front of the addresses the connector gives
+to partners.
+
 A management route may answer **HTTP 403** in 1.x, for a token that does
 not grant the action. 1.0 never answers it: the API key grants every
 right (ADR 0025, freeze point 2). `dataAddress` in the transfer view is
@@ -184,13 +195,17 @@ connector, [DEPLOYING](DEPLOYING.md) section 4 for the identity and
 section 7 for the issuer,
 [Traces and metrics](DEPLOYING.md#traces-and-metrics) for `OTEL_*`.
 
+One rule for every setting: spaces around a value are dropped, and an
+empty value means "not set". A required setting that is empty stops the
+start; an optional one takes its default.
+
 ### Settings of every binary
 
 ```text
 PORTITOR_BIND
 PORTITOR_PARTICIPANT_ID
 PORTITOR_DB_FILE
-PORTITOR_ALLOW_HTTP_CALLBACKS
+PORTITOR_ALLOW_HTTP
 PORTITOR_MANAGEMENT_BIND
 PORTITOR_MANAGEMENT_API_KEY_FILE
 PORTITOR_MAX_REQUEST_BYTES
@@ -232,7 +247,7 @@ PORTITOR_BUNDLE_CACHE_DIR
 PORTITOR_CREDENTIAL_SERVICE_URL
 PORTITOR_IDENTITY_KEY_FILE
 PORTITOR_IDENTITY_RETIRED_KEY_FILES
-PORTITOR_IDENTITY_CERTIFICATE_CHAIN
+PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE
 PORTITOR_STS_CLIENT_ID
 PORTITOR_STS_CLIENT_SECRET_FILE
 PORTITOR_TRUSTED_ISSUERS
@@ -248,7 +263,7 @@ PORTITOR_GAIAX_PARTICIPANT_FILE
 PORTITOR_ISSUER_SERVICE_URL
 PORTITOR_ISSUER_KEY_FILE
 PORTITOR_ISSUER_RETIRED_KEY_FILES
-PORTITOR_ISSUER_CREDENTIALS_FILE
+PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE
 PORTITOR_ISSUER_MAX_ACTIVE_PER_HOLDER
 PORTITOR_ISSUER_BUNDLE_KEY_FILE
 PORTITOR_ISSUER_BUNDLE_DIR
@@ -270,12 +285,12 @@ named in the CHANGELOG.
 | File | Set with | Format |
 |---|---|---|
 | Datasets file | `PORTITOR_DATASETS_FILE` | A JSON list of DCAT datasets with their ODRL offers and `portitor:source` ([ADR 0020](adr/0020-dataset-harvest.md), [DEPLOYING](DEPLOYING.md#dataset-harvest)). Policies are read strictly ([ADR 0009](adr/0009-minimal-odrl-policies.md)); a 1.x release may understand more terms |
-| Credential definitions | `PORTITOR_ISSUER_CREDENTIALS_FILE` | A JSON list ([DEPLOYING, issuer configuration](DEPLOYING.md#configuration-1), `examples/issuer-credentials.json`) |
+| Credential definitions | `PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE` | A JSON list ([DEPLOYING, issuer configuration](DEPLOYING.md#configuration-1), `examples/issuer-credentials.json`) |
 | Bundle | `PORTITOR_BUNDLE_URL`, `portitor-issuer bundle build` | A folder per version with `manifest.json` and `manifest.jws`, and `latest.json` ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)); the manifest follows [bundle-manifest.schema.json](schemas/bundle-manifest.schema.json) |
 | Gaia-X participant file | `PORTITOR_GAIAX_PARTICIPANT_FILE` | JSON ([DEPLOYING, Gaia-X onboarding](DEPLOYING.md#gaia-x-onboarding-optional)) |
 | Private keys | `PORTITOR_IDENTITY_KEY_FILE`, `PORTITOR_ISSUER_KEY_FILE` | One P-256 key, unencrypted PKCS#8 PEM |
 | Retired keys | `PORTITOR_IDENTITY_RETIRED_KEY_FILES`, `PORTITOR_ISSUER_RETIRED_KEY_FILES` | Public keys, PEM |
-| Certificate chain | `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` | PEM, the key's certificate first |
+| Certificate chain | `PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE` | PEM, the key's certificate first |
 | Bundle key | `PORTITOR_ISSUER_BUNDLE_KEY_FILE` | The public key as a JWK, or a PKCS#8 PEM |
 | Secrets | `PORTITOR_MANAGEMENT_API_KEY_FILE`, `PORTITOR_STS_CLIENT_SECRET_FILE` | Text; the API key has at least 32 characters |
 
@@ -303,6 +318,13 @@ confirmed this for 1.x at the freeze (2026-11-20,
 - **The Rust crates.** They are not published as libraries
   (`publish = false` in every `Cargo.toml`); their APIs change without
   notice.
+- **Names removed before 1.0.** A service that finds one of them set
+  refuses to start and names what to set instead; the names themselves
+  are not settings: `PORTITOR_DATASETS` (removed in 0.2),
+  `PORTITOR_ALLOW_HTTP_CALLBACKS`, `PORTITOR_IDENTITY_CERTIFICATE_CHAIN`
+  and `PORTITOR_ISSUER_CREDENTIALS_FILE` (renamed in 0.13;
+  [DEPLOYING, from 0.12 to 0.13](DEPLOYING.md#from-012-to-013)). The
+  freeze guard keeps them on its "not frozen" lists.
 - **Development aids:** the `tck` build feature and its
   `PORTITOR_TCK_AUTHORIZATION` setting and `/tck/...` routes, `scripts/`,
   the `_http/` request collection, `examples/`, and any API browser

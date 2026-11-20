@@ -41,6 +41,57 @@ versions may change behaviour and configuration.
 
 ### Changed
 
+Six changes made before the interface freeze (maintainer, 2026-11-20);
+after 1.0 they could only be made in 2.0. What to do:
+[DEPLOYING, From 0.12 to 0.13](docs/DEPLOYING.md#from-012-to-013).
+
+- **Breaking, all three: `PORTITOR_ALLOW_HTTP_CALLBACKS` is now
+  `PORTITOR_ALLOW_HTTP`.** It allows plain `http://` for every outgoing
+  call, not only callbacks. A service that finds the old name set does
+  not start and names the new one. `PORTITOR_STS_ALLOW_HTTP` is
+  unchanged.
+- **Breaking, identity: `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` is now
+  `PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE`** (it is a file path). The
+  old name stops the start.
+- **Breaking, issuer: `PORTITOR_ISSUER_CREDENTIALS_FILE` is now
+  `PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE`** (it holds credential
+  definitions). The old name stops the start.
+- **Breaking, connector management API: `providerAddress` and
+  `providerId` are now `counterPartyAddress` and `counterPartyId`**, in
+  the body of `POST /v1/negotiations` and in the negotiation and
+  transfer views that `/v1/negotiations` and `/v1/transfers` return:
+  the names of Eclipse EDC (`ContractRequest`, `TransferRequest`,
+  `CatalogRequest`, EDC v1.0.0-RC8) and of the catalog calls. The old
+  names are refused with 400 as unknown fields. `providerPid` and
+  `consumerPid` keep their DSP names.
+- **Breaking, connector: `PORTITOR_PARTICIPANT_ID` and
+  `PORTITOR_PUBLIC_URL` are required.** They defaulted to
+  `did:web:localhost%3A8080` and `http://localhost:8080`; the connector
+  now refuses to start without them, as the identity and the issuer do.
+- **Breaking, all three: one rule for every setting.** Spaces around a
+  value are dropped, and an empty value means "not set": a required
+  setting that is empty stops the start, an optional one takes its
+  default. The connector did not trim and took an empty value as set.
+  Changed for a value that is set but empty: `PORTITOR_DCP_SCOPES` and
+  `PORTITOR_ISSUER_MAX_ACTIVE_PER_HOLDER` (were refused, now the
+  default), `PORTITOR_SCOPE_TYPE_ALIASES` (was "no alias", now the
+  default alias), `PORTITOR_BIND` and `PORTITOR_DB_FILE` (now the
+  default), and the connector's settings in seconds (now the default).
+- **Bundle manifest: a file with a role the reader does not know may
+  have any media type** of the shape `type/subtype` (RFC 6838,
+  section 4.2), so a later role that needs another media type does not
+  make a 1.0 connector refuse the bundle. Files with the four known
+  roles keep the three media types. The JSON schema had the closed list
+  for every file and is corrected (ADR 0005, amended).
+- The management OpenAPI descriptions say in one shared place (the
+  `api_key` security scheme) that the API key is opaque; the
+  connector's also says it for the data plane token.
+- DEPLOYING, "Known limits": a repeated transfer request does not
+  start a second transfer (since 0.12, TD-34); the sentence was stale.
+- `docs/STABILITY.md` reserves two things for 1.x: a 1.x release may
+  refuse internal network addresses on URLs that a partner chooses, by
+  default, with a setting to allow them (F-01, R-17); and it says that
+  each service needs its own host name.
 - The connector's management OpenAPI lists HTTP 403 on every route
   that needs the key. Nothing answers 403 today: it is reserved for
   scoped access in 1.x, and the API key keeps every right (ADR 0025).

@@ -12,7 +12,7 @@
 //! Each request carries a fresh DCP token for the provider, from the same
 //! [`Prover`] the negotiation and transfer messages use (ADR 0016), and
 //! goes out through the same [`Sender`], so the rule for outbound URLs is
-//! the same too (`https://` only, unless `PORTITOR_ALLOW_HTTP_CALLBACKS`).
+//! the same too (`https://` only, unless `PORTITOR_ALLOW_HTTP`).
 //!
 //! What differs from the outbox ([`crate::outbox`]):
 //!

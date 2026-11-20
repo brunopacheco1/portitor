@@ -7,7 +7,7 @@
 //! its DID document over plain HTTP on 127.0.0.1; the connector's
 //! [`BundleSource`] fetches them and its [`BundleHarvester`] takes them,
 //! at start and when a newer version comes, with plain HTTP allowed (as
-//! `PORTITOR_ALLOW_HTTP_CALLBACKS` allows it for local tests).
+//! `PORTITOR_ALLOW_HTTP` allows it for local tests).
 #![allow(clippy::unwrap_used)]
 
 use std::path::{Path, PathBuf};
@@ -75,7 +75,7 @@ impl Authority {
             participant_id: did.clone(),
             key_file: "unused".into(),
             retired_key_files: Vec::new(),
-            credentials_file: "unused".into(),
+            credential_definitions_file: "unused".into(),
             issuer_service_url: format!("http://127.0.0.1:{port}/issuer"),
             bind: "unused".to_owned(),
             db_file: "unused".into(),

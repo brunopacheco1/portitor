@@ -91,16 +91,18 @@ without a reason: HTTP 404 on the negotiation and transfer routes, HTTP
 401 on the catalog routes (from 0.12,
 [ADR 0016](docs/adr/0016-dsp-caller-authentication.md)).
 
-Configuration (environment variables):
+Configuration (environment variables). In all three services, spaces around a value are dropped and an empty
+value means "not set": a required setting that is empty stops the start,
+and an optional one takes its default.
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `PORTITOR_BIND` | `0.0.0.0:8080` | Address to listen on |
-| `PORTITOR_PARTICIPANT_ID` | `did:web:localhost%3A8080` | Participant id (a DID) |
-| `PORTITOR_PUBLIC_URL` | `http://localhost:8080` | Public base URL; the DSP endpoint is this plus `/dsp/2025-1`, the consumer callback address this plus `/dsp/2025-1/callback` |
+| `PORTITOR_PARTICIPANT_ID` | none (**required**) | Participant id (a DID), for example `did:web:connector.example.com`. The connector does not start without it |
+| `PORTITOR_PUBLIC_URL` | none (**required**) | Public base URL, for example `https://connector.example.com`. The connector does not start without it; the DSP endpoint is this plus `/dsp/2025-1`, the consumer callback address this plus `/dsp/2025-1/callback` |
 | `PORTITOR_DATASETS_FILE` | none (empty catalog) | JSON file with the datasets to offer, harvested into a read copy at start and at each run ([ADR 0020](docs/adr/0020-dataset-harvest.md)) |
 | `PORTITOR_HARVEST_INTERVAL_SECONDS` | `3600` | Seconds between two harvest runs; `0` harvests only at start; at most `31536000` (one year) |
-| `PORTITOR_BUNDLE_URL` | none (no SHACL checks) | `https://` URL of the authority's folder of signed schema and vocabulary bundles, one folder per version and `latest.json` ([ADR 0005](docs/adr/0005-schema-and-vocabulary-registry.md)); `http://` only with `PORTITOR_ALLOW_HTTP_CALLBACKS` |
+| `PORTITOR_BUNDLE_URL` | none (no SHACL checks) | `https://` URL of the authority's folder of signed schema and vocabulary bundles, one folder per version and `latest.json` ([ADR 0005](docs/adr/0005-schema-and-vocabulary-registry.md)); `http://` only with `PORTITOR_ALLOW_HTTP` |
 | `PORTITOR_BUNDLE_DIR` | none | A local bundles folder instead of the URL (development and tests) |
 | `PORTITOR_BUNDLE_VERSION` | `latest` | `latest` follows the newest version without a restart (never an older one); or one fixed version |
 | `PORTITOR_BUNDLE_REFRESH_SECONDS` | `3600` | Seconds between two looks at `latest.json`; `0` only at start; at most `31536000` (one year) |
@@ -111,7 +113,7 @@ Configuration (environment variables):
 | `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8081` | Address of the management port: always the health checks (`/api/check/...`, no key, [DEPLOYING](docs/DEPLOYING.md#health-and-logs)), and the management API with its key |
 | `PORTITOR_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | Largest request body on the public port, `1` to `67108864` (64 MiB); larger gets HTTP 413. Small DSP messages have a lower fixed limit ([DEPLOYING](docs/DEPLOYING.md#5-security)) |
 | `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | Largest request body on the management port, `1` to `67108864` (64 MiB) |
-| `PORTITOR_ALLOW_HTTP_CALLBACKS` | `false` | `true` allows plain `http://` for consumers' callbacks, providers, partners' `did:web` DIDs and credential services, status lists and the STS; development and tests only |
+| `PORTITOR_ALLOW_HTTP` | `false` | `true` allows plain `http://` for consumers' callbacks, providers, partners' `did:web` DIDs and credential services, status lists and the STS; development and tests only |
 | `PORTITOR_DATA_TOKEN_SECONDS` | `3600` | How long a data access token is valid after the transfer starts; `1` to `31536000` (one year) |
 | `PORTITOR_STS_URL` | none (**required**) | Token endpoint of the participant's STS (`portitor-identity`: `<base URL>/sts/token`); every DSP request is authenticated with DCP (ADR 0016) |
 | `PORTITOR_STS_ALLOW_HTTP` | unset | `true` allows a plain-HTTP `PORTITOR_STS_URL` (the STS on an internal network), and nothing else |
@@ -255,7 +257,7 @@ can send the same body:
 
 | Member | What Portitor does with it |
 |---|---|
-| `counterPartyAddress`, `counterPartyId` | Required. The provider's DSP endpoint and its `did:web` DID: the `providerAddress` and `providerId` of a negotiation |
+| `counterPartyAddress`, `counterPartyId` | Required. The provider's DSP endpoint and its `did:web` DID, as in a negotiation |
 | `protocol`, or `profile` (EDC's newer name) | Exactly one is required, and it must be `dataspace-protocol-http:2025-1`, the only protocol the connector speaks; anything else gets 400 |
 | `additionalScopes` | Optional. Scopes added to the configured ones (`PORTITOR_DCP_SCOPES`) in the token for the provider, for datasets it shows only to holders of a credential |
 | `querySpec` | Refused with 400. EDC sends it as the `filter` of the DSP request; DSP leaves its content to each implementation, and the connector always asks for the whole catalog |
@@ -276,8 +278,8 @@ provider agrees only to the catalog's terms, see above):
 ```sh
 curl -s -X POST localhost:8081/v1/negotiations \
   -H "authorization: Bearer $(cat key)" -H 'content-type: application/json' -d '{
-  "providerAddress": "https://provider.example/dsp/2025-1",
-  "providerId": "did:web:provider.example",
+  "counterPartyAddress": "https://provider.example/dsp/2025-1",
+  "counterPartyId": "did:web:provider.example",
   "datasetId": "air-quality",
   "offer": {"@id": "air-quality:offer:until-2030", "@type": "Offer",
             "permission": [{"action": "use", "constraint": [{"leftOperand": "dateTime",
@@ -403,7 +405,7 @@ set on the identity component, not the connector:
 
 | Variable (identity) | Default | Meaning |
 |---------------------|---------|---------|
-| `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` | none | PEM chain of the identity key, its certificate first; served at `/.well-known/x509CertificateChain.pem` (below the DID path, for a DID with one) and named by `x5u` in the DID document. The identity refuses to start if the first certificate is for another key |
+| `PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE` | none | PEM chain of the identity key, its certificate first; served at `/.well-known/x509CertificateChain.pem` (below the DID path, for a DID with one) and named by `x5u` in the DID document. The identity refuses to start if the first certificate is for another key |
 | `PORTITOR_GAIAX_COMPLIANCE_URL` | none (Gaia-X off) | Base URL of a Gaia-X compliance service; the identity gets and renews its participant's compliance credential. Needs the chain, the participant file and `PORTITOR_GAIAX_COMPLIANCE_DID` |
 | `PORTITOR_GAIAX_COMPLIANCE_DID` | none | The compliance service's `did:web` DID, for example `did:web:compliance.lab.gaia-x.eu:v2`. An answer signed by any other DID is refused |
 | `PORTITOR_GAIAX_PARTICIPANT_FILE` | none | JSON file: Gaia-X context, legal person claims, terms and conditions hash, and the path of the notary's registration number credential (DEPLOYING, "Gaia-X onboarding") |

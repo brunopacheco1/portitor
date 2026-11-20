@@ -17,7 +17,7 @@ script:pre-request {
       grant_type: "client_credentials",
       client_id: bru.getEnvVar("consumerId"),
       client_secret: bru.getEnvVar("stsSecret"),
-      audience: bru.getEnvVar("providerId"),
+      audience: bru.getEnvVar("counterPartyId"),
       bearer_access_scope: bru.getEnvVar("dcpScope"),
     };
     const form = Object.keys(fields)

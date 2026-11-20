@@ -21,6 +21,7 @@ use portitor_runtime::request_size::RequestLimits;
 use portitor_runtime::serve::{
     MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, run_component, serve, with_limits,
 };
+use portitor_runtime::settings;
 
 /// The verifier and the prover (ADR 0016).
 type AuthAdapters = (Arc<dyn CallerVerifier>, Arc<dyn Prover>);
@@ -50,9 +51,9 @@ async fn serve_connector() -> ExitCode {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = portitor_connector::Config::from_env()?;
     let limits = RequestLimits::from_env()?;
-    let sender = portitor_connector::dsp_sender(config.allow_http_callbacks)?;
-    if config.allow_http_callbacks {
-        tracing::warn!("http callback addresses allowed (PORTITOR_ALLOW_HTTP_CALLBACKS)");
+    let sender = portitor_connector::dsp_sender(config.allow_http)?;
+    if config.allow_http {
+        tracing::warn!("plain http allowed for every outgoing call (PORTITOR_ALLOW_HTTP)");
     }
     let store = Arc::new(
         portitor_connector::store::SqliteNegotiations::open(&config.db_file)
@@ -62,7 +63,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let sender = portitor_connector::tck::LateStart(sender);
     let mut ports = portitor_connector::Ports::new(Arc::new(sender));
     ports.use_sqlite(&store);
-    let settings = AuthSettings::from_env(&config.participant_id, config.allow_http_callbacks)?;
+    let settings = AuthSettings::from_env(&config.participant_id, config.allow_http)?;
     if let Some(settings) = &settings
         && let Some(warning) = settings.policy_types_warning(&config.credential_types)
     {
@@ -109,7 +110,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Ok(count) => tracing::info!(count, "sending pending negotiation messages again"),
         Err(failure) => return Err(format!("cannot read pending messages: {failure:?}").into()),
     }
-    let bind = std::env::var("PORTITOR_BIND").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
+    let bind = settings::text_from_env("PORTITOR_BIND")
+        .unwrap_or_else(|| portitor_connector::DEFAULT_BIND.to_owned());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
 
     // the management port always serves the health checks (ADR 0023);
@@ -155,8 +157,7 @@ async fn start_bundle_harvest(
     Option<(BundleHarvester, portitor_connector::harvest::JobRecord)>,
     Box<dyn std::error::Error>,
 > {
-    let Some(bundle_config) = BundleConfig::from_env(&config.db_file, config.allow_http_callbacks)?
-    else {
+    let Some(bundle_config) = BundleConfig::from_env(&config.db_file, config.allow_http)? else {
         return Ok(None);
     };
     // the authority's DID document, reused as long as every other one
@@ -218,9 +219,7 @@ async fn auth_adapters(settings: Option<AuthSettings>) -> Result<AuthAdapters, S
         );
         (Arc::new(RefuseAll), Arc::new(NoTokens))
     };
-    let fixed = std::env::var("PORTITOR_TCK_AUTHORIZATION")
-        .ok()
-        .filter(|header| !header.is_empty());
+    let fixed = settings::text_from_env("PORTITOR_TCK_AUTHORIZATION");
     Ok((
         Arc::new(TckVerifier {
             fixed: fixed.clone(),

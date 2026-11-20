@@ -608,7 +608,7 @@ async fn list_compliance_runs(State(identity): State<Arc<Identity>>) -> Response
 #[openapi(
     info(
         title = "Portitor identity management API",
-        description = "Credential requests, credentials and offers of the participant this identity component holds, and its Gaia-X compliance runs. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only. The API key is an opaque string: a client must not parse it, and a 1.x release may accept other forms of token. HTTP 403 is reserved for such tokens; 1.0 never answers it.",
+        description = "Credential requests, credentials and offers of the participant this identity component holds, and its Gaia-X compliance runs. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only. The API key is opaque (see the api_key security scheme). HTTP 403 is reserved for tokens with limited rights in 1.x; 1.0 never answers it.",
         license(name = "Apache-2.0", identifier = "Apache-2.0"),
     ),
     paths(

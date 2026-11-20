@@ -347,7 +347,7 @@ impl World {
             participant_id: ISSUER.to_owned(),
             key_file: "unused".into(),
             retired_key_files: setup.retired_key_files,
-            credentials_file: "unused".into(),
+            credential_definitions_file: "unused".into(),
             issuer_service_url: SERVICE.to_owned(),
             bind: "unused".to_owned(),
             db_file: "unused".into(),
@@ -1418,7 +1418,7 @@ fn the_issuer_does_not_start_with_its_own_key_as_retired() {
         participant_id: ISSUER.to_owned(),
         key_file: "unused".into(),
         retired_key_files: vec![current_file],
-        credentials_file: "unused".into(),
+        credential_definitions_file: "unused".into(),
         issuer_service_url: SERVICE.to_owned(),
         bind: "unused".to_owned(),
         db_file: "unused".into(),
@@ -1753,7 +1753,10 @@ fn start_and_wait_for_the_stop(
             "https://issuer.example/issuer",
         )
         .env("PORTITOR_ISSUER_KEY_FILE", key_file)
-        .env("PORTITOR_ISSUER_CREDENTIALS_FILE", definitions_file)
+        .env(
+            "PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE",
+            definitions_file,
+        )
         .env("PORTITOR_DB_FILE", dir.path().join("issuer.db"))
         .env("PORTITOR_BIND", "127.0.0.1:0")
         .envs(more_settings.iter().copied())
@@ -1803,7 +1806,7 @@ fn the_issuer_does_not_start_without_a_valid_credential_schema() {
         let (ended_well, logged) = start_and_wait_for_the_stop(&entry(credential_schema), &[]);
         assert!(!ended_well, "{credential_schema}: {logged}");
         assert!(
-            logged.contains("PORTITOR_ISSUER_CREDENTIALS_FILE"),
+            logged.contains("PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE"),
             "{credential_schema}: {logged}"
         );
         assert!(logged.contains(reason), "{credential_schema}: {logged}");

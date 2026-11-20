@@ -101,7 +101,7 @@ fn config(participant_id: &str, public_url: &str, datasets_file: Option<&str>) -
         public_url: public_url.into(),
         datasets_file: datasets_file.map(Into::into),
         harvest_interval_seconds: 0,
-        allow_http_callbacks: false,
+        allow_http: false,
         db_file: "unused.db".into(),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
@@ -500,12 +500,12 @@ async fn played_provider() -> (String, Seen) {
 }
 
 /// A consumer's management router whose connector sends with the real
-/// HTTP client. `allow_http` is `PORTITOR_ALLOW_HTTP_CALLBACKS`.
+/// HTTP client. `allow_http` is `PORTITOR_ALLOW_HTTP`.
 fn consumer_over_http(allow_http: bool) -> Router {
     let sender = portitor_connector::dsp_sender(allow_http).unwrap();
     let ports = authenticating(Ports::new(Arc::new(sender)), CONSUMER);
     let mut config = config(CONSUMER, "https://consumer.example", None);
-    config.allow_http_callbacks = allow_http;
+    config.allow_http = allow_http;
     let (_, negotiator) = portitor_connector::build(&config, ports).unwrap();
     router(negotiator, ApiKey::new(KEY).unwrap())
 }
@@ -641,7 +641,7 @@ async fn an_answer_that_is_not_what_was_asked_for_is_a_bad_gateway() {
     assert!(detail.contains("is not a DSP 2025-1 Dataset"), "{detail}");
 }
 
-/// Without `PORTITOR_ALLOW_HTTP_CALLBACKS` a plain `http://` address is
+/// Without `PORTITOR_ALLOW_HTTP` a plain `http://` address is
 /// refused, and the provider is never called.
 #[tokio::test]
 async fn an_http_address_is_refused_without_the_allow_flag() {

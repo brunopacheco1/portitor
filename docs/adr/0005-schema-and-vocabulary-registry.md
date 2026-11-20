@@ -271,7 +271,7 @@ every member had upgraded. The maintainer decided (2026-11-20;
   later role name is safe to log); anything else is an error. Only a
   well-formed role object with another type is skipped, and it may have
   any other fields. A file entry with such a role is still checked:
-  path, digest, and a media type from the list (any of the three).
+  path, digest, and the shape of its media type (see below).
 - **The issuer stays strict.** `portitor-issuer bundle build` refuses a
   role it does not know (it already did, with a less clear message),
   `sign_manifest` refuses to sign one, and the issuer's bundle route
@@ -286,9 +286,12 @@ enforce it. An authority that needs every member to enforce a new role
 must wait until they have upgraded (the WARN line and the gauge show
 who has not), or make membership depend on the version.
 
-Not changed: a media type outside the three listed still makes the
-manifest invalid, so a later role that needs another media type cannot
-be skipped by a 1.0 connector.
+The media type of a file with an unknown role is open too (same day,
+before the freeze): it may be any `type/subtype` of the shape RFC 6838
+section 4.2 gives (restricted names, no parameters), so a later role
+that needs a media type outside the three is skipped by a 1.0 connector
+and does not make it refuse the bundle; for a file with one of the four
+known roles the three media types stay the only valid ones.
 
 Where: `portitor_dcp::bundle` (`Role::Unknown`, read in two named steps
 in `impl Deserialize for Role`; `Manifest::files_to_fetch`,

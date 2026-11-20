@@ -36,6 +36,16 @@ use common::World;
 use portitor_runtime::health::{HealthChecks, management_app};
 use portitor_runtime::testing::frozen;
 
+/// Names the code holds that are no settings of a release build: the
+/// old names of renamed settings. The service only refuses to start when
+/// one of them is set (`REMOVED_SETTINGS` in `config.rs`).
+const NOT_FROZEN: &[&str] = &[
+    // renamed in 0.13 to PORTITOR_ALLOW_HTTP
+    "PORTITOR_ALLOW_HTTP_CALLBACKS",
+    // renamed in 0.13 to PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE
+    "PORTITOR_IDENTITY_CERTIFICATE_CHAIN",
+];
+
 fn stability() -> String {
     frozen::repository_file(env!("CARGO_MANIFEST_DIR"), "docs/STABILITY.md").unwrap()
 }
@@ -52,7 +62,7 @@ fn frozen_settings() {
         crates.join("portitor-runtime/src"),
     ];
     let folders: Vec<&Path> = folders.iter().map(std::path::PathBuf::as_path).collect();
-    let result = frozen::check_settings(&stability(), "portitor-identity", &folders, &[]);
+    let result = frozen::check_settings(&stability(), "portitor-identity", &folders, NOT_FROZEN);
     if let Err(difference) = result {
         panic!("{difference}");
     }

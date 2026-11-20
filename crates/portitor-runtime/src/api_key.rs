@@ -129,6 +129,10 @@ pub async fn require_key(
 /// Adds the `api_key` security scheme (`Authorization: Bearer <key>`) to
 /// a management API's `OpenAPI` description; use it as
 /// `#[openapi(modifiers(&BearerKey))]`.
+///
+/// Its description is the one place that tells clients of the three
+/// management APIs that the key is opaque (`docs/STABILITY.md`; ADR 0025,
+/// freeze point 1).
 #[derive(Debug)]
 pub struct BearerKey;
 
@@ -141,7 +145,7 @@ impl Modify for BearerKey {
                 HttpBuilder::new()
                     .scheme(HttpAuthScheme::Bearer)
                     .description(Some(
-                        "The key from PORTITOR_MANAGEMENT_API_KEY_FILE: Authorization: Bearer <key>",
+                        "The key from PORTITOR_MANAGEMENT_API_KEY_FILE: Authorization: Bearer <key>. The key is an opaque string: a client must not parse it or rely on its length or alphabet, and a 1.x release may accept other forms of token.",
                     ))
                     .build(),
             ),

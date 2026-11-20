@@ -115,15 +115,17 @@ Check each item and keep the answers in your own runbook.
 ## 2. Configuration
 
 All configuration is by environment variable. The full table is in the
-[README](../README.md#interface).
+[README](../README.md#interface). In all three services, spaces around a value are dropped and an empty
+value means "not set": a required setting that is empty stops the start,
+and an optional one takes its default.
 
 | Variable | Production value |
 |---|---|
-| `PORTITOR_PARTICIPANT_ID` | your DID |
-| `PORTITOR_PUBLIC_URL` | your public `https://` URL |
+| `PORTITOR_PARTICIPANT_ID` | **required**: your DID |
+| `PORTITOR_PUBLIC_URL` | **required**: your public `https://` URL |
 | `PORTITOR_DATASETS_FILE` | path of the mounted datasets file, harvested at start and at each run |
 | `PORTITOR_HARVEST_INTERVAL_SECONDS` | leave the default, `3600` (one hour); `0` harvests only at start. A value that is not a whole number, or is above `31536000` (one year), stops the start |
-| `PORTITOR_BUNDLE_URL` | with a bundle: the `https://` URL of the authority's bundles folder (one folder per version, and `latest.json`), for example `https://issuer.example.com/bundles/`; plain `http://` only with `PORTITOR_ALLOW_HTTP_CALLBACKS=true` |
+| `PORTITOR_BUNDLE_URL` | with a bundle: the `https://` URL of the authority's bundles folder (one folder per version, and `latest.json`), for example `https://issuer.example.com/bundles/`; plain `http://` only with `PORTITOR_ALLOW_HTTP=true` |
 | `PORTITOR_BUNDLE_DIR` | unset; a local bundles folder (one folder per version, and `latest.json`), for development and tests only. Not together with `PORTITOR_BUNDLE_URL` |
 | `PORTITOR_BUNDLE_VERSION` | `latest`: follow the newest version the authority names in `latest.json`; or one fixed version, never changed while the connector runs (the manifest must have exactly this version) |
 | `PORTITOR_BUNDLE_REFRESH_SECONDS` | `3600`: how often the newest version is looked for; `0` only at start. A value that is not a whole number, or is above `31536000` (one year), stops the start. Not used with a fixed version |
@@ -135,7 +137,7 @@ All configuration is by environment variable. The full table is in the
 | `PORTITOR_MANAGEMENT_BIND` | `0.0.0.0:8081` in a container (publish it only on an internal interface); the default `127.0.0.1:8081` is unreachable from outside a container. The port is always bound: it serves the [health checks](#health-and-logs), with or without the key |
 | `PORTITOR_MAX_REQUEST_BYTES` | leave the default, `2097152` (2 MiB): the largest request body the public port takes; a larger one gets HTTP 413. Some routes have a lower fixed limit ([section 5](#5-security)). A value that is not a whole number from `1` to `67108864` (64 MiB) stops the start |
 | `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | leave the default, `2097152` (2 MiB): the same for the management port |
-| `PORTITOR_ALLOW_HTTP_CALLBACKS` | **unset** (never `true` in production) |
+| `PORTITOR_ALLOW_HTTP` | **unset** (never `true` in production) |
 | `PORTITOR_DATA_TOKEN_SECONDS` | leave the default, `3600`, unless consumers need longer to fetch; at most `31536000` (one year) |
 | `PORTITOR_STS_URL` | **required**: your identity's STS token endpoint, `<identity base URL>/sts/token` |
 | `PORTITOR_STS_ALLOW_HTTP` | unset; `true` only when `PORTITOR_STS_URL` is plain `http://` on an internal network ([section 4](#endpoints)) |
@@ -389,7 +391,10 @@ messages against them. A dataset that passes is served with
   to enforce it. A bundle in which the connector knows no role at all
   is refused like any invalid bundle (the version in use stays; with
   no version, the start stops). Everything else in a manifest is still
-  read strictly: a field the format does not have is an error.
+  read strictly: a field the format does not have is an error. Such a
+  file may have any media type (`type/subtype`, RFC 6838); a file with
+  a role the connector knows must be `text/turtle`,
+  `application/n-triples` or `application/ld+json`.
 - A bundle that was read but fails a check (signature, key, authority,
   version or a digest) stops the start; the cache does not replace it.
   So does a bundle that cannot be loaded at all (no download and no
@@ -592,9 +597,9 @@ participant.
 | `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | leave the default; the same for the management port |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (no traces or metrics) | your OTLP receiver's base URL, if you collect them ([Traces and metrics](#traces-and-metrics)) |
 | `PORTITOR_SCOPE_TYPE_ALIASES` | `org.eclipse.edc.vc.type` | comma-separated scope aliases that mean "credentials of this type", besides DCP's `org.eclipse.dspace.dcp.vc.type` |
-| `PORTITOR_ALLOW_HTTP_CALLBACKS` | unset | **unset** (`true` allows plain-HTTP DIDs and URLs, tests only) |
+| `PORTITOR_ALLOW_HTTP` | unset | **unset** (`true` allows plain-HTTP DIDs and URLs, tests only) |
 | `PORTITOR_DID_CACHE_SECONDS` | `300` | leave the default; how long a resolved DID document (a caller's, an issuer's) is reused, `0` to `3600`, `0` for no cache ([DID document cache](#did-document-cache)) |
-| `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` | unset | Gaia-X only: path of the PEM chain of the identity key, the key's certificate first ([Gaia-X onboarding](#gaia-x-onboarding-optional)) |
+| `PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE` | unset | Gaia-X only: path of the PEM chain of the identity key, the key's certificate first ([Gaia-X onboarding](#gaia-x-onboarding-optional)) |
 | `PORTITOR_GAIAX_COMPLIANCE_URL` | unset (Gaia-X off) | base URL of a Gaia-X compliance service, for example `https://compliance.lab.gaia-x.eu/v2`; needs the settings around it |
 | `PORTITOR_GAIAX_COMPLIANCE_DID` | unset | Gaia-X only: the `did:web` DID of that service, for example `did:web:compliance.lab.gaia-x.eu:v2`; an answer signed by any other DID is refused |
 | `PORTITOR_GAIAX_PARTICIPANT_FILE` | unset | Gaia-X only: path of the participant file |
@@ -623,7 +628,7 @@ and to check partners' credentials:
 |---|---|
 | `PORTITOR_PARTICIPANT_ID` | the identity's DID |
 | `PORTITOR_STS_URL` | **required**: the identity's STS token endpoint on the internal network, for example `http://identity:8090/sts/token` |
-| `PORTITOR_STS_ALLOW_HTTP` | `true` when `PORTITOR_STS_URL` is plain `http://`: allows plain HTTP for that URL only, nothing else (the connector refuses to start with an `http://` STS URL unless this or `PORTITOR_ALLOW_HTTP_CALLBACKS` is `true`) |
+| `PORTITOR_STS_ALLOW_HTTP` | `true` when `PORTITOR_STS_URL` is plain `http://`: allows plain HTTP for that URL only, nothing else (the connector refuses to start with an `http://` STS URL unless this or `PORTITOR_ALLOW_HTTP` is `true`) |
 | `PORTITOR_STS_CLIENT_SECRET_FILE` | **required**: the same secret file as the identity's |
 | `PORTITOR_STS_CLIENT_ID` | leave the default, `PORTITOR_PARTICIPANT_ID` |
 | `PORTITOR_TRUSTED_ISSUERS` | **required**: DIDs trusted to issue credentials, usually the dataspace's `portitor-issuer` |
@@ -809,7 +814,7 @@ anchor. Keep the identity key; get a certificate for it:
   Give the provider the same CSR.
 
 Mount the chain (your certificate first, then the CA certificates) and
-set `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` to it. The identity refuses to
+set `PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE` to it. The identity refuses to
 start if the first certificate is not for its key. It serves the chain at
 `https://<your host>/.well-known/x509CertificateChain.pem` (below the DID
 path, for a DID with one) and points to
@@ -1093,7 +1098,7 @@ tested with a proxy product.
   keeps the data address of each usable transfer, token included, in
   `/data/portitor.db` until the transfer ends (ADR 0014). Protect the volume
   and its backups like the management key.
-- Do not set `PORTITOR_ALLOW_HTTP_CALLBACKS=true` outside development and tests.
+- Do not set `PORTITOR_ALLOW_HTTP=true` outside development and tests.
 - Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
 
 ## 6. Operate
@@ -1676,6 +1681,74 @@ do not change.
    negotiations pile up, and small answers no longer wait 43 ms
    ([BENCHMARKS](BENCHMARKS.md)).
 
+#### From 0.12 to 0.13
+
+0.13 freezes the interface for 1.0 ([STABILITY](STABILITY.md)). Six
+things changed before the freeze, because after 1.0 they could only
+change in 2.0. The databases need no manual step. Change your
+configuration and your management API clients **before** you start the
+new images.
+
+1. **Breaking, all three: three settings have new names.** A service
+   that finds an old name set (to a value that is not empty) does not
+   start; the log line `... stopped` names the new one, for example
+   `PORTITOR_ALLOW_HTTP_CALLBACKS was renamed in 0.13; set
+   PORTITOR_ALLOW_HTTP instead`. The meanings did not change.
+
+   | Service | Old name | New name |
+   |---|---|---|
+   | connector, identity, issuer | `PORTITOR_ALLOW_HTTP_CALLBACKS` | `PORTITOR_ALLOW_HTTP` |
+   | identity | `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` | `PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE` |
+   | issuer | `PORTITOR_ISSUER_CREDENTIALS_FILE` | `PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE` |
+
+   `PORTITOR_STS_ALLOW_HTTP` is another setting and keeps its name.
+2. **Breaking, connector management API: `counterPartyAddress` and
+   `counterPartyId`.** `POST /v1/negotiations` takes them in place of
+   `providerAddress` and `providerId`, and the answers of
+   `/v1/negotiations` and `/v1/transfers` (start, one, list) return
+   them under the new names. They are the names of Eclipse EDC and of
+   the catalog calls. A request with an old name gets HTTP 400
+   (`unknown field`). Change every client that starts a negotiation or
+   reads these two fields. `providerPid` and `consumerPid` did not
+   change.
+3. **Breaking, connector: `PORTITOR_PARTICIPANT_ID` and
+   `PORTITOR_PUBLIC_URL` are required.** Before, a connector without
+   them started as `did:web:localhost%3A8080` at
+   `http://localhost:8080`. Now it does not start
+   (`PORTITOR_PARTICIPANT_ID: required ...`). A production connector
+   set both already; check test and development setups.
+4. **Behaviour change, all three: an empty value means "not set".**
+   Spaces around a value are dropped, and a setting that is empty (or
+   only spaces) counts as not set: a required one stops the start, an
+   optional one takes its default. The identity and the issuer mostly
+   did this already; the connector did not. What is different for a
+   setting that is **set but empty**:
+
+   | Setting | Before | From 0.13 |
+   |---|---|---|
+   | connector: `PORTITOR_PARTICIPANT_ID`, `PORTITOR_PUBLIC_URL` | an empty id or URL was used | the start stops (required) |
+   | connector: `PORTITOR_BIND`, `PORTITOR_DB_FILE`, `PORTITOR_DATASETS_FILE` | an empty address or path was used (and failed, or gave an empty catalog) | the default (`0.0.0.0:8080`, `portitor.db`, no datasets file) |
+   | connector: `PORTITOR_HARVEST_INTERVAL_SECONDS`, `PORTITOR_DATA_TOKEN_SECONDS` | the start stopped (invalid value) | the default |
+   | connector: `PORTITOR_DCP_SCOPES` | the start stopped (`set but empty`) | the default scope |
+   | connector: `PORTITOR_STS_CLIENT_SECRET_FILE` | the start stopped (cannot read the file) | the start stops (required) |
+   | identity, issuer: `PORTITOR_BIND`, `PORTITOR_DB_FILE` | an empty address or path was used (and failed) | the default |
+   | identity: `PORTITOR_SCOPE_TYPE_ALIASES` | no alias besides DCP's own | the default alias, `org.eclipse.edc.vc.type` |
+   | issuer: `PORTITOR_ISSUER_MAX_ACTIVE_PER_HOLDER` | the start stopped (invalid value) | the default, 10 |
+
+   If you set `PORTITOR_SCOPE_TYPE_ALIASES` to an empty value to switch
+   EDC's alias off, set it to `org.eclipse.dspace.dcp.vc.type` (DCP's
+   own alias) instead. The content of a secret file is read as before.
+   The connector also trims values now: a value with a space or a line
+   end around it, which failed before, works.
+5. **Bundle authorities, nothing to do:** a file whose role a connector
+   does not know may now have any media type, not only the three
+   ([Schema and vocabulary bundle](#schema-and-vocabulary-bundle)).
+6. New in 0.13, nothing to do: the catalog calls of the management API
+   ([README](../README.md#management-api)).
+
+Rollback to 0.12: put the old names back in the configuration and the
+old field names in your clients; for the database, as above.
+
 ## 7. Run the issuer (dataspace authority only)
 
 The issuer issues and revokes the dataspace's credentials with the
@@ -1728,7 +1801,7 @@ DID.
 | `PORTITOR_ISSUER_SERVICE_URL` | required | public base URL of the issuer service, for example `https://issuer.example.com/issuer`; written into the DID document (`IssuerService`). The status lists are served under it (`/status-lists/vc11`, `/status-lists/vc20`) and every credential points there, so **never change it** once credentials are issued |
 | `PORTITOR_ISSUER_KEY_FILE` | required | path of the mounted PEM key |
 | `PORTITOR_ISSUER_RETIRED_KEY_FILES` | unset (no retired key) | only during a key change: comma-separated paths of the old **public** keys, as for the identity ([Rotating a key](#rotating-a-key)). The start fails for a private key, a key that is not P-256, the current key, a key given twice, or the bundle key |
-| `PORTITOR_ISSUER_CREDENTIALS_FILE` | required | path of the mounted credential definitions file |
+| `PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE` | required | path of the mounted credential definitions file |
 | `PORTITOR_BIND` | `0.0.0.0:8070` | keep |
 | `PORTITOR_DB_FILE` | `/data/portitor-issuer.db` | keep the image default |
 | `PORTITOR_MANAGEMENT_API_KEY_FILE` | unset (management API off; the port serves only the health checks; an empty value counts as unset) | path of the mounted key file |
@@ -1736,7 +1809,7 @@ DID.
 | `PORTITOR_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | keep; the largest request body the public port takes (HTTP 413 above it; credential requests have a lower fixed limit, [section 5](#5-security)). From `1` to `67108864` (64 MiB), or the start stops |
 | `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | keep; the same for the management port |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (no traces or metrics) | your OTLP receiver's base URL, if you collect them ([Traces and metrics](#traces-and-metrics)) |
-| `PORTITOR_ALLOW_HTTP_CALLBACKS` | unset | **unset**; `true` only for local tests with plain-HTTP DIDs |
+| `PORTITOR_ALLOW_HTTP` | unset | **unset**; `true` only for local tests with plain-HTTP DIDs |
 | `PORTITOR_DID_CACHE_SECONDS` | `300` | keep; how long a holder's resolved DID document is reused, `0` to `3600`, `0` for no cache ([DID document cache](#did-document-cache)) |
 | `PORTITOR_ISSUER_BUNDLE_KEY_FILE` | unset | with a bundle: the **public** bundle key as a JWK (as `bundle build` prints it), so the private key stays offline; a PKCS#8 PEM is accepted too. Listed in the DID document as `<did>#bundle-key` under `assertionMethod`. The start fails if it is the credential key |
 | `PORTITOR_ISSUER_BUNDLE_DIR` | unset | with a bundle: the folder of built bundles, served read only at `GET /bundles/{version}/{path}` on the public port, and its `latest.json` at `GET /bundles/latest.json` |
@@ -1764,7 +1837,7 @@ The credential definitions file (ADR 0018):
 
 Any other field, a missing required one, or a value outside these rules
 stops the start, with a line that names the entry, for example
-`PORTITOR_ISSUER_CREDENTIALS_FILE: credential definitions:
+`PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE: credential definitions:
 "membership-vc20": credentialSchema is required (the URL of the
 credential's schema)`.
 
@@ -1954,9 +2027,11 @@ known risk and technical debt, with its status and target release):
   check `bundle` does not show skipped files (it only passes or
   fails); the log, the gauge and the job log do.
 - Negotiations start from the consumer only; a provider cannot start
-  one with an offer ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)). A
-  transfer request sent twice starts two transfers
-  ([TD-34](RISKS_AND_TECHNICAL_DEBTS.md#td-34)).
+  one with an offer ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)). As
+  provider, a transfer request repeated with the same `consumerPid`
+  gets the transfer it already has, not a second one (from 0.12;
+  [TD-34](RISKS_AND_TECHNICAL_DEBTS.md#td-34)). As consumer, each
+  `POST /v1/transfers` on the management API starts a new transfer.
 - Reading a provider's catalog (`POST /v1/catalog/request` and
   `/v1/catalog/dataset/request` on the management API, from 0.13;
   [README](../README.md#management-api)): at most 16 MiB of answer are

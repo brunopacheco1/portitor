@@ -43,7 +43,7 @@ use portitor_runtime::http::Sender;
 use portitor_runtime::testing::{TempDir, frozen};
 use serde_json::Value;
 
-/// One credential definition, as in `PORTITOR_ISSUER_CREDENTIALS_FILE`.
+/// One credential definition, as in `PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE`.
 const DEFINITIONS: &str = r#"[
   {"id": "membership-vc20", "credentialType": "MembershipCredential",
    "profile": "vc20-bssl/jwt", "validityDays": 30,
@@ -81,7 +81,7 @@ fn routers(bundles: &Path) -> (Router, Router) {
         participant_id: "did:web:issuer.example".to_owned(),
         key_file: "unused".into(),
         retired_key_files: Vec::new(),
-        credentials_file: "unused".into(),
+        credential_definitions_file: "unused".into(),
         issuer_service_url: "https://issuer.example/issuer".to_owned(),
         bind: "unused".to_owned(),
         db_file: "unused".into(),
@@ -111,6 +111,16 @@ fn routers(bundles: &Path) -> (Router, Router) {
     (public, management)
 }
 
+/// Names the code holds that are no settings of a release build: the
+/// old names of renamed settings. The service only refuses to start when
+/// one of them is set (`REMOVED_SETTINGS` in `config.rs`).
+const NOT_FROZEN: &[&str] = &[
+    // renamed in 0.13 to PORTITOR_ALLOW_HTTP
+    "PORTITOR_ALLOW_HTTP_CALLBACKS",
+    // renamed in 0.13 to PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE
+    "PORTITOR_ISSUER_CREDENTIALS_FILE",
+];
+
 fn stability() -> String {
     frozen::repository_file(env!("CARGO_MANIFEST_DIR"), "docs/STABILITY.md").unwrap()
 }
@@ -127,7 +137,7 @@ fn frozen_settings() {
         crates.join("portitor-runtime/src"),
     ];
     let folders: Vec<&Path> = folders.iter().map(std::path::PathBuf::as_path).collect();
-    let result = frozen::check_settings(&stability(), "portitor-issuer", &folders, &[]);
+    let result = frozen::check_settings(&stability(), "portitor-issuer", &folders, NOT_FROZEN);
     if let Err(difference) = result {
         panic!("{difference}");
     }

@@ -54,6 +54,7 @@ use portitor_dsp::transfer::consumer::{ConsumerTransfer, ConsumerTransferDecisio
 use portitor_dsp::transfer::provider::Failure as TransferFailure;
 use portitor_dsp::{Binding, CatalogError, ProtocolVersion, VERSION, VersionResponse};
 use portitor_runtime::request_size::small_message;
+use portitor_runtime::settings::{self, RemovedSetting};
 use serde::Serialize;
 
 pub mod auth;
@@ -123,10 +124,12 @@ pub struct Config {
     /// default one hour, at most [`MAX_SETTING_SECONDS`]); 0 harvests only
     /// at start.
     pub harvest_interval_seconds: u64,
-    /// Allow `http://` callback addresses (development and the TCK only;
-    /// the consumer chooses the address, so this widens what the connector
-    /// can be made to call).
-    pub allow_http_callbacks: bool,
+    /// Allow plain `http://` for every outgoing call
+    /// (`PORTITOR_ALLOW_HTTP`): callbacks, providers, partners' DIDs and
+    /// credential services, status lists, the bundle URL and the STS.
+    /// Development and the TCK only: partners choose most of these
+    /// addresses, so this widens what the connector can be made to call.
+    pub allow_http: bool,
     /// The `SQLite` file that keeps negotiations.
     pub db_file: std::path::PathBuf,
     /// How long a data access token stays valid, in seconds
@@ -139,6 +142,12 @@ pub struct Config {
     pub credential_types: CredentialTypes,
 }
 
+/// The `SQLite` file unless `PORTITOR_DB_FILE` says otherwise.
+pub const DEFAULT_DB_FILE: &str = "portitor.db";
+
+/// Where the public port listens unless `PORTITOR_BIND` says otherwise.
+pub const DEFAULT_BIND: &str = "0.0.0.0:8080";
+
 /// Default lifetime of a data access token: one hour.
 pub const DEFAULT_DATA_TOKEN_SECONDS: u64 = 3_600;
 
@@ -148,16 +157,15 @@ pub const DEFAULT_DATA_TOKEN_SECONDS: u64 = 3_600;
 pub const MAX_SETTING_SECONDS: u64 = 31_536_000;
 
 /// Reads a setting in whole seconds, from 0 to [`MAX_SETTING_SECONDS`];
-/// `default` when the variable is not set.
+/// `default` when the variable is not set or empty.
 fn seconds_var(
     var: impl Fn(&str) -> Option<OsString>,
     name: &'static str,
     default: u64,
 ) -> Result<u64, ConfigError> {
-    let Some(value) = var(name) else {
+    let Some(value) = settings::text(var, name) else {
         return Ok(default);
     };
-    let value = value.to_string_lossy().into_owned();
     match value.parse::<u64>() {
         Ok(seconds) if seconds <= MAX_SETTING_SECONDS => Ok(seconds),
         _ => Err(ConfigError::Invalid(name, value)),
@@ -167,8 +175,12 @@ fn seconds_var(
 /// Why the configuration could not be read.
 #[derive(Debug)]
 pub enum ConfigError {
-    /// `PORTITOR_DATASETS` was removed in 0.2.
-    Removed(&'static str),
+    /// A setting that a release removed or renamed is still set
+    /// ([`REMOVED_SETTINGS`]).
+    Removed(RemovedSetting),
+    /// A required setting is not set (or is empty): its name, and what
+    /// it must hold.
+    Missing(&'static str, &'static str),
     /// A variable has a value that cannot be used.
     Invalid(&'static str, String),
     /// `PORTITOR_POLICY_CREDENTIALS` cannot be used; the text says why.
@@ -178,7 +190,8 @@ pub enum ConfigError {
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Removed(msg) => f.write_str(msg),
+            Self::Removed(setting) => setting.fmt(f),
+            Self::Missing(name, what) => write!(f, "{name}: required ({what})"),
             Self::Invalid(name, value) => write!(f, "{name} has an invalid value {value:?}"),
             Self::PolicyCredentials(why) => f.write_str(why),
         }
@@ -186,6 +199,16 @@ impl std::fmt::Display for ConfigError {
 }
 
 impl std::error::Error for ConfigError {}
+
+/// The settings the connector no longer has. When one of them is set,
+/// the connector refuses to start and names what to set instead.
+pub const REMOVED_SETTINGS: &[RemovedSetting] = &[
+    RemovedSetting {
+        name: "PORTITOR_DATASETS",
+        advice: "was removed in 0.2; define datasets in a JSON file and set PORTITOR_DATASETS_FILE",
+    },
+    settings::ALLOW_HTTP_CALLBACKS,
+];
 
 /// Why the connector cannot start: its stored read copy cannot be read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,13 +223,15 @@ impl std::fmt::Display for StartError {
 impl std::error::Error for StartError {}
 
 impl Config {
-    /// Reads `PORTITOR_PARTICIPANT_ID`, `PORTITOR_PUBLIC_URL`,
-    /// `PORTITOR_ALLOW_HTTP_CALLBACKS` (`true` to allow), `PORTITOR_DB_FILE`
+    /// Reads `PORTITOR_PARTICIPANT_ID` and `PORTITOR_PUBLIC_URL` (both
+    /// required: there is no default that is right for anyone),
+    /// `PORTITOR_ALLOW_HTTP` (`true` to allow), `PORTITOR_DB_FILE`
     /// (default `portitor.db`), `PORTITOR_DATA_TOKEN_SECONDS` (default
     /// 3600), `PORTITOR_POLICY_CREDENTIALS` (see
     /// [`auth::policy_credentials`]), `PORTITOR_HARVEST_INTERVAL_SECONDS`
     /// (default 3600) and, when set, `PORTITOR_DATASETS_FILE` from the
-    /// environment. The datasets file is not read here: the harvest reads
+    /// environment. As everywhere, spaces around a value are dropped and
+    /// an empty value means "not set" (`portitor_runtime::settings`). The datasets file is not read here: the harvest reads
     /// it at start and at each run, and a bad file or dataset does not stop
     /// the connector.
     ///
@@ -221,21 +246,28 @@ impl Config {
     ///
     /// # Errors
     ///
-    /// A number is not a number, a number of seconds is above
+    /// `PORTITOR_PARTICIPANT_ID` or `PORTITOR_PUBLIC_URL` is not set or
+    /// empty, a number is not a number, a number of seconds is above
     /// [`MAX_SETTING_SECONDS`] (one year), `PORTITOR_DATA_TOKEN_SECONDS` is
-    /// 0, `PORTITOR_POLICY_CREDENTIALS` cannot be used, or the removed
-    /// `PORTITOR_DATASETS` variable is set.
+    /// 0, `PORTITOR_POLICY_CREDENTIALS` cannot be used, or one of the
+    /// [`REMOVED_SETTINGS`] is set.
     pub fn from_vars(var: impl Fn(&str) -> Option<OsString>) -> Result<Self, ConfigError> {
-        // the variable's value as text, or `default` when it is not set
-        let text = |name: &str, default: &str| match var(name) {
-            Some(value) => value.to_string_lossy().into_owned(),
-            None => default.to_owned(),
-        };
-        if var("PORTITOR_DATASETS").is_some() {
-            return Err(ConfigError::Removed(
-                "PORTITOR_DATASETS was removed in 0.2; define datasets in a JSON file and set PORTITOR_DATASETS_FILE",
+        settings::refuse_removed(&var, REMOVED_SETTINGS).map_err(ConfigError::Removed)?;
+        // required, as the identity's and the issuer's id and URL are: a
+        // connector that started with a made-up id or address would
+        // only fail later, in front of a partner
+        let Some(participant_id) = settings::text(&var, "PORTITOR_PARTICIPANT_ID") else {
+            return Err(ConfigError::Missing(
+                "PORTITOR_PARTICIPANT_ID",
+                "the participant's DID, for example did:web:connector.example.com",
             ));
-        }
+        };
+        let Some(public_url) = settings::text(&var, "PORTITOR_PUBLIC_URL") else {
+            return Err(ConfigError::Missing(
+                "PORTITOR_PUBLIC_URL",
+                "the connector's public address, for example https://connector.example.com",
+            ));
+        };
         let data_token_seconds = seconds_var(
             &var,
             "PORTITOR_DATA_TOKEN_SECONDS",
@@ -256,13 +288,15 @@ impl Config {
         let credential_types =
             auth::policy_credentials(&var).map_err(ConfigError::PolicyCredentials)?;
         Ok(Self {
-            participant_id: text("PORTITOR_PARTICIPANT_ID", "did:web:localhost%3A8080"),
-            public_url: text("PORTITOR_PUBLIC_URL", "http://localhost:8080"),
-            datasets_file: var("PORTITOR_DATASETS_FILE").map(PathBuf::from),
+            participant_id,
+            public_url,
+            datasets_file: settings::text(&var, "PORTITOR_DATASETS_FILE").map(PathBuf::from),
             harvest_interval_seconds,
-            allow_http_callbacks: var("PORTITOR_ALLOW_HTTP_CALLBACKS")
-                .is_some_and(|v| v.eq_ignore_ascii_case("true")),
-            db_file: var("PORTITOR_DB_FILE").map_or_else(|| "portitor.db".into(), Into::into),
+            allow_http: settings::is_true(&var, "PORTITOR_ALLOW_HTTP"),
+            db_file: match settings::text(&var, "PORTITOR_DB_FILE") {
+                Some(file) => PathBuf::from(file),
+                None => PathBuf::from(DEFAULT_DB_FILE),
+            },
             data_token_seconds,
             credential_types,
         })
@@ -548,12 +582,12 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         &ports,
         callback_address.clone(),
         config.participant_id.clone(),
-        config.allow_http_callbacks,
+        config.allow_http,
     ));
     let transfer_consumer = Arc::new(consumer_transfer::TransferConsumer::new(
         &ports,
         callback_address,
-        config.allow_http_callbacks,
+        config.allow_http,
     ));
     #[cfg(feature = "tck")]
     {
@@ -563,19 +597,19 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
     let verifier = Arc::clone(&ports.verifier);
     let catalog_reader = Arc::new(catalog_reader::CatalogReader::new(
         &ports,
-        config.allow_http_callbacks,
+        config.allow_http,
     ));
     let data_plane = start_data_plane(config, &mut ports, &datasets);
     let transfers = Arc::new(transfer::TransferProvider::new(
         &ports,
         datasets.clone(),
-        config.allow_http_callbacks,
+        config.allow_http,
     ));
     let provider = Arc::new(negotiation::Provider::new(
         ports,
         datasets.clone(),
         config.participant_id.clone(),
-        config.allow_http_callbacks,
+        config.allow_http,
     ));
     let catalog = CatalogService::new(
         datasets,
