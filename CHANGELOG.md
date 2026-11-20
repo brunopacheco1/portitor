@@ -35,7 +35,7 @@ versions may change behaviour and configuration.
   `additionalScopes`, `@id`). `protocol` must be
   `dataspace-protocol-http:2025-1`; a `querySpec` is refused with 400.
   A provider that refuses or does not answer gives 502. At most 16 MiB
-  are read (a fixed limit; other answers keep 64 kB), and of a catalog
+  are read (a fixed limit; other answers keep 64 KiB), and of a catalog
   in pages only the first, with the provider's `Link` headers (README,
   "Management API"; DEPLOYING, "Known limits").
 - The demo, the Gaia-X and the EDC interoperability scripts and the

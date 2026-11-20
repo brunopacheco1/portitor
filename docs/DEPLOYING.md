@@ -1748,6 +1748,23 @@ new images.
    ([Schema and vocabulary bundle](#schema-and-vocabulary-bundle)).
 6. New in 0.13, nothing to do: the catalog calls of the management API
    ([README](../README.md#management-api)).
+7. **Behaviour change, connector, nothing to do:** a bundle file whose
+   role the connector does not know is skipped; before, the whole
+   bundle was refused. The connector does not enforce what such a file
+   holds. Watch the new gauge `portitor.bundle.file.skipped` and the
+   WARN line `bundle file skipped: ...`
+   ([Schema and vocabulary bundle](#schema-and-vocabulary-bundle)).
+8. **Behaviour change, connector as provider, nothing to do:** a
+   transfer request from the agreement's consumer that arrives while
+   the finalization event is still on its way is accepted; before, it
+   got HTTP 400 (ADR 0007, amended;
+   [TD-44](RISKS_AND_TECHNICAL_DEBTS.md#td-44)). A transfer request
+   that is refused because it names no finalized agreement of the
+   caller is now logged: `transfer request is refused; answered 400`
+   (INFO).
+9. The management OpenAPI files of the three services list HTTP 403 on
+   every route that needs the API key. No service answers 403 in 0.13:
+   it is reserved for 1.x (ADR 0025).
 
 Rollback to 0.12: put the old names back in the configuration and the
 old field names in your clients; for the database, as above.
