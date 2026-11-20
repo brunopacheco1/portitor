@@ -4,7 +4,7 @@ SPDX-FileCopyrightText: Portitor contributors
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Deploying and operating Portitor
+# Deploying Portitor
 
 A runbook for the operations team that deploys Portitor. Running it
 afterwards is in [OPERATING](OPERATING.md). This file follows the order
@@ -13,11 +13,16 @@ of a deployment:
 | Step | Component | Who runs it | Needed? |
 |---|---|---|---|
 | 1 | [`portitor-issuer`](#step-1-issuer-dataspace-authority-only) | Only the dataspace authority, once per dataspace | A participant never runs it. It only trusts the issuer's DID |
-| 2 | [`portitor-identity`](#step-2-identity-every-participant) | Every participant | Mandatory. It holds the participant's key and credentials |
+| 2 | [`portitor-identity`](#step-2-identity-every-participant) | Every participant | Mandatory, unless the participant uses another DCP wallet ([ARCHITECTURE](ARCHITECTURE.md#components)). It holds the participant's key and credentials |
 | 3 | [`portitor-connector`](#step-3-connector-every-participant) | Every participant | Mandatory. It does not start without its identity |
 
-Optional inside a deployment: the connector's management API (needed
-to read catalogs and negotiate as consumer), the authority's
+Each component has a management port for its operator. The health
+checks on it need no key; every other call needs the management API
+key. Set the key on all three: the connector needs it to show its
+harvest jobs (provider) and to read catalogs, negotiate and transfer
+(consumer). Never expose a management port to the Internet.
+
+Optional inside a deployment: the authority's
 [schema and vocabulary bundle](#schema-and-vocabulary-bundle),
 Gaia-X ([onboarding](#gaia-x-onboarding-optional),
 [compliance in policies](#gaia-x-compliance)) and
@@ -32,53 +37,68 @@ not here.
 
 The shortest path, in order. Each step links to its details. Example
 host names: `issuer.example.com`, `identity.example.com`,
-`connector.example.com`. TLS ends at your reverse proxy
+`connector.example.com`. TLS ends at your reverse proxy. Verify the
+images and deploy them by digest
 ([rules for all three components](#rules-for-all-three-components)).
+The "management key" of a component is the API key of its management
+port; its readiness check is `GET /api/check/readiness` on that port.
 
-**The dataspace authority, once:**
+**The dataspace authority, once.** It runs the dataspace's issuer and
+decides its rules.
 
 1. Decide the [values every participant must share](#what-the-dataspace-decides-first):
    the trusted issuer DIDs and the scope strings.
 2. Deploy the [issuer](#step-1-issuer-dataspace-authority-only). Make
    its key, its [credential definitions file](#credential-definitions-file)
-   and a management key. Set:
+   and a management key ([checklist](#before-you-deploy-the-issuer)).
+   Set, with values as in [Run the issuer](#run-the-issuer):
    `PORTITOR_PARTICIPANT_ID`, `PORTITOR_ISSUER_SERVICE_URL`,
    `PORTITOR_ISSUER_KEY_FILE`,
    `PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE`,
    `PORTITOR_MANAGEMENT_API_KEY_FILE`, `PORTITOR_MANAGEMENT_BIND`.
 3. Route `https://issuer.example.com` to port 8070. Check that
    `/.well-known/did.json` answers and that the readiness check passes.
-4. Register each participant's DID and claims: `POST /v1/participants`
-   on the issuer's management port. Give participants the issuer's DID.
+4. Give participants the issuer's DID and the values of step 1.
 
 **Each participant:**
 
 5. Deploy the [identity](#step-2-identity-every-participant). Make its
-   key, an STS client secret and a management key. Set:
+   key, a management key and an STS client secret
+   ([checklist](#before-you-deploy-the-identity)); the STS is the
+   identity's token service, which only your connector calls. Set,
+   with values as in [Run the identity](#run-the-identity):
    `PORTITOR_PARTICIPANT_ID`, `PORTITOR_IDENTITY_KEY_FILE`,
    `PORTITOR_CREDENTIAL_SERVICE_URL`, `PORTITOR_STS_CLIENT_SECRET_FILE`,
    `PORTITOR_TRUSTED_ISSUERS`, `PORTITOR_MANAGEMENT_API_KEY_FILE`,
    `PORTITOR_MANAGEMENT_BIND`.
 6. Route `https://identity.example.com` to port 8090, except
-   `/sts/token`, which only your connector calls on the internal
-   network. Check that `/.well-known/did.json` answers.
-7. Ask the issuer for your membership credential:
+   `/sts/token`, which stays on the internal network. Check that
+   `/.well-known/did.json` answers.
+7. Send the authority your DID and your claims, the values your
+   credentials will carry (for example a role), out of band. The
+   authority registers them: `POST /v1/participants` on the issuer's
+   management port
+   ([Registering participants and issuing](#registering-participants-and-issuing)).
+8. Ask the issuer for your membership credential:
    `POST /v1/credential-requests` on the identity's management port
    ([Getting a credential](#getting-a-credential)). Wait until the
    request is `ISSUED`.
-8. Write your [datasets file](#datasets-file), if you offer data.
-9. Deploy the [connector](#step-3-connector-every-participant). Set:
-   `PORTITOR_PARTICIPANT_ID` (the identity's DID), `PORTITOR_PUBLIC_URL`,
-   `PORTITOR_STS_URL` (with `PORTITOR_STS_ALLOW_HTTP=true` for an
-   internal `http://` address), `PORTITOR_STS_CLIENT_SECRET_FILE` (the
-   identity's file), `PORTITOR_TRUSTED_ISSUERS`,
-   `PORTITOR_DATASETS_FILE`, `PORTITOR_MANAGEMENT_BIND`. To act as
-   consumer, also `PORTITOR_MANAGEMENT_API_KEY_FILE`. If the dataspace
-   decided other scopes than the default, `PORTITOR_DCP_SCOPES`.
-10. Route `https://connector.example.com` to port 8080. Check
-    `/.well-known/dspace-version`, the readiness check on the
-    management port, and the first harvest job
-    (`GET /v1/harvest-jobs`).
+9. Write your [datasets file](#datasets-file), if you offer data.
+10. Deploy the [connector](#step-3-connector-every-participant)
+    ([checklist](#before-you-deploy-the-connector)). It must reach
+    `https://identity.example.com`: it reads its own DID document
+    there. Set, with values as in [Run the connector](#run-the-connector):
+    `PORTITOR_PARTICIPANT_ID` (the identity's DID), `PORTITOR_PUBLIC_URL`,
+    `PORTITOR_STS_URL` (with `PORTITOR_STS_ALLOW_HTTP=true` for an
+    internal `http://` address), `PORTITOR_STS_CLIENT_SECRET_FILE` (the
+    identity's file), `PORTITOR_TRUSTED_ISSUERS`,
+    `PORTITOR_DATASETS_FILE`, `PORTITOR_MANAGEMENT_API_KEY_FILE`,
+    `PORTITOR_MANAGEMENT_BIND`. If the dataspace decided other scopes
+    than the default, `PORTITOR_DCP_SCOPES`.
+11. Route `https://connector.example.com` to port 8080. Check
+    `/.well-known/dspace-version`, the readiness check, and with the
+    management key the first harvest job (`GET /v1/harvest-jobs`), the
+    run that loads your datasets file into the catalog.
 
 Every other setting has a default that works. Before you go live, read
 [Security](#security) and set up [backups](OPERATING.md#backup-and-restore) and
@@ -191,8 +211,8 @@ settings are in its step.
 | `RUST_LOG` | `info` | Log level; `debug` only while diagnosing |
 | `SSL_CERT_DIR`, `SSL_CERT_FILE` | the image's CA bundle | Only to trust a private CA ([Private CAs](#private-cas)) |
 
-- Leave the two bind addresses of the public port and the database, and
-  the two size limits, at their defaults.
+- Leave `PORTITOR_BIND`, `PORTITOR_DB_FILE` and the two size limits at
+  their defaults.
 - Management port: in a container set `0.0.0.0:<port>` and publish it
   only on an internal interface; the default is unreachable from outside
   the container. If the port is taken, the component does not start. A
@@ -642,7 +662,7 @@ issuer must be in `PORTITOR_TRUSTED_ISSUERS`, or nothing is sent.
    curl -X POST localhost:8091/v1/credential-requests \
      -H "Authorization: Bearer $(cat /srv/portitor/identity-management-key)" \
      -H 'Content-Type: application/json' \
-     -d '{"issuerDid": "did:web:issuer.example.com", "credentialIds": ["membership-vc11"]}'
+     -d '{"issuerDid": "did:web:issuer.example.com", "credentialIds": ["membership-vc20"]}'
    ```
 
    The component resolves the issuer's DID, checks the ids against its
@@ -706,7 +726,7 @@ only recorded, so the Storage API accepts that issuer's delivery for the
 curl -X POST localhost:8091/v1/credential-requests \
   -H "Authorization: Bearer $(cat /srv/portitor/identity-management-key)" \
   -H 'Content-Type: application/json' \
-  -d '{"issuerDid": "did:web:issuer.example", "holderPid": "membership-2026"}'
+  -d '{"issuerDid": "did:web:issuer.example.com", "holderPid": "membership-2026"}'
 ```
 
 ### Gaia-X onboarding (optional)
@@ -881,17 +901,20 @@ Check each item and keep the answers in your own runbook.
   checks dataset metadata, its authority gives you the bundle's URL, the
   version to pin (if any) and its DID
   ([Schema and vocabulary bundle](#schema-and-vocabulary-bundle), ADR 0005).
-- [ ] **Management API.** Needed only if this connector reads catalogs
-  or starts negotiations as consumer. Create a key
-  (`openssl rand -hex 32`), keep it in your secret store, and mount it
-  as a file (`PORTITOR_MANAGEMENT_API_KEY_FILE`). Decide who may reach
-  the management port.
+- [ ] **Management API key.** Create a key (`openssl rand -hex 32`),
+  keep it in your secret store, and mount it as a file
+  (`PORTITOR_MANAGEMENT_API_KEY_FILE`). You need it to read the harvest
+  jobs and, as consumer, to read catalogs, negotiate and transfer.
+  Decide who may reach the management port; never expose it to the
+  Internet.
 - [ ] **Storage.** A persistent volume for `/data` (negotiations,
   transfers, the dataset copy, the bundle cache; SQLite).
 - [ ] **Network.** Inbound: partners reach the DSP endpoints, including
   the consumer callbacks under `/dsp/2025-1/callback`, and the data
   plane (`/data`), through your proxy. Inbound from your probes and
-  monitoring only: the management port. Outbound: its STS; partners'
+  monitoring only: the management port. Outbound: its STS; its own
+  identity's public URL (it reads its own DID document as partners do,
+  at start and for the readiness check); partners'
   DID documents and credential services; the issuers' status list URLs;
   the callback addresses partners give it and, as consumer, the
   providers' DSP endpoints; your data sources; with a bundle, the
@@ -922,7 +945,7 @@ Besides the [settings of every component](#settings-of-every-component):
 | `PORTITOR_BUNDLE_VERSION` | `latest` | `latest` follows the newest version; or one fixed version |
 | `PORTITOR_BUNDLE_REFRESH_SECONDS` | `3600` | Seconds between two looks at `latest.json`, `0` (only at start) to `31536000`; not used with a fixed version |
 | `PORTITOR_BUNDLE_CACHE_DIR` | `bundle-cache` next to `PORTITOR_DB_FILE` (`/data/bundle-cache` in the image) | Where the verified bundle and the version in use are kept |
-| `PORTITOR_BUNDLE_DIR` | none | A local bundles folder instead of the URL; development and tests only |
+| `PORTITOR_BUNDLE_DIR` | none | A local bundles folder instead of the URL, not together with `PORTITOR_BUNDLE_URL`; development and tests only |
 
 - `PORTITOR_PUBLIC_URL` has no query or fragment. The DSP endpoint is
   this plus `/dsp/2025-1`, the consumer callback address this plus
@@ -936,17 +959,20 @@ Besides the [settings of every component](#settings-of-every-component):
   (`org.eclipse.dspace.dcp.vc.type:<Type>[:access]` or
   `org.eclipse.dspace.dcp.vc.id:<id>`). The type `VerifiableCredential`
   is refused, as it would let a partner read every credential.
+- A bundle setting without `PORTITOR_BUNDLE_URL` or
+  `PORTITOR_BUNDLE_DIR` stops the start.
 - Leave the three time settings and the cache folder at their defaults,
   unless consumers need longer than an hour to fetch.
 
 ### Run the connector
 
 Docker (the [rules for all three components](#rules-for-all-three-components)
-apply):
+apply; the management port is published on the host's loopback only):
 
 ```sh
 docker run -d --name portitor-connector --restart unless-stopped \
   -p 8080:8080 \
+  -p 127.0.0.1:8081:8081 \
   -v /srv/portitor/datasets.json:/datasets.json:ro \
   -v portitor-data:/data \
   -e PORTITOR_PARTICIPANT_ID=did:web:identity.example.com \
@@ -956,6 +982,9 @@ docker run -d --name portitor-connector --restart unless-stopped \
   -e PORTITOR_STS_URL=http://identity:8090/sts/token -e PORTITOR_STS_ALLOW_HTTP=true \
   -e PORTITOR_STS_CLIENT_SECRET_FILE=/run/secrets/sts-client-secret \
   -e PORTITOR_TRUSTED_ISSUERS=did:web:issuer.example.com \
+  -v /srv/portitor/management-key:/run/secrets/portitor-key:ro \
+  -e PORTITOR_MANAGEMENT_API_KEY_FILE=/run/secrets/portitor-key \
+  -e PORTITOR_MANAGEMENT_BIND=0.0.0.0:8081 \
   ghcr.io/brunopacheco1/portitor-connector@sha256:<digest>
 ```
 
@@ -963,21 +992,18 @@ The STS lines point at the identity component of
 [step 2](#step-2-identity-every-participant), reached on an internal
 network as `identity`; without them the connector does not start.
 
-With the management API, add (the key file must be readable by user
-`65532`; the port is published on the host's loopback only):
+The management lines: without `PORTITOR_MANAGEMENT_BIND` the port
+cannot be reached from outside the container, and without the key it
+serves only the health checks.
 
-```sh
-  -p 127.0.0.1:8081:8081 \
-  -v /srv/portitor/management-key:/run/secrets/portitor-key:ro \
-  -e PORTITOR_MANAGEMENT_API_KEY_FILE=/run/secrets/portitor-key \
-  -e PORTITOR_MANAGEMENT_BIND=0.0.0.0:8081 \
-```
-
-Check after start:
+Check after start, the last two on the host:
 
 ```sh
 curl -sf https://connector.example.com/health          # "ok"
 curl -s  https://connector.example.com/.well-known/dspace-version
+curl -sf localhost:8081/api/check/readiness
+curl -s  localhost:8081/v1/harvest-jobs \
+  -H "authorization: Bearer $(cat /srv/portitor/management-key)"
 ```
 
 The log line `portitor-connector listening` shows the bind address, the number
@@ -1385,7 +1411,7 @@ by the list's URL, in memory.
   be seen: a partner whose credential was just revoked is still admitted
   until the cached list is fetched again. With `0` it is seen on the
   next request, at the cost of one fetch per credential status on every
-  request. Eclipse EDC 1.0.0-RC7 reuses status lists for 15 minutes by
+  request. Eclipse EDC reuses status lists for 15 minutes by
   default (`edc.iam.credential.revocation.cache.validity`).
 - Only a list that was fetched and verified (signed by the credential's
   issuer, valid now) is reused. A failed fetch or check is not: it is
@@ -1397,10 +1423,12 @@ by the list's URL, in memory.
 
 ### Management API
 
-Your own systems read a provider's catalog, and start and follow
-negotiations and transfers as consumer, through the management API. It
-is not part of DSP, so it has its own port (`PORTITOR_MANAGEMENT_BIND`)
-and is off unless `PORTITOR_MANAGEMENT_API_KEY_FILE` is set. Every call
+Through the management API you read the harvest jobs
+([Dataset harvest](#dataset-harvest)), and your own systems read a
+provider's catalog and start and follow negotiations and transfers as
+consumer. It is not part of DSP, so it has its own port
+(`PORTITOR_MANAGEMENT_BIND`) and is off unless
+`PORTITOR_MANAGEMENT_API_KEY_FILE` is set. Every call
 needs `Authorization: Bearer <key>`, except `/v1/openapi.json`,
 `/health` and the health checks. Every route and field is described in
 [api/management-openapi.json](api/management-openapi.json), which the
@@ -1428,10 +1456,8 @@ and `DatasetRequest` schemas of the OpenAPI file.
 
 If the provider refuses, cannot be reached or sends something else, the
 answer is 502 and its `detail` says which (for example `the provider
-answered HTTP 401 Unauthorized`). `POST /v1/catalog/request` also
-answers 502 when the provider's catalog has no `participantId`, or one
-that differs from `counterPartyId`. The limits of these two calls are
-under [Known limits](#known-limits).
+answered HTTP 401 Unauthorized`). The limits of these two calls, and
+their other 502 cases, are under [Known limits](#known-limits).
 
 Then negotiate, with an offer copied unchanged from the catalog (the
 provider agrees only to the catalog's terms):

@@ -32,7 +32,8 @@ functionality, components, roadmap).
 
 ## What it does
 
-A participant is an organisation with one DID. With Portitor it offers
+A participant is an organisation with one DID (a decentralised
+identifier, here a `did:web` address). With Portitor it offers
 datasets with policies, agrees contracts with other participants and
 transfers the data (HTTP pull). Each participant proves who it is with
 credentials from the dataspace's issuer, on every request.
@@ -55,22 +56,24 @@ order.
 
 | Order | Image | Who runs it | Needed? |
 |---|---|---|---|
-| 1 | `portitor-issuer` | The dataspace authority, once per dataspace. A participant never runs it | Optional for a participant; the dataspace needs one issuer |
-| 2 | `portitor-identity` | Every participant | Mandatory: it holds the participant's key and credentials, and the connector does not start without it |
+| 1 | `portitor-issuer` | The dataspace authority (the party that decides the dataspace's rules), once per dataspace. A participant never runs it | Optional for a participant; the dataspace needs one issuer |
+| 2 | `portitor-identity` | Every participant | Mandatory, unless the participant uses another DCP wallet ([ARCHITECTURE](docs/ARCHITECTURE.md#components)): it holds the participant's key and credentials, and the connector does not start without it |
 | 3 | `portitor-connector` | Every participant | Mandatory: catalog, contract negotiation and data transfer |
 
-Each service keeps its state in one SQLite file. Inside a deployment,
-three things are optional: the connector's management API (needed to
-act as consumer), the authority's signed schema and vocabulary bundle,
-and Gaia-X compliance.
+Each service keeps its state in one SQLite file. Each has a management
+API for its operator, on its own port and behind an API key; that port
+must never be exposed to the Internet. Inside a deployment, two things
+are optional: the authority's signed schema and vocabulary bundle (the
+shapes that dataset metadata is checked against), and Gaia-X
+compliance.
 
 ## Try it
 
 The [quickstart](https://bruno.pacheco.lu/portitor/#try) on the website
 runs a small dataspace on your machine: an issuer, a provider and a
 consumer. It needs Docker with the Compose plugin, or
-[Podman](docs/TESTING.md#docker-or-podman), and `curl`, `jq` and
-`openssl`.
+[Podman](docs/TESTING.md#docker-or-podman), and bash 4.4 or later,
+`curl`, `jq` and `openssl`.
 
 ```sh
 scripts/demo-compose.sh
