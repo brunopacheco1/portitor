@@ -588,7 +588,7 @@ releases, each with one main risk (maintainer, 2026-11-15). 1.0 follows
   [TD-44](RISKS_AND_TECHNICAL_DEBTS.md#td-44) and
   [TD-45](RISKS_AND_TECHNICAL_DEBTS.md#td-45).
 
-## 0.13 API and configuration freeze
+## 0.13 API and configuration freeze (released 2026-11-20 as v0.13.0)
 
 The release candidate was split in two (maintainer, 2026-11-20): 0.13
 freezes the code, 0.14 makes the documentation and the assurance ready.
