@@ -12,7 +12,7 @@
 #  1. A test CA made for this run, and from it: the TLS certificate of the
 #     public names (*.gaiax.test), the compliance service's certificate
 #     (RSA, PS256), the test notary's, and one for each Gaia-X participant's
-#     identity key (PORTITOR_IDENTITY_CERTIFICATE_CHAIN).
+#     identity key (PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE).
 #  2. The test notary (scripts/gaiax_test_notary.py) signs each Gaia-X
 #     participant's registration number credential (gx:VatID); each gets
 #     a participant file (PORTITOR_GAIAX_PARTICIPANT_FILE).

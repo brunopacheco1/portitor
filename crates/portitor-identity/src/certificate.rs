@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The X.509 certificate chain of the identity key (ADR 0021, "The key
-//! and its certificate"), from `PORTITOR_IDENTITY_CERTIFICATE_CHAIN`:
+//! and its certificate"), from `PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE`:
 //!
 //! - at start, the first certificate must be for the identity key, or the
 //!   identity does not start;
@@ -138,7 +138,7 @@ pub(crate) async fn serve(State(identity): State<Arc<Identity>>) -> Response {
         Some(chain) => ([(header::CONTENT_TYPE, CHAIN_MEDIA_TYPE)], chain.pem()).into_response(),
         None => problem(
             StatusCode::NOT_FOUND,
-            "no certificate chain (PORTITOR_IDENTITY_CERTIFICATE_CHAIN)",
+            "no certificate chain (PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE)",
         ),
     }
 }

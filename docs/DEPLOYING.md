@@ -594,7 +594,7 @@ participant.
 | `PORTITOR_SCOPE_TYPE_ALIASES` | `org.eclipse.edc.vc.type` | comma-separated scope aliases that mean "credentials of this type", besides DCP's `org.eclipse.dspace.dcp.vc.type` |
 | `PORTITOR_ALLOW_HTTP` | unset | **unset** (`true` allows plain-HTTP DIDs and URLs, tests only) |
 | `PORTITOR_DID_CACHE_SECONDS` | `300` | leave the default; how long a resolved DID document (a caller's, an issuer's) is reused, `0` to `3600`, `0` for no cache ([DID document cache](#did-document-cache)) |
-| `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` | unset | Gaia-X only: path of the PEM chain of the identity key, the key's certificate first ([Gaia-X onboarding](#gaia-x-onboarding-optional)) |
+| `PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE` | unset | Gaia-X only: path of the PEM chain of the identity key, the key's certificate first ([Gaia-X onboarding](#gaia-x-onboarding-optional)) |
 | `PORTITOR_GAIAX_COMPLIANCE_URL` | unset (Gaia-X off) | base URL of a Gaia-X compliance service, for example `https://compliance.lab.gaia-x.eu/v2`; needs the settings around it |
 | `PORTITOR_GAIAX_COMPLIANCE_DID` | unset | Gaia-X only: the `did:web` DID of that service, for example `did:web:compliance.lab.gaia-x.eu:v2`; an answer signed by any other DID is refused |
 | `PORTITOR_GAIAX_PARTICIPANT_FILE` | unset | Gaia-X only: path of the participant file |
@@ -809,7 +809,7 @@ anchor. Keep the identity key; get a certificate for it:
   Give the provider the same CSR.
 
 Mount the chain (your certificate first, then the CA certificates) and
-set `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` to it. The identity refuses to
+set `PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE` to it. The identity refuses to
 start if the first certificate is not for its key. It serves the chain at
 `https://<your host>/.well-known/x509CertificateChain.pem` (below the DID
 path, for a DID with one) and points to

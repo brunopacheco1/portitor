@@ -28,7 +28,14 @@ pub const DEFAULT_DB_FILE: &str = "/data/portitor-identity.db";
 
 /// The settings the identity no longer has. When one of them is set, the
 /// identity refuses to start and names what to set instead.
-pub const REMOVED_SETTINGS: &[RemovedSetting] = &[ALLOW_HTTP_CALLBACKS];
+pub const REMOVED_SETTINGS: &[RemovedSetting] = &[
+    ALLOW_HTTP_CALLBACKS,
+    // the value is the path of a file, and the name now says so
+    RemovedSetting {
+        name: "PORTITOR_IDENTITY_CERTIFICATE_CHAIN",
+        advice: "was renamed in 0.13; set PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE instead",
+    },
+];
 
 /// Everything the identity component needs to start.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,7 +72,7 @@ pub struct Config {
     /// tests only).
     pub allow_http: bool,
     /// The X.509 chain of the identity key, PEM, the key's certificate
-    /// first (`PORTITOR_IDENTITY_CERTIFICATE_CHAIN`, ADR 0021).
+    /// first (`PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE`, ADR 0021).
     pub certificate_chain_file: Option<PathBuf>,
     /// Gaia-X onboarding, if `PORTITOR_GAIAX_COMPLIANCE_URL` is set.
     pub gaiax: Option<GaiaxConfig>,
@@ -154,7 +161,7 @@ impl Config {
         let scope_type_aliases =
             text("PORTITOR_SCOPE_TYPE_ALIASES").unwrap_or_else(|| DEFAULT_TYPE_ALIASES.to_owned());
         let allow_http = is_true(&var, "PORTITOR_ALLOW_HTTP");
-        let certificate_chain_file = text("PORTITOR_IDENTITY_CERTIFICATE_CHAIN")
+        let certificate_chain_file = text("PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from);
         let gaiax = gaiax_config(&text, certificate_chain_file.is_some(), allow_http)?;
@@ -223,7 +230,7 @@ fn gaiax_config(
         })?;
     if !has_chain {
         return Err(invalid(
-            "PORTITOR_IDENTITY_CERTIFICATE_CHAIN",
+            "PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE",
             "required with PORTITOR_GAIAX_COMPLIANCE_URL",
         ));
     }
@@ -259,7 +266,13 @@ mod tests {
     }
 
     /// Old names (refused) and the new name each error must give.
-    const RENAMED: &[(&str, &str)] = &[("PORTITOR_ALLOW_HTTP_CALLBACKS", "PORTITOR_ALLOW_HTTP")];
+    const RENAMED: &[(&str, &str)] = &[
+        ("PORTITOR_ALLOW_HTTP_CALLBACKS", "PORTITOR_ALLOW_HTTP"),
+        (
+            "PORTITOR_IDENTITY_CERTIFICATE_CHAIN",
+            "PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE",
+        ),
+    ];
 
     const MINIMAL: &[(&str, &str)] = &[
         ("PORTITOR_PARTICIPANT_ID", "did:web:identity.example"),
@@ -357,9 +370,12 @@ mod tests {
         ));
         assert_eq!(
             read(&vars).unwrap_err().name,
-            "PORTITOR_IDENTITY_CERTIFICATE_CHAIN"
+            "PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE"
         );
-        vars.push(("PORTITOR_IDENTITY_CERTIFICATE_CHAIN", "/config/chain.pem"));
+        vars.push((
+            "PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE",
+            "/config/chain.pem",
+        ));
         let config = read(&vars).unwrap();
         assert_eq!(
             config.gaiax,

@@ -186,7 +186,7 @@ services:
       PORTITOR_ALLOW_HTTP: "true"
       # Gaia-X (ADR 0021): the certificate chain of the identity key, the
       # compliance service and the participant file
-      PORTITOR_IDENTITY_CERTIFICATE_CHAIN: /config/certificate-chain.pem
+      PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE: /config/certificate-chain.pem
       PORTITOR_GAIAX_COMPLIANCE_URL: https://compliance.gaiax.test
       PORTITOR_GAIAX_COMPLIANCE_DID: did:web:compliance.gaiax.test
       PORTITOR_GAIAX_PARTICIPANT_FILE: /config/participant.json

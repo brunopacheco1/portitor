@@ -782,7 +782,7 @@ The participants are Portitor identities and connectors, members by a
 
 - provider (`did:web:provider.gaiax.test`) and consumer
   (`did:web:consumer.gaiax.test`), both with Gaia-X on (ADR 0021): a
-  certificate for the identity key (`PORTITOR_IDENTITY_CERTIFICATE_CHAIN`),
+  certificate for the identity key (`PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE`),
   a participant file (`PORTITOR_GAIAX_PARTICIPANT_FILE`) and a
   registration number credential (`gx:VatID`);
 - an outsider (`did:web:outsider-identity%3A8090`), a member without

@@ -42,6 +42,8 @@ use portitor_runtime::testing::frozen;
 const NOT_FROZEN: &[&str] = &[
     // renamed in 0.13 to PORTITOR_ALLOW_HTTP
     "PORTITOR_ALLOW_HTTP_CALLBACKS",
+    // renamed in 0.13 to PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE
+    "PORTITOR_IDENTITY_CERTIFICATE_CHAIN",
 ];
 
 fn stability() -> String {
