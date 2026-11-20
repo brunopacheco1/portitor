@@ -1,10 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-2 -23 156 156">
   <!-- SPDX-FileCopyrightText: Portitor contributors -->
   <!-- SPDX-License-Identifier: Apache-2.0 -->
-  <!-- The website's mark at icon size: the gate, the toll coin and the ferry with its oar. -->
-  <rect width="32" height="32" rx="6" fill="#f5f0e6"/>
-  <path d="M6.500 26.500V14.500a9.500 9.500 0 0 1 19 0v12" fill="none" stroke="#2b221c" stroke-width="2.600" stroke-linecap="round"/>
-  <circle cx="16" cy="12.500" r="2.400" fill="none" stroke="#a97c35" stroke-width="1.700"/>
-  <path d="M19 17.500l3.500 7.500" fill="none" stroke="#8f2a22" stroke-width="1.500" stroke-linecap="round"/>
-  <path d="M10.200 20.500h11.600c-.9 3.200-2.900 4.700-5.800 4.700s-4.900-1.500-5.800-4.700z" fill="#8f2a22"/>
+  <!-- The website's mark, whole: the gate, the toll coin, the ferry and the river.
+       The same paths as in index.html, on a travertine tile so it shows on dark tabs. -->
+  <rect x="-2" y="-23" width="156" height="156" rx="24" fill="#f5f0e6"/>
+  <g fill="none" stroke="#2b221c" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M34 82V44a42 42 0 0 1 84 0v38M46 82V44a30 30 0 0 1 60 0v38"/>
+    <path d="M30 44h20M102 44h20M28 82h22M102 82h22"/>
+    <g stroke="#a97c35" stroke-width="2.4"><circle cx="76" cy="40" r="8"/><circle cx="76" cy="40" r="4.5"/></g>
+    <g stroke="#8f2a22"><path d="M52 68h48c-4 9-13 14-24 14s-20-5-24-14z"/><path d="M84 58l16 30"/></g>
+    <path d="M4 96q6-5 12 0t12 0 12 0 12 0 12 0 12 0 12 0 12 0 12 0 12 0 12 0 12 0M28 106q6-5 12 0t12 0 12 0 12 0 12 0 12 0 12 0 12 0"/>
+  </g>
 </svg>
