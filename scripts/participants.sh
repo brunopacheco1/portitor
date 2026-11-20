@@ -74,7 +74,7 @@ start_issuer() { # [more VAR=value settings]: the authority's portitor-issuer, w
     PORTITOR_DB_FILE="$dir/issuer.db" \
     PORTITOR_MANAGEMENT_BIND="$ISSUER_MANAGEMENT" \
     PORTITOR_MANAGEMENT_API_KEY_FILE="$dir/management.key" \
-    PORTITOR_ALLOW_HTTP_CALLBACKS=true \
+    PORTITOR_ALLOW_HTTP=true \
     "$@" "$ISSUER" >"$WORK/issuer.log" 2>&1 &
   PIDS+=($!)
 }
@@ -109,7 +109,7 @@ start_identity() { # name did address management-address
   PORTITOR_MANAGEMENT_API_KEY_FILE="$dir/identity-management.key" \
   PORTITOR_STS_CLIENT_SECRET_FILE="$dir/sts-client-secret" \
   PORTITOR_TRUSTED_ISSUERS=$AUTHORITY \
-  PORTITOR_ALLOW_HTTP_CALLBACKS=true \
+  PORTITOR_ALLOW_HTTP=true \
     "$IDENTITY" >"$WORK/$name-identity.log" 2>&1 &
   PIDS+=($!)
 }
@@ -152,7 +152,7 @@ start_connector() { # name did address identity-address [more VAR=value settings
     PORTITOR_STS_URL="http://$identity_address/sts/token" \
     PORTITOR_STS_CLIENT_SECRET_FILE="$WORK/$name/sts-client-secret" \
     PORTITOR_TRUSTED_ISSUERS="$AUTHORITY" \
-    PORTITOR_ALLOW_HTTP_CALLBACKS=true \
+    PORTITOR_ALLOW_HTTP=true \
     "$@" "$CONNECTOR" >"$WORK/$name-connector.log" 2>&1 &
   PIDS+=($!)
 }

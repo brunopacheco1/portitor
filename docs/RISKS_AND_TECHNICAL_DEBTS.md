@@ -493,7 +493,7 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
 - **Why it matters.** A partner could make the connector call an internal
   service.
 - **Current state: Mitigated.** Only `https://` (unless
-  `PORTITOR_ALLOW_HTTP_CALLBACKS` for tests), no redirects, time and size
+  `PORTITOR_ALLOW_HTTP` for tests), no redirects, time and size
   limits, the callback's answer body is never read, a 10 s timeout;
   DEPLOYING asks for an egress firewall. Internal addresses are not
   blocked (checked: no such check in the code).

@@ -123,7 +123,7 @@ All configuration is by environment variable. The full table is in the
 | `PORTITOR_PUBLIC_URL` | your public `https://` URL |
 | `PORTITOR_DATASETS_FILE` | path of the mounted datasets file, harvested at start and at each run |
 | `PORTITOR_HARVEST_INTERVAL_SECONDS` | leave the default, `3600` (one hour); `0` harvests only at start. A value that is not a whole number, or is above `31536000` (one year), stops the start |
-| `PORTITOR_BUNDLE_URL` | with a bundle: the `https://` URL of the authority's bundles folder (one folder per version, and `latest.json`), for example `https://issuer.example.com/bundles/`; plain `http://` only with `PORTITOR_ALLOW_HTTP_CALLBACKS=true` |
+| `PORTITOR_BUNDLE_URL` | with a bundle: the `https://` URL of the authority's bundles folder (one folder per version, and `latest.json`), for example `https://issuer.example.com/bundles/`; plain `http://` only with `PORTITOR_ALLOW_HTTP=true` |
 | `PORTITOR_BUNDLE_DIR` | unset; a local bundles folder (one folder per version, and `latest.json`), for development and tests only. Not together with `PORTITOR_BUNDLE_URL` |
 | `PORTITOR_BUNDLE_VERSION` | `latest`: follow the newest version the authority names in `latest.json`; or one fixed version, never changed while the connector runs (the manifest must have exactly this version) |
 | `PORTITOR_BUNDLE_REFRESH_SECONDS` | `3600`: how often the newest version is looked for; `0` only at start. A value that is not a whole number, or is above `31536000` (one year), stops the start. Not used with a fixed version |
@@ -135,7 +135,7 @@ All configuration is by environment variable. The full table is in the
 | `PORTITOR_MANAGEMENT_BIND` | `0.0.0.0:8081` in a container (publish it only on an internal interface); the default `127.0.0.1:8081` is unreachable from outside a container. The port is always bound: it serves the [health checks](#health-and-logs), with or without the key |
 | `PORTITOR_MAX_REQUEST_BYTES` | leave the default, `2097152` (2 MiB): the largest request body the public port takes; a larger one gets HTTP 413. Some routes have a lower fixed limit ([section 5](#5-security)). A value that is not a whole number from `1` to `67108864` (64 MiB) stops the start |
 | `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | leave the default, `2097152` (2 MiB): the same for the management port |
-| `PORTITOR_ALLOW_HTTP_CALLBACKS` | **unset** (never `true` in production) |
+| `PORTITOR_ALLOW_HTTP` | **unset** (never `true` in production) |
 | `PORTITOR_DATA_TOKEN_SECONDS` | leave the default, `3600`, unless consumers need longer to fetch; at most `31536000` (one year) |
 | `PORTITOR_STS_URL` | **required**: your identity's STS token endpoint, `<identity base URL>/sts/token` |
 | `PORTITOR_STS_ALLOW_HTTP` | unset; `true` only when `PORTITOR_STS_URL` is plain `http://` on an internal network ([section 4](#endpoints)) |
@@ -592,7 +592,7 @@ participant.
 | `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | leave the default; the same for the management port |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (no traces or metrics) | your OTLP receiver's base URL, if you collect them ([Traces and metrics](#traces-and-metrics)) |
 | `PORTITOR_SCOPE_TYPE_ALIASES` | `org.eclipse.edc.vc.type` | comma-separated scope aliases that mean "credentials of this type", besides DCP's `org.eclipse.dspace.dcp.vc.type` |
-| `PORTITOR_ALLOW_HTTP_CALLBACKS` | unset | **unset** (`true` allows plain-HTTP DIDs and URLs, tests only) |
+| `PORTITOR_ALLOW_HTTP` | unset | **unset** (`true` allows plain-HTTP DIDs and URLs, tests only) |
 | `PORTITOR_DID_CACHE_SECONDS` | `300` | leave the default; how long a resolved DID document (a caller's, an issuer's) is reused, `0` to `3600`, `0` for no cache ([DID document cache](#did-document-cache)) |
 | `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` | unset | Gaia-X only: path of the PEM chain of the identity key, the key's certificate first ([Gaia-X onboarding](#gaia-x-onboarding-optional)) |
 | `PORTITOR_GAIAX_COMPLIANCE_URL` | unset (Gaia-X off) | base URL of a Gaia-X compliance service, for example `https://compliance.lab.gaia-x.eu/v2`; needs the settings around it |
@@ -623,7 +623,7 @@ and to check partners' credentials:
 |---|---|
 | `PORTITOR_PARTICIPANT_ID` | the identity's DID |
 | `PORTITOR_STS_URL` | **required**: the identity's STS token endpoint on the internal network, for example `http://identity:8090/sts/token` |
-| `PORTITOR_STS_ALLOW_HTTP` | `true` when `PORTITOR_STS_URL` is plain `http://`: allows plain HTTP for that URL only, nothing else (the connector refuses to start with an `http://` STS URL unless this or `PORTITOR_ALLOW_HTTP_CALLBACKS` is `true`) |
+| `PORTITOR_STS_ALLOW_HTTP` | `true` when `PORTITOR_STS_URL` is plain `http://`: allows plain HTTP for that URL only, nothing else (the connector refuses to start with an `http://` STS URL unless this or `PORTITOR_ALLOW_HTTP` is `true`) |
 | `PORTITOR_STS_CLIENT_SECRET_FILE` | **required**: the same secret file as the identity's |
 | `PORTITOR_STS_CLIENT_ID` | leave the default, `PORTITOR_PARTICIPANT_ID` |
 | `PORTITOR_TRUSTED_ISSUERS` | **required**: DIDs trusted to issue credentials, usually the dataspace's `portitor-issuer` |
@@ -1093,7 +1093,7 @@ tested with a proxy product.
   keeps the data address of each usable transfer, token included, in
   `/data/portitor.db` until the transfer ends (ADR 0014). Protect the volume
   and its backups like the management key.
-- Do not set `PORTITOR_ALLOW_HTTP_CALLBACKS=true` outside development and tests.
+- Do not set `PORTITOR_ALLOW_HTTP=true` outside development and tests.
 - Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
 
 ## 6. Operate
@@ -1734,7 +1734,7 @@ DID.
 | `PORTITOR_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | keep; the largest request body the public port takes (HTTP 413 above it; credential requests have a lower fixed limit, [section 5](#5-security)). From `1` to `67108864` (64 MiB), or the start stops |
 | `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | keep; the same for the management port |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (no traces or metrics) | your OTLP receiver's base URL, if you collect them ([Traces and metrics](#traces-and-metrics)) |
-| `PORTITOR_ALLOW_HTTP_CALLBACKS` | unset | **unset**; `true` only for local tests with plain-HTTP DIDs |
+| `PORTITOR_ALLOW_HTTP` | unset | **unset**; `true` only for local tests with plain-HTTP DIDs |
 | `PORTITOR_DID_CACHE_SECONDS` | `300` | keep; how long a holder's resolved DID document is reused, `0` to `3600`, `0` for no cache ([DID document cache](#did-document-cache)) |
 | `PORTITOR_ISSUER_BUNDLE_KEY_FILE` | unset | with a bundle: the **public** bundle key as a JWK (as `bundle build` prints it), so the private key stays offline; a PKCS#8 PEM is accepted too. Listed in the DID document as `<did>#bundle-key` under `assertionMethod`. The start fails if it is the credential key |
 | `PORTITOR_ISSUER_BUNDLE_DIR` | unset | with a bundle: the folder of built bundles, served read only at `GET /bundles/{version}/{path}` on the public port, and its `latest.json` at `GET /bundles/latest.json` |

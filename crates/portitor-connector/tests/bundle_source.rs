@@ -7,7 +7,7 @@
 //! its DID document over plain HTTP on 127.0.0.1; the connector's
 //! [`BundleSource`] fetches them and its [`BundleHarvester`] takes them,
 //! at start and when a newer version comes, with plain HTTP allowed (as
-//! `PORTITOR_ALLOW_HTTP_CALLBACKS` allows it for local tests).
+//! `PORTITOR_ALLOW_HTTP` allows it for local tests).
 #![allow(clippy::unwrap_used)]
 
 use std::path::{Path, PathBuf};

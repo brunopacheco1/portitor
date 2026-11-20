@@ -38,7 +38,7 @@ x-portitor: &portitor
   restart: on-failure
 x-portitor-environment: &portitor-environment
   PORTITOR_TRUSTED_ISSUERS: did:web:issuer%3A8070
-  PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+  PORTITOR_ALLOW_HTTP: "true"
   # only the run's test CA: the test reaches nothing else over HTTPS
   SSL_CERT_DIR: /ca
 
@@ -104,7 +104,7 @@ services:
       PORTITOR_ISSUER_CREDENTIALS_FILE: /credentials/issuer-credentials.json
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8071
       PORTITOR_MANAGEMENT_API_KEY_FILE: /config/management.key
-      PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+      PORTITOR_ALLOW_HTTP: "true"
       # it delivers to the Gaia-X participants' credential services over HTTPS
       SSL_CERT_DIR: /ca
     volumes:

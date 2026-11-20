@@ -91,7 +91,7 @@ fn provider_config(datasets_file: Option<&str>) -> portitor_connector::Config {
         public_url: "https://provider.example".into(),
         datasets_file: datasets_file.map(Into::into),
         harvest_interval_seconds: 0,
-        allow_http_callbacks: false,
+        allow_http: false,
         db_file: "unused.db".into(),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
@@ -450,7 +450,7 @@ fn config_from_variables() {
     assert_eq!(defaults.public_url, "http://localhost:8080");
     assert_eq!(defaults.datasets_file, None);
     assert_eq!(defaults.harvest_interval_seconds, 3_600);
-    assert!(!defaults.allow_http_callbacks);
+    assert!(!defaults.allow_http);
     assert_eq!(defaults.db_file, std::path::PathBuf::from("portitor.db"));
 
     let set = portitor_connector::Config::from_vars(vars(&[
@@ -458,12 +458,12 @@ fn config_from_variables() {
         ("PORTITOR_PUBLIC_URL", "https://p.example"),
         ("PORTITOR_DATASETS_FILE", file),
         ("PORTITOR_HARVEST_INTERVAL_SECONDS", "0"),
-        ("PORTITOR_ALLOW_HTTP_CALLBACKS", "TRUE"),
+        ("PORTITOR_ALLOW_HTTP", "TRUE"),
         ("PORTITOR_DB_FILE", "/data/x.db"),
     ]))
     .unwrap();
     assert_eq!(set.participant_id, "did:web:p.example");
-    assert!(set.allow_http_callbacks);
+    assert!(set.allow_http);
     assert_eq!(set.db_file, std::path::PathBuf::from("/data/x.db"));
     assert_eq!(set.datasets_file, Some(std::path::PathBuf::from(file)));
     assert_eq!(set.harvest_interval_seconds, 0);
@@ -471,6 +471,14 @@ fn config_from_variables() {
     let removed =
         portitor_connector::Config::from_vars(vars(&[("PORTITOR_DATASETS", "a,b")])).unwrap_err();
     assert!(removed.to_string().contains("PORTITOR_DATASETS_FILE"));
+    // renamed in 0.13: the old name stops the start and names the new one
+    let renamed =
+        portitor_connector::Config::from_vars(vars(&[("PORTITOR_ALLOW_HTTP_CALLBACKS", "true")]))
+            .unwrap_err();
+    assert_eq!(
+        renamed.to_string(),
+        "PORTITOR_ALLOW_HTTP_CALLBACKS was renamed in 0.13; set PORTITOR_ALLOW_HTTP instead"
+    );
 
     // above one year: refused, as a schedule that far ahead overflows the
     // clock (and would abort the connector) instead of a config error

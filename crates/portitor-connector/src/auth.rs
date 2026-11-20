@@ -609,7 +609,7 @@ pub struct AuthSettings {
     /// Scopes asked for, on both sides (`PORTITOR_DCP_SCOPES`,
     /// comma-separated).
     pub scopes: Vec<String>,
-    /// Allow plain-HTTP DIDs and URLs (`PORTITOR_ALLOW_HTTP_CALLBACKS`;
+    /// Allow plain-HTTP DIDs and URLs (`PORTITOR_ALLOW_HTTP`;
     /// tests and the TCKs only).
     pub allow_http: bool,
     /// How long a verified status list credential is kept, in seconds

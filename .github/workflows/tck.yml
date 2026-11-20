@@ -67,7 +67,7 @@ jobs:
           PORTITOR_PARTICIPANT_ID: did:web:localhost%3A8080
           PORTITOR_PUBLIC_URL: http://127.0.0.1:8080
           PORTITOR_DATASETS_FILE: tck/datasets.json
-          PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+          PORTITOR_ALLOW_HTTP: "true"
           # the TCK's fixed header (tck/dsp-tck.properties); no DCP here
           PORTITOR_TCK_AUTHORIZATION: Bearer dsp-tck-only
         run: |
@@ -127,7 +127,7 @@ jobs:
           PORTITOR_CREDENTIAL_SERVICE_URL: http://localhost:8090
           PORTITOR_MANAGEMENT_BIND: 127.0.0.1:8091
           PORTITOR_TRUSTED_ISSUERS: did:web:127.0.0.1%3A8083:issuer
-          PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+          PORTITOR_ALLOW_HTTP: "true"
         run: |
           mkdir -p "$RUNNER_TEMP/identity"
           cd "$RUNNER_TEMP/identity"
@@ -204,7 +204,7 @@ jobs:
         env:
           PORTITOR_PARTICIPANT_ID: did:web:localhost%3A8090
           PORTITOR_TRUSTED_ISSUERS: did:web:127.0.0.1%3A8083:issuer
-          PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+          PORTITOR_ALLOW_HTTP: "true"
         run: |
           secrets="$RUNNER_TEMP/identity"
           mkdir -p "$secrets"

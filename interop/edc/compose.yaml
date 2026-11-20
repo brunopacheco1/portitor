@@ -93,7 +93,7 @@ services:
       PORTITOR_ISSUER_CREDENTIALS_FILE: /config/issuer-credentials.json
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8071
       PORTITOR_MANAGEMENT_API_KEY_FILE: /config/issuer-management.key
-      PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+      PORTITOR_ALLOW_HTTP: "true"
       # the demo bundle, written by scripts/edc-interop.sh
       PORTITOR_ISSUER_BUNDLE_KEY_FILE: /config/bundle/bundle-key.jwk
       PORTITOR_ISSUER_BUNDLE_DIR: /config/bundle/bundles
@@ -183,7 +183,7 @@ services:
       PORTITOR_MANAGEMENT_API_KEY_FILE: /config/identity-management.key
       PORTITOR_STS_CLIENT_SECRET_FILE: /config/sts-client-secret
       PORTITOR_TRUSTED_ISSUERS: did:web:issuer%3A8070
-      PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+      PORTITOR_ALLOW_HTTP: "true"
       # Gaia-X (ADR 0021): the certificate chain of the identity key, the
       # compliance service and the participant file
       PORTITOR_IDENTITY_CERTIFICATE_CHAIN: /config/certificate-chain.pem
@@ -213,7 +213,7 @@ services:
       PORTITOR_PARTICIPANT_ID: did:web:portitor.gaiax.test
       PORTITOR_PUBLIC_URL: http://portitor-connector:8080
       PORTITOR_DATASETS_FILE: /config/datasets.json
-      PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+      PORTITOR_ALLOW_HTTP: "true"
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8081
       PORTITOR_MANAGEMENT_API_KEY_FILE: /config/connector-management.key
       PORTITOR_STS_URL: http://portitor-identity:8090/sts/token

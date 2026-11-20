@@ -50,9 +50,9 @@ async fn serve_connector() -> ExitCode {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = portitor_connector::Config::from_env()?;
     let limits = RequestLimits::from_env()?;
-    let sender = portitor_connector::dsp_sender(config.allow_http_callbacks)?;
-    if config.allow_http_callbacks {
-        tracing::warn!("http callback addresses allowed (PORTITOR_ALLOW_HTTP_CALLBACKS)");
+    let sender = portitor_connector::dsp_sender(config.allow_http)?;
+    if config.allow_http {
+        tracing::warn!("plain http allowed for every outgoing call (PORTITOR_ALLOW_HTTP)");
     }
     let store = Arc::new(
         portitor_connector::store::SqliteNegotiations::open(&config.db_file)
@@ -62,7 +62,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let sender = portitor_connector::tck::LateStart(sender);
     let mut ports = portitor_connector::Ports::new(Arc::new(sender));
     ports.use_sqlite(&store);
-    let settings = AuthSettings::from_env(&config.participant_id, config.allow_http_callbacks)?;
+    let settings = AuthSettings::from_env(&config.participant_id, config.allow_http)?;
     if let Some(settings) = &settings
         && let Some(warning) = settings.policy_types_warning(&config.credential_types)
     {
@@ -155,8 +155,7 @@ async fn start_bundle_harvest(
     Option<(BundleHarvester, portitor_connector::harvest::JobRecord)>,
     Box<dyn std::error::Error>,
 > {
-    let Some(bundle_config) = BundleConfig::from_env(&config.db_file, config.allow_http_callbacks)?
-    else {
+    let Some(bundle_config) = BundleConfig::from_env(&config.db_file, config.allow_http)? else {
         return Ok(None);
     };
     // the authority's DID document, reused as long as every other one

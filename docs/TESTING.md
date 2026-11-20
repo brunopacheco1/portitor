@@ -258,7 +258,7 @@ Where the tests are:
   404, 503), cannot be reached, sends pages (`Link` headers), more than
   the limit, or something that is not a catalog. Also: every refused
   request body, `additionalScopes` in the token, an `http://` address
-  without `PORTITOR_ALLOW_HTTP_CALLBACKS`, and HTTP 403 documented on
+  without `PORTITOR_ALLOW_HTTP`, and HTTP 403 documented on
   every protected route of the OpenAPI description (ADR 0025).
   `cargo test -p portitor-connector --test management_catalog`.
 - **Keys of another DID** (DCP 5.4.3): `crates/portitor-dcp/src/credential/tests.rs`
@@ -350,7 +350,7 @@ sha1sum dsp-tck-1.0.2-all.jar
 cargo build -p portitor-connector --features tck
 PORTITOR_BIND=127.0.0.1:8080 PORTITOR_PUBLIC_URL=http://127.0.0.1:8080 \
 PORTITOR_PARTICIPANT_ID='did:web:localhost%3A8080' PORTITOR_TCK_AUTHORIZATION='Bearer dsp-tck-only' \
-PORTITOR_DATASETS_FILE=tck/datasets.json PORTITOR_ALLOW_HTTP_CALLBACKS=true \
+PORTITOR_DATASETS_FILE=tck/datasets.json PORTITOR_ALLOW_HTTP=true \
 PORTITOR_DB_FILE=/tmp/portitor-tck.db target/debug/portitor-connector &
 
 # 3. Run it and check the required tests
@@ -406,7 +406,7 @@ openssl rand -hex 32 > /tmp/id-api.key
 PORTITOR_PARTICIPANT_ID='did:web:localhost%3A8090' PORTITOR_BIND=127.0.0.1:8090 \
 PORTITOR_CREDENTIAL_SERVICE_URL=http://localhost:8090 PORTITOR_IDENTITY_KEY_FILE=/tmp/id-key.pem \
 PORTITOR_STS_CLIENT_SECRET_FILE=/tmp/id-sts.secret PORTITOR_MANAGEMENT_API_KEY_FILE=/tmp/id-api.key \
-PORTITOR_TRUSTED_ISSUERS='did:web:127.0.0.1%3A8083:issuer' PORTITOR_ALLOW_HTTP_CALLBACKS=true \
+PORTITOR_TRUSTED_ISSUERS='did:web:127.0.0.1%3A8083:issuer' PORTITOR_ALLOW_HTTP=true \
 PORTITOR_DB_FILE=/tmp/portitor-identity-tck.db target/debug/portitor-identity &
 
 # 3. Record the requests the test credentials answer: one per correlation id
@@ -439,7 +439,7 @@ which the TCK checks against that identity's DID document. The run uses
 # (management API not needed), then the connector
 cargo build -p portitor-connector
 PORTITOR_PARTICIPANT_ID='did:web:localhost%3A8090' PORTITOR_TRUSTED_ISSUERS='did:web:127.0.0.1%3A8083:issuer' \
-PORTITOR_ALLOW_HTTP_CALLBACKS=true PORTITOR_BIND=127.0.0.1:8080 PORTITOR_PUBLIC_URL=http://127.0.0.1:8080 \
+PORTITOR_ALLOW_HTTP=true PORTITOR_BIND=127.0.0.1:8080 PORTITOR_PUBLIC_URL=http://127.0.0.1:8080 \
 PORTITOR_DATASETS_FILE=tck/datasets.json PORTITOR_DB_FILE=/tmp/portitor-verifier-tck.db \
 PORTITOR_STS_URL=http://localhost:8090/sts/token PORTITOR_STS_CLIENT_SECRET_FILE=/tmp/id-sts.secret \
   target/debug/portitor-connector &
@@ -992,7 +992,7 @@ build (test-only) also accepts one fixed header instead,
 with the example datasets:
 
 ```sh
-PORTITOR_DATASETS_FILE=examples/datasets.json PORTITOR_ALLOW_HTTP_CALLBACKS=true \
+PORTITOR_DATASETS_FILE=examples/datasets.json PORTITOR_ALLOW_HTTP=true \
 PORTITOR_TCK_AUTHORIZATION=manual-test \
 PORTITOR_DB_FILE=/tmp/portitor-manual.db cargo run -p portitor-connector --features tck
 ```

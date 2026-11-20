@@ -76,7 +76,7 @@ async fn the_outbox_sends_no_trace_context() {
         public_url: "https://consumer.example".into(),
         datasets_file: None,
         harvest_interval_seconds: 0,
-        allow_http_callbacks: true,
+        allow_http: true,
         db_file: "unused.db".into(),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),

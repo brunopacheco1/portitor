@@ -75,7 +75,7 @@ start_issuer() { # name address management-address
     PORTITOR_ISSUER_SERVICE_URL="http://$address/issuer" PORTITOR_ISSUER_KEY_FILE="$dir/key.pem" \
     PORTITOR_ISSUER_CREDENTIALS_FILE=examples/issuer-credentials.json \
     PORTITOR_DB_FILE="$dir/issuer.db" PORTITOR_MANAGEMENT_BIND="$management" \
-    PORTITOR_MANAGEMENT_API_KEY_FILE="$dir/management.key" PORTITOR_ALLOW_HTTP_CALLBACKS=true \
+    PORTITOR_MANAGEMENT_API_KEY_FILE="$dir/management.key" PORTITOR_ALLOW_HTTP=true \
     "$BIN/portitor-issuer" >"$WORK/$name.log" 2>&1 &
   PIDS+=($!)
 }
@@ -90,7 +90,7 @@ start_identity() { # name address management-address trusted-issuers
     PORTITOR_DB_FILE="$dir/identity.db" PORTITOR_MANAGEMENT_BIND="$management" \
     PORTITOR_MANAGEMENT_API_KEY_FILE="$dir/management.key" \
     PORTITOR_STS_CLIENT_SECRET_FILE="$dir/sts-client-secret" \
-    PORTITOR_TRUSTED_ISSUERS="$trusted" PORTITOR_ALLOW_HTTP_CALLBACKS=true \
+    PORTITOR_TRUSTED_ISSUERS="$trusted" PORTITOR_ALLOW_HTTP=true \
     "$BIN/portitor-identity" >"$WORK/$name.log" 2>&1 &
   PIDS+=($!)
 }
@@ -123,7 +123,7 @@ start_connector() { # name address management-address identity-name identity-add
     PORTITOR_PUBLIC_URL="http://$address" PORTITOR_DB_FILE="$WORK/$name/connector.db" \
     PORTITOR_STS_URL="http://$identity_address/sts/token" \
     PORTITOR_STS_CLIENT_SECRET_FILE="$WORK/$identity/sts-client-secret" \
-    PORTITOR_TRUSTED_ISSUERS="$trusted" PORTITOR_ALLOW_HTTP_CALLBACKS=true \
+    PORTITOR_TRUSTED_ISSUERS="$trusted" PORTITOR_ALLOW_HTTP=true \
     PORTITOR_STATUS_LIST_CACHE_SECONDS=0 PORTITOR_MANAGEMENT_BIND="$management" \
     PORTITOR_MANAGEMENT_API_KEY_FILE="$WORK/$name/management.key" \
     "$@" "$BIN/portitor-connector" >"$WORK/$name.log" 2>&1 &

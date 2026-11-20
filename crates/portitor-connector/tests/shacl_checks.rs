@@ -209,7 +209,7 @@ fn config(participant: &str, public_url: &str) -> Config {
         public_url: public_url.to_owned(),
         datasets_file: None,
         harvest_interval_seconds: 0,
-        allow_http_callbacks: false,
+        allow_http: false,
         db_file: "unused.db".into(),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),

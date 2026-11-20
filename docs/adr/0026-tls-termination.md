@@ -34,6 +34,9 @@ What the code does today (checked on 2026-11-20):
 | Proxy headers | Not read. No code reads `X-Forwarded-*`, `Forwarded` or `Host`, or the caller's network address (searched in `crates/*/src`) | — |
 | Telemetry | The HTTP server metric reports `url.scheme` as `http`, because TLS ends before the component | DEPLOYING, "Traces and metrics" |
 
+Note, 2026-11-20: `PORTITOR_ALLOW_HTTP_CALLBACKS` was renamed in 0.13 to
+`PORTITOR_ALLOW_HTTP`; the meaning is unchanged.
+
 DEPLOYING already tells operators to run the services behind an HTTPS
 reverse proxy, to keep the management ports and `/sts/token` off the
 public proxy, and SECURITY-ASSURANCE lists TLS inside the services as

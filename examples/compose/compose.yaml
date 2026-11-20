@@ -7,7 +7,7 @@
 # (portitor-identity). DSP requests are authenticated with DCP: the
 # caller shows a MembershipCredential from a trusted issuer, here the data
 # space's portitor-issuer (did:web:issuer%3A8070). Not a production setup:
-# plain HTTP between the containers (PORTITOR_ALLOW_HTTP_CALLBACKS), and
+# plain HTTP between the containers (PORTITOR_ALLOW_HTTP), and
 # the issuer next to the participants. The issuer also serves the data
 # space's HealthDCAT-AP demo bundle (scripts/demo-bundle.sh), which the
 # provider pins and checks its datasets (../healthdcat-datasets.json)
@@ -62,7 +62,7 @@ services:
       PORTITOR_ISSUER_CREDENTIALS_FILE: /config/issuer-credentials.json
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8071
       PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/issuer-management-key
-      PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+      PORTITOR_ALLOW_HTTP: "true"
       # the demo bundle: its public key in the DID document
       # (did:web:issuer%3A8070#bundle-key), the signed versions served at
       # http://issuer:8070/bundles/<version>/, the newest named in
@@ -99,7 +99,7 @@ services:
       PORTITOR_TRUSTED_ISSUERS: did:web:issuer%3A8070
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8091
       PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/provider-identity-management-key
-      PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+      PORTITOR_ALLOW_HTTP: "true"
     secrets:
       - provider-identity-key
       - provider-sts-secret
@@ -132,7 +132,7 @@ services:
       PORTITOR_BUNDLE_AUTHORITY: did:web:issuer%3A8070
       # the offer for EU processors checks a DataProcessorCredential claim (ADR 0019)
       PORTITOR_POLICY_CREDENTIALS: DataProcessorCredential
-      PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+      PORTITOR_ALLOW_HTTP: "true"
       # the harvest jobs (GET /v1/harvest-jobs)
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8081
       PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/provider-management-key
@@ -168,7 +168,7 @@ services:
       PORTITOR_TRUSTED_ISSUERS: did:web:issuer%3A8070
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8091
       PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/consumer-identity-management-key
-      PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+      PORTITOR_ALLOW_HTTP: "true"
     secrets:
       - consumer-identity-key
       - consumer-sts-secret
@@ -191,7 +191,7 @@ services:
       PORTITOR_STATUS_LIST_CACHE_SECONDS: "0"
       PORTITOR_PUBLIC_URL: http://consumer:8080
       PORTITOR_POLICY_CREDENTIALS: DataProcessorCredential
-      PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+      PORTITOR_ALLOW_HTTP: "true"
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8081
       PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/consumer-management-key
     secrets:

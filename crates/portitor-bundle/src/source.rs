@@ -187,7 +187,7 @@ pub struct BundleConfig {
     /// (`PORTITOR_BUNDLE_REFRESH_SECONDS`); 0: only at start. Only used
     /// with [`VersionChoice::Latest`].
     pub refresh_seconds: u64,
-    /// Plain-HTTP URLs and DIDs allowed (`PORTITOR_ALLOW_HTTP_CALLBACKS`,
+    /// Plain-HTTP URLs and DIDs allowed (`PORTITOR_ALLOW_HTTP`,
     /// development and tests only).
     pub allow_http: bool,
 }

@@ -99,7 +99,7 @@ jobs:
             -e PORTITOR_CREDENTIAL_SERVICE_URL=http://localhost:8090 \
             -e PORTITOR_STS_CLIENT_SECRET_FILE=/run/secrets/portitor/sts-client-secret \
             -e PORTITOR_TRUSTED_ISSUERS=did:web:issuer.example \
-            -e PORTITOR_ALLOW_HTTP_CALLBACKS=true \
+            -e PORTITOR_ALLOW_HTTP=true \
             portitor-identity:ci
           # did:web:localhost%3A8090 resolves to http://localhost:8090/.well-known/did.json
           for _ in $(seq 50); do curl -sf http://127.0.0.1:8090/.well-known/did.json > did.json && break; sleep 0.2; done

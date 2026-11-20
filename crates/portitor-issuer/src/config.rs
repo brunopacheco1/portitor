@@ -10,7 +10,9 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub use portitor_runtime::settings::base_path;
-use portitor_runtime::settings::path_list;
+use portitor_runtime::settings::{
+    ALLOW_HTTP_CALLBACKS, RemovedSetting, is_true, path_list, refuse_removed,
+};
 
 /// Where the public server listens unless `PORTITOR_BIND` says otherwise.
 pub const DEFAULT_BIND: &str = "0.0.0.0:8070";
@@ -28,6 +30,10 @@ pub const DEFAULT_DB_FILE: &str = "/data/portitor-issuer.db";
 /// registered participant from filling a status list (ADR 0018, amended
 /// during the 0.6 review).
 pub const DEFAULT_MAX_ACTIVE_PER_HOLDER: u64 = 10;
+
+/// The settings the issuer no longer has. When one of them is set, the
+/// issuer refuses to start and names what to set instead.
+pub const REMOVED_SETTINGS: &[RemovedSetting] = &[ALLOW_HTTP_CALLBACKS];
 
 /// Everything the issuer needs to start.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,7 +60,7 @@ pub struct Config {
     /// The management port: always the health checks, and the management
     /// API when `PORTITOR_MANAGEMENT_API_KEY_FILE` is set.
     pub management: ManagementConfig,
-    /// Plain-HTTP DIDs and URLs allowed (`PORTITOR_ALLOW_HTTP_CALLBACKS`,
+    /// Plain-HTTP DIDs and URLs allowed (`PORTITOR_ALLOW_HTTP`,
     /// tests only).
     pub allow_http: bool,
     /// The most credentials of one definition a holder may have that are
@@ -105,6 +111,7 @@ impl Config {
                 .filter(|v| !v.is_empty())
                 .ok_or_else(|| invalid(name, "required"))
         };
+        refuse_removed(&var, REMOVED_SETTINGS).map_err(removed)?;
         let participant_id = required("PORTITOR_PARTICIPANT_ID")?;
         portitor_dcp::did_web_url(&participant_id)
             .map_err(|e| invalid("PORTITOR_PARTICIPANT_ID", &e.to_string()))?;
@@ -138,8 +145,7 @@ impl Config {
                 text("PORTITOR_DB_FILE").unwrap_or_else(|| DEFAULT_DB_FILE.to_owned()),
             ),
             management,
-            allow_http: text("PORTITOR_ALLOW_HTTP_CALLBACKS")
-                .is_some_and(|v| v.eq_ignore_ascii_case("true")),
+            allow_http: is_true(&var, "PORTITOR_ALLOW_HTTP"),
             max_active_per_holder,
             bundle_key_file: text("PORTITOR_ISSUER_BUNDLE_KEY_FILE")
                 .filter(|v| !v.is_empty())
@@ -149,6 +155,12 @@ impl Config {
                 .map(PathBuf::from),
         })
     }
+}
+
+/// The error for a removed setting that is still set: its old name, and
+/// what to set instead.
+fn removed(setting: RemovedSetting) -> ConfigError {
+    invalid(setting.name, setting.advice)
 }
 
 fn invalid(name: &'static str, problem: &str) -> ConfigError {
@@ -167,6 +179,9 @@ mod tests {
         Config::from_vars(portitor_runtime::testing::vars(pairs))
     }
 
+    /// Old names (refused) and the new name each error must give.
+    const RENAMED: &[(&str, &str)] = &[("PORTITOR_ALLOW_HTTP_CALLBACKS", "PORTITOR_ALLOW_HTTP")];
+
     const MINIMAL: &[(&str, &str)] = &[
         ("PORTITOR_PARTICIPANT_ID", "did:web:issuer.example"),
         ("PORTITOR_ISSUER_KEY_FILE", "/run/secrets/issuer.pem"),
@@ -179,6 +194,17 @@ mod tests {
             "https://issuer.example/issuer/",
         ),
     ];
+
+    #[test]
+    fn a_renamed_setting_is_refused_with_its_new_name() {
+        for (old, new) in RENAMED {
+            let mut vars = MINIMAL.to_vec();
+            vars.push((old, "anything"));
+            let error = read(&vars).unwrap_err();
+            assert_eq!(error.name, *old);
+            assert!(error.to_string().contains(new), "{error}");
+        }
+    }
 
     #[test]
     fn defaults() {
@@ -231,7 +257,7 @@ mod tests {
     fn management_api_needs_a_key_file() {
         let mut vars = MINIMAL.to_vec();
         vars.push(("PORTITOR_MANAGEMENT_API_KEY_FILE", "/run/secrets/api"));
-        vars.push(("PORTITOR_ALLOW_HTTP_CALLBACKS", "TRUE"));
+        vars.push(("PORTITOR_ALLOW_HTTP", "TRUE"));
         let config = read(&vars).unwrap();
         assert_eq!(
             config.management,

@@ -100,7 +100,7 @@ Configuration (environment variables):
 | `PORTITOR_PUBLIC_URL` | `http://localhost:8080` | Public base URL; the DSP endpoint is this plus `/dsp/2025-1`, the consumer callback address this plus `/dsp/2025-1/callback` |
 | `PORTITOR_DATASETS_FILE` | none (empty catalog) | JSON file with the datasets to offer, harvested into a read copy at start and at each run ([ADR 0020](docs/adr/0020-dataset-harvest.md)) |
 | `PORTITOR_HARVEST_INTERVAL_SECONDS` | `3600` | Seconds between two harvest runs; `0` harvests only at start; at most `31536000` (one year) |
-| `PORTITOR_BUNDLE_URL` | none (no SHACL checks) | `https://` URL of the authority's folder of signed schema and vocabulary bundles, one folder per version and `latest.json` ([ADR 0005](docs/adr/0005-schema-and-vocabulary-registry.md)); `http://` only with `PORTITOR_ALLOW_HTTP_CALLBACKS` |
+| `PORTITOR_BUNDLE_URL` | none (no SHACL checks) | `https://` URL of the authority's folder of signed schema and vocabulary bundles, one folder per version and `latest.json` ([ADR 0005](docs/adr/0005-schema-and-vocabulary-registry.md)); `http://` only with `PORTITOR_ALLOW_HTTP` |
 | `PORTITOR_BUNDLE_DIR` | none | A local bundles folder instead of the URL (development and tests) |
 | `PORTITOR_BUNDLE_VERSION` | `latest` | `latest` follows the newest version without a restart (never an older one); or one fixed version |
 | `PORTITOR_BUNDLE_REFRESH_SECONDS` | `3600` | Seconds between two looks at `latest.json`; `0` only at start; at most `31536000` (one year) |
@@ -111,7 +111,7 @@ Configuration (environment variables):
 | `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8081` | Address of the management port: always the health checks (`/api/check/...`, no key, [DEPLOYING](docs/DEPLOYING.md#health-and-logs)), and the management API with its key |
 | `PORTITOR_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | Largest request body on the public port, `1` to `67108864` (64 MiB); larger gets HTTP 413. Small DSP messages have a lower fixed limit ([DEPLOYING](docs/DEPLOYING.md#5-security)) |
 | `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | Largest request body on the management port, `1` to `67108864` (64 MiB) |
-| `PORTITOR_ALLOW_HTTP_CALLBACKS` | `false` | `true` allows plain `http://` for consumers' callbacks, providers, partners' `did:web` DIDs and credential services, status lists and the STS; development and tests only |
+| `PORTITOR_ALLOW_HTTP` | `false` | `true` allows plain `http://` for consumers' callbacks, providers, partners' `did:web` DIDs and credential services, status lists and the STS; development and tests only |
 | `PORTITOR_DATA_TOKEN_SECONDS` | `3600` | How long a data access token is valid after the transfer starts; `1` to `31536000` (one year) |
 | `PORTITOR_STS_URL` | none (**required**) | Token endpoint of the participant's STS (`portitor-identity`: `<base URL>/sts/token`); every DSP request is authenticated with DCP (ADR 0016) |
 | `PORTITOR_STS_ALLOW_HTTP` | unset | `true` allows a plain-HTTP `PORTITOR_STS_URL` (the STS on an internal network), and nothing else |
