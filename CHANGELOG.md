@@ -76,6 +76,10 @@ and no route changed. Two checks are stricter; what to do:
   settled (ADR 0007, note of 0.14; TD-44). The negotiation is
   `FINALIZED`, so nothing was given up. The metric keeps its name; an
   INFO log line says when a message is not counted.
+- The same metric no longer counts a message whose outcome the store
+  could not record (WARN `outgoing message not recorded`). Such a
+  message is still saved as pending and is sent again after a restart;
+  it is counted then, if it fails again.
 
 ### Security
 

@@ -589,4 +589,32 @@ async fn a_finalization_that_never_arrives_after_it_was_settled_ends_nothing() {
     moment.let_the_event_go_on(2).await;
     assert_eq!(moment.provider_state().await, "FINALIZED");
     assert_eq!(moment.consumer_state(), NegotiationState::Verified);
+    // TD-44: the event was not delivered, but the negotiation was
+    // settled without it, so the provider's outbox did not count it in
+    // `portitor.outbox.message.given_up`
+    assert_eq!(given_up_by_the_provider_negotiation(), 0);
+}
+
+/// How many messages the provider's negotiation outbox counted as given
+/// up (`portitor.outbox.message.given_up`) in this test so far.
+fn given_up_by_the_provider_negotiation() -> usize {
+    use portitor_runtime::telemetry::metrics::{Outbox, Role};
+    portitor_runtime::telemetry::testing::given_up_on_this_thread()
+        .iter()
+        .filter(|outbox| **outbox == Outbox::Negotiation(Role::Provider))
+        .count()
+}
+
+/// The other side of TD-44: the same event that never arrives, with no
+/// transfer request to settle the negotiation. The provider gives the
+/// event up, counts it once, and ends the negotiation.
+#[tokio::test]
+async fn a_finalization_that_never_arrives_and_was_not_settled_is_counted_as_given_up() {
+    let moment = RightAfterTheAgreement::with(EventFate::NeverArrives).await;
+    assert_eq!(moment.consumer_state(), NegotiationState::Verified);
+    assert_eq!(given_up_by_the_provider_negotiation(), 0);
+
+    moment.let_the_event_go_on(2).await;
+    assert_eq!(moment.provider_state().await, "TERMINATED");
+    assert_eq!(given_up_by_the_provider_negotiation(), 1);
 }
