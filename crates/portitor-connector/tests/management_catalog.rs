@@ -407,15 +407,14 @@ async fn played_catalog_request(
     State(seen): State<Seen>,
     Path(case): Path<String>,
     headers: HeaderMap,
-    body: String,
+    axum::Json(body): axum::Json<Value>,
 ) -> Response {
     {
         let mut seen = seen.lock().unwrap();
         let authorization = headers.get(header::AUTHORIZATION);
         let authorization = authorization.map(|value| value.to_str().unwrap().to_owned());
         seen.authorizations.push(authorization.unwrap_or_default());
-        seen.catalog_requests
-            .push(serde_json::from_str(&body).unwrap_or(Value::Null));
+        seen.catalog_requests.push(body);
     }
     let json = [(header::CONTENT_TYPE, "application/json")];
     match case.as_str() {
