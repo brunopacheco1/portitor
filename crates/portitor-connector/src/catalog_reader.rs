@@ -26,6 +26,12 @@
 //!   of a dataset does not require one): reading it into Portitor's own
 //!   types and writing it again would drop whatever those types do not
 //!   know.
+//! - A catalog must be the catalog of the provider that was asked: its
+//!   `participantId` is the provider id of the request (the
+//!   `counterPartyId` of the management call). DSP 2025-1 requires
+//!   `participantId` of a catalog (`catalog-schema.json`, `RootCatalog`),
+//!   so a catalog without it is refused too. A dataset has no
+//!   `participantId`.
 //! - At most [`MAX_CONCURRENT_READS`] answers are read at a time, as each
 //!   may be held in memory whole.
 //!
@@ -100,8 +106,9 @@ pub enum ReadFailure {
     /// The provider did not give a usable answer: it refused, could not
     /// be reached, or sent more than [`MAX_CATALOG_ANSWER`]. (HTTP 502.)
     Provider(HttpError),
-    /// The provider answered 2xx, but not with what was asked for; the
-    /// text says what is wrong. (HTTP 502.)
+    /// The provider answered 2xx, but not with what was asked for (also:
+    /// with the catalog of another participant); the text says what is
+    /// wrong. (HTTP 502.)
     NotDsp(String),
 }
 
@@ -111,24 +118,6 @@ enum Wanted<'a> {
     Catalog,
     /// One dataset, by its `@id`.
     Dataset(&'a str),
-}
-
-impl Wanted<'_> {
-    /// The `@type` of the provider's answer.
-    fn answer_type(&self) -> &'static str {
-        match self {
-            Wanted::Catalog => "Catalog",
-            Wanted::Dataset(_) => "Dataset",
-        }
-    }
-
-    /// Whether the answer must say its `@type`. DSP 2025-1 requires it of
-    /// a catalog (`catalog-schema.json`: `@type` is `Catalog`) but not of
-    /// a dataset (`dataset-schema.json`, `RootDataset`, requires
-    /// `@context`, `@id`, `hasPolicy` and `distribution` only).
-    fn type_required(&self) -> bool {
-        matches!(self, Wanted::Catalog)
-    }
 }
 
 /// Reads catalogs and datasets from providers, with our token.
@@ -197,7 +186,7 @@ impl CatalogReader {
     }
 
     /// Checks the address and the id, gets a token, sends the request
-    /// once and checks the answer's `@type`.
+    /// once and checks the answer (`check_catalog`, `check_dataset`).
     async fn read(
         &self,
         provider_address: &str,
@@ -247,7 +236,10 @@ impl CatalogReader {
             }
         };
         let RawAnswer { body, links } = sent.map_err(ReadFailure::Provider)?;
-        check_type(&body, wanted.answer_type(), wanted.type_required())?;
+        match wanted {
+            Wanted::Catalog => check_catalog(&body, provider_id)?,
+            Wanted::Dataset(_) => check_dataset(&body)?,
+        }
         if !links.is_empty() {
             tracing::warn!(
                 "the provider sent Link headers (catalog pages); only this first answer is read"
@@ -293,50 +285,120 @@ fn catalog_request_message(guard: &dyn MessageGuard) -> Result<serde_json::Value
     }
 }
 
-/// Only the `@type` of a JSON object; every other member is skipped
-/// without being kept, so a large catalog is checked without building it
-/// in memory a second time.
+/// The two members read from a catalog answer; every other member is
+/// skipped without being kept, so a large catalog is checked without
+/// building it in memory a second time.
 #[derive(Deserialize)]
-struct TypeOnly {
+struct CatalogHead {
+    #[serde(rename = "@type")]
+    kind: Option<String>,
+    #[serde(rename = "participantId")]
+    participant_id: Option<String>,
+}
+
+/// Only the `@type` of a dataset answer; every other member is skipped,
+/// as in [`CatalogHead`].
+#[derive(Deserialize)]
+struct DatasetHead {
     #[serde(rename = "@type")]
     kind: Option<String>,
 }
 
-/// Checks that `body` is a JSON object whose `@type` is `expected`; an
-/// object without `@type` passes unless `required`.
-fn check_type(body: &[u8], expected: &str, required: bool) -> Result<(), ReadFailure> {
-    // JSON is UTF-8 (RFC 8259, section 8.1). Checked here for the whole
-    // body: the reader below passes over the members it does not keep
-    // without looking at the bytes of their texts, and the body is
-    // handed on as `application/json`.
-    if std::str::from_utf8(body).is_err() {
-        return Err(ReadFailure::NotDsp(
-            "the provider's answer is not JSON: it is not UTF-8 text".to_owned(),
-        ));
+/// How much of a provider's `participantId` an error shows, in
+/// characters: the text comes from the provider and goes to the caller.
+const SHOWN_CHARACTERS: usize = 200;
+
+/// Checks a provider's answer to a catalog request, sent by the provider
+/// `provider_id`: a JSON object whose `@type` is `Catalog` and whose
+/// `participantId` is `provider_id`.
+///
+/// DSP 2025-1 requires both members of a catalog (`catalog-schema.json`:
+/// `@type` is the text `Catalog` in `Catalog`, and `RootCatalog` lists
+/// `participantId`, a text, under `required`). The specification does
+/// not say that a consumer compares `participantId` with the provider it
+/// asked; Portitor does, so that the caller is not handed the catalog of
+/// another participant under the name it asked for. The ids are compared
+/// as written.
+fn check_catalog(body: &[u8], provider_id: &str) -> Result<(), ReadFailure> {
+    check_json_object(body)?;
+    let head: CatalogHead = match serde_json::from_slice(body) {
+        Ok(head) => head,
+        Err(error) => {
+            return Err(ReadFailure::NotDsp(format!(
+                "the provider's answer is not a JSON object with a text @type and a text participantId: {error}"
+            )));
+        }
+    };
+    if head.kind.as_deref() != Some("Catalog") {
+        return Err(wrong_type("Catalog"));
     }
-    // serde reads a struct from a JSON array too (its fields in order),
-    // so `["Catalog"]` would pass below: only an object is read
-    let first = body.iter().find(|byte| !byte.is_ascii_whitespace());
-    if first != Some(&b'{') {
-        return Err(ReadFailure::NotDsp(
-            "the provider's answer is not a JSON object".to_owned(),
-        ));
+    match head.participant_id {
+        Some(participant_id) if participant_id == provider_id => Ok(()),
+        Some(participant_id) => Err(other_participant(&participant_id, provider_id)),
+        None => Err(ReadFailure::NotDsp(
+            "the provider's answer is not a DSP 2025-1 Catalog (it has no participantId)"
+                .to_owned(),
+        )),
     }
-    let read: TypeOnly = match serde_json::from_slice(body) {
-        Ok(read) => read,
+}
+
+/// Checks a provider's answer to a dataset request: a JSON object whose
+/// `@type`, if it has one, is `Dataset`. DSP 2025-1 does not require
+/// `@type` of a dataset (`dataset-schema.json`, `RootDataset`, requires
+/// `@context`, `@id`, `hasPolicy` and `distribution` only), and a
+/// dataset has no `participantId`.
+fn check_dataset(body: &[u8]) -> Result<(), ReadFailure> {
+    check_json_object(body)?;
+    let head: DatasetHead = match serde_json::from_slice(body) {
+        Ok(head) => head,
         Err(error) => {
             return Err(ReadFailure::NotDsp(format!(
                 "the provider's answer is not a JSON object with a text @type: {error}"
             )));
         }
     };
-    match read.kind.as_deref() {
-        Some(kind) if kind == expected => Ok(()),
-        None if !required => Ok(()),
-        Some(_) | None => Err(ReadFailure::NotDsp(format!(
-            "the provider's answer is not a DSP 2025-1 {expected} (its @type is not \"{expected}\")"
-        ))),
+    match head.kind.as_deref() {
+        Some("Dataset") | None => Ok(()),
+        Some(_) => Err(wrong_type("Dataset")),
     }
+}
+
+/// Checks that `body` is UTF-8 text that starts as a JSON object.
+fn check_json_object(body: &[u8]) -> Result<(), ReadFailure> {
+    // JSON is UTF-8 (RFC 8259, section 8.1). Checked here for the whole
+    // body: the reader passes over the members it does not keep without
+    // looking at the bytes of their texts, and the body is handed on as
+    // `application/json`.
+    if std::str::from_utf8(body).is_err() {
+        return Err(ReadFailure::NotDsp(
+            "the provider's answer is not JSON: it is not UTF-8 text".to_owned(),
+        ));
+    }
+    // serde reads a struct from a JSON array too (its fields in order),
+    // so `["Catalog"]` would pass as a catalog: only an object is read
+    let first = body.iter().find(|byte| !byte.is_ascii_whitespace());
+    if first != Some(&b'{') {
+        return Err(ReadFailure::NotDsp(
+            "the provider's answer is not a JSON object".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// The failure for an answer whose `@type` is not `expected`.
+fn wrong_type(expected: &str) -> ReadFailure {
+    ReadFailure::NotDsp(format!(
+        "the provider's answer is not a DSP 2025-1 {expected} (its @type is not \"{expected}\")"
+    ))
+}
+
+/// The failure for a catalog whose `participantId` is not the provider
+/// that was asked.
+fn other_participant(participant_id: &str, provider_id: &str) -> ReadFailure {
+    let shown: String = participant_id.chars().take(SHOWN_CHARACTERS).collect();
+    ReadFailure::NotDsp(format!(
+        "the provider's answer is the catalog of another participant: its participantId is {shown:?}, not the counterPartyId {provider_id:?}"
+    ))
 }
 
 /// `text` as one segment of a URL path (RFC 3986, section 3.3): letters,
@@ -373,41 +435,99 @@ mod tests {
         assert_eq!(path_segment("é%"), "%C3%A9%25");
     }
 
-    #[test]
-    fn the_answer_must_have_the_type_asked_for() {
-        assert_eq!(
-            check_type(br#" {"@type":"Catalog","x":[1,{}]}"#, "Catalog", true),
-            Ok(())
-        );
-        for wrong in [
-            &br#"{"@type":"Dataset"}"#[..],
-            br#"{"x":1}"#,
-            b"[]",
-            br#"["Catalog"]"#,
-            br#""Catalog""#,
-            b"",
-            b"<html>",
-            br#"{"@type":"Catalog""#,
-            // not UTF-8, in a member that is not read
-            b"{\"@type\":\"Catalog\",\"x\":\"\xff\"}",
-        ] {
-            let checked = check_type(wrong, "Catalog", true);
-            assert!(matches!(checked, Err(ReadFailure::NotDsp(_))), "{wrong:?}");
+    const PROVIDER: &str = "did:web:provider.example";
+
+    /// The reason of an answer that was refused as not what was asked.
+    fn not_dsp(checked: Result<(), ReadFailure>) -> String {
+        match checked {
+            Err(ReadFailure::NotDsp(reason)) => reason,
+            other => panic!("not refused as NotDsp: {other:?}"),
         }
     }
 
-    /// DSP 2025-1 `dataset-schema.json` does not require `@type`.
+    #[test]
+    fn a_catalog_answer_must_have_the_type_catalog() {
+        let catalog =
+            br#" {"@type":"Catalog","participantId":"did:web:provider.example","x":[1,{}]}"#;
+        assert_eq!(check_catalog(catalog, PROVIDER), Ok(()));
+        for wrong in [
+            &br#"{"@type":"Dataset","participantId":"did:web:provider.example"}"#[..],
+            br#"{"x":1,"participantId":"did:web:provider.example"}"#,
+            b"[]",
+            br#"["Catalog","did:web:provider.example"]"#,
+            br#""Catalog""#,
+            b"",
+            b"<html>",
+            br#"{"@type":"Catalog","participantId":"did:web:provider.example""#,
+            // not UTF-8, in a member that is not read
+            b"{\"@type\":\"Catalog\",\"participantId\":\"did:web:provider.example\",\"x\":\"\xff\"}",
+        ] {
+            let reason = not_dsp(check_catalog(wrong, PROVIDER));
+            assert!(
+                reason.starts_with("the provider's answer is not "),
+                "{reason}"
+            );
+        }
+    }
+
+    /// DSP 2025-1 `catalog-schema.json`, `RootCatalog`: `participantId`
+    /// is required and a text. It must name the provider that was asked.
+    #[test]
+    fn a_catalog_answer_must_name_the_provider_that_was_asked() {
+        let other = br#"{"@type":"Catalog","participantId":"did:web:someone-else.example"}"#;
+        assert_eq!(
+            not_dsp(check_catalog(other, PROVIDER)),
+            "the provider's answer is the catalog of another participant: its participantId is \"did:web:someone-else.example\", not the counterPartyId \"did:web:provider.example\""
+        );
+        // compared as written: other letters or a longer id are another id
+        for different in [
+            &br#"{"@type":"Catalog","participantId":"did:web:Provider.example"}"#[..],
+            br#"{"@type":"Catalog","participantId":"did:web:provider.example:x"}"#,
+            br#"{"@type":"Catalog","participantId":""}"#,
+        ] {
+            let reason = not_dsp(check_catalog(different, PROVIDER));
+            assert!(reason.contains("another participant"), "{reason}");
+        }
+        let missing =
+            br#"{"@type":"Catalog","dataset":[{"participantId":"did:web:provider.example"}]}"#;
+        assert_eq!(
+            not_dsp(check_catalog(missing, PROVIDER)),
+            "the provider's answer is not a DSP 2025-1 Catalog (it has no participantId)"
+        );
+        for not_one_text in [
+            &br#"{"@type":"Catalog","participantId":{"@id":"did:web:provider.example"}}"#[..],
+            br#"{"@type":"Catalog","participantId":["did:web:provider.example"]}"#,
+            br#"{"@type":"Catalog","participantId":"did:web:provider.example","participantId":"did:web:someone-else.example"}"#,
+        ] {
+            let reason = not_dsp(check_catalog(not_one_text, PROVIDER));
+            assert!(reason.contains("a text participantId"), "{reason}");
+        }
+    }
+
+    /// The id comes from the provider and goes into the answer to the
+    /// caller: only its start is shown.
+    #[test]
+    fn a_long_participant_id_is_cut_in_the_error() {
+        let long = format!(
+            r#"{{"@type":"Catalog","participantId":"{}"}}"#,
+            "x".repeat(5000)
+        );
+        let reason = not_dsp(check_catalog(long.as_bytes(), PROVIDER));
+        assert!(reason.contains(&"x".repeat(200)), "{reason}");
+        assert!(!reason.contains(&"x".repeat(201)), "{reason}");
+    }
+
+    /// DSP 2025-1 `dataset-schema.json` does not require `@type`, and a
+    /// dataset has no `participantId`: one that is there is not read.
     #[test]
     fn a_dataset_may_leave_its_type_out_but_not_name_another() {
         let dataset = br#"{"@id":"urn:uuid:1","hasPolicy":[],"distribution":[]}"#;
-        assert_eq!(check_type(dataset, "Dataset", false), Ok(()));
-        assert_eq!(
-            check_type(br#"{"@type":"Dataset"}"#, "Dataset", false),
-            Ok(())
-        );
+        assert_eq!(check_dataset(dataset), Ok(()));
+        assert_eq!(check_dataset(br#"{"@type":"Dataset"}"#), Ok(()));
+        let with_participant = br#"{"@type":"Dataset","participantId":{"any":"thing"}}"#;
+        assert_eq!(check_dataset(with_participant), Ok(()));
         for wrong in [&br#"{"@type":"Catalog"}"#[..], br#"["Dataset"]"#, b"[]"] {
-            let checked = check_type(wrong, "Dataset", false);
-            assert!(matches!(checked, Err(ReadFailure::NotDsp(_))), "{wrong:?}");
+            not_dsp(check_dataset(wrong));
         }
     }
 
@@ -436,7 +556,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_bad_address_or_id_is_refused_before_anything_is_sent() {
-        let provider = "did:web:provider.example";
+        let provider = PROVIDER;
         for (address, id, allow_http) in [
             ("http://provider.example/dsp", provider, false),
             ("ftp://provider.example/dsp", provider, true),

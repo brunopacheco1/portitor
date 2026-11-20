@@ -1090,19 +1090,66 @@ async fn a_redirect_is_not_followed() {
     assert!(seen_elsewhere.lock().unwrap().authorizations.is_empty());
 }
 
-/// What the code does today, written down (a question for the
-/// maintainer, not a rule of DSP): the catalog's `participantId` is not
-/// compared with `counterPartyId`. The token is made for
-/// `counterPartyId`, so a provider with another identity normally
-/// refuses it (401, then 502 here); one that answers anyway is believed.
+/// The catalog must be that of the provider that was asked: its
+/// `participantId` is the `counterPartyId` of the request. The token is
+/// made for `counterPartyId`, so a provider with another identity
+/// normally refuses it (401, then 502 here); one that answers anyway is
+/// not believed, and its catalog is not handed on.
 #[tokio::test]
-async fn a_catalog_that_names_another_participant_is_returned_as_it_is() {
+async fn a_catalog_that_names_another_participant_is_a_bad_gateway() {
     let mut catalog = played_catalog();
     catalog["participantId"] = json!("did:web:someone-else.example");
     let response = ok_response("", catalog.to_string().as_bytes());
     let answer = catalog_of_raw_provider(response).await;
+    let detail = problem_detail(&answer, StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        detail,
+        format!(
+            "the provider's answer is the catalog of another participant: its participantId is \"did:web:someone-else.example\", not the counterPartyId \"{PROVIDER_DID}\""
+        )
+    );
+    // nothing of the catalog is in the answer
+    assert!(answer.body.get("dataset").is_none(), "{}", answer.body);
+}
+
+/// DSP 2025-1 requires `participantId` of a catalog
+/// (`catalog-schema.json`, `RootCatalog`): one without it, or with one
+/// that is not a text, is not a Catalog.
+#[tokio::test]
+async fn a_catalog_without_a_participant_id_is_a_bad_gateway() {
+    let mut catalog = played_catalog();
+    catalog.as_object_mut().unwrap().remove("participantId");
+    let response = ok_response("", catalog.to_string().as_bytes());
+    let answer = catalog_of_raw_provider(response).await;
+    let detail = problem_detail(&answer, StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        detail,
+        "the provider's answer is not a DSP 2025-1 Catalog (it has no participantId)"
+    );
+
+    let mut catalog = played_catalog();
+    catalog["participantId"] = json!({"@id": PROVIDER_DID});
+    let response = ok_response("", catalog.to_string().as_bytes());
+    let answer = catalog_of_raw_provider(response).await;
+    let detail = problem_detail(&answer, StatusCode::BAD_GATEWAY);
+    assert!(detail.contains("a text participantId"), "{detail}");
+}
+
+/// The catalog that names the provider asked is handed on, and a
+/// dataset needs no `participantId`: the DSP 2025-1 schema of a dataset
+/// has none.
+#[tokio::test]
+async fn a_catalog_of_the_provider_asked_and_a_dataset_are_returned() {
+    let (base, _) = played_provider().await;
+    let app = consumer_over_http(true);
+    let address = format!("{base}/whole");
+    let answer = post(&app, "/v1/catalog/request", &catalog_request(&address)).await;
     assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
-    assert_eq!(answer.body["participantId"], "did:web:someone-else.example");
+    assert_eq!(answer.body["participantId"], PROVIDER_DID);
+    let request = dataset_request(&address, "urn:uuid:dataset-1");
+    let answer = post(&app, "/v1/catalog/dataset/request", &request).await;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    assert!(answer.body.get("participantId").is_none());
 }
 
 /// The address is used as written: a path stays, slashes at the end go,

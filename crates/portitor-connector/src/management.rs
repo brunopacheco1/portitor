@@ -134,7 +134,8 @@ pub struct CatalogRequest {
     #[schema(example = "https://provider.example/dsp/2025-1")]
     counter_party_address: String,
     /// The provider's participant id: a `did:web` DID, the
-    /// `counterPartyId` of a negotiation. Our token is made for it.
+    /// `counterPartyId` of a negotiation. Our token is made for it, and
+    /// the catalog must name it as its `participantId`.
     #[schema(example = "did:web:provider.example")]
     counter_party_id: String,
     /// `dataspace-protocol-http:2025-1`. Exactly one of `protocol` and
@@ -301,7 +302,10 @@ fn provider_error(error: &HttpError) -> String {
 /// most 30 seconds); nothing is stored.
 ///
 /// The answer is the provider's JSON as it came. At most 16 MiB are
-/// read. If the provider sends its catalog in pages (DSP 2025-1, "Catalog
+/// read. The catalog's `participantId` must be the `counterPartyId` of
+/// the request: the catalog of another participant, or one without a
+/// `participantId` (DSP 2025-1 requires it), is answered with 502 and
+/// not handed on. If the provider sends its catalog in pages (DSP 2025-1, "Catalog
 /// HTTPS Binding", "Pagination"), this is the first page only, and the
 /// provider's `Link` headers are copied to the answer.
 #[utoipa::path(
@@ -314,7 +318,7 @@ fn provider_error(error: &HttpError) -> String {
         (status = 400, description = "Invalid request, a protocol other than dataspace-protocol-http:2025-1, a querySpec, or an address that is not an https URL", body = Problem, content_type = "application/problem+json"),
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
         (status = 403, description = FORBIDDEN, body = Problem, content_type = "application/problem+json"),
-        (status = 502, description = "No catalog: the provider refused (the detail has its HTTP status), did not answer, answered with more than 16 MiB or with something that is not a Catalog, or the identity component gave no token", body = Problem, content_type = "application/problem+json"),
+        (status = 502, description = "No catalog: the provider refused (the detail has its HTTP status), did not answer, answered with more than 16 MiB or with something that is not a Catalog, answered with a Catalog whose participantId is not the counterPartyId of the request (or that has none), or the identity component gave no token", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = [])),
     tag = "Catalog"

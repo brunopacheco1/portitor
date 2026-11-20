@@ -206,7 +206,7 @@
           "Catalog"
         ],
         "summary": "Read a provider's catalog (DSP 2025-1 `Catalog`): the datasets it\noffers, each with its offers (`hasPolicy`). The connector asks the\nprovider with its own DCP token and waits for the answer (one try, at\nmost 30 seconds); nothing is stored.",
-        "description": "The answer is the provider's JSON as it came. At most 16 MiB are\nread. If the provider sends its catalog in pages (DSP 2025-1, \"Catalog\nHTTPS Binding\", \"Pagination\"), this is the first page only, and the\nprovider's `Link` headers are copied to the answer.",
+        "description": "The answer is the provider's JSON as it came. At most 16 MiB are\nread. The catalog's `participantId` must be the `counterPartyId` of\nthe request: the catalog of another participant, or one without a\n`participantId` (DSP 2025-1 requires it), is answered with 502 and\nnot handed on. If the provider sends its catalog in pages (DSP 2025-1, \"Catalog\nHTTPS Binding\", \"Pagination\"), this is the first page only, and the\nprovider's `Link` headers are copied to the answer.",
         "operationId": "request_catalog",
         "requestBody": {
           "content": {
@@ -268,7 +268,7 @@
             }
           },
           "502": {
-            "description": "No catalog: the provider refused (the detail has its HTTP status), did not answer, answered with more than 16 MiB or with something that is not a Catalog, or the identity component gave no token",
+            "description": "No catalog: the provider refused (the detail has its HTTP status), did not answer, answered with more than 16 MiB or with something that is not a Catalog, answered with a Catalog whose participantId is not the counterPartyId of the request (or that has none), or the identity component gave no token",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1062,7 +1062,7 @@
           },
           "counterPartyId": {
             "type": "string",
-            "description": "The provider's participant id: a `did:web` DID, the\n`counterPartyId` of a negotiation. Our token is made for it.",
+            "description": "The provider's participant id: a `did:web` DID, the\n`counterPartyId` of a negotiation. Our token is made for it, and\nthe catalog must name it as its `participantId`.",
             "example": "did:web:provider.example"
           },
           "profile": {
