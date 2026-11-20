@@ -1018,7 +1018,7 @@
     "schemas": {
       "CatalogRequest": {
         "type": "object",
-        "description": "Ask a provider for its catalog.\n\nThe body is the `CatalogRequest` of Eclipse EDC's management API v4\n(EDC v1.0.0-RC8: `catalog-request-schema.json` in\n`management-api-schema-validator`, `CatalogRequest.java` and\n`CatalogRequestValidator.java`), so a client written for EDC can send\nthe same body. What Portitor does with each member:\n\n- `counterPartyAddress`, `counterPartyId`: required, as in EDC. They\n  are the `providerAddress` and `providerId` of a negotiation.\n- `protocol` or `profile` (EDC's newer name for it): exactly one is\n  required, as in EDC's schema, and it must be\n  `dataspace-protocol-http:2025-1`, the only protocol this\n  connector speaks. Any other value is refused with 400.\n- `additionalScopes`: optional, honoured as in EDC: the scopes are\n  added to the configured ones in the token for the provider.\n- `querySpec`: refused with 400 when present. EDC sends it to the\n  provider as the `filter` of the `CatalogRequestMessage`; DSP 2025-1\n  leaves the content of `filter` to each implementation, and a\n  provider that does not support it must refuse the request, as\n  Portitor's own provider side does. Portitor always asks for the\n  whole catalog.\n- `@context`: optional and not read. EDC requires it (its bodies are\n  JSON-LD); Portitor reads the member names as written.\n- `@type`: optional; when present it must be `CatalogRequest`.\n- Any other member (EDC's schema also lists `@id`, which EDC does\n  not use) is refused with 400, as on every management call.",
+        "description": "Ask a provider for its catalog.\n\nThe body is the `CatalogRequest` of Eclipse EDC's management API v4\n(EDC v1.0.0-RC8: `catalog-request-schema.json` in\n`management-api-schema-validator`, `CatalogRequest.java` and\n`CatalogRequestValidator.java`), so a client written for EDC can send\nthe same body. What Portitor does with each member:\n\n- `counterPartyAddress`, `counterPartyId`: required, as in EDC. A\n  negotiation (`POST /v1/negotiations`) names the provider with the same\n  two members.\n- `protocol` or `profile` (EDC's newer name for it): exactly one is\n  required, as in EDC's schema, and it must be\n  `dataspace-protocol-http:2025-1`, the only protocol this\n  connector speaks. Any other value is refused with 400.\n- `additionalScopes`: optional, honoured as in EDC: the scopes are\n  added to the configured ones in the token for the provider.\n- `querySpec`: refused with 400 when present. EDC sends it to the\n  provider as the `filter` of the `CatalogRequestMessage`; DSP 2025-1\n  leaves the content of `filter` to each implementation, and a\n  provider that does not support it must refuse the request, as\n  Portitor's own provider side does. Portitor always asks for the\n  whole catalog.\n- `@context`: optional and not read. EDC requires it (its bodies are\n  JSON-LD); Portitor reads the member names as written.\n- `@type`: optional; when present it must be `CatalogRequest`.\n- Any other member (EDC's schema also lists `@id`, which EDC does\n  not use) is refused with 400, as on every management call.",
         "required": [
           "counterPartyAddress",
           "counterPartyId"
@@ -1057,12 +1057,12 @@
           },
           "counterPartyAddress": {
             "type": "string",
-            "description": "The provider's DSP endpoint, for example\n`https://provider.example/dsp/2025-1`: the `providerAddress` of a\nnegotiation. The catalog is read at\n`<counterPartyAddress>/catalog/request`.",
+            "description": "The provider's DSP endpoint, for example\n`https://provider.example/dsp/2025-1`: the `counterPartyAddress`\nof a negotiation. The catalog is read at\n`<counterPartyAddress>/catalog/request`.",
             "example": "https://provider.example/dsp/2025-1"
           },
           "counterPartyId": {
             "type": "string",
-            "description": "The provider's participant id: a `did:web` DID, the `providerId`\nof a negotiation. Our token is made for it.",
+            "description": "The provider's participant id: a `did:web` DID, the\n`counterPartyId` of a negotiation. Our token is made for it.",
             "example": "did:web:provider.example"
           },
           "profile": {
@@ -1463,8 +1463,8 @@
         "required": [
           "consumerPid",
           "state",
-          "providerAddress",
-          "providerId",
+          "counterPartyAddress",
+          "counterPartyId",
           "offer"
         ],
         "properties": {
@@ -1479,17 +1479,17 @@
             "type": "string",
             "description": "Our process id."
           },
+          "counterPartyAddress": {
+            "type": "string",
+            "description": "The other party's DSP endpoint: the provider's, as this connector\nis the consumer of every negotiation it lists."
+          },
+          "counterPartyId": {
+            "type": "string",
+            "description": "The other party's participant id: the provider's."
+          },
           "offer": {
             "type": "object",
             "description": "The latest offer (DSP 2025-1 `Offer`)."
-          },
-          "providerAddress": {
-            "type": "string",
-            "description": "The provider's DSP endpoint."
-          },
-          "providerId": {
-            "type": "string",
-            "description": "The provider's participant id."
           },
           "providerPid": {
             "type": [
@@ -1532,13 +1532,23 @@
       },
       "StartNegotiation": {
         "type": "object",
-        "description": "Start a negotiation as consumer.",
+        "description": "Start a negotiation as consumer.\n\nThe other party is named as in the catalog calls and as Eclipse EDC\nnames it: `counterPartyAddress` and `counterPartyId` (before 0.13:\n`providerAddress` and `providerId`, which are now refused as unknown\nmembers). EDC's `ContractRequest` and `TransferRequest` carry only\n`counterPartyAddress` (EDC v1.0.0-RC8, `ContractRequest.java`,\n`TransferRequest.java`); `counterPartyId` is the name of EDC's\n`CatalogRequest` and of its `ContractNegotiation` view, and Portitor\nrequires it here, because its token is made for that participant.",
         "required": [
-          "providerAddress",
-          "providerId",
+          "counterPartyAddress",
+          "counterPartyId",
           "offer"
         ],
         "properties": {
+          "counterPartyAddress": {
+            "type": "string",
+            "description": "The provider's DSP endpoint, for example\n`https://provider.example/dsp/2025-1` (the catalog's\n`DataService` `endpointURL`).",
+            "example": "https://provider.example/dsp/2025-1"
+          },
+          "counterPartyId": {
+            "type": "string",
+            "description": "The provider's participant id (the catalog's `participantId`): a\n`did:web` DID. Our DSP requests are tokens for it, and only it may\nanswer.",
+            "example": "did:web:provider.example"
+          },
           "datasetId": {
             "type": [
               "string",
@@ -1550,16 +1560,6 @@
           "offer": {
             "type": "object",
             "description": "The offer from the provider's catalog (a DSP 2025-1 `Offer`), copied\nunchanged from the dataset's `hasPolicy`."
-          },
-          "providerAddress": {
-            "type": "string",
-            "description": "The provider's DSP endpoint, for example\n`https://provider.example/dsp/2025-1` (the catalog's\n`DataService` `endpointURL`).",
-            "example": "https://provider.example/dsp/2025-1"
-          },
-          "providerId": {
-            "type": "string",
-            "description": "The provider's participant id (the catalog's `participantId`): a\n`did:web` DID. Our DSP requests are tokens for it, and only it may\nanswer.",
-            "example": "did:web:provider.example"
           }
         },
         "additionalProperties": false
@@ -1613,8 +1613,8 @@
         "required": [
           "consumerPid",
           "state",
-          "providerAddress",
-          "providerId",
+          "counterPartyAddress",
+          "counterPartyId",
           "agreementId",
           "format"
         ],
@@ -1627,6 +1627,14 @@
             "type": "string",
             "description": "Our process id."
           },
+          "counterPartyAddress": {
+            "type": "string",
+            "description": "The other party's DSP endpoint: the provider's, as this connector\nis the consumer of every transfer it lists."
+          },
+          "counterPartyId": {
+            "type": "string",
+            "description": "The other party's participant id: the provider's."
+          },
           "dataAddress": {
             "type": [
               "object",
@@ -1637,14 +1645,6 @@
           "format": {
             "type": "string",
             "description": "The format asked for."
-          },
-          "providerAddress": {
-            "type": "string",
-            "description": "The provider's DSP endpoint."
-          },
-          "providerId": {
-            "type": "string",
-            "description": "The provider's participant id."
           },
           "providerPid": {
             "type": [

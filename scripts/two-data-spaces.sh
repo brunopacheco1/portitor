@@ -168,7 +168,7 @@ exchange() { # label consumer-connector consumer-management consumer-identity co
   [[ $(jq -r '.participantId' "$WORK/catalog.json") == "$provider_did" ]] || fail "$label: other participant"
   offer=$(jq -c '.dataset[] | select(.["@id"] == "weather-stations") | .hasPolicy[0]' "$WORK/catalog.json")
   body=$(jq -nc --arg addr "http://$provider/dsp/2025-1" --arg id "$provider_did" --argjson offer "$offer" \
-    '{providerAddress: $addr, providerId: $id, datasetId: "weather-stations", offer: $offer}')
+    '{counterPartyAddress: $addr, counterPartyId: $id, datasetId: "weather-stations", offer: $offer}')
   pid=$(api "$connector" "$management" POST /v1/negotiations "$body" | jq -r '.consumerPid') || fail "$label: start"
   view=$(until_state "$connector" "$management" "/v1/negotiations/$pid" 'FINALIZED|TERMINATED')
   [[ $(jq -r '.state' <<<"$view") == FINALIZED ]] || fail "$label: negotiation $(jq -c . <<<"$view")"

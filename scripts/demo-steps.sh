@@ -189,7 +189,7 @@ negotiate() { # dataset offer -> prints the ended negotiation
   local body pid
   body=$(jq -nc --arg addr "$PROVIDER/$DSP" --arg id "$PROVIDER_ID" --argjson offer "$offer" \
     --arg dataset "$dataset" \
-    '{providerAddress: $addr, providerId: $id, datasetId: $dataset, offer: $offer}')
+    '{counterPartyAddress: $addr, counterPartyId: $id, datasetId: $dataset, offer: $offer}')
   pid=$(api POST /v1/negotiations "$body" | jq -r '.consumerPid') || fail "start negotiation"
   until_state "/v1/negotiations/$pid" 'FINALIZED|TERMINATED'
 }

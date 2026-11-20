@@ -93,8 +93,9 @@ pub const DSP_HTTP_2025_1: &str = "dataspace-protocol-http:2025-1";
 /// `CatalogRequestValidator.java`), so a client written for EDC can send
 /// the same body. What Portitor does with each member:
 ///
-/// - `counterPartyAddress`, `counterPartyId`: required, as in EDC. They
-///   are the `providerAddress` and `providerId` of a negotiation.
+/// - `counterPartyAddress`, `counterPartyId`: required, as in EDC. A
+///   negotiation (`POST /v1/negotiations`) names the provider with the same
+///   two members.
 /// - `protocol` or `profile` (EDC's newer name for it): exactly one is
 ///   required, as in EDC's schema, and it must be
 ///   `dataspace-protocol-http:2025-1`, the only protocol this
@@ -127,13 +128,13 @@ pub struct CatalogRequest {
     #[schema(example = "CatalogRequest")]
     kind: Option<String>,
     /// The provider's DSP endpoint, for example
-    /// `https://provider.example/dsp/2025-1`: the `providerAddress` of a
-    /// negotiation. The catalog is read at
+    /// `https://provider.example/dsp/2025-1`: the `counterPartyAddress`
+    /// of a negotiation. The catalog is read at
     /// `<counterPartyAddress>/catalog/request`.
     #[schema(example = "https://provider.example/dsp/2025-1")]
     counter_party_address: String,
-    /// The provider's participant id: a `did:web` DID, the `providerId`
-    /// of a negotiation. Our token is made for it.
+    /// The provider's participant id: a `did:web` DID, the
+    /// `counterPartyId` of a negotiation. Our token is made for it.
     #[schema(example = "did:web:provider.example")]
     counter_party_id: String,
     /// `dataspace-protocol-http:2025-1`. Exactly one of `protocol` and
@@ -394,6 +395,15 @@ async fn request_dataset(
 }
 
 /// Start a negotiation as consumer.
+///
+/// The other party is named as in the catalog calls and as Eclipse EDC
+/// names it: `counterPartyAddress` and `counterPartyId` (before 0.13:
+/// `providerAddress` and `providerId`, which are now refused as unknown
+/// members). EDC's `ContractRequest` and `TransferRequest` carry only
+/// `counterPartyAddress` (EDC v1.0.0-RC8, `ContractRequest.java`,
+/// `TransferRequest.java`); `counterPartyId` is the name of EDC's
+/// `CatalogRequest` and of its `ContractNegotiation` view, and Portitor
+/// requires it here, because its token is made for that participant.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartNegotiation {
@@ -401,12 +411,12 @@ pub struct StartNegotiation {
     /// `https://provider.example/dsp/2025-1` (the catalog's
     /// `DataService` `endpointURL`).
     #[schema(example = "https://provider.example/dsp/2025-1")]
-    provider_address: String,
+    counter_party_address: String,
     /// The provider's participant id (the catalog's `participantId`): a
     /// `did:web` DID. Our DSP requests are tokens for it, and only it may
     /// answer.
     #[schema(example = "did:web:provider.example")]
-    provider_id: String,
+    counter_party_id: String,
     /// The dataset id. Optional if the offer has a `target`; offers in a
     /// catalog have none, as the dataset holds them.
     #[schema(example = "urn:uuid:dataset-1")]
@@ -431,10 +441,11 @@ pub struct NegotiationView {
     /// The DSP state, for example `REQUESTED` or `FINALIZED`.
     #[schema(example = "FINALIZED")]
     state: String,
-    /// The provider's DSP endpoint.
-    provider_address: String,
-    /// The provider's participant id.
-    provider_id: String,
+    /// The other party's DSP endpoint: the provider's, as this connector
+    /// is the consumer of every negotiation it lists.
+    counter_party_address: String,
+    /// The other party's participant id: the provider's.
+    counter_party_id: String,
     /// The latest offer (DSP 2025-1 `Offer`).
     #[schema(value_type = Object)]
     offer: Value,
@@ -456,8 +467,8 @@ impl From<ConsumerNegotiation> for NegotiationView {
                 .and_then(|a| serde_json::to_value(a).ok()),
             consumer_pid: negotiation.consumer_pid,
             provider_pid: negotiation.provider_pid,
-            provider_address: negotiation.provider_address,
-            provider_id: negotiation.provider_id,
+            counter_party_address: negotiation.provider_address,
+            counter_party_id: negotiation.provider_id,
         }
     }
 }
@@ -516,11 +527,11 @@ async fn start(
         (None, d) => req.offer.target = d,
         _ => {}
     }
-    if let Err(e) = portitor_dcp::did_web_url(&req.provider_id) {
-        let detail = format!("providerId must be a did:web DID: {e}");
+    if let Err(e) = portitor_dcp::did_web_url(&req.counter_party_id) {
+        let detail = format!("counterPartyId must be a did:web DID: {e}");
         return problem(StatusCode::BAD_REQUEST, &detail);
     }
-    match negotiator.start(&req.provider_address, &req.provider_id, req.offer) {
+    match negotiator.start(&req.counter_party_address, &req.counter_party_id, req.offer) {
         Ok(started) => (StatusCode::CREATED, Json(NegotiationView::from(started))).into_response(),
         Err(f) => failed(&f),
     }
@@ -617,10 +628,11 @@ pub struct TransferView {
     /// The DSP state, for example `REQUESTED` or `STARTED`.
     #[schema(example = "STARTED")]
     state: String,
-    /// The provider's DSP endpoint.
-    provider_address: String,
-    /// The provider's participant id.
-    provider_id: String,
+    /// The other party's DSP endpoint: the provider's, as this connector
+    /// is the consumer of every transfer it lists.
+    counter_party_address: String,
+    /// The other party's participant id: the provider's.
+    counter_party_id: String,
     /// The agreement the transfer is made under.
     agreement_id: String,
     /// The format asked for.
@@ -645,8 +657,8 @@ impl From<ConsumerTransfer> for TransferView {
                 .and_then(|a| serde_json::to_value(a).ok()),
             consumer_pid: transfer.consumer_pid,
             provider_pid: transfer.provider_pid,
-            provider_address: transfer.provider_address,
-            provider_id: transfer.provider_id,
+            counter_party_address: transfer.provider_address,
+            counter_party_id: transfer.provider_id,
             agreement_id: transfer.agreement_id,
             format: transfer.format,
         }

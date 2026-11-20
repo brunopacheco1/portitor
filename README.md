@@ -255,7 +255,7 @@ can send the same body:
 
 | Member | What Portitor does with it |
 |---|---|
-| `counterPartyAddress`, `counterPartyId` | Required. The provider's DSP endpoint and its `did:web` DID: the `providerAddress` and `providerId` of a negotiation |
+| `counterPartyAddress`, `counterPartyId` | Required. The provider's DSP endpoint and its `did:web` DID, as in a negotiation |
 | `protocol`, or `profile` (EDC's newer name) | Exactly one is required, and it must be `dataspace-protocol-http:2025-1`, the only protocol the connector speaks; anything else gets 400 |
 | `additionalScopes` | Optional. Scopes added to the configured ones (`PORTITOR_DCP_SCOPES`) in the token for the provider, for datasets it shows only to holders of a credential |
 | `querySpec` | Refused with 400. EDC sends it as the `filter` of the DSP request; DSP leaves its content to each implementation, and the connector always asks for the whole catalog |
@@ -276,8 +276,8 @@ provider agrees only to the catalog's terms, see above):
 ```sh
 curl -s -X POST localhost:8081/v1/negotiations \
   -H "authorization: Bearer $(cat key)" -H 'content-type: application/json' -d '{
-  "providerAddress": "https://provider.example/dsp/2025-1",
-  "providerId": "did:web:provider.example",
+  "counterPartyAddress": "https://provider.example/dsp/2025-1",
+  "counterPartyId": "did:web:provider.example",
   "datasetId": "air-quality",
   "offer": {"@id": "air-quality:offer:until-2030", "@type": "Offer",
             "permission": [{"action": "use", "constraint": [{"leftOperand": "dateTime",

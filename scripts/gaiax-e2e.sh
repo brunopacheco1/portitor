@@ -252,7 +252,7 @@ negotiate() { # name: the participant negotiates the offer; prints the ended neg
   local name=$1 pid view state=
   pid=$(connector_api "$name" POST /v1/negotiations "$(jq -nc --arg addr "$PROVIDER_DSP_INSIDE" \
     --arg id "$PROVIDER_DID" --arg dataset "$DATASET" --argjson offer "$OFFER" \
-    '{providerAddress: $addr, providerId: $id, datasetId: $dataset, offer: $offer}')" |
+    '{counterPartyAddress: $addr, counterPartyId: $id, datasetId: $dataset, offer: $offer}')" |
     jq -r '.consumerPid') || fail "the $name starts the negotiation"
   for _ in $(seq 1 120); do
     view=$(connector_api "$name" GET "/v1/negotiations/$pid") || fail "read the $name's negotiation"

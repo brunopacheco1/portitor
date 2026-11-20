@@ -16,8 +16,8 @@ headers {
 
 body:json {
   {
-    "providerAddress": "{{dsp}}",
-    "providerId": "{{providerId}}",
+    "counterPartyAddress": "{{dsp}}",
+    "counterPartyId": "{{counterPartyId}}",
     "datasetId": "{{datasetId}}",
     "offer": {
       "@id": "{{offerId}}",
@@ -40,9 +40,9 @@ assert {
 docs {
   Use the "two-connectors" environment (docs/TESTING.md, Two connectors).
   This is the consumer's management API, not the DSP endpoint POST /negotiations/request:
-  the body is a StartNegotiation (providerAddress, providerId, datasetId, offer), not a
+  the body is a StartNegotiation (counterPartyAddress, counterPartyId, datasetId, offer), not a
   ContractRequestMessage. The connector sends the DSP message to the provider in the
   background. The answer is 201 with the negotiation as the connector sees it
-  (consumerPid, state REQUESTED, providerAddress, providerId, offer).
+  (consumerPid, state REQUESTED, counterPartyAddress, counterPartyId, offer).
   The offer must be copied from the provider's catalog. Saves mgmtNegotiationConsumerPid.
 }

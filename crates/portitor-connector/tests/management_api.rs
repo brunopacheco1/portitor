@@ -79,8 +79,8 @@ fn authed(req: axum::http::request::Builder) -> axum::http::request::Builder {
 
 fn start_body(dataset: &str) -> Value {
     json!({
-        "providerAddress": "https://provider.example/dsp/2025-1",
-        "providerId": "did:web:provider.example",
+        "counterPartyAddress": "https://provider.example/dsp/2025-1",
+        "counterPartyId": "did:web:provider.example",
         "offer": {"@id": format!("{dataset}:offer"), "@type": "Offer", "target": dataset,
                   "permission": [{"action": "use"}]}
     })
@@ -161,7 +161,7 @@ async fn start_read_and_page() {
     let (s, _, n) = call(&app, get(&format!("/v1/negotiations/{}", pids[0]))).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(n["consumerPid"], pids[0].as_str());
-    assert_eq!(n["providerId"], "did:web:provider.example");
+    assert_eq!(n["counterPartyId"], "did:web:provider.example");
 
     let (s, ct, _) = call(&app, get("/v1/negotiations/unknown")).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
@@ -202,7 +202,7 @@ async fn start_read_and_page() {
 async fn bad_requests_are_problems() {
     let app = app();
     let mut http = start_body("d");
-    http["providerAddress"] = json!("http://provider.example/dsp/2025-1");
+    http["counterPartyAddress"] = json!("http://provider.example/dsp/2025-1");
     let mut no_target = start_body("d");
     no_target["offer"].as_object_mut().unwrap().remove("target");
     let mut extra = start_body("d");
@@ -210,7 +210,21 @@ async fn bad_requests_are_problems() {
     let mut differ = start_body("d");
     differ["datasetId"] = json!("other");
     let mut not_a_did = start_body("d");
-    not_a_did["providerId"] = json!("provider");
+    not_a_did["counterPartyId"] = json!("provider");
+    // the names before 0.13 are unknown members now: no alias
+    let mut old_names = start_body("d");
+    let fields = old_names.as_object_mut().unwrap();
+    let address = fields.remove("counterPartyAddress").unwrap();
+    let id = fields.remove("counterPartyId").unwrap();
+    fields.insert("providerAddress".to_owned(), address);
+    fields.insert("providerId".to_owned(), id);
+    let (status, _, problem) = call(&app, start(&old_names)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let detail = problem["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("unknown field `providerAddress`"),
+        "{detail}"
+    );
     for body in [http, no_target, extra, differ, not_a_did, json!({})] {
         let (s, ct, p) = call(&app, start(&body)).await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{body}");

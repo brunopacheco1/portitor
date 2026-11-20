@@ -482,7 +482,7 @@ until_state() { # api path states (regex): prints the record once in one of them
 step "Portitor negotiates the EDC offer"
 PID=$(portitor POST /v1/negotiations "$(jq -nc --arg addr "$EDC_DSP_INSIDE" \
   --arg id "$EDC_DID" --argjson offer "$EDC_OFFER" \
-  '{providerAddress: $addr, providerId: $id, datasetId: "edc-interop", offer: $offer}')" |
+  '{counterPartyAddress: $addr, counterPartyId: $id, datasetId: "edc-interop", offer: $offer}')" |
   jq -r '.consumerPid') || fail "start the negotiation"
 VIEW=$(until_state portitor "/v1/negotiations/$PID" 'FINALIZED|TERMINATED')
 [[ $(jq -r "$STATE_PATH" <<<"$VIEW") == FINALIZED ]] || fail "expected FINALIZED: $VIEW"
