@@ -8,7 +8,10 @@
 //! on its own port (`PORTITOR_MANAGEMENT_BIND`), never on the DSP port, and
 //! every call needs the API key (`Authorization: Bearer <key>`).
 //!
-//! Its `OpenAPI` description is generated from the handlers below (utoipa)
+//! The two catalog calls are in the module `catalog`; the others are
+//! below.
+//!
+//! Its `OpenAPI` description is generated from the handlers (utoipa)
 //! and served at `GET /v1/openapi.json`; `docs/api/management-openapi.json`
 //! is a copy that a test keeps in step.
 //!
@@ -33,13 +36,17 @@ use serde_json::Value;
 use utoipa::{IntoParams, OpenApi, ToSchema};
 
 use crate::Negotiator;
-use crate::catalog_reader::{MAX_CATALOG_ANSWER, ProviderAnswer, ReadFailure};
 use crate::harvest::{EntryError, HarvestJob};
-use crate::http_client::HttpError;
 use crate::system::xsd_date_time;
 pub use portitor_runtime::api_key::{ApiKey, MIN_KEY_LEN, Problem, problem, require_key};
 use portitor_runtime::api_key::{BearerKey, internal_error};
 use portitor_runtime::health;
+
+mod catalog;
+
+/// The one value of `protocol` (or `profile`) the catalog calls take.
+pub use catalog::DSP_HTTP_2025_1;
+pub use catalog::{CatalogRequest, DatasetRequest};
 
 /// Where the management port listens unless `PORTITOR_MANAGEMENT_BIND`
 /// says otherwise: on this machine only.
@@ -77,326 +84,6 @@ fn transfer_failed(failure: &TransferFailure) -> Response {
         TransferFailure::Store(e) => internal_error("transfer store", e),
         TransferFailure::DataPlane(e) => internal_error("data plane", e),
     }
-}
-
-/// The one value of `protocol` (or `profile`) this connector takes: DSP
-/// 2025-1 over HTTPS, as Eclipse EDC names it (`dataspace-protocol-http`
-/// in `HttpMessageProtocol.java`, then `:` and the profile, in
-/// `DataspaceProfileContext.java`; EDC v1.0.0-RC8).
-pub const DSP_HTTP_2025_1: &str = "dataspace-protocol-http:2025-1";
-
-/// Ask a provider for its catalog.
-///
-/// The body is the `CatalogRequest` of Eclipse EDC's management API v4
-/// (EDC v1.0.0-RC8: `catalog-request-schema.json` in
-/// `management-api-schema-validator`, `CatalogRequest.java` and
-/// `CatalogRequestValidator.java`), so a client written for EDC can send
-/// the same body. What Portitor does with each member:
-///
-/// - `counterPartyAddress`, `counterPartyId`: required, as in EDC. A
-///   negotiation (`POST /v1/negotiations`) names the provider with the same
-///   two members.
-/// - `protocol` or `profile` (EDC's newer name for it): exactly one is
-///   required, as in EDC's schema, and it must be
-///   `dataspace-protocol-http:2025-1`, the only protocol this
-///   connector speaks. Any other value is refused with 400.
-/// - `additionalScopes`: optional, honoured as in EDC: the scopes are
-///   added to the configured ones in the token for the provider.
-/// - `querySpec`: refused with 400 when present. EDC sends it to the
-///   provider as the `filter` of the `CatalogRequestMessage`; DSP 2025-1
-///   leaves the content of `filter` to each implementation, and a
-///   provider that does not support it must refuse the request, as
-///   Portitor's own provider side does. Portitor always asks for the
-///   whole catalog.
-/// - `@context`: optional and not read. EDC requires it (its bodies are
-///   JSON-LD); Portitor reads the member names as written.
-/// - `@type`: optional; when present it must be `CatalogRequest`.
-/// - Any other member (EDC's schema also lists `@id`, which EDC does
-///   not use) is refused with 400, as on every management call.
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CatalogRequest {
-    /// Accepted so that a body written for Eclipse EDC works unchanged;
-    /// not read.
-    #[serde(rename = "@context")]
-    #[schema(value_type = Option<Vec<String>>, example = json!(["https://w3id.org/edc/connector/management/v2"]))]
-    // `IgnoredAny` takes any JSON value and keeps nothing of it; the
-    // leading `_` says the field is never read
-    _context: Option<serde::de::IgnoredAny>,
-    /// `CatalogRequest`, when present.
-    #[serde(rename = "@type")]
-    #[schema(example = "CatalogRequest")]
-    kind: Option<String>,
-    /// The provider's DSP endpoint, for example
-    /// `https://provider.example/dsp/2025-1`: the `counterPartyAddress`
-    /// of a negotiation. The catalog is read at
-    /// `<counterPartyAddress>/catalog/request`.
-    #[schema(example = "https://provider.example/dsp/2025-1")]
-    counter_party_address: String,
-    /// The provider's participant id: a `did:web` DID, the
-    /// `counterPartyId` of a negotiation. Our token is made for it, and
-    /// the catalog must name it as its `participantId`.
-    #[schema(example = "did:web:provider.example")]
-    counter_party_id: String,
-    /// `dataspace-protocol-http:2025-1`. Exactly one of `protocol` and
-    /// `profile` is required.
-    #[schema(example = "dataspace-protocol-http:2025-1")]
-    protocol: Option<String>,
-    /// Eclipse EDC's newer name for `protocol`; the same value.
-    profile: Option<String>,
-    /// Scopes the provider may read from our Credential Service with our
-    /// token, on top of the configured ones (`PORTITOR_DCP_SCOPES`): for
-    /// datasets a provider shows only to holders of a credential.
-    #[serde(default)]
-    #[schema(example = json!(["org.eclipse.dspace.dcp.vc.type:MembershipCredential:read"]))]
-    additional_scopes: Vec<String>,
-    /// Not supported: a request with a `querySpec` is refused with 400.
-    /// The whole catalog is always asked for.
-    #[schema(value_type = Option<Object>)]
-    // only whether it is there matters (`null` reads as left out)
-    query_spec: Option<serde::de::IgnoredAny>,
-}
-
-/// Ask a provider for one dataset.
-///
-/// The body is the `DatasetRequest` of Eclipse EDC's management API v4
-/// (EDC v1.0.0-RC8: `dataset-request-schema.json`, `DatasetRequest.java`
-/// and `DatasetRequestValidator.java`). `@id` (the dataset's id),
-/// `counterPartyAddress` and `counterPartyId` are required, and exactly
-/// one of `protocol` and `profile`; all are read as in
-/// [`CatalogRequest`]. EDC's `DatasetRequest` has no `querySpec` and no
-/// `additionalScopes`, so neither is taken here.
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DatasetRequest {
-    /// Accepted so that a body written for Eclipse EDC works unchanged;
-    /// not read.
-    #[serde(rename = "@context")]
-    #[schema(value_type = Option<Vec<String>>, example = json!(["https://w3id.org/edc/connector/management/v2"]))]
-    // `IgnoredAny` takes any JSON value and keeps nothing of it; the
-    // leading `_` says the field is never read
-    _context: Option<serde::de::IgnoredAny>,
-    /// `DatasetRequest`, when present.
-    #[serde(rename = "@type")]
-    #[schema(example = "DatasetRequest")]
-    kind: Option<String>,
-    /// The dataset's `@id` in the provider's catalog.
-    #[serde(rename = "@id")]
-    #[schema(example = "urn:uuid:dataset-1")]
-    id: String,
-    /// The provider's DSP endpoint. The dataset is read at
-    /// `<counterPartyAddress>/catalog/datasets/<@id>`.
-    #[schema(example = "https://provider.example/dsp/2025-1")]
-    counter_party_address: String,
-    /// The provider's participant id: a `did:web` DID.
-    #[schema(example = "did:web:provider.example")]
-    counter_party_id: String,
-    /// `dataspace-protocol-http:2025-1`. Exactly one of `protocol` and
-    /// `profile` is required.
-    #[schema(example = "dataspace-protocol-http:2025-1")]
-    protocol: Option<String>,
-    /// Eclipse EDC's newer name for `protocol`; the same value.
-    profile: Option<String>,
-}
-
-/// Checks the members that say what kind of request this is: `@type`,
-/// if present, is `expected_type`, and exactly one of `protocol` and
-/// `profile` is there and names DSP 2025-1 over HTTPS.
-///
-/// # Errors
-///
-/// What is wrong, for the 400 answer.
-fn check_kind_and_protocol(
-    kind: Option<&str>,
-    expected_type: &str,
-    protocol: Option<&str>,
-    profile: Option<&str>,
-) -> Result<(), String> {
-    if let Some(kind) = kind
-        && kind != expected_type
-    {
-        return Err(format!("@type must be {expected_type}"));
-    }
-    let named = match (protocol, profile) {
-        (Some(protocol), None) => protocol,
-        (None, Some(profile)) => profile,
-        (Some(_), Some(_)) => return Err("give protocol or profile, not both".to_owned()),
-        (None, None) => {
-            return Err(format!(
-                "protocol (or profile) is required: {DSP_HTTP_2025_1}"
-            ));
-        }
-    };
-    if named == DSP_HTTP_2025_1 {
-        Ok(())
-    } else {
-        Err(format!(
-            "protocol {named} is not supported; this connector speaks {DSP_HTTP_2025_1} only"
-        ))
-    }
-}
-
-/// Checks `additionalScopes`: a scope is one word, as the scopes go to
-/// our STS in one field, separated by spaces (`bearer_access_scope`,
-/// `auth/sts.rs`).
-fn check_scopes(scopes: &[String]) -> Result<(), String> {
-    for scope in scopes {
-        if scope.is_empty() || scope.contains(char::is_whitespace) {
-            return Err("each of additionalScopes must be one word, without spaces".to_owned());
-        }
-    }
-    Ok(())
-}
-
-/// The answer for a provider's catalog or dataset: its JSON as it came
-/// and its `Link` headers (catalog pages), or the problem that says why
-/// there is none.
-fn provider_answer(read: Result<ProviderAnswer, ReadFailure>) -> Response {
-    let answer = match read {
-        Ok(answer) => answer,
-        Err(failure) => return read_failed(&failure),
-    };
-    let mut response = ([(header::CONTENT_TYPE, "application/json")], answer.body).into_response();
-    for link in &answer.links {
-        // a value that cannot be a header (it came as one, so it can) is
-        // left out
-        if let Ok(value) = header::HeaderValue::from_str(link) {
-            response.headers_mut().append(header::LINK, value);
-        }
-    }
-    response
-}
-
-/// 400 for a request that was not sent; 502 (Bad Gateway, as Eclipse EDC
-/// answers: `BaseCatalogApiController.java`) when our identity component
-/// or the provider did not give what was needed.
-fn read_failed(failure: &ReadFailure) -> Response {
-    match failure {
-        ReadFailure::BadRequest(reason) => problem(StatusCode::BAD_REQUEST, reason),
-        ReadFailure::NoToken => problem(
-            StatusCode::BAD_GATEWAY,
-            "no token for the provider from the identity component (STS); the connector's log says why",
-        ),
-        ReadFailure::Provider(error) => problem(StatusCode::BAD_GATEWAY, &provider_error(error)),
-        ReadFailure::NotDsp(reason) => problem(StatusCode::BAD_GATEWAY, reason),
-    }
-}
-
-/// What to tell the caller about a provider that gave no usable answer.
-fn provider_error(error: &HttpError) -> String {
-    match error {
-        HttpError::Status(_) | HttpError::StatusWithBody(_, _) => {
-            format!("the provider answered {error}")
-        }
-        HttpError::NoAnswer(reason) => format!("the provider did not answer: {reason}"),
-        HttpError::NotSent(reason) => format!("the request was not sent: {reason}"),
-        HttpError::BadAnswer(reason) => format!(
-            "the provider's answer cannot be used ({reason}); at most {MAX_CATALOG_ANSWER} bytes are read"
-        ),
-    }
-}
-
-/// Read a provider's catalog (DSP 2025-1 `Catalog`): the datasets it
-/// offers, each with its offers (`hasPolicy`). The connector asks the
-/// provider with its own DCP token and waits for the answer (one try, at
-/// most 30 seconds); nothing is stored.
-///
-/// The answer is the provider's JSON as it came. At most 16 MiB are
-/// read. The catalog's `participantId` must be the `counterPartyId` of
-/// the request: the catalog of another participant, or one without a
-/// `participantId` (DSP 2025-1 requires it), is answered with 502 and
-/// not handed on. If the provider sends its catalog in pages (DSP 2025-1, "Catalog
-/// HTTPS Binding", "Pagination"), this is the first page only, and the
-/// provider's `Link` headers are copied to the answer.
-#[utoipa::path(
-    post,
-    path = "/v1/catalog/request",
-    request_body = CatalogRequest,
-    responses(
-        (status = 200, description = "The provider's catalog (DSP 2025-1 Catalog), as the provider sent it", body = Object, content_type = "application/json",
-            headers(("Link" = String, description = "The provider's Link headers, when it sent its catalog in pages; only this first page is returned"))),
-        (status = 400, description = "Invalid request, a protocol other than dataspace-protocol-http:2025-1, a querySpec, or an address that is not an https URL", body = Problem, content_type = "application/problem+json"),
-        (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
-        (status = 403, description = FORBIDDEN, body = Problem, content_type = "application/problem+json"),
-        (status = 502, description = "No catalog: the provider refused (the detail has its HTTP status), did not answer, answered with more than 16 MiB or with something that is not a Catalog, answered with a Catalog whose participantId is not the counterPartyId of the request (or that has none), or the identity component gave no token", body = Problem, content_type = "application/problem+json"),
-    ),
-    security(("api_key" = [])),
-    tag = "Catalog"
-)]
-async fn request_catalog(
-    State(negotiator): State<Negotiator>,
-    body: Result<Json<CatalogRequest>, JsonRejection>,
-) -> Response {
-    let request = match body {
-        Ok(Json(request)) => request,
-        Err(e) => return problem(StatusCode::BAD_REQUEST, &e.body_text()),
-    };
-    let checked = check_kind_and_protocol(
-        request.kind.as_deref(),
-        "CatalogRequest",
-        request.protocol.as_deref(),
-        request.profile.as_deref(),
-    );
-    if let Err(reason) = checked {
-        return problem(StatusCode::BAD_REQUEST, &reason);
-    }
-    if request.query_spec.is_some() {
-        return problem(
-            StatusCode::BAD_REQUEST,
-            "querySpec is not supported: the whole catalog is always asked for; leave it out",
-        );
-    }
-    if let Err(reason) = check_scopes(&request.additional_scopes) {
-        return problem(StatusCode::BAD_REQUEST, &reason);
-    }
-    let read = negotiator.read_catalog(
-        &request.counter_party_address,
-        &request.counter_party_id,
-        &request.additional_scopes,
-    );
-    provider_answer(read.await)
-}
-
-/// Read one dataset from a provider (DSP 2025-1 `Dataset`), by its
-/// `@id`. Works as `POST /v1/catalog/request` does: the connector's own
-/// DCP token, one try, the provider's JSON as it came.
-#[utoipa::path(
-    post,
-    path = "/v1/catalog/dataset/request",
-    request_body = DatasetRequest,
-    responses(
-        (status = 200, description = "The dataset (DSP 2025-1 Dataset), as the provider sent it", body = Object, content_type = "application/json"),
-        (status = 400, description = "Invalid request, a protocol other than dataspace-protocol-http:2025-1, a dataset id that is \".\" or \"..\", or an address that is not an https URL", body = Problem, content_type = "application/problem+json"),
-        (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
-        (status = 403, description = FORBIDDEN, body = Problem, content_type = "application/problem+json"),
-        (status = 502, description = "No dataset: the provider refused (the detail has its HTTP status; 404 for a dataset it does not have or does not show us), did not answer, answered with something that is not a JSON object or whose @type is not Dataset (a dataset without @type is accepted), or the identity component gave no token", body = Problem, content_type = "application/problem+json"),
-    ),
-    security(("api_key" = [])),
-    tag = "Catalog"
-)]
-async fn request_dataset(
-    State(negotiator): State<Negotiator>,
-    body: Result<Json<DatasetRequest>, JsonRejection>,
-) -> Response {
-    let request = match body {
-        Ok(Json(request)) => request,
-        Err(e) => return problem(StatusCode::BAD_REQUEST, &e.body_text()),
-    };
-    let checked = check_kind_and_protocol(
-        request.kind.as_deref(),
-        "DatasetRequest",
-        request.protocol.as_deref(),
-        request.profile.as_deref(),
-    );
-    if let Err(reason) = checked {
-        return problem(StatusCode::BAD_REQUEST, &reason);
-    }
-    let read = negotiator.read_dataset(
-        &request.counter_party_address,
-        &request.counter_party_id,
-        &request.id,
-    );
-    provider_answer(read.await)
 }
 
 /// Start a negotiation as consumer.
@@ -1094,8 +781,8 @@ fn next_after<T>(found: &[T], limit: usize, key: impl Fn(&T) -> &String) -> Opti
         license(name = "Apache-2.0", identifier = "Apache-2.0"),
     ),
     paths(
-        request_catalog,
-        request_dataset,
+        catalog::request_catalog,
+        catalog::request_dataset,
         start,
         one,
         list,
@@ -1146,8 +833,11 @@ pub fn openapi_json() -> String {
 pub fn router(negotiator: Negotiator, key: ApiKey) -> Router {
     let key = std::sync::Arc::new(key);
     let protected = Router::new()
-        .route("/v1/catalog/request", post(request_catalog))
-        .route("/v1/catalog/dataset/request", post(request_dataset))
+        .route("/v1/catalog/request", post(catalog::request_catalog))
+        .route(
+            "/v1/catalog/dataset/request",
+            post(catalog::request_dataset),
+        )
         .route("/v1/negotiations", get(list).post(start))
         .route("/v1/negotiations/{consumerPid}", get(one))
         .route("/v1/transfers", get(list_transfers).post(start_transfer))
