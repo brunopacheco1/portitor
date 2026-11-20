@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Portitor
 
-A small and fast connector for data spaces. It implements the
+A small and fast connector for dataspaces. It implements the
 [Eclipse Dataspace Protocol](https://eclipse-dataspace-protocol-base.github.io/DataspaceProtocol/2025-1-err2/)
 (DSP 2025-1) and the Decentralized Claims Protocol (DCP v1.0.1). It can
 also get a participant's Gaia-X compliance credential and require one in
@@ -35,7 +35,7 @@ functionality, components, roadmap).
 A participant is an organisation with one DID. With Portitor it offers
 datasets with policies, agrees contracts with other participants and
 transfers the data (HTTP pull). Each participant proves who it is with
-credentials from the data space's issuer, on every request.
+credentials from the dataspace's issuer, on every request.
 
 Credentials are system to system: a participant holds them, and
 connectors check them. Portitor does not identify the people or
@@ -55,7 +55,7 @@ order.
 
 | Order | Image | Who runs it | Needed? |
 |---|---|---|---|
-| 1 | `portitor-issuer` | The data space authority, once per data space. A participant never runs it | Optional for a participant; the data space needs one issuer |
+| 1 | `portitor-issuer` | The dataspace authority, once per dataspace. A participant never runs it | Optional for a participant; the dataspace needs one issuer |
 | 2 | `portitor-identity` | Every participant | Mandatory: it holds the participant's key and credentials, and the connector does not start without it |
 | 3 | `portitor-connector` | Every participant | Mandatory: catalog, contract negotiation and data transfer |
 
@@ -67,7 +67,7 @@ and Gaia-X compliance.
 ## Try it
 
 The [quickstart](https://bruno.pacheco.lu/portitor/#try) on the website
-runs a small data space on your machine: an issuer, a provider and a
+runs a small dataspace on your machine: an issuer, a provider and a
 consumer. It needs Docker with the Compose plugin, or
 [Podman](docs/TESTING.md#docker-or-podman), and `curl`, `jq` and
 `openssl`.

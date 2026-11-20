@@ -84,7 +84,7 @@ of work with no release yet.
 | [R-16](#r-16) | A Gaia-X compliance credential cannot be revoked | Security | Accepted | none |
 | [R-17](#r-17) | Server-side request forgery through partner-chosen URLs | Security | Mitigated | not named |
 | [R-19](#r-19) | Consumer's data access tokens in the SQLite file and the management API | Security | Mitigated | none |
-| [R-20](#r-20) | The issuer key is the root of trust of a data space | Security | Mitigated | 1.4 (TD-05) |
+| [R-20](#r-20) | The issuer key is the root of trust of a dataspace | Security | Mitigated | 1.4 (TD-05) |
 | [R-21](#r-21) | Bugs in Portitor's own SHACL engine; new SHACL components in later profiles | Security, upstream | Mitigated | none |
 | [R-22](#r-22) | Bundle: unsigned `latest.json`; a revoked bundle key not seen while offline | Security | Mitigated | Later (TD-16) |
 | [R-23](#r-23) | A wrong host clock gives wrong policy and token decisions | Security | Mitigated | none |
@@ -106,7 +106,7 @@ of work with no release yet.
 | [R-47](#r-47) | The EDC Issuer Service's admin API may change with the next release candidate | Interoperability | Accepted | EDC 1.0.0 |
 | [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | Open | research, with TD-03 |
 | [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | Open | research; code 1.5 |
-| [TD-03](#td-03) | A provider in several data spaces, each with its own rules | Technical debt | Accepted | profiles in one connector: after 1.0 |
+| [TD-03](#td-03) | A provider in several dataspaces, each with its own rules | Technical debt | Accepted | profiles in one connector: after 1.0 |
 | [TD-04](#td-04) | User to system authentication and authorisation | Technical debt | Accepted | code 1.5 |
 | [TD-05](#td-05) | Key custody and key rotation | Technical debt | Open | 1.4 (OpenBao) |
 | [TD-07](#td-07) | STS tokens and presentations are not cached | Technical debt | Open | 1.4, if needed |
@@ -118,7 +118,7 @@ of work with no release yet.
 | [TD-13](#td-13) | The catalog shows every offer to every member | Technical debt | Open | 1.2 |
 | [TD-14](#td-14) | Credential schemas, presentation definitions and issuance policies are not supported | Technical debt | Open | 1.4, if needed |
 | [TD-15](#td-15) | Agreements are not revised when the data's scope changes | Technical debt | Open | 1.5 |
-| [TD-16](#td-16) | One harvest source; no data space registry; other catalogs not checked; no bundle expiry or bundle key rotation | Technical debt | Open | Later |
+| [TD-16](#td-16) | One harvest source; no dataspace registry; other catalogs not checked; no bundle expiry or bundle key rotation | Technical debt | Open | Later |
 | [TD-17](#td-17) | The data plane runs inside the connector process | Technical debt | Accepted | after 1.0, when Signaling 1.0 is released |
 | [TD-19](#td-19) | No TLS inside the services | Technical debt | Accepted | none |
 | [TD-20](#td-20) | A holder must delete a revoked credential by hand after a reissue | Technical debt | Open | 1.4 |
@@ -408,10 +408,10 @@ are closed.
   no release named.
 
 <a id="r-20"></a>
-### R-20 The issuer key is the root of trust of a data space
+### R-20 The issuer key is the root of trust of a dataspace
 
 - **What.** The issuer key signs every credential and status list of
-  the data space ([ADR 0018](adr/0018-issuer-component.md)). Whoever
+  the dataspace ([ADR 0018](adr/0018-issuer-component.md)). Whoever
   controls a DID in `PORTITOR_TRUSTED_ISSUERS` can admit any
   participant.
 - **Why it matters.** A stolen key admits anyone; a lost key means
@@ -568,7 +568,7 @@ are closed.
 <a id="r-39"></a>
 ### R-39 No specification defines agreements that depend on an upstream agreement
 
-- **What.** In the health data space demo, Cooper's offer to Marley
+- **What.** In the health dataspace demo, Cooper's offer to Marley
   rests on Cooper's agreement with Alice and must not be wider than it.
   DSP and ODRL have no link between two agreements.
 - **Why it matters.** Portitor's design may differ from what EDC or
@@ -711,8 +711,8 @@ are closed.
   defines (`manifest.json`, `manifest.jws`, `latest.json`;
   [ADR 0005](adr/0005-schema-and-vocabulary-registry.md)), and the
   connector pulls it into a disk cache. Only its version fields come
-  from a standard (DCAT 3 `dcat:version`, `dcterms:issued`). No data
-  space specification we follow defines how an authority publishes
+  from a standard (DCAT 3 `dcat:version`, `dcterms:issued`). No
+  dataspace specification we follow defines how an authority publishes
   schemas: Simpl-Open has its own schema-manager API, not signed.
   Portitor must not invent a standard, so the format may change
   (maintainer, 2026-11-14).
@@ -749,25 +749,25 @@ are closed.
   [Later](ROADMAP.md#later-not-planned-for-a-release-yet).
 
 <a id="td-03"></a>
-### TD-03 A provider in several data spaces, each with its own rules
+### TD-03 A provider in several dataspaces, each with its own rules
 
-- **What.** A provider may belong to several data spaces, each with its
+- **What.** A provider may belong to several dataspaces, each with its
   own rules for dataset descriptions, offers, credentials and where
-  data may be processed. One connector serves one data space: one
+  data may be processed. One connector serves one dataspace: one
   bundle, one list of trusted issuers, one datasets file (maintainer,
   2026-11-15).
 - **Current state: Accepted** for 1.0 (maintainer, 2026-11-20,
-  [ADR 0024](adr/0024-several-data-spaces.md)): one connector per data
-  space. One DID per data space is the documented default; a shared DID
+  [ADR 0024](adr/0024-several-data-spaces.md)): one connector per
+  dataspace. One DID per dataspace is the documented default; a shared DID
   is allowed, and DEPLOYING names what it discloses
   ([Two data spaces](DEPLOYING.md#two-data-spaces);
   `scripts/two-data-spaces.sh`).
 - **Next.** After 1.0, no release named: one connector with several
-  data space profiles, behind its own ADR; trusted issuers by
+  dataspace profiles, behind its own ADR; trusted issuers by
   credential type (threat model finding F-08), which is additive.
 
 <a id="td-04"></a>
-### TD-04 User to system authentication and authorisation, governed per data space
+### TD-04 User to system authentication and authorisation, governed per dataspace
 
 - **What.** The people and applications inside an organisation are not
   identified: the management APIs use one API key per component, and
@@ -849,7 +849,7 @@ are closed.
   `GET` of the whole source
   ([ADR 0013](adr/0013-transfer-and-data-plane.md)). The consumer side
   has no data plane (ADR 0014).
-- **Why it matters.** Long or large transfers, and data spaces that use
+- **Why it matters.** Long or large transfers, and dataspaces that use
   push (Simpl-Open documents S3 push and Kafka).
 - **Current state: Open.** Measured in 0.12
   ([BENCHMARKS](BENCHMARKS.md), "Data plane"): a download still running
@@ -907,10 +907,10 @@ are closed.
   (ADR 0015; the DCP TCK does not test it); the issuer has no approval
   queue and no "present another credential first" (`issuancePolicy`,
   [ADR 0018](adr/0018-issuer-component.md)).
-- **Why it matters.** Data spaces that use them cannot use Portitor as
+- **Why it matters.** Dataspaces that use them cannot use Portitor as
   it is.
 - **Current state: Open.**
-- **Next.** ROADMAP 1.4, if a target data space needs it; the issuer's
+- **Next.** ROADMAP 1.4, if a target dataspace needs it; the issuer's
   decision port allows it.
 
 <a id="td-15"></a>
@@ -926,10 +926,10 @@ are closed.
   standard.
 
 <a id="td-16"></a>
-### TD-16 One harvest source; no data space registry; other catalogs not checked; no bundle expiry or bundle key rotation
+### TD-16 One harvest source; no dataspace registry; other catalogs not checked; no bundle expiry or bundle key rotation
 
 - **What.** Datasets come only from the datasets file
-  ([ADR 0020](adr/0020-dataset-harvest.md)); a data space wide registry
+  ([ADR 0020](adr/0020-dataset-harvest.md)); a dataspace wide registry
   or federated catalogue is "only if needed"; other participants'
   catalogs are not checked against the bundle; the bundle has no expiry
   and its key no rotation
@@ -1053,7 +1053,7 @@ are closed.
   `DELETE /v1/credentials/{id}`). A management call has no person
   behind it ([TD-04](#td-04); SECURITY-ASSURANCE, F-02).
 - **Why it matters.** A provider cannot show who pulled which data and
-  when. Health data spaces are likely to require this (EHDS; not
+  when. Health dataspaces are likely to require this (EHDS; not
   checked which article).
 - **Current state: Open.** DSP 2025-1 does not sign its messages, so
   evidence between participants rests on the DCP tokens and on each

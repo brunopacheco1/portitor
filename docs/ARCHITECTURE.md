@@ -134,8 +134,8 @@ system to system (see "Who holds the credentials" below). Gaia-X is
 optional: the compliance service (GXDCH), the GXDCH notary the operator
 asks once for the registration number credential, and the certificate
 authority that certifies the identity key. One Portitor serves one
-dataspace: a participant in two data spaces runs one connector per
-data space ([ADR 0024](adr/0024-several-data-spaces.md),
+dataspace: a participant in two dataspaces runs one connector per
+dataspace ([ADR 0024](adr/0024-several-data-spaces.md),
 [TD-03](RISKS_AND_TECHNICAL_DEBTS.md#td-03)).
 
 ![C1 System context](diagrams/c1-system-context.drawio.svg)

@@ -11,9 +11,9 @@ so visitors' browsers never contact third-party services.
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Portitor: a data space connector</title>
+  <title>Portitor: a dataspace connector</title>
   <meta name="description" content="Portitor is a small and fast open-source connector. It implements the Eclipse Dataspace Protocol and the Decentralized Claims Protocol, and is tested against Eclipse EDC; Simpl-Open is planned.">
-  <meta property="og:title" content="Portitor: a data space connector">
+  <meta property="og:title" content="Portitor: a dataspace connector">
   <meta property="og:description" content="A small, fast, open-source dataspace connector: Dataspace Protocol, Decentralized Claims Protocol, Gaia-X.">
   <meta property="og:type" content="website">
   <meta name="color-scheme" content="light dark">
@@ -65,7 +65,7 @@ so visitors' browsers never contact third-party services.
         <p class="motto">Checked at the gate, carried across.</p>
         <p class="lede">
           Portitor lets an organisation offer and use data under agreed rules, using the open
-          standards of European data spaces: the Eclipse <strong>Dataspace Protocol</strong>
+          standards of European dataspaces: the Eclipse <strong>Dataspace Protocol</strong>
           for catalogs, contracts and transfers, and the <strong>Decentralized Claims
           Protocol</strong> for identity and verifiable credentials. It is built to work with
           Eclipse EDC and Simpl-Open, and to follow the Gaia-X Trust Framework.
@@ -121,14 +121,14 @@ so visitors' browsers never contact third-party services.
     <section id="try">
       <div class="wrap">
         <h2>Try it</h2>
-        <p>Run a small data space on your machine: its issuer, a provider and a consumer (each a connector with its identity component) and a web server with the provider's data. A script checks that the two participants prove who they are with credentials, agree a contract and transfer a file.</p>
+        <p>Run a small dataspace on your machine: its issuer, a provider and a consumer (each a connector with its identity component) and a web server with the provider's data. A script checks that the two participants prove who they are with credentials, agree a contract and transfer a file.</p>
         <h3>You need</h3>
         <p>Docker Engine 25 or later (Docker Desktop 4.27 or later) with the Compose plugin: the images' health check uses <code>HEALTHCHECK --start-interval</code>, which came with Engine 25. Podman works too, see <a href="https://github.com/brunopacheco1/portitor/blob/main/docs/TESTING.md#docker-or-podman">TESTING</a>. Also <code>git</code>, <code>bash</code>, <code>curl</code>, <code>jq</code> and <code>openssl</code>. The demo downloads about 40&nbsp;MB of images; after that it runs in about 10 seconds.</p>
         <h3>Run the demo</h3>
         <pre><code>git clone --branch v0.13.0 --depth 1 https://github.com/brunopacheco1/portitor
 cd portitor
 KEEP=1 scripts/demo-compose.sh</code></pre>
-        <p>The script writes new keys and secrets into <code>examples/compose/run/</code>, builds and signs the data space's HealthDCAT-AP bundle, starts the containers and has the issuer give both participants their credentials. Then it runs the demo steps, one line starting with <code>==</code> each: the provider refuses a catalog request without a token, serves its catalog checked against the bundle, agrees a contract and refuses changed terms, checks credential claims, transfers a file, and refuses a credential the issuer has revoked. The last line starts with <code>== Done</code>. If a step fails, the script prints <code>FAILED</code> and the containers' last log lines.</p>
+        <p>The script writes new keys and secrets into <code>examples/compose/run/</code>, builds and signs the dataspace's HealthDCAT-AP bundle, starts the containers and has the issuer give both participants their credentials. Then it runs the demo steps, one line starting with <code>==</code> each: the provider refuses a catalog request without a token, serves its catalog checked against the bundle, agrees a contract and refuses changed terms, checks credential claims, transfers a file, and refuses a credential the issuer has revoked. The last line starts with <code>== Done</code>. If a step fails, the script prints <code>FAILED</code> and the containers' last log lines.</p>
         <h3>Look around</h3>
         <p><code>KEEP=1</code> leaves everything running. The consumer's management API is on <code>127.0.0.1:18091</code>, the provider's, with its harvest jobs, on <code>127.0.0.1:18081</code>:</p>
         <pre><code>KEY=$(cat examples/compose/run/consumer/management.key)
@@ -193,7 +193,7 @@ rm -rf examples/compose/run</code></pre>
           <li class="done"><span>0.13</span> API and configuration freeze: reading a provider's catalog from the management API, the EDC test with Gaia-X compliance as a repeatable run, what 1.0 keeps stable</li>
           <li class="now"><span>0.14</span> Release candidate for 1.0: shorter documentation, a deployment guide for operations teams, OpenSSF silver, Baseline level 1 self-assessment</li>
           <li><span>1.0</span> Stable: the 0.14 release candidate, with no new features</li>
-          <li><span>1.1</span> Push to S3-compatible object storage; health data space demo, step 1</li>
+          <li><span>1.1</span> Push to S3-compatible object storage; health dataspace demo, step 1</li>
           <li><span>1.2</span> Purpose and data permit in policies; demo, step 2</li>
           <li><span>1.3</span> Data user and health data access body; the demo answers its four questions</li>
           <li><span>1.4</span> Keys in OpenBao; revoked credentials leave presentations by themselves</li>

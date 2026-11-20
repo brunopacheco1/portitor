@@ -183,7 +183,7 @@ and each format is taken from a specification, EDC or Simpl-Open, never
 invented. Each 1.x release ships when its exit criteria pass, not on a
 date.
 
-The health data space demo (see below) grows one step per release, from
+The health dataspace demo (see below) grows one step per release, from
 1.1 to 1.3. It is a manual test, run with Compose and a runbook, not a
 CI job (maintainer, 2026-11-15).
 
@@ -264,7 +264,7 @@ CI job (maintainer, 2026-11-15).
 - The identity reads status lists and stops presenting a revoked
   credential ([TD-20](RISKS_AND_TECHNICAL_DEBTS.md#td-20)).
 - Credential schemas, presentation definitions and issuance policies, if
-  a target data space needs them
+  a target dataspace needs them
   ([TD-14](RISKS_AND_TECHNICAL_DEBTS.md#td-14)); STS token and
   presentation caching only if the 0.11 measurements show the need
   ([TD-07](RISKS_AND_TECHNICAL_DEBTS.md#td-07)).
@@ -315,7 +315,7 @@ code is written once.
 - Exit, for each item: the unit tests, the DSP and DCP TCKs and the EDC
   interop test pass unchanged; the C4 diagrams, RUST-IDIOMS and the
   "read the code in this order" page name the new files and types. For
-  the Helm chart: the demo data space runs from it on a local cluster,
+  the Helm chart: the demo dataspace runs from it on a local cluster,
   and DEPLOYING explains it.
 - Main risk: a refactoring that changes behaviour unseen. The TCKs and
   the interop test are the guard, so no item starts while one of them
@@ -328,20 +328,20 @@ rejects. It runs beside the releases.
 
 | Topic | Needed by |
 | --- | --- |
-| Several data spaces ([TD-03](RISKS_AND_TECHNICAL_DEBTS.md#td-03)) | Accepted in 0.13 ([ADR 0024](adr/0024-several-data-spaces.md)) |
+| Several dataspaces ([TD-03](RISKS_AND_TECHNICAL_DEBTS.md#td-03)) | Accepted in 0.13 ([ADR 0024](adr/0024-several-data-spaces.md)) |
 | Users and roles ([TD-04](RISKS_AND_TECHNICAL_DEBTS.md#td-04)) | Accepted in 0.13 ([ADR 0025](adr/0025-users-and-roles.md)); code in 1.5 |
 | Who calls the data plane ([TD-02](RISKS_AND_TECHNICAL_DEBTS.md#td-02)) | 1.5 |
 | S3 data address | 1.1 |
 | Agreements that depend on an upstream agreement | 1.3 |
 | Consent | 1.5 |
 | How schemas are published ([TD-01](RISKS_AND_TECHNICAL_DEBTS.md#td-01)) | with TD-03 |
-| A data space's policy rules as SHACL shapes in the bundle (maintainer, 2026-11-18; [TD-32](RISKS_AND_TECHNICAL_DEBTS.md#td-32)) | 1.2 |
+| A dataspace's policy rules as SHACL shapes in the bundle (maintainer, 2026-11-18; [TD-32](RISKS_AND_TECHNICAL_DEBTS.md#td-32)) | 1.2 |
 
-### The health data space demo
+### The health dataspace demo
 
 Four participants and an authority (maintainer, 2026-11-15), modelled on
-a health data access body (HDAB) and the ICUdata4EU ICU data space. The
-authority governs the data space and runs the issuer; it plays the
+a health data access body (HDAB) and the ICUdata4EU ICU dataspace. The
+authority governs the dataspace and runs the issuer; it plays the
 national contact point for secondary use (EHDS Art. 75, which the
 coordinator HDAB of Art. 55(1) may also be). Alice, a data
 provider, holds patient records. Bob, a data user, asks Alice directly,
@@ -371,7 +371,7 @@ applies from March 2029.
 
 ## Later (not planned for a release yet)
 
-- Join a Simpl-Open data space behind the participant's Simpl Tier 2
+- Join a Simpl-Open dataspace behind the participant's Simpl Tier 2
   gateway, with a small login adapter ([ADR 0017](adr/0017-simpl-open.md)).
   Parked until the maintainer sets up a Simpl-Open sandbox to test
   against (maintainer, 2026-11-13).
@@ -402,7 +402,7 @@ applies from March 2029.
   compliance credentials; a legal person credential signed by another
   signer the participant chooses ([TD-21](RISKS_AND_TECHNICAL_DEBTS.md#td-21), 2026-11-18 review).
 - Explore Simpl-Open features that are not part of DSP, DCP, Data Plane
-  Signaling or EDC, but add security or complete what a data space
+  Signaling or EDC, but add security or complete what a dataspace
   participant can do (maintainer, 2026-11-15). First candidates:
   - mutual TLS between participants: Simpl-Open's Tier 2 gateway asks
     every caller for an x509 client certificate from the governance
@@ -435,8 +435,8 @@ questions the maintainer asked to investigate:
 
 - [How schemas and vocabularies are collected and stored](RISKS_AND_TECHNICAL_DEBTS.md#td-01) (TD-01)
 - [Who calls the data plane, and with which credentials](RISKS_AND_TECHNICAL_DEBTS.md#td-02) (TD-02)
-- [A provider in several data spaces, each with its own rules](RISKS_AND_TECHNICAL_DEBTS.md#td-03) (TD-03)
-- [User to system authentication and authorisation, governed per data space](RISKS_AND_TECHNICAL_DEBTS.md#td-04) (TD-04)
+- [A provider in several dataspaces, each with its own rules](RISKS_AND_TECHNICAL_DEBTS.md#td-03) (TD-03)
+- [User to system authentication and authorisation, governed per dataspace](RISKS_AND_TECHNICAL_DEBTS.md#td-04) (TD-04)
 - [Key custody and key rotation](RISKS_AND_TECHNICAL_DEBTS.md#td-05) (TD-05)
 
 The other technical debts (TD-06 onwards) and the risks (R-01 onwards)

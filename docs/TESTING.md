@@ -620,12 +620,12 @@ CI runs both.
 
 ## EDC interop test
 
-`scripts/edc-interop.sh` runs a small data space in Docker Compose
+`scripts/edc-interop.sh` runs a small dataspace in Docker Compose
 (`interop/edc/compose.yaml`): a Portitor participant (`portitor-connector`
 and `portitor-identity`, `did:web:portitor.gaiax.test`) and an Eclipse
 Dataspace Components participant (control plane, data plane, and
 IdentityHub with its STS, all v1.0.0-RC8, `did:web:edc.gaiax.test`), both
-members by a `MembershipCredential` from the data space's
+members by a `MembershipCredential` from the dataspace's
 `portitor-issuer`. From 0.13 it also has the local Gaia-X compliance
 service of the [Gaia-X end-to-end test](#gaia-x-end-to-end-test)
 (gx-compliance v2.16.0 with Memgraph 3.9.0, a test notary and a test CA).
@@ -973,7 +973,7 @@ and `rm -rf interop/edc/run/`.
 
 ## Gaia-X end-to-end test
 
-`scripts/gaiax-e2e.sh` runs a small data space in Docker Compose
+`scripts/gaiax-e2e.sh` runs a small dataspace in Docker Compose
 (`interop/gaiax/compose.yaml`) with a local Gaia-X compliance service:
 gx-compliance v2.16.0 with Memgraph 3.9.0, both pinned by digest, in the
 test mode Gaia-X documents for local testing
@@ -1065,7 +1065,7 @@ cargo +nightly fuzz run gaiax_compliance -- -max_total_time=60   # see Fuzzing
 gets a contract (`FINALIZED`) and the outsider is refused (`TERMINATED`);
 see [Gaia-X end-to-end test](#gaia-x-end-to-end-test) for what it sets up.
 
-**3. By hand, on the running data space.** `KEEP=1 scripts/gaiax-e2e.sh`
+**3. By hand, on the running dataspace.** `KEEP=1 scripts/gaiax-e2e.sh`
 leaves everything running, with the keys in `interop/gaiax/run/`. From
 the repository root:
 
@@ -1253,7 +1253,7 @@ provider sends the `FINALIZED` event. `GET
 
 ### Two connectors
 
-`scripts/demo.sh` runs a small data space on this machine, with DCP,
+`scripts/demo.sh` runs a small dataspace on this machine, with DCP,
 and checks the result. It needs `curl`, `jq`, `openssl` and Python 3.
 
 ```sh
@@ -1264,8 +1264,8 @@ scripts/demo.sh <portitor-connector> [<portitor-identity> [<portitor-issuer>]]
 What it sets up:
 
 - Each participant (provider and consumer) is a connector and its own
-  `portitor-identity`. A `portitor-issuer` with a new key is the data
-  space's authority (credential definitions in
+  `portitor-identity`. A `portitor-issuer` with a new key is the
+  dataspace's authority (credential definitions in
   `examples/issuer-credentials.json`).
 - The script registers both participants at the issuer (claims:
   `memberOf`, and `processing: "eu"` for the consumer). Each identity
@@ -1369,16 +1369,16 @@ data source, so it gets `STARTED` and a `dataAddress` to fetch from (on
 ### Two data spaces
 
 `scripts/two-data-spaces.sh shared` and `scripts/two-data-spaces.sh
-separate` run one organisation in two data spaces on this machine, with
-one connector per data space
+separate` run one organisation in two dataspaces on this machine, with
+one connector per dataspace
 ([DEPLOYING](DEPLOYING.md#two-data-spaces),
-[ADR 0024](adr/0024-several-data-spaces.md)). Each data space has its
+[ADR 0024](adr/0024-several-data-spaces.md)). Each dataspace has its
 own issuer and one consumer that trusts only that issuer. `shared`
 gives the organisation one identity for both connectors; `separate`
-gives it one identity per data space. The script checks that the whole
-exchange works inside each data space (catalog, negotiation, transfer,
-data), that a member of one data space gets 401 from the connector of
-the other, and, for `shared`, that a verifier of one data space
+gives it one identity per dataspace. The script checks that the whole
+exchange works inside each dataspace (catalog, negotiation, transfer,
+data), that a member of one dataspace gets 401 from the connector of
+the other, and, for `shared`, that a verifier of one dataspace
 receives both membership credentials. It needs curl, jq, openssl and
 python3, uses ports 19070 to 19511, and is not run by CI.
 

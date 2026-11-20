@@ -1582,42 +1582,42 @@ release.
 
 ## Two data spaces
 
-One connector serves one data space
+One connector serves one dataspace
 ([ADR 0024](adr/0024-several-data-spaces.md), accepted for 1.0). If
-your organisation is in two data spaces, run **one connector per data
-space**. Each connector has its own:
+your organisation is in two dataspaces, run **one connector per
+dataspace**. Each connector has its own:
 
 - host name and `PORTITOR_PUBLIC_URL` (the connector serves
   `/dsp/2025-1` at the root of its host), and its own management port
   and key;
 - database and volume (`PORTITOR_DB_FILE`; one connector per file);
-- datasets file, with the description and the offers that data space
+- datasets file, with the description and the offers that dataspace
   asks for; the `portitor:source` of a dataset can be the same in both;
-- `PORTITOR_TRUSTED_ISSUERS`, with the issuers of **that data space
-  only**, and that data space's `PORTITOR_DCP_SCOPES`,
+- `PORTITOR_TRUSTED_ISSUERS`, with the issuers of **that dataspace
+  only**, and that dataspace's `PORTITOR_DCP_SCOPES`,
   `PORTITOR_POLICY_CREDENTIALS` and bundle settings.
 
-A member of one data space is then refused by the connector of the
+A member of one dataspace is then refused by the connector of the
 other, because its credential comes from an issuer that connector does
 not trust.
 
 For the identity there are two ways:
 
-| | One identity and DID per data space (the default) | One shared identity and DID |
+| | One identity and DID per dataspace (the default) | One shared identity and DID |
 |---|---|---|
-| Deploy | One `portitor-identity` per data space, each with its own DID, key, database and host name. Each connector uses the STS of its own identity | One `portitor-identity`. Both connectors have the same `PORTITOR_PARTICIPANT_ID`, `PORTITOR_STS_URL` and STS client secret |
-| `PORTITOR_TRUSTED_ISSUERS` of the identity | That data space's issuers | The issuers of both data spaces |
-| Credentials | Each identity asks its data space's issuer. With Gaia-X, one onboarding per identity | The one identity asks each issuer |
-| What partners learn | Nothing about the other data space | **A partner in one data space learns that you are a member of the other,** when both use the same credential type: it asks for `MembershipCredential` and gets both (DCP has no scope by issuer). Its own check skips the credential of the issuer it does not trust |
+| Deploy | One `portitor-identity` per dataspace, each with its own DID, key, database and host name. Each connector uses the STS of its own identity | One `portitor-identity`. Both connectors have the same `PORTITOR_PARTICIPANT_ID`, `PORTITOR_STS_URL` and STS client secret |
+| `PORTITOR_TRUSTED_ISSUERS` of the identity | That dataspace's issuers | The issuers of both dataspaces |
+| Credentials | Each identity asks its dataspace's issuer. With Gaia-X, one onboarding per identity | The one identity asks each issuer |
+| What partners learn | Nothing about the other dataspace | **A partner in one dataspace learns that you are a member of the other,** when both use the same credential type: it asks for `MembershipCredential` and gets both (DCP has no scope by issuer). Its own check skips the credential of the issuer it does not trust |
 
-Use a shared DID only if this disclosure is acceptable in both data
-spaces. With a shared DID, also remember that a partner whose connector
+Use a shared DID only if this disclosure is acceptable in both
+dataspaces. With a shared DID, also remember that a partner whose connector
 trusts both issuers refuses you while one of the two credentials is
 revoked or expired ([Security](#security), "Caller authentication").
 
 Both ways were tested by hand on one machine
-([TESTING](TESTING.md#two-data-spaces)). One connector for several data
-spaces is planned after 1.0.
+([TESTING](TESTING.md#two-data-spaces)). One connector for several
+dataspaces is planned after 1.0.
 
 ## Users and roles
 
@@ -1643,8 +1643,8 @@ tested with a proxy product.
 ## Known limits
 
 In this version. See also [STABILITY](STABILITY.md#what-10-does-not-do)
-for what 1.0 does not do (no TLS in the services, one connector per data
-space, no persons, no test with Simpl-Open),
+for what 1.0 does not do (no TLS in the services, one connector per
+dataspace, no persons, no test with Simpl-Open),
 [SECURITY-ASSURANCE.md](SECURITY-ASSURANCE.md), and
 [RISKS_AND_TECHNICAL_DEBTS.md](RISKS_AND_TECHNICAL_DEBTS.md) for every
 known risk and technical debt, with its status and target release.

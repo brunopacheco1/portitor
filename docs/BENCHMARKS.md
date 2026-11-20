@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Benchmarks
 
-What Portitor does under the load a data space puts on it, measured
+What Portitor does under the load a dataspace puts on it, measured
 for release 0.12. Architecture principle 4 asks for these numbers every
 release; until 0.11 they were in
 [ADR 0002](adr/0002-technology-stack.md), section 7.

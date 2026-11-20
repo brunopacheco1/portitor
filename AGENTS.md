@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # AGENTS.md
 
-Instructions for AI coding agents working on Portitor, a data space
+Instructions for AI coding agents working on Portitor, a dataspace
 connector. Humans should read `CONTRIBUTING.md`; this file adds what an
 agent needs to work safely and in line with the project.
 
