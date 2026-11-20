@@ -212,7 +212,13 @@ impl TransferProvider {
     /// its agreement `agreement_id`, if it holds that agreement (ADR 0019).
     async fn credentials(&self, caller: &Caller, agreement_id: &str) -> CallerCredentials {
         let types = &self.link.credential_types;
-        let scopes = match self.service.agreement(agreement_id, &caller.id) {
+        // not only a read: an agreement whose finalization event is on
+        // its way to this caller is recorded as FINALIZED here (ADR 0007,
+        // amended in 0.13), before the request itself is checked
+        let held = self
+            .service
+            .agreement_settling_finalization(agreement_id, &caller.id);
+        let scopes = match held {
             Ok(Some(agreement)) => credential_scopes(&agreement, types),
             // the request is refused anyway
             Ok(None) | Err(_) => Vec::new(),

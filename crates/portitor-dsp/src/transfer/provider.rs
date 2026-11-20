@@ -363,7 +363,7 @@ where
     /// # Errors
     ///
     /// The store failed, or the negotiation kept changing.
-    pub fn agreement(
+    pub fn agreement_settling_finalization(
         &self,
         agreement_id: &str,
         caller: &str,
@@ -379,20 +379,23 @@ where
         }
     }
 
-    /// Proof of delivery for the finalization event (ADR 0007, amended in
+    /// Settles a finalization that is on its way (ADR 0007, amended in
     /// 0.13). The provider records `FINALIZED` only when the consumer
     /// acknowledged the finalization event; the consumer records it on
     /// receipt, a moment earlier, and may ask for a transfer at once
     /// (TD-44). So when `caller`, the consumer of the negotiation that
     /// made `agreement_id`, names that agreement while our finalization
-    /// event is pending, the event is taken as delivered: the negotiation
-    /// is written as `FINALIZED` with nothing pending, and the agreement
-    /// is returned.
+    /// event is pending, the consumer acts on the agreement after
+    /// verifying it, and that is taken as enough: the negotiation is
+    /// written as `FINALIZED` with nothing pending, and the agreement is
+    /// returned. It does not prove that the event itself arrived: the
+    /// consumer knows the agreement's id from the agreement message.
     ///
     /// Returns `None`, and writes nothing, when there is no such
-    /// agreement, when `caller` is not its consumer (checked before
-    /// anything is written, ADR 0013), or when the negotiation is in any
-    /// other state (for example `AGREED`, or `TERMINATED`).
+    /// agreement, when `caller` is not its consumer and its assignee
+    /// (both checked before anything is written, ADR 0013), or when the
+    /// negotiation is in any other state (for example `AGREED`, or
+    /// `TERMINATED`).
     ///
     /// No lock and no wait: the write compares the negotiation's
     /// `version`. If another write came first (a second transfer request,
@@ -418,9 +421,13 @@ where
                 .agreement
                 .clone()
                 .filter(|a| a.id == agreement_id && a.assignee == caller);
+            // not the agreement's assignee: nothing is written
+            let Some(agreement) = agreement else {
+                return Ok(None);
+            };
             if negotiation.state == NegotiationState::Finalized {
                 // another write settled it since `finalized` was read
-                return Ok(agreement);
+                return Ok(Some(agreement));
             }
             let Some(mut proved) = finalization_proved(&negotiation) else {
                 return Ok(None);
@@ -432,7 +439,7 @@ where
                 .replace_negotiation_if(&proved, expected)
                 .map_err(Failure::Store)?
             {
-                return Ok(agreement);
+                return Ok(Some(agreement));
             }
         }
         Err(bad(
@@ -546,7 +553,7 @@ where
         // an unknown agreement and another consumer's agreement get the
         // same answer, so a caller cannot learn which agreement ids exist
         let agreement = self
-            .agreement(&msg.agreement_id, caller)?
+            .agreement_settling_finalization(&msg.agreement_id, caller)?
             .ok_or_else(|| bad("", cpid, NO_FINALIZED_AGREEMENT))?;
         // checked again at each new transfer, with the credentials of this
         // request: a credential revoked since the agreement stops it

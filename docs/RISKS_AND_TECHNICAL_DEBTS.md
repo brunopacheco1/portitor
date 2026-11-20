@@ -1888,7 +1888,7 @@ certificate and compliance run at each key change (ADR 0021).
   negotiation as `FINALIZED` and is then checked as any other; any
   other state is refused as before. The rule is in `portitor-dsp`
   (`negotiation::provider::finalization_proved`,
-  `transfer::provider::TransferService::agreement`), the SQL in
+  `transfer::provider::TransferService::agreement_settling_finalization`), the SQL in
   `crates/portitor-connector/src/store/transfers.rs`. The provider now
   logs the refusal `transfer request is refused; answered 400`
   ([DEPLOYING](DEPLOYING.md), troubleshooting). Tested in the domain

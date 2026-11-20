@@ -944,9 +944,21 @@ fn a_transfer_starts_only_while_the_caller_meets_the_agreement() {
     assert_eq!(ack.state, TransferState::Requested);
     assert_eq!(out.unwrap().to, TransferState::Started);
     // the agreement, for the adapter to derive scopes from
-    assert!(s.agreement("a-members", CONSUMER).unwrap().is_some());
-    assert!(s.agreement("a-other", CONSUMER).unwrap().is_none());
-    assert!(s.agreement("unknown", CONSUMER).unwrap().is_none());
+    assert!(
+        s.agreement_settling_finalization("a-members", CONSUMER)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        s.agreement_settling_finalization("a-other", CONSUMER)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        s.agreement_settling_finalization("unknown", CONSUMER)
+            .unwrap()
+            .is_none()
+    );
 }
 
 // ---- ADR 0007, amended in 0.13 (TD-44): a transfer request that arrives
@@ -1075,8 +1087,24 @@ fn request_as(s: &RacingService<'_>, caller: &str) -> Handled {
     s.request(&msg, caller, &CallerCredentials::default())
 }
 
+/// The provider always makes the consumer the agreement's assignee; if
+/// a stored negotiation ever said otherwise, nothing is written for it.
 #[test]
-fn a_request_while_the_finalization_is_on_its_way_proves_it_arrived() {
+fn nothing_is_written_when_the_caller_is_not_the_agreements_assignee() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let mut negotiation = finalization_on_its_way();
+    let use_it: Rule = serde_json::from_value(json!({"action": "use"})).unwrap();
+    negotiation.agreement = Some(agreement("a-new", "did:web:someone-else", use_it));
+    let held = negotiations(negotiation.clone());
+    let s = racing(&store, &held, &flows);
+
+    assert!(request_as(&s, CONSUMER).is_err());
+    assert_eq!(held.0.borrow()[0], negotiation);
+    assert!(flows.calls().is_empty());
+}
+
+#[test]
+fn a_request_while_the_finalization_is_on_its_way_settles_it() {
     let (store, flows) = (Store::default(), Flows::default());
     let held = negotiations(finalization_on_its_way());
     let s = racing(&store, &held, &flows);

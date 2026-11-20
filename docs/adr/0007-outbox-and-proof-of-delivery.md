@@ -109,7 +109,7 @@ partner that refuses us answers with 404 too), and the process ends. Our
 log shows `HTTP 404`; only the partner's log says whether it refused us
 or did not know the process.
 
-### Amendment for 0.13: a transfer request proves the finalization event arrived (2026-11-20)
+### Amendment for 0.13: a transfer request settles a finalization that is on its way (2026-11-20)
 
 The provider records `FINALIZED` only when the consumer acknowledged the
 finalization event. The consumer records it on receipt, a moment
@@ -124,7 +124,9 @@ to this case too:
 - A `TransferRequestMessage` that names the agreement of a negotiation
   whose finalization event is pending (state `VERIFIED`, the event saved
   in the outbox, not yet acknowledged), sent by that negotiation's
-  consumer, proves that the event arrived. The negotiation is written
+  consumer, shows that the consumer acts on the agreement after
+  verifying it. That is taken as enough; it does not prove that the
+  event itself arrived (see "The cost" below). The negotiation is written
   as `FINALIZED` with nothing pending, exactly as its acknowledgement
   would write it, and the request is then checked as any other
   (ADR 0013).
@@ -147,15 +149,19 @@ to this case too:
   again after a restart.
 - The negotiation is settled when the request names the agreement and
   the caller is its consumer, also if the request is then refused for
-  another reason (the agreement no longer allows it, the format). The
-  proof is that the consumer asked, not that the transfer is granted.
+  another reason (the agreement no longer allows it, the format). What
+  counts is that the consumer asked, not that the transfer is granted.
 
 The cost, accepted: a consumer knows the agreement's id from the
 agreement message, so one that asks for a transfer after it sent its
 verification, but before it received the finalization event, is served
 too. If that event is then lost and the provider restarts, the provider
-shows `FINALIZED` and such a consumer `VERIFIED`. A consumer that
-follows DSP asks only after `FINALIZED`.
+shows `FINALIZED` and such a consumer `VERIFIED`. The same holds for a
+consumer whose callback address cannot be reached: it never receives the
+event, but can get `FINALIZED` and a transfer this way, and the outbox
+then still logs and counts the event as given up
+(`portitor.outbox.message.given_up`). A consumer that follows DSP asks only
+after `FINALIZED`.
 
 Compared with Eclipse EDC (checked by the integrator in EDC 1.0.0-RC8):
 EDC accepts a transfer request as soon as the agreement record exists
@@ -175,7 +181,7 @@ line names neither the agreement nor the caller.
 
 Where: the rule is in the domain
 (`portitor-dsp`: `negotiation::provider::finalization_proved`,
-`transfer::provider::TransferService::agreement`); the `Agreements` port
+`transfer::provider::TransferService::agreement_settling_finalization`); the `Agreements` port
 got the read of a negotiation by agreement id and the versioned write;
 the SQL is in the connector (`store/transfers.rs`) and uses the index of
 migration 10, so there is no new migration.
