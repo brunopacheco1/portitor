@@ -9,12 +9,18 @@
 # anchor; the compliance service loads its shapes and contexts from the
 # Gaia-X Lab Registry, so it also runs nightly.
 name: Gaia-X
+# This workflow has a path filter, so it must not be a required check: a
+# pull request that does not match would wait for it for ever
+# (CONTRIBUTING.md, "Required checks"). The filter lists what the job
+# reads; keep it in step with scripts/gaiax-e2e.sh.
 on:
   pull_request:
     paths:
       - "crates/**"
+      - "Cargo.toml" # the release profile, the dependencies' features, the lints
       - "Cargo.lock"
       - "Dockerfile"
+      - ".dockerignore"
       - "examples/issuer-credentials.json"
       - "interop/gaiax/**"
       - "scripts/gaiax-e2e.sh"
@@ -26,6 +32,11 @@ on:
   schedule:
     - cron: "53 2 * * *" # nightly: the Gaia-X Registry's shapes change without our code changing
   workflow_dispatch:
+
+# a newer push to the same pull request replaces the run in progress; nightly and manual runs always finish
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

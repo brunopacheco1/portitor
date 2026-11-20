@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: Portitor contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Called by the workflows that always start (CI, TCK, Dependencies). It
+# tells them whether the change needs their jobs, so that a change to
+# prose only (roadmap, changelog, website) does not build and test the
+# code. The rule and its self-test are in scripts/ci_changes.sh; it is
+# fail-safe: any path it does not know means "run everything".
+#
+# The callers end with a gate job, the only required check of each
+# workflow (CONTRIBUTING.md, "Required checks"). A job skipped by its
+# `if:` reports "skipped"; the gate job tells that from a failure.
+name: Changed files
+on:
+  workflow_call:
+    outputs:
+      code:
+        description: "'false' only when every changed file is prose"
+        value: ${{ jobs.changes.outputs.code }}
+      build:
+        description: "'false' only when every changed file is prose or fuzzing (fuzz/, .clusterfuzzlite/)"
+        value: ${{ jobs.changes.outputs.build }}
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Changed files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.detect.outputs.code }}
+      build: ${{ steps.detect.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the commits to compare with
+          persist-credentials: false
+      # a broken rule fails here, and so fails the gate job of the caller
+      - name: The rule passes its self-test
+        run: scripts/ci_changes.sh self-test
+      - name: Which jobs does this change need?
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: scripts/ci_changes.sh detect

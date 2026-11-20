@@ -75,6 +75,42 @@ The build enforces the style, so a pull request that breaks it fails:
    that pass the required checks, are up to date with `main`, and are
    approved by a code owner (`.github/CODEOWNERS`).
 
+## Required checks
+
+The ruleset on `main` requires three checks, by these names:
+
+| Check | Workflow | It passes when |
+|---|---|---|
+| `CI gate` | `CI` (`ci.yml`) | `REUSE compliance` and `Documentation matches the code` passed, and `Lint, test and build` and `SonarQube Cloud` passed or were not needed |
+| `TCK gate` | `TCK` (`tck.yml`) | the four TCK jobs passed or were not needed |
+| `Dependencies gate` | `Dependencies` (`dependencies.yml`) | the dependency review, cargo-deny and cargo-vet passed or were not needed |
+
+"Not needed" is decided by `scripts/ci_changes.sh` from the changed
+files:
+
+- A change to prose only skips the build, the tests, the TCKs and the
+  dependency checks. Prose is `site/`, `_http/`, `.vscode/`, the `*.md`
+  files in the repository root, and the `*.md` files under `docs/`
+  except `docs/STABILITY.md` and `docs/ARCHITECTURE.md`, which tests and
+  `scripts/check_docs.py` read.
+- A change to `fuzz/` or `.clusterfuzzlite/` only skips the build, the
+  tests and the TCKs, not the dependency checks.
+- Any other path runs everything. So do the weekly and the manual runs.
+
+The licence check (`reuse lint`) and `scripts/check_docs.py` always run.
+The script tests its own rule in every run
+(`scripts/ci_changes.sh self-test`). Before you add a path to the prose
+list, check that no test, script or workflow reads it, and add a case to
+the self-test.
+
+Only a gate job can be a required check. A job that is skipped on
+purpose reports "skipped", and its name alone cannot tell that from
+"passed after a failure upstream"; the gate job can. A workflow with a
+path filter (`EDC interop`, `Gaia-X`, `ORT`, `Fuzzing (PR)`, `Website`,
+the `Release` dry run) must never be required: on a pull request that
+does not match the filter it reports nothing, and the pull request
+would wait for ever. CodeQL runs on every pull request.
+
 ## Dependency audits (cargo-vet)
 
 CI runs [cargo-vet](https://mozilla.github.io/cargo-vet/) (`cargo vet

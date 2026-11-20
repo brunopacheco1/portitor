@@ -8,6 +8,11 @@ on:
     branches: [main]
   pull_request:
 
+# a newer push to the same pull request replaces the run in progress; pushes to main always finish
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -15,12 +20,25 @@ env:
   RUST_TOOLCHAIN: "1.97.0"
   CARGO_TERM_COLOR: always
 
+# How the jobs are chosen: `changes` reads the changed files
+# (scripts/ci_changes.sh). `check` and `sonar` are skipped when the change
+# is prose or fuzzing only; `reuse` and `docs` always run. `gate` is the
+# one required check (CONTRIBUTING.md, "Required checks").
 jobs:
+  changes:
+    name: Changes
+    uses: ./.github/workflows/changes.yml
+
   check:
     name: Lint, test and build
+    needs: changes
+    if: ${{ needs.changes.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install Rust
         run: |
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal -c clippy,rustfmt -t x86_64-unknown-linux-musl
@@ -47,8 +65,6 @@ jobs:
               echo "::error::$c depends on an I/O crate"; exit 1
             fi
           done
-      - name: Documentation matches the code (C4 diagrams, OpenAPI versions)
-        run: python3 scripts/check_docs.py
       - name: Build static binaries
         run: |
           start=$(date +%s)
@@ -129,22 +145,44 @@ jobs:
             target/x86_64-unknown-linux-musl/release/portitor-issuer
           retention-days: 7
 
+  # always runs: every file needs a licence header, prose too
   reuse:
     name: REUSE compliance
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: fsfe/reuse-action@676e2d560c9a403aa252096d99fcab3e1132b0f5 # v6.0.0
+
+  # always runs: it checks the documents, and it needs no build (seconds)
+  docs:
+    name: Documentation matches the code
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: C4 diagrams and OpenAPI versions
+        run: python3 scripts/check_docs.py
 
   sonar:
     name: SonarQube Cloud
+    needs: changes
+    if: ${{ needs.changes.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     env:
-      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      # only whether there is a token; the token itself goes to the scan step alone, so the
+      # build scripts and tests of the dependencies (coverage step) never see it
+      HAS_SONAR_TOKEN: ${{ secrets.SONAR_TOKEN != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # full history for blame data
+          persist-credentials: false
       - name: Install Rust
         run: |
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal -c clippy,llvm-tools-preview
@@ -160,12 +198,41 @@ jobs:
       # Mandatory once SONAR_TOKEN is set: the scan waits for the quality gate and fails this job
       # if the gate fails. GitHub gives no secrets to pull requests from forks, so those are skipped.
       - name: Scan and wait for the quality gate
-        if: ${{ env.SONAR_TOKEN != '' }}
+        if: ${{ env.HAS_SONAR_TOKEN == 'true' }}
         uses: SonarSource/sonarqube-scan-action@59202af334b4ba7b5db01b701b8e79f8b3bef0f4 # v8.5.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           args: >
             -Dsonar.qualitygate.wait=true
             -Dsonar.qualitygate.timeout=600
       - name: SonarQube Cloud skipped (no token)
-        if: ${{ env.SONAR_TOKEN == '' }}
+        if: ${{ env.HAS_SONAR_TOKEN != 'true' }}
         run: echo "::warning title=SonarQube Cloud not run::SONAR_TOKEN is not set (not configured yet, or a pull request from a fork)."
+
+  # The one required check of this workflow. It always runs. It fails when
+  # a job above failed or was cancelled, when `changes` did not succeed,
+  # and when a job was skipped although the change needed it. It passes
+  # when `check` and `sonar` were skipped on purpose (prose or fuzzing only).
+  gate:
+    name: CI gate
+    if: ${{ always() }}
+    needs: [changes, check, reuse, docs, sonar]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed, or was skipped on purpose
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
+          jq -e '.changes.result == "success"' <<< "$NEEDS" > /dev/null ||
+            { echo "::error::the changes job did not succeed"; exit 1; }
+          jq -e 'all(.[]; .result == "success" or .result == "skipped")' <<< "$NEEDS" > /dev/null ||
+            { echo "::error::a job failed or was cancelled"; exit 1; }
+          jq -e '.reuse.result == "success" and .docs.result == "success"' <<< "$NEEDS" > /dev/null ||
+            { echo "::error::a job that always runs was skipped"; exit 1; }
+          if jq -e '.changes.outputs.build != "false"' <<< "$NEEDS" > /dev/null; then
+            jq -e '.check.result == "success" and .sonar.result == "success"' <<< "$NEEDS" > /dev/null ||
+              { echo "::error::the change needs check and sonar, and one of them was skipped"; exit 1; }
+          fi
