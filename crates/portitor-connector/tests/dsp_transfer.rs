@@ -1042,6 +1042,229 @@ async fn requests_at_once_while_the_finalization_is_on_its_way_settle_it_once() 
     assert_eq!(settled.version, 5, "written once");
 }
 
+/// `finalization_on_its_way()` moved to `state`, with `pending` on its
+/// way instead of the finalization event.
+fn negotiation_in(state: NegotiationState, pending: Option<Transition>) -> Negotiation {
+    let mut negotiation = finalization_on_its_way();
+    negotiation.state = state;
+    negotiation.pending = match (negotiation.pending, pending) {
+        (Some(message), Some(transition)) => Some(Outgoing {
+            transition,
+            to: match transition {
+                Transition::Finalize => NegotiationState::Finalized,
+                Transition::Terminate => NegotiationState::Terminated,
+                _ => state,
+            },
+            ..message
+        }),
+        _ => None,
+    };
+    negotiation
+}
+
+/// The table of ADR 0007 (amended in 0.13) through HTTP and the `SQLite`
+/// store, for every state of the negotiation and every message that can
+/// be on its way when the transfer request arrives: it is served only
+/// under a `FINALIZED` negotiation, or a `VERIFIED` one whose
+/// finalization event is on its way. Every other request gets 400 and
+/// the stored negotiation stays as it was.
+#[tokio::test]
+async fn a_request_is_served_only_when_finalized_or_when_the_finalization_is_on_its_way() {
+    use NegotiationState::{Accepted, Agreed, Finalized, Offered, Requested, Terminated, Verified};
+    use Transition::{Agree, Finalize, Offer, Terminate};
+    let uri = format!("{BASE}/request");
+    let states = [
+        Requested, Offered, Accepted, Agreed, Verified, Finalized, Terminated,
+    ];
+    let on_its_way = [
+        None,
+        Some(Offer),
+        Some(Agree),
+        Some(Finalize),
+        Some(Terminate),
+    ];
+    for state in states {
+        for pending in on_its_way {
+            let served = state == Finalized || (state == Verified && pending == Some(Finalize));
+            let negotiation = negotiation_in(state, pending);
+            let (app, file, flows) = app_with_stored(&negotiation);
+            let (status, answer) = call(&app, post(&uri, &request("a-new"))).await;
+            let case = format!("{state:?} with {pending:?} on its way: {answer}");
+            if served {
+                assert_eq!(status, StatusCode::CREATED, "{case}");
+                assert_eq!(stored(&file).state, Finalized, "{case}");
+                assert_eq!(flows.calls(), ["start CAT0101"], "{case}");
+            } else {
+                assert_eq!(status, StatusCode::BAD_REQUEST, "{case}");
+                assert_eq!(stored(&file), negotiation, "{case}");
+                assert!(flows.calls().is_empty(), "{case}");
+            }
+        }
+    }
+}
+
+/// ADR 0007, amended in 0.13: "The negotiation is settled when the
+/// request names the agreement and the caller is its consumer, also if
+/// the request is then refused for another reason. The proof is that the
+/// consumer asked, not that the transfer is granted."
+#[tokio::test]
+async fn a_request_refused_for_another_reason_still_settles_the_finalization() {
+    let uri = format!("{BASE}/request");
+    let mut other_format = request("a-new");
+    other_format["format"] = json!("HttpData-PUSH");
+    // a push transfer, which this connector does not do (ADR 0013)
+    let mut push = request("a-new");
+    push["dataAddress"] = json!({
+        "@type": "DataAddress",
+        "endpointType": "https://w3id.org/idsa/v4.1/HTTP",
+        "endpoint": "https://consumer.example/in"
+    });
+    for (name, body) in [("another format", other_format), ("push", push)] {
+        let (app, file, flows) = app_with_stored(&finalization_on_its_way());
+        let (status, error) = call(&app, post(&uri, &body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name}: {error}");
+        assert!(flows.calls().is_empty(), "{name}");
+        let settled = stored(&file);
+        assert_eq!(settled.state, NegotiationState::Finalized, "{name}");
+        assert_eq!(settled.pending, None, "{name}");
+        assert_eq!(settled.version, 5, "{name}");
+        // and the next, good request is served without another write
+        let (status, ack) = call(&app, post(&uri, &request("a-new"))).await;
+        assert_eq!(status, StatusCode::CREATED, "{name}: {ack}");
+        assert_eq!(stored(&file), settled, "{name}");
+    }
+}
+
+/// What the code does today, written down: a request that is refused
+/// before the agreement is looked up settles nothing. These are requests
+/// that are no valid `TransferRequestMessage`, have no caller, or name a
+/// callback address the connector may not call.
+#[tokio::test]
+async fn a_request_refused_before_the_agreement_is_looked_up_settles_nothing() {
+    let uri = format!("{BASE}/request");
+    let mut no_format = request("a-new");
+    no_format.as_object_mut().unwrap().remove("format");
+    let mut http_callback = request("a-new");
+    http_callback["callbackAddress"] = json!("http://consumer.example/cb");
+    let json_body = |body: &Value| Body::from(body.to_string());
+    let cases = [
+        (
+            "not a valid message",
+            post(&uri, &no_format),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "an http callback",
+            post(&uri, &http_callback),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "no caller",
+            Request::post(&uri)
+                .header("content-type", "application/json")
+                .body(json_body(&request("a-new")))
+                .unwrap(),
+            StatusCode::NOT_FOUND,
+        ),
+    ];
+    for (name, req, expected) in cases {
+        let (app, file, flows) = app_with_stored(&finalization_on_its_way());
+        let (status, error) = call(&app, req).await;
+        assert_eq!(status, expected, "{name}: {error}");
+        assert_eq!(stored(&file), finalization_on_its_way(), "{name}");
+        assert!(flows.calls().is_empty(), "{name}");
+    }
+}
+
+/// The connector on the `SQLite` file `path`. With `after_a_start`,
+/// what the file holds as pending is sent again, as `main` does it.
+/// Returns the router, what it sends, and how many messages were sent
+/// again.
+fn connector_on(path: &std::path::Path, after_a_start: bool) -> (Router, Arc<FakeSender>, usize) {
+    let (sender, flows) = (
+        Arc::new(FakeSender::default()),
+        Arc::new(FakeFlows::default()),
+    );
+    let mut p = ports(&sender, &flows);
+    p.use_sqlite(&Arc::new(SqliteNegotiations::open(path).unwrap()));
+    let (app, negotiator) = portitor_connector::build(&config(), p).unwrap();
+    let sent_again = if after_a_start {
+        negotiator.resume().unwrap()
+    } else {
+        0
+    };
+    (app, sender, sent_again)
+}
+
+/// A restart between the transfer request that settled the finalization
+/// and the acknowledgement that never came: the file says `FINALIZED`,
+/// the finalization event is not sent again ("It is not sent again after
+/// a restart", ADR 0007), the transfer is still there and the agreement
+/// serves another one.
+#[tokio::test]
+async fn after_a_restart_a_settled_finalization_is_not_sent_again() {
+    use portitor_dsp::negotiation::provider::NegotiationStore as _;
+
+    let folder = portitor_runtime::testing::TempDir::new("td-44");
+    let path = folder.path().join("portitor.db");
+    let file = SqliteNegotiations::open(&path).unwrap();
+    file.insert(&finalization_on_its_way()).unwrap();
+    let uri = format!("{BASE}/request");
+
+    // the event is on its way (nothing answers it); the request arrives
+    let (app, _sender, _) = connector_on(&path, false);
+    let (status, first) = call(&app, post(&uri, &request("a-new"))).await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    let pid = first["providerPid"].as_str().unwrap().to_owned();
+    wait_for(&app, &pid, "STARTED").await;
+    drop(app);
+
+    // the restart
+    let (app, sender, sent_again) = connector_on(&path, true);
+    assert_eq!(sent_again, 0, "nothing was pending");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(sender.sent().is_empty(), "{:?}", sender.sent());
+    let settled = file.get("urn:uuid:n1").unwrap().unwrap();
+    assert_eq!(settled.state, NegotiationState::Finalized);
+    assert_eq!(settled.pending, None);
+    assert_eq!(settled.version, 5);
+    assert_eq!(state(&app, &pid).await, "STARTED");
+    let mut second = request("a-new");
+    second["consumerPid"] = json!("urn:uuid:consumer-2");
+    let (status, answer) = call(&app, post(&uri, &second)).await;
+    assert_eq!(status, StatusCode::CREATED, "{answer}");
+    assert_eq!(file.get("urn:uuid:n1").unwrap().unwrap(), settled);
+}
+
+/// The other order: the restart comes first and finds the finalization
+/// event still pending. It is sent again; a transfer request that
+/// arrives before the consumer answers it is served all the same.
+#[tokio::test]
+async fn after_a_restart_with_the_finalization_still_on_its_way_a_request_is_served() {
+    use portitor_dsp::negotiation::provider::NegotiationStore as _;
+
+    let folder = portitor_runtime::testing::TempDir::new("td-44");
+    let path = folder.path().join("portitor.db");
+    let file = SqliteNegotiations::open(&path).unwrap();
+    file.insert(&finalization_on_its_way()).unwrap();
+
+    let (app, sender, sent_again) = connector_on(&path, true);
+    assert_eq!(sent_again, 1, "the finalization event");
+    let (status, answer) = call(&app, post(&format!("{BASE}/request"), &request("a-new"))).await;
+    assert_eq!(status, StatusCode::CREATED, "{answer}");
+    // the event's acknowledgement and the transfer's start message
+    let all = sent(&sender, 2).await;
+    let events = all.iter().filter(|(url, _)| url.ends_with("/events"));
+    assert_eq!(events.count(), 1, "{all:?}");
+    let settled = file.get("urn:uuid:n1").unwrap().unwrap();
+    assert_eq!(settled.state, NegotiationState::Finalized);
+    assert_eq!(settled.pending, None);
+    assert_eq!(
+        settled.version, 5,
+        "written once: by the request or by the acknowledgement"
+    );
+}
+
 /// Serves `hello` as CSV at `/file` on a free local port; returns its URL.
 #[cfg(feature = "data-plane")]
 async fn upstream() -> String {

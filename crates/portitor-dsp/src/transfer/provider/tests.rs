@@ -967,6 +967,9 @@ enum OtherWriter {
     RecordedTheAcknowledgement,
     /// It changed the negotiation without finalizing it.
     ChangedSomethingElse,
+    /// It gave up the finalization event and saved our termination in
+    /// its place (the outbox, when the consumer cannot be reached).
+    StartedToTerminate,
 }
 
 impl Agreements for &Negotiations {
@@ -989,9 +992,18 @@ impl Agreements for &Negotiations {
         if self.1.get() > 0 {
             self.1.set(self.1.get() - 1);
             old.version += 1;
-            if matches!(self.2, OtherWriter::RecordedTheAcknowledgement) {
-                old.state = NegotiationState::Finalized;
-                old.pending = None;
+            match self.2 {
+                OtherWriter::RecordedTheAcknowledgement => {
+                    old.state = NegotiationState::Finalized;
+                    old.pending = None;
+                }
+                OtherWriter::ChangedSomethingElse => {}
+                OtherWriter::StartedToTerminate => {
+                    if let Some(pending) = &mut old.pending {
+                        pending.transition = NegotiationTransition::Terminate;
+                        pending.to = NegotiationState::Terminated;
+                    }
+                }
             }
             return Ok(false);
         }
@@ -1211,4 +1223,73 @@ fn settling_is_tried_again_a_few_times_and_then_given_up() {
     assert_eq!(held.0.borrow()[0].state, NegotiationState::Verified);
     assert!(store.0.borrow().is_empty());
     assert!(flows.calls().is_empty());
+}
+
+/// The provider gives up the finalization event (the consumer could not
+/// be reached) at the moment the transfer request arrives, and its write
+/// comes first: the settling write loses the version check, the
+/// negotiation is read again, and now our termination is on its way.
+/// That is no finalization, so the request is refused and nothing of the
+/// termination is undone.
+#[test]
+fn a_termination_written_first_makes_the_request_refused() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let mut held = negotiations(finalization_on_its_way());
+    held.2 = OtherWriter::StartedToTerminate;
+    held.1.set(1);
+    let s = racing(&store, &held, &flows);
+
+    let failure = request_as(&s, CONSUMER).unwrap_err();
+    assert!(failure.is_no_finalized_agreement(), "{failure:?}");
+    let ending = held.0.borrow()[0].clone();
+    assert_eq!(ending.state, NegotiationState::Verified);
+    assert_eq!(
+        ending.pending.unwrap().transition,
+        NegotiationTransition::Terminate
+    );
+    assert_eq!(ending.version, 5, "only the other writer wrote");
+    assert!(store.0.borrow().is_empty());
+    assert!(flows.calls().is_empty());
+}
+
+/// The table of ADR 0007 (amended in 0.13), for every state a
+/// negotiation can be in and every message that can be on its way: a
+/// transfer request is served only under a `FINALIZED` negotiation, or a
+/// `VERIFIED` one whose finalization event is on its way. In every other
+/// case it is refused and the negotiation is left exactly as it was.
+#[test]
+fn only_finalized_or_verified_with_the_finalization_on_its_way_is_served() {
+    use NegotiationState::{Accepted, Agreed, Finalized, Offered, Requested, Terminated, Verified};
+    use NegotiationTransition::{Agree, Finalize, Offer, Terminate};
+    let states = [
+        Requested, Offered, Accepted, Agreed, Verified, Finalized, Terminated,
+    ];
+    let on_its_way = [
+        None,
+        Some(Offer),
+        Some(Agree),
+        Some(Finalize),
+        Some(Terminate),
+    ];
+    for state in states {
+        for pending in on_its_way {
+            let served = state == Finalized || (state == Verified && pending == Some(Finalize));
+            let (store, flows) = (Store::default(), Flows::default());
+            let held = negotiations(negotiation(state, pending));
+            let s = racing(&store, &held, &flows);
+            let handled = request_as(&s, CONSUMER);
+            let case = format!("{state:?} with {pending:?} on its way");
+            if served {
+                assert!(handled.is_ok(), "{case}: {handled:?}");
+                assert_eq!(held.0.borrow()[0].state, Finalized, "{case}");
+                assert_eq!(flows.calls(), ["start urn:uuid:1"], "{case}");
+            } else {
+                let failure = handled.unwrap_err();
+                assert!(failure.is_no_finalized_agreement(), "{case}: {failure:?}");
+                assert_eq!(held.0.borrow()[0], negotiation(state, pending), "{case}");
+                assert!(store.0.borrow().is_empty(), "{case}");
+                assert!(flows.calls().is_empty(), "{case}");
+            }
+        }
+    }
 }
