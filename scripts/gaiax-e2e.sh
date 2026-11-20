@@ -229,15 +229,18 @@ done
 # --- 5. Gaia-X onboarding -------------------------------------------------------------
 
 has_compliance_credential() { # name: true once it holds one from the compliance service
-  gaiax_has_compliance_credential "${IDENTITY_MANAGEMENT[$1]}" "$RUN/$1/identity-management.key"
+  local name=$1
+  gaiax_has_compliance_credential "${IDENTITY_MANAGEMENT[$name]}" "$RUN/$name/identity-management.key"
 }
 
 start_compliance_run() { # name: POST /v1/gaiax/compliance; 409: a run is on already
-  gaiax_start_compliance_run "${IDENTITY_MANAGEMENT[$1]}" "$RUN/$1/identity-management.key" "the $1"
+  local name=$1
+  gaiax_start_compliance_run "${IDENTITY_MANAGEMENT[$name]}" "$RUN/$name/identity-management.key" "the $name"
 }
 
 until_compliance_run_ended() { # name: prints the newest run once it is no longer RUNNING
-  gaiax_until_compliance_run_ended "${IDENTITY_MANAGEMENT[$1]}" "$RUN/$1/identity-management.key" "the $1"
+  local name=$1
+  gaiax_until_compliance_run_ended "${IDENTITY_MANAGEMENT[$name]}" "$RUN/$name/identity-management.key" "the $name"
 }
 
 step "The consumer's identity runs its Gaia-X onboarding (POST /v1/gaiax/compliance)"

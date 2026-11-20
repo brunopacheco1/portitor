@@ -58,18 +58,24 @@ fail() {
   for log in "$WORK"/*.log; do printf -- '--- %s\n' "$log" >&2; tail -8 "$log" >&2; done
   exit 1
 }
-wait_for() {
-  for _ in $(seq 1 100); do curl -sf "$1" >/dev/null && return 0; sleep 0.2; done
-  fail "$1 did not answer"
+wait_for() { # url
+  local url=$1
+  for _ in $(seq 1 100); do curl -sf "$url" >/dev/null && return 0; sleep 0.2; done
+  fail "$url did not answer"
 }
-did_web() { echo "did:web:${1/:/%3A}"; }
+did_web() { # address
+  local address=$1
+  echo "did:web:${address/:/%3A}"
+}
+JSON=(-H 'content-type: application/json')
 
 DATA=127.0.0.1:19070
 ISSUER_A=127.0.0.1:19100; ISSUER_B=127.0.0.1:19200
 DID_A=$(did_web $ISSUER_A); DID_B=$(did_web $ISSUER_B)
 
 start_issuer() { # name address management-address
-  local name=$1 address=$2 management=$3 dir=$WORK/$1
+  local name=$1 address=$2 management=$3
+  local dir=$WORK/$name
   mkdir -p "$dir"
   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$dir/key.pem" 2>/dev/null
   openssl rand -hex 32 >"$dir/management.key"
@@ -82,7 +88,8 @@ start_issuer() { # name address management-address
   PIDS+=($!)
 }
 start_identity() { # name address management-address trusted-issuers
-  local name=$1 address=$2 management=$3 trusted=$4 dir=$WORK/$1
+  local name=$1 address=$2 management=$3 trusted=$4
+  local dir=$WORK/$name
   mkdir -p "$dir"
   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$dir/key.pem" 2>/dev/null
   openssl rand -hex 32 >"$dir/management.key"
@@ -97,24 +104,26 @@ start_identity() { # name address management-address trusted-issuers
   PIDS+=($!)
 }
 register() { # issuer-name issuer-management did
-  curl -sS --fail-with-body -X POST "http://$2/v1/participants" \
-    -H "authorization: Bearer $(cat "$WORK/$1/management.key")" -H 'content-type: application/json' \
-    -d "$(jq -nc --arg did "$3" --arg m "data space of $1" '{did: $did, claims: {memberOf: $m}}')" \
-    >/dev/null || fail "register $3 at $1"
+  local issuer=$1 management=$2 did=$3
+  curl -sS --fail-with-body -X POST "http://$management/v1/participants" \
+    -H "authorization: Bearer $(cat "$WORK/$issuer/management.key")" "${JSON[@]}" \
+    -d "$(jq -nc --arg did "$did" --arg m "data space of $issuer" '{did: $did, claims: {memberOf: $m}}')" \
+    >/dev/null || fail "register $did at $issuer"
 }
 request_membership() { # identity-name identity-management issuer-did
+  local identity=$1 management=$2 issuer_did=$3
   local key view pid
-  key=$(cat "$WORK/$1/management.key")
-  pid=$(curl -sS --fail-with-body -X POST "http://$2/v1/credential-requests" \
-    -H "authorization: Bearer $key" -H 'content-type: application/json' \
-    -d "$(jq -nc --arg issuer "$3" '{issuerDid: $issuer, credentialIds: ["membership-vc20"]}')" |
-    jq -r '.holderPid') || fail "$1 asks $3"
+  key=$(cat "$WORK/$identity/management.key")
+  pid=$(curl -sS --fail-with-body -X POST "http://$management/v1/credential-requests" \
+    -H "authorization: Bearer $key" "${JSON[@]}" \
+    -d "$(jq -nc --arg issuer "$issuer_did" '{issuerDid: $issuer, credentialIds: ["membership-vc20"]}')" |
+    jq -r '.holderPid') || fail "$identity asks $issuer_did"
   for _ in $(seq 1 100); do
-    view=$(curl -sf "http://$2/v1/credential-requests/$pid" -H "authorization: Bearer $key")
+    view=$(curl -sf "http://$management/v1/credential-requests/$pid" -H "authorization: Bearer $key")
     [[ $(jq -r '.status' <<<"$view") == ISSUED ]] && return 0
     sleep 0.2
   done
-  fail "$1: no credential from $3: $view"
+  fail "$identity: no credential from $issuer_did: $view"
 }
 start_connector() { # name address management-address identity-name identity-address trusted-issuers [more VAR=value settings]
   local name=$1 address=$2 management=$3 identity=$4 identity_address=$5 trusted=$6
@@ -132,34 +141,41 @@ start_connector() { # name address management-address identity-name identity-add
   PIDS+=($!)
 }
 sts_token() { # identity-name identity-address audience-did
-  curl -sf -X POST "http://$2/sts/token" --data-urlencode grant_type=client_credentials \
-    --data-urlencode "client_id=$(did_web "$2")" \
-    --data-urlencode "client_secret=$(cat "$WORK/$1/sts-client-secret")" \
-    --data-urlencode "audience=$3" \
+  local identity=$1 address=$2 audience=$3
+  curl -sf -X POST "http://$address/sts/token" --data-urlencode grant_type=client_credentials \
+    --data-urlencode "client_id=$(did_web "$address")" \
+    --data-urlencode "client_secret=$(cat "$WORK/$identity/sts-client-secret")" \
+    --data-urlencode "audience=$audience" \
     --data-urlencode "bearer_access_scope=org.eclipse.dspace.dcp.vc.type:MembershipCredential" |
     jq -r '.access_token'
 }
 catalog_status() { # consumer-identity-name consumer-identity-address provider-address provider-did
+  local identity=$1 identity_address=$2 provider=$3 provider_did=$4
   local token
-  token=$(sts_token "$1" "$2" "$4") || fail "no STS token from $1"
-  curl -s -o "$WORK/catalog.json" -w '%{http_code}' -X POST "http://$3/dsp/2025-1/catalog/request" \
-    -H "authorization: Bearer $token" -H 'content-type: application/json' \
+  token=$(sts_token "$identity" "$identity_address" "$provider_did") || fail "no STS token from $identity"
+  curl -s -o "$WORK/catalog.json" -w '%{http_code}' -X POST "http://$provider/dsp/2025-1/catalog/request" \
+    -H "authorization: Bearer $token" "${JSON[@]}" \
     -d '{"@context": ["https://w3id.org/dspace/2025/1/context.jsonld"], "@type": "CatalogRequestMessage"}'
 }
 api() { # connector-name management-address method path [body]
-  local args=(-sf -X "$3" "http://$2$4" -H "authorization: Bearer $(cat "$WORK/$1/management.key")")
-  if [[ $# -gt 4 ]]; then args+=(-H 'content-type: application/json' -d "$5"); fi
+  local connector=$1 management=$2 method=$3 path=$4
+  local args=(-sf -X "$method" "http://$management$path" -H "authorization: Bearer $(cat "$WORK/$connector/management.key")")
+  if [[ $# -gt 4 ]]; then
+    local body=$5
+    args+=("${JSON[@]}" -d "$body")
+  fi
   curl "${args[@]}"
 }
 until_state() { # connector-name management-address path states
+  local connector=$1 management=$2 path=$3 states=$4
   local view state
   for _ in $(seq 1 100); do
-    view=$(api "$1" "$2" GET "$3") || fail "read $3"
+    view=$(api "$connector" "$management" GET "$path") || fail "read $path"
     state=$(jq -r '.state' <<<"$view")
-    if [[ $state =~ ^($4)$ ]]; then echo "$view"; return 0; fi
+    if [[ $state =~ ^($states)$ ]]; then echo "$view"; return 0; fi
     sleep 0.2
   done
-  fail "$3 still $state"
+  fail "$path still $state"
 }
 # a whole exchange: catalog, negotiation, transfer, data pull
 exchange() { # label consumer-connector consumer-management consumer-identity consumer-identity-address provider-address provider-did
@@ -264,7 +280,7 @@ if [[ $MODE == shared ]]; then
     --data-urlencode "audience=$(did_web 127.0.0.1:19300)" --data-urlencode "token=$ACCESS" | jq -r '.access_token') ||
     fail "the STS of consumer A gave no token for the organisation's credential service"
   curl -s -X POST http://127.0.0.1:19300/cs/presentations/query -H "authorization: Bearer $VERIFIER_TOKEN" \
-    -H 'content-type: application/json' -d '{"@context": ["https://w3id.org/dspace-dcp/v1.0/dcp.jsonld"],
+    "${JSON[@]}" -d '{"@context": ["https://w3id.org/dspace-dcp/v1.0/dcp.jsonld"],
       "type": "PresentationQueryMessage", "scope": ["org.eclipse.dspace.dcp.vc.type:MembershipCredential"]}' \
     >"$WORK/presentation.json"
   python3 - "$WORK/presentation.json" <<'PY'

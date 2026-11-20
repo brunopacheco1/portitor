@@ -36,15 +36,18 @@ container_engine_fail() {
 }
 
 container_engine_exists() { # command
-  command -v "$1" >/dev/null 2>&1
+  local engine=$1
+  command -v "$engine" >/dev/null 2>&1
 }
 
 container_engine_answers() { # command: it exists and its daemon (or machine) answers
-  container_engine_exists "$1" && "$1" info >/dev/null 2>&1
+  local engine=$1
+  container_engine_exists "$engine" && "$engine" info >/dev/null 2>&1
 }
 
 container_engine_is_podman() { # command: Podman, also under the name docker
-  case $("$1" --version 2>/dev/null) in
+  local engine=$1
+  case $("$engine" --version 2>/dev/null) in
     *[Pp]odman*) return 0 ;;
     *) return 1 ;;
   esac

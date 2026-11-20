@@ -49,6 +49,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from gaiax_test_notary import base64url, load_key, public_jwk, sign_es256
 
 VC2_CONTEXT = "https://www.w3.org/ns/credentials/v2"
+CONTEXT = "@context"  # the JSON-LD member that names the contexts
 # how long the credentials and the presentation are valid: 90 days, as a
 # Portitor identity writes them (VALIDITY_SECONDS in gaiax_sign.rs)
 VALIDITY = datetime.timedelta(days=90)
@@ -81,7 +82,7 @@ def private_jwk(key: ec.EllipticCurvePrivateKey, kid: str) -> dict:
 def credential(credential_id: str, did: str, contexts: list, kind: str, subject: dict, period: dict) -> dict:
     """A VC 2.0 credential of one Gaia-X type (`credential` in gaiax_sign.rs)."""
     return {
-        "@context": [VC2_CONTEXT, *contexts],
+        CONTEXT: [VC2_CONTEXT, *contexts],
         "id": credential_id,
         "type": ["VerifiableCredential", kind],
         "issuer": did,
@@ -136,11 +137,11 @@ def sign(
 
     # `presentation` and `envelope` in gaiax_sign.rs
     presentation = {
-        "@context": [VC2_CONTEXT],
+        CONTEXT: [VC2_CONTEXT],
         "type": "VerifiablePresentation",
         "verifiableCredential": [
             {
-                "@context": VC2_CONTEXT,
+                CONTEXT: VC2_CONTEXT,
                 "id": f"data:application/vc+jwt,{jwt}",
                 "type": "EnvelopedVerifiableCredential",
             }
@@ -167,7 +168,7 @@ def manifest(jwt_file: str, participant_context_id: str, resource_id: str) -> No
     issuer = payload["issuer"]
     subject = payload["credentialSubject"]
     described = {
-        "@context": payload["@context"],
+        CONTEXT: payload[CONTEXT],
         "id": payload["id"],
         "type": payload["type"],
         "issuer": {"id": issuer["id"] if isinstance(issuer, dict) else issuer},
