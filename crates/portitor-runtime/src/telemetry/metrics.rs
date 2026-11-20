@@ -51,6 +51,7 @@ struct Instruments {
     harvest_runs: Counter<u64>,
     datasets_rejected: Counter<u64>,
     bundle_in_use: Gauge<u64>,
+    bundle_files_skipped: Gauge<u64>,
     http_requests_panicked: Counter<u64>,
     tasks_panicked: Counter<u64>,
 }
@@ -124,6 +125,13 @@ impl Instruments {
                 .with_unit("{bundle}")
                 .with_description(
                     "1 for the bundle version in force, 0 for one no longer in force.",
+                )
+                .build(),
+            bundle_files_skipped: meter
+                .u64_gauge("portitor.bundle.file.skipped")
+                .with_unit("{file}")
+                .with_description(
+                    "Files of the bundle version in force that are skipped, because their role is not known to this version. What they hold is not enforced.",
                 )
                 .build(),
             http_requests_panicked: meter
@@ -333,6 +341,15 @@ pub fn bundle_in_use(version: &str, in_use: bool) {
         .record(u64::from(in_use), &attributes);
 }
 
+/// `count` files of the bundle version in force are skipped: their role
+/// is not known to this version, so what they hold is not enforced
+/// (ADR 0005, amended in 0.13). 0 when every file is used. No attribute:
+/// the paths and role names are the authority's text, not a fixed set.
+pub fn bundle_files_skipped(count: usize) {
+    let count = u64::try_from(count).unwrap_or(u64::MAX);
+    instruments().bundle_files_skipped.record(count, &[]);
+}
+
 /// A request handler panicked and the request was answered with HTTP 500
 /// ([`crate::panics::answer_500_on_panic`]). `route` is the route
 /// template, `None` when no route matched.
@@ -395,6 +412,7 @@ mod tests {
         harvest_run_ended("datasets", "succeeded");
         datasets_rejected("dsp", 2);
         bundle_in_use("1.0.0", true);
+        bundle_files_skipped(2);
         http_request_panicked(Some("/data/{flowId}"));
         task_panicked("outbox_delivery");
         server_request(0.01, "GET", Some("/health"), 200, "1.1");

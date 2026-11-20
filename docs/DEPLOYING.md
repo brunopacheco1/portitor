@@ -376,6 +376,20 @@ messages against them. A dataset that passes is served with
   is used only when the authority's host or DID document cannot be
   reached; its files and signature are then checked again, with a
   warning. Keep the cache on the `/data` volume.
+- **A file with a role this version does not know is skipped** (from
+  0.13; ADR 0005). A later version of the format may add roles, for
+  example policy shapes. The connector does not download such a file
+  and does not use it; the other files are used as before. You see it
+  in three places: one WARN line for each file,
+  `bundle file skipped: ...`, with `path` and `role_type`; the gauge
+  `portitor.bundle.file.skipped`; and the bundle run in
+  `GET /v1/harvest-jobs`, whose summary ends with
+  `N files skipped (unknown role, ...)`. **The limit: a connector that
+  skips a new kind of rule does not enforce it.** Upgrade the connector
+  to enforce it. A bundle in which the connector knows no role at all
+  is refused like any invalid bundle (the version in use stays; with
+  no version, the start stops). Everything else in a manifest is still
+  read strictly: a field the format does not have is an error.
 - A bundle that was read but fails a check (signature, key, authority,
   version or a digest) stops the start; the cache does not replace it.
   So does a bundle that cannot be loaded at all (no download and no
@@ -1174,6 +1188,7 @@ tested with a proxy product.
 | `outbound DSP message breaks the dataspace's message rules; not sent` (WARN) | The same breach, logged by the check itself with `message_type` and `reasons` | As above |
 | `inbound DSP message breaks the dataspace's message rules; answered 400` (INFO) | A partner's negotiation or transfer message failed the bundle's message shapes; it got HTTP 400 and nothing changed | Nothing, unless the partner asks |
 | `inbound DSP message is not valid; answered 400` (INFO) | A partner's negotiation or transfer message could not be read; `reason` says why. `unknown field ...` in an offer or agreement: a policy term the connector does not read (for example a `duty` inside a permission), refused on purpose. The partner got HTTP 400 and nothing changed | Nothing, unless you want that offer: then ask the partner for one with only the terms listed under [Known limits](#known-limits) |
+| `transfer request is refused; answered 400` (INFO) | A partner asked for a transfer under an agreement that is not finalized here, is not its own, or does not exist (`reason`: `no finalized agreement with this id for the caller`). It got HTTP 400 and no transfer was made. The line names neither the agreement nor the partner. From 0.13 a request that arrives just before the partner's acknowledgement of the finalization is recorded is accepted, not refused (ADR 0007) | Nothing, unless a partner asks: its negotiation must reach `FINALIZED` on your side first (look for its `negotiation state changed` lines) |
 | `message had arrived before` (INFO) | A send failed, but the partner's state shows it had received the message (a lost answer, or a resend after a restart); the negotiation goes on | Nothing |
 | `sending pending negotiation messages again` (INFO, at start) | Messages saved but not acknowledged before the last stop are being sent | Nothing |
 | `counter-party not reachable; process not started` (WARN) | The first request of a negotiation or transfer we started as consumer failed (tried as above); it ends without a message, as the provider never knew it | Same as above |
@@ -1200,6 +1215,7 @@ tested with a proxy product.
 | `harvest: cannot store the run; ...` (ERROR) | The database could not be written; the catalog keeps what it had | Check disk space and the `/data` volume |
 | `looking for new bundle versions` (INFO, at start) | The bundles URL or folder and how often `latest.json` is read | Nothing |
 | `bundle: no new version is looked for (...)` (INFO, at start) | A fixed `PORTITOR_BUNDLE_VERSION`, or `PORTITOR_BUNDLE_REFRESH_SECONDS=0` | Nothing |
+| `bundle file skipped: this version does not know its role; what the file holds is not enforced` (WARN) | The bundle in force lists a file with a role of a later version (`path`, `role_type`, `version`). The file is not downloaded and not used; the other files are. Logged each time a version is taken | Upgrade the connector to enforce that kind of rule; until then it is not enforced here. If the role type looks misspelt, tell the authority |
 | `bundle downloaded and verified` (INFO) | A bundle version was downloaded and passed every check | Nothing |
 | `bundle download failed; using the cached copy, checked again` (WARN, at start) | The authority's host or DID document could not be reached; the cached copy is used | Check the network to the authority; nothing breaks meanwhile |
 | `bundle: the newest version cannot be taken; keeping the version in use` (ERROR, at start) | With `latest`: the newest version could not be downloaded, failed a check or is older than the one in use; the cached version in use before is kept | Check the reason in the log line or in `GET /v1/harvest-jobs`; ask the authority |
@@ -1355,6 +1371,7 @@ dots into underscores and adds the unit, for example
 | `portitor.http.request.panicked` | counter, `{request}` | `http.route` (when a route matched). A request handler panicked (a bug); the request got HTTP 500 | all |
 | `portitor.task.panicked` | counter, `{task}` | `portitor.task.name`: `outbox_delivery`, `dataset_harvest`, `bundle_harvest`, `identity_check` (connector), `certificate_watch`, `gaiax_schedule`, `gaiax_run` (identity), `issuer_outbox`, `credential_decision` (issuer) | all |
 | `portitor.bundle.in_use` | gauge, `{bundle}` | `portitor.bundle.version`: 1 for the version in force, 0 for one replaced since the start | connector, with a bundle |
+| `portitor.bundle.file.skipped` | gauge, `{file}` | none. Files of the bundle version in force that are skipped because this connector does not know their role; what they hold is not enforced. 0 when every file is used | connector, with a bundle |
 
 A resend is a retry of a message, a message saved before a restart
 and sent again, or a DSP message sent again after its sending
@@ -1816,7 +1833,9 @@ catalog.
    ```
    It refuses RDF/XML, paths that leave the folder, files over 64 MiB, and
    a version folder that exists already: a published version never
-   changes. It checks its own result as a connector will, and prints the
+   changes. It also refuses a role it does not know (only `datasets`,
+   `messages`, `vocabulary` and `context` in this version), so a
+   misspelt role is never published. It checks its own result as a connector will, and prints the
    public key as a JWK. `--issued` is a UTC date and time
    (`YYYY-MM-DDThh:mm:ssZ`); without it, the time of the build is used. It also points `latest.json` at the new version,
    unless that file names a version issued later, or you pass
@@ -1833,6 +1852,17 @@ catalog.
 
 The issuer serves only `manifest.json`, `manifest.jws` and the files the
 version's manifest lists; anything else is 404.
+
+Roles and older connectors (from 0.13; ADR 0005): a connector skips a
+file whose role it does not know, with a warning, and uses the rest of
+the bundle. So a later version of the issuer can add a new kind of file
+without breaking the members that have not upgraded. **The limit: a
+connector that skips a new kind of rule does not enforce it.** If every
+member must enforce a new rule, wait until all have upgraded before you
+rely on it. Keep at least one file with a role every member knows: a
+connector refuses a bundle in which it knows no role. The issuer itself
+is strict: it builds, signs and serves only roles it knows, so publish
+a new role with the issuer version that has it.
 
 ### Ports
 
@@ -1916,6 +1946,11 @@ known risk and technical debt, with its status and target release):
   `constraint` in a rule; `leftOperand`, `operator` and `rightOperand`,
   or one of `and`, `andSequence`, `or`, `xone`, in a constraint. An
   offer in your datasets file has no `target`, `assigner` or `assignee`.
+- Bundle: a file with a role this version does not know is skipped,
+  so a rule of a later kind is not enforced until the connector is
+  upgraded ([bundle](#schema-and-vocabulary-bundle)). The readiness
+  check `bundle` does not show skipped files (it only passes or
+  fails); the log, the gauge and the job log do.
 - Negotiations start from the consumer only; a provider cannot start
   one with an offer ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)). A
   transfer request sent twice starts two transfers

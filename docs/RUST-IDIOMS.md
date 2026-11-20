@@ -1059,6 +1059,43 @@ by hand (`Constraint` in `portitor-dsp/src/lib.rs`):
 The body first reads the JSON whole into a `serde_json::Value`, then
 decides from its fields what it is.
 
+### Reading JSON in two steps: strict for known names, open for others
+
+```rust
+impl<'de> Deserialize<'de> for Role {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = Box::<RawValue>::deserialize(deserializer)?;       // keep the JSON text
+        let RoleTypeOnly { type_name } = serde_json::from_str(text.get())?;  // step 1
+        if KNOWN_ROLE_TYPES.contains(&type_name.as_str()) {
+            let known: KnownRole = serde_json::from_str(text.get())?;        // step 2
+            return Ok(known.into());
+        }
+        Ok(Role::Unknown { type_name })
+    }
+}
+```
+
+(Shortened from `Role` in `portitor-dcp/src/bundle.rs`; the real code
+also turns the errors into `D::Error` and checks the name.)
+
+The rule is "read the roles I know strictly, and keep only the name of
+any other". serde's derive cannot say that: `deny_unknown_fields`
+refuses every unknown name, and `#[serde(other)]` cannot keep the name
+or allow extra fields. So the rule is written out:
+
+- `RawValue` (from `serde_json`) is a piece of JSON kept as text,
+  not yet read into a type. `text.get()` gives that text.
+- Step 1 reads the same text into a small struct that has only the
+  field `type`; serde passes over the other fields.
+- Step 2, only for a known name, reads the text again into
+  `KnownRole`, an enum with `deny_unknown_fields`, so a field a known
+  role does not have is still an error.
+- Any other name becomes the variant `Role::Unknown { type_name }`. A
+  `match` on `Role` must then say what happens to an unknown role, and
+  the compiler checks that it does.
+
+Reading the text twice costs little here: a role is a few dozen bytes.
+
 ## Macros: `name!(...)`
 
 A name with `!` is a macro: code that writes code at compile time.

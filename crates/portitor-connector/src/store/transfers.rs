@@ -5,15 +5,15 @@
 //! Transfers as provider, and the agreements they are made under, in the
 //! same `SQLite` file as the negotiations (ADR 0013).
 
-use portitor_dsp::negotiation::provider::Negotiation;
+use portitor_dsp::negotiation::provider::{Negotiation, NegotiationStore};
 use portitor_dsp::negotiation::{Agreement, NegotiationState};
 use portitor_dsp::transfer::provider::{Agreements, Outgoing, Transfer, TransferStore};
 use portitor_dsp::transfer::{TransferState, Transition};
 use rusqlite::{Row, params};
 
 use super::{
-    SqliteNegotiations, StoreError, StoredMessage, col, err, json, parsed, parsed_version,
-    state_text, version,
+    NEGOTIATION_COLUMNS, SqliteNegotiations, StoreError, StoredMessage, col, err, json,
+    negotiation_from_row, parsed, parsed_version, state_text, version,
 };
 
 const TRANSFER_COLUMNS: &str = "provider_pid, consumer_pid, state, callback_address, \
@@ -192,6 +192,27 @@ impl Agreements for SqliteNegotiations {
         })?;
         Ok(found.into_iter().next())
     }
+
+    fn negotiation_of(&self, agreement_id: &str) -> Result<Option<Negotiation>, StoreError> {
+        // the expression is the one of the index `negotiation_agreement`
+        // (migration 10), as in `finalized` above; agreement ids are made
+        // here and are unique, so there is at most one row
+        let sql = format!(
+            "SELECT {NEGOTIATION_COLUMNS} FROM negotiation
+             WHERE json_extract(agreement, '$.\"@id\"') = ?1"
+        );
+        let found = self.query(&sql, params![agreement_id], negotiation_from_row)?;
+        Ok(found.into_iter().next())
+    }
+
+    fn replace_negotiation_if(
+        &self,
+        negotiation: &Negotiation,
+        expected: u64,
+    ) -> Result<bool, StoreError> {
+        // the same compare-and-update the negotiation service uses
+        NegotiationStore::replace_if(self, negotiation, expected)
+    }
 }
 
 /// The agreement of a finalized negotiation, for adapters that keep
@@ -206,7 +227,6 @@ pub fn finalized_agreement(negotiation: &Negotiation, agreement_id: &str) -> Opt
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use portitor_dsp::negotiation::provider::NegotiationStore;
     use serde_json::json;
 
     use super::*;
@@ -321,5 +341,64 @@ mod tests {
         assert_eq!(db.finalized("urn:uuid:a").unwrap(), Some(agreement.clone()));
         assert_eq!(db.finalized("urn:uuid:other").unwrap(), None);
         assert_eq!(finalized_agreement(&n, "urn:uuid:a"), Some(agreement));
+    }
+
+    /// The negotiation behind an agreement is found in any state, and
+    /// written with the version check of the negotiation store (ADR 0007,
+    /// amended in 0.13).
+    #[test]
+    fn the_negotiation_of_an_agreement_is_found_and_replaced_by_version() {
+        let db = SqliteNegotiations::in_memory().unwrap();
+        let negotiations: &dyn NegotiationStore = &db;
+        let without_agreement: Negotiation = Negotiation {
+            provider_pid: "urn:uuid:n0".to_owned(),
+            consumer_pid: "urn:uuid:c0".to_owned(),
+            state: NegotiationState::Requested,
+            callback_address: "https://c.example/cb".to_owned(),
+            counter_party: "did:web:c".to_owned(),
+            offer: serde_json::from_value(json!({
+                "@id": "o", "@type": "Offer", "target": "d", "permission": [{"action": "use"}]
+            }))
+            .unwrap(),
+            agreement: None,
+            pending: None,
+            version: 0,
+        };
+        negotiations.insert(&without_agreement).unwrap();
+        assert_eq!(db.negotiation_of("urn:uuid:a").unwrap(), None);
+
+        let mut verified = without_agreement.clone();
+        verified.provider_pid = "urn:uuid:n1".to_owned();
+        verified.state = NegotiationState::Verified;
+        verified.agreement = Some(
+            serde_json::from_value(json!({
+                "@id": "urn:uuid:a", "@type": "Agreement", "target": "d",
+                "assigner": "did:web:p", "assignee": "did:web:c",
+                "timestamp": "2026-11-13T00:00:00Z", "permission": [{"action": "use"}]
+            }))
+            .unwrap(),
+        );
+        negotiations.insert(&verified).unwrap();
+        assert_eq!(db.finalized("urn:uuid:a").unwrap(), None);
+        assert_eq!(
+            db.negotiation_of("urn:uuid:a").unwrap(),
+            Some(verified.clone())
+        );
+        assert_eq!(db.negotiation_of("urn:uuid:other").unwrap(), None);
+
+        let mut finalized = verified.clone();
+        finalized.state = NegotiationState::Finalized;
+        finalized.version = 1;
+        assert!(db.replace_negotiation_if(&finalized, 0).unwrap());
+        assert!(
+            !db.replace_negotiation_if(&finalized, 0).unwrap(),
+            "version 0 is gone"
+        );
+        assert_eq!(db.finalized("urn:uuid:a").unwrap(), finalized.agreement);
+        // the other negotiation is untouched
+        assert_eq!(
+            negotiations.get("urn:uuid:n0").unwrap(),
+            Some(without_agreement)
+        );
     }
 }

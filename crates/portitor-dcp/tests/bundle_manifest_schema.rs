@@ -139,7 +139,27 @@ fn broken_manifests_fail_the_schema_and_the_rust_type() {
             "accessRights",
             json!([]),
         ),
-        ("unknown role", "/files/0", "role", json!({"type": "rules"})),
+        ("role without type", "/files/0", "role", json!({})),
+        (
+            "role type not a string",
+            "/files/0",
+            "role",
+            json!({"type": 7}),
+        ),
+        ("role not an object", "/files/0", "role", json!("messages")),
+        ("role as an array", "/files/0", "role", json!(["messages"])),
+        (
+            "role type not a name",
+            "/files/0",
+            "role",
+            json!({"type": "two words"}),
+        ),
+        (
+            "extra field in a context role",
+            "/files/4/role",
+            "extra",
+            json!(1),
+        ),
         (
             "extra role field",
             "/files/2/role",
@@ -157,4 +177,46 @@ fn broken_manifests_fail_the_schema_and_the_rust_type() {
         let parsed = Manifest::parse(&serde_json::to_vec(&manifest).unwrap());
         assert!(parsed.is_err(), "Rust type accepted: {name}");
     }
+}
+
+/// ADR 0005, amended in 0.13: a role object with a type this version
+/// does not know is valid, with any other fields and any of the three
+/// media types; the reader skips the file.
+#[test]
+fn a_file_with_an_unknown_role_passes_the_schema_and_the_rust_type() {
+    let validator = validator();
+    let roles = [
+        json!({"type": "rules"}),
+        json!({"type": "policy-shapes", "appliesTo": ["offers"], "strict": {"level": 2}}),
+    ];
+    for role in roles {
+        for media_type in [
+            "text/turtle",
+            "application/n-triples",
+            "application/ld+json",
+        ] {
+            let mut manifest = full_example();
+            manifest["files"][0]["role"] = role.clone();
+            manifest["files"][0]["mediaType"] = json!(media_type);
+            let errors: Vec<String> = validator
+                .iter_errors(&manifest)
+                .map(|e| e.to_string())
+                .collect();
+            assert!(errors.is_empty(), "{role} as {media_type}: {errors:?}");
+            let parsed = Manifest::parse(&serde_json::to_vec(&manifest).unwrap()).unwrap();
+            let skipped = parsed.files_of_unknown_role();
+            assert_eq!(skipped.len(), 1, "{role}");
+            assert_eq!(skipped[0].role_type, role["type"].as_str().unwrap());
+        }
+    }
+}
+
+/// A manifest in which no file has a known role gives no rules: both
+/// refuse it.
+#[test]
+fn a_manifest_with_only_unknown_roles_fails_the_schema_and_the_rust_type() {
+    let mut manifest = minimal_example();
+    manifest["files"][0]["role"] = json!({"type": "rules"});
+    assert!(!validator().is_valid(&manifest));
+    assert!(Manifest::parse(&serde_json::to_vec(&manifest).unwrap()).is_err());
 }

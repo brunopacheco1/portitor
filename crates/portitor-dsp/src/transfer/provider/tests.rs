@@ -104,6 +104,12 @@ impl Agreements for Agreed {
             _ => None,
         })
     }
+    fn negotiation_of(&self, _: &str) -> Result<Option<Negotiation>, StoreError> {
+        Ok(None)
+    }
+    fn replace_negotiation_if(&self, _: &Negotiation, _: u64) -> Result<bool, StoreError> {
+        Ok(false)
+    }
 }
 
 /// Only for callers with a `MembershipCredential` at level `gold`
@@ -941,4 +947,268 @@ fn a_transfer_starts_only_while_the_caller_meets_the_agreement() {
     assert!(s.agreement("a-members", CONSUMER).unwrap().is_some());
     assert!(s.agreement("a-other", CONSUMER).unwrap().is_none());
     assert!(s.agreement("unknown", CONSUMER).unwrap().is_none());
+}
+
+// ---- ADR 0007, amended in 0.13 (TD-44): a transfer request that arrives
+// ---- before the acknowledgement of our finalization event is recorded
+
+use crate::negotiation::Transition as NegotiationTransition;
+use crate::negotiation::provider::Outgoing as NegotiationMessage;
+
+/// Agreements kept as the provider's negotiations, as the connector's
+/// store keeps them. `.1`: how many settling writes lose the version
+/// check; `.2`: what another writer did to the negotiation meanwhile.
+struct Negotiations(RefCell<Vec<Negotiation>>, Cell<u32>, OtherWriter);
+
+/// What the write that came first did.
+#[derive(Clone, Copy)]
+enum OtherWriter {
+    /// It recorded the acknowledgement of the finalization event.
+    RecordedTheAcknowledgement,
+    /// It changed the negotiation without finalizing it.
+    ChangedSomethingElse,
+}
+
+impl Agreements for &Negotiations {
+    fn finalized(&self, id: &str) -> Result<Option<Agreement>, StoreError> {
+        Ok(self
+            .negotiation_of(id)?
+            .filter(|n| n.state == NegotiationState::Finalized)
+            .and_then(|n| n.agreement))
+    }
+    fn negotiation_of(&self, id: &str) -> Result<Option<Negotiation>, StoreError> {
+        let all = self.0.borrow();
+        let made_it = |n: &&Negotiation| n.agreement.as_ref().is_some_and(|a| a.id == id);
+        Ok(all.iter().find(made_it).cloned())
+    }
+    fn replace_negotiation_if(&self, new: &Negotiation, expected: u64) -> Result<bool, StoreError> {
+        let mut all = self.0.borrow_mut();
+        let Some(old) = all.iter_mut().find(|n| n.provider_pid == new.provider_pid) else {
+            return Ok(false);
+        };
+        if self.1.get() > 0 {
+            self.1.set(self.1.get() - 1);
+            old.version += 1;
+            if matches!(self.2, OtherWriter::RecordedTheAcknowledgement) {
+                old.state = NegotiationState::Finalized;
+                old.pending = None;
+            }
+            return Ok(false);
+        }
+        if old.version != expected {
+            return Ok(false);
+        }
+        *old = new.clone();
+        Ok(true)
+    }
+}
+
+/// The provider's negotiation `n1` with `CONSUMER`, which made agreement
+/// `a-new` for dataset `d1`, in `state` with `pending` on its way.
+fn negotiation(state: NegotiationState, pending: Option<NegotiationTransition>) -> Negotiation {
+    let use_it: Rule = serde_json::from_value(json!({"action": "use"})).unwrap();
+    let pending = pending.map(|transition| NegotiationMessage {
+        provider_pid: "n1".to_owned(),
+        url: "https://consumer.example/cb/negotiations/c1/events".to_owned(),
+        body: json!({}),
+        transition,
+        to: match transition {
+            NegotiationTransition::Finalize => NegotiationState::Finalized,
+            _ => NegotiationState::Terminated,
+        },
+        status_url: "https://consumer.example/cb/negotiations/c1".to_owned(),
+        counter_party: CONSUMER.to_owned(),
+    });
+    Negotiation {
+        provider_pid: "n1".to_owned(),
+        consumer_pid: "c1".to_owned(),
+        state,
+        callback_address: "https://consumer.example/cb".to_owned(),
+        counter_party: CONSUMER.to_owned(),
+        offer: serde_json::from_value(json!({
+            "@id": "d1:offer", "@type": "Offer", "target": "d1",
+            "permission": [{"action": "use"}]
+        }))
+        .unwrap(),
+        agreement: Some(agreement("a-new", CONSUMER, use_it)),
+        pending,
+        version: 4,
+    }
+}
+
+/// `VERIFIED`, the finalization event on its way: the race of TD-44.
+fn finalization_on_its_way() -> Negotiation {
+    negotiation(
+        NegotiationState::Verified,
+        Some(NegotiationTransition::Finalize),
+    )
+}
+
+fn negotiations(negotiation: Negotiation) -> Negotiations {
+    Negotiations(
+        RefCell::new(vec![negotiation]),
+        Cell::new(0),
+        OtherWriter::RecordedTheAcknowledgement,
+    )
+}
+
+type RacingService<'a> =
+    TransferService<&'a Store, &'a Negotiations, &'a Flows, Always, Catalog, Env>;
+
+fn racing<'a>(
+    store: &'a Store,
+    negotiations: &'a Negotiations,
+    flows: &'a Flows,
+) -> RacingService<'a> {
+    TransferService::new(
+        store,
+        negotiations,
+        flows,
+        Always(TransferDecision::Start),
+        Catalog,
+        Env::default(),
+    )
+}
+
+fn request_as(s: &RacingService<'_>, caller: &str) -> Handled {
+    let msg = request("a-new", "HttpData-PULL");
+    s.request(&msg, caller, &CallerCredentials::default())
+}
+
+#[test]
+fn a_request_while_the_finalization_is_on_its_way_proves_it_arrived() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let held = negotiations(finalization_on_its_way());
+    let s = racing(&store, &held, &flows);
+
+    let (ack, out) = request_as(&s, CONSUMER).unwrap();
+    assert_eq!(ack.state, TransferState::Requested);
+    assert_eq!(out.unwrap().to, TransferState::Started);
+    assert_eq!(flows.calls(), ["start urn:uuid:1"]);
+
+    // the negotiation is settled as if the acknowledgement had come:
+    // FINALIZED, nothing pending, one write
+    let settled = held.0.borrow()[0].clone();
+    assert_eq!(settled.state, NegotiationState::Finalized);
+    assert_eq!(settled.pending, None);
+    assert_eq!(settled.version, 5);
+    assert!(settled.agreement.is_some());
+
+    // a second transfer under it finds a finalized agreement: no write
+    let mut second = request("a-new", "HttpData-PULL");
+    second.consumer_pid = "urn:uuid:c2".to_owned();
+    s.request(&second, CONSUMER, &CallerCredentials::default())
+        .unwrap();
+    assert_eq!(held.0.borrow()[0], settled);
+}
+
+/// ADR 0013: the caller must be the agreement's consumer, and this is
+/// checked before anything is settled.
+#[test]
+fn another_caller_proves_nothing_and_settles_nothing() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let held = negotiations(finalization_on_its_way());
+    let s = racing(&store, &held, &flows);
+
+    let failure = request_as(&s, "did:web:someone-else").unwrap_err();
+    assert!(failure.is_no_finalized_agreement(), "{failure:?}");
+    assert_eq!(held.0.borrow()[0], finalization_on_its_way());
+    assert!(store.0.borrow().is_empty());
+    assert!(flows.calls().is_empty());
+    // the same answer as for an agreement that does not exist
+    let mut unknown = request("a-unknown", "HttpData-PULL");
+    unknown.consumer_pid = "urn:uuid:c".to_owned();
+    let other = s
+        .request(
+            &unknown,
+            "did:web:someone-else",
+            &CallerCredentials::default(),
+        )
+        .unwrap_err();
+    assert_eq!(failure, other);
+}
+
+#[test]
+fn an_agreement_of_a_negotiation_in_any_other_state_is_still_refused() {
+    use NegotiationState::{Agreed, Terminated, Verified};
+    let cases = [
+        // agreed, not verified by the consumer
+        (Agreed, None),
+        // verified, but the provider has not decided to finalize
+        (Verified, None),
+        // verified, and the provider is ending the negotiation
+        (Verified, Some(NegotiationTransition::Terminate)),
+        (Terminated, None),
+    ];
+    for (state, pending) in cases {
+        let (store, flows) = (Store::default(), Flows::default());
+        let held = negotiations(negotiation(state, pending));
+        let s = racing(&store, &held, &flows);
+        let failure = request_as(&s, CONSUMER).unwrap_err();
+        assert!(
+            failure.is_no_finalized_agreement(),
+            "{state:?}: {failure:?}"
+        );
+        assert_eq!(held.0.borrow()[0], negotiation(state, pending), "{state:?}");
+        assert!(store.0.borrow().is_empty());
+        assert!(flows.calls().is_empty());
+    }
+}
+
+/// Only this refusal answers `true`; the adapter logs it.
+#[test]
+fn other_refusals_are_not_the_no_finalized_agreement_refusal() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = service(&store, &flows, TransferDecision::Start);
+    let none = CallerCredentials::default();
+    let expired = s.request(&request("a-expired", "HttpData-PULL"), CONSUMER, &none);
+    assert!(!expired.unwrap_err().is_no_finalized_agreement());
+    let unknown = s.request(&request("unknown", "HttpData-PULL"), CONSUMER, &none);
+    assert!(unknown.unwrap_err().is_no_finalized_agreement());
+    assert!(!Failure::DataPlane("down".to_owned()).is_no_finalized_agreement());
+}
+
+/// The acknowledgement (or a second transfer request) is written at the
+/// same moment and comes first: the settling write loses the version
+/// check, the negotiation is read again, is FINALIZED, and the request
+/// goes on. Nothing is written twice.
+#[test]
+fn a_settling_write_that_comes_second_reads_the_negotiation_again() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let held = negotiations(finalization_on_its_way());
+    held.1.set(1);
+    let s = racing(&store, &held, &flows);
+
+    let (ack, _) = request_as(&s, CONSUMER).unwrap();
+    assert_eq!(ack.state, TransferState::Requested);
+    let finalized = held.0.borrow()[0].clone();
+    assert_eq!(finalized.state, NegotiationState::Finalized);
+    assert_eq!(finalized.version, 5, "only the other writer wrote");
+}
+
+/// The first write was something else (not a finalization): the rule is
+/// applied again to what is stored now. After a few lost writes the
+/// request is refused and the consumer may try again.
+#[test]
+fn settling_is_tried_again_a_few_times_and_then_given_up() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let mut held = negotiations(finalization_on_its_way());
+    held.2 = OtherWriter::ChangedSomethingElse;
+    held.1.set(2);
+    let s = racing(&store, &held, &flows);
+    request_as(&s, CONSUMER).unwrap();
+    assert_eq!(held.0.borrow()[0].state, NegotiationState::Finalized);
+    assert_eq!(held.0.borrow()[0].version, 7, "two lost writes, then ours");
+
+    let (store, flows) = (Store::default(), Flows::default());
+    let mut held = negotiations(finalization_on_its_way());
+    held.2 = OtherWriter::ChangedSomethingElse;
+    held.1.set(3);
+    let s = racing(&store, &held, &flows);
+    let failure = request_as(&s, CONSUMER).unwrap_err();
+    assert!(reason(&failure).contains("concurrently"), "{failure:?}");
+    assert!(!failure.is_no_finalized_agreement());
+    assert_eq!(held.0.borrow()[0].state, NegotiationState::Verified);
+    assert!(store.0.borrow().is_empty());
+    assert!(flows.calls().is_empty());
 }

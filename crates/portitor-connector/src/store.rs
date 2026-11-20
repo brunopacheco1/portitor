@@ -849,6 +849,21 @@ mod tests {
                 .collect();
             assert!(plan.iter().any(|step| step.contains(index)), "{plan:?}");
         }
+        // 0.13: the negotiation behind an agreement, in any state
+        // (`store/transfers.rs`, `negotiation_of`), uses the same index
+        let plan: Vec<String> = store
+            .conn()
+            .prepare(
+                "EXPLAIN QUERY PLAN SELECT provider_pid FROM negotiation
+                   WHERE json_extract(agreement, '$.\"@id\"') = ?1",
+            )
+            .unwrap()
+            .query_map(["urn:uuid:a"], |row| row.get(3))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let index = "INDEX negotiation_agreement";
+        assert!(plan.iter().any(|step| step.contains(index)), "{plan:?}");
     }
 
     /// A file written by 0.11 (8 migrations) with negotiations in it, as

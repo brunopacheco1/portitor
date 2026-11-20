@@ -19,6 +19,15 @@
 //! force (`main.rs` stops otherwise), and neither goes back later. So
 //! while the connector serves, they cannot fail; they are listed so that
 //! the answer shows them, and in case the start order changes.
+//!
+//! Bundle files that are skipped because this version does not know
+//! their role (ADR 0005, amended in 0.13) do not fail `bundle`: the
+//! connector works, and failing readiness would take every connector
+//! that has not upgraded out of service when the authority adds a role.
+//! The answer follows EDC's `HealthStatus`, which has a text only for a
+//! failed check, so the number of skipped files is not in it. It is in
+//! the log (one WARN for each file), in the gauge
+//! `portitor.bundle.file.skipped` and in the bundle run of the job log.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};

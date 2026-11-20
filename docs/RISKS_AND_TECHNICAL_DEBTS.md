@@ -78,7 +78,7 @@ checks this file:
 | [R-23](#r-23) | A wrong host clock gives wrong policy and token decisions | Security | 0.3 (ADR 0009, 2026-11-12) | Mitigated | — |
 | [R-24](#r-24) | Simpl-Open: parked, facts not verified, and it changes fast | Interoperability, upstream churn | 0.5 (ADR 0017, maintainer, 2026-11-13) | Accepted | Later |
 | [R-25](#r-25) | Name not checked for trademarks and domains | Delivery, legal | 0.3 (ADR 0008, 2026-11-12) | Open | 0.13 (blocks 1.0) |
-| [R-26](#r-26) | ODRL `dateTime` definition read from memory | Interoperability | 0.3 (ADR 0009, 2026-11-12) | Open | 0.13 |
+| [R-26](#r-26) | ODRL `dateTime` definition read from memory | Interoperability | 0.3 (ADR 0009, 2026-11-12) | Addressed (0.13) | — |
 | [R-27](#r-27) | CI downloads from Maven Central and GitHub | Delivery | 0.8 (2026-11-15) | Mitigated | — |
 | [R-28](#r-28) | 0.8 Gaia-X code had no fuzz target | Security | 0.8 (sweep for this file, 2026-11-15) | Addressed | 0.8 |
 | [R-29](#r-29) | DCP costs about 2 ms per request and 13 times fewer requests under load | Performance | 0.5 (ADR 0002 section 7, 2026-11-13) | Open (measured again in 0.12) | with TD-07 |
@@ -141,7 +141,7 @@ checks this file:
 | [TD-41](#td-41) | A panic stopped the whole process (`panic = "abort"`) | Technical debt, security | 2026-11-18 review (Q4) | Addressed (0.12) | — |
 | [TD-42](#td-42) | Four near-copies of the negotiation and transfer logic | Technical debt | 2026-11-18 review (Q5) | Open | 0.13 (note); 1.x (merge) |
 | [TD-43](#td-43) | The Gaia-X documents name several versions of the rules | Technical debt | 2026-11-18 review (G1) | Open | 0.13 |
-| [TD-44](#td-44) | A transfer request sent at once after the agreement can be refused | Technical debt, interoperability | 0.12 benchmark (2026-11-19) | Open | 0.13 (decision) |
+| [TD-44](#td-44) | A transfer request sent at once after the agreement can be refused | Technical debt, interoperability | 0.12 benchmark (2026-11-19) | Addressed (0.13) | — |
 | [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | 0.12 benchmark (2026-11-19) | Open | — |
 
 Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
@@ -634,8 +634,23 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
 - **What.** ADR 0009 could not read the ODRL 2.2 definition of `dateTime`
   and used it from memory: "check before 1.0".
 - **Why it matters.** Another connector may read it differently.
-- **Current state: Open.**
-- **Next.** ROADMAP 0.13, before 1.0.
+- **Current state: Addressed (0.13).** The definition was read on
+  2026-11-20 from the W3C working group's repository
+  (`https://raw.githubusercontent.com/w3c/poe/gh-pages/vocab/ODRL22.ttl`;
+  w3.org could not be reached). The text from memory was the definition
+  word for word, and the code follows it; a test now holds the
+  specification's own examples
+  ([ADR 0009](adr/0009-minimal-odrl-policies.md), note of 2026-11-20).
+  No code changed.
+- **What is left.** Portitor is stricter in one point, on purpose: a
+  date and time without a time zone is not understood (ODRL: optional,
+  "strongly recommended"). Two `xsd:dateTime` forms are not read
+  (`24:00:00`, years outside 0001 to 9999). Eclipse EDC has no built-in
+  `odrl:dateTime`; its own term is `edc:inForceDate`. So a time limit
+  is not interoperable with EDC out of the box, whatever the reading.
+- **Next.** The maintainer decides whether to read a date and time
+  without a time zone; compare the file with the copy at w3.org when it
+  can be reached.
 
 <a id="r-27"></a>
 ### R-27 CI downloads from Maven Central and GitHub
@@ -918,6 +933,15 @@ keep them.
 
 Mitigation today: the source and the store are their own crate,
 `portitor-bundle`, so they can be replaced as a whole (ADR 0005).
+
+Note for 0.13 (2026-11-20): the manifest format is frozen for 1.0 with
+one opening for later versions. A connector skips a file whose role
+type it does not know, with a warning and a metric, and refuses a bundle
+in which it knows no role (ADR 0005, "Amendment for 0.13"). So a later
+format can add roles without breaking 1.0 connectors. The limit: a
+connector that skips a new kind of rule does not enforce it. The rest
+of this debt (which standard to follow, where schemas are kept) is
+unchanged.
 
 <a id="td-02"></a>
 ### TD-02 Who calls the data plane, and with which credentials
@@ -1848,19 +1872,28 @@ certificate and compliance run at each key change (ADR 0021).
 - **Why it matters.** A person who starts a transfer by hand never meets
   it. A program that starts the transfer in the same second can, and
   sees a transfer refused for no visible reason.
-- **Current state: Open.** Not changed in 0.12: each way to close it
-  touches ADR 0007 and needs the maintainer's choice.
-- **Options.** (1) The provider treats a transfer request under an
-  agreement whose finalization is on its way as proof that the event
-  arrived, as a consumer's next negotiation message already is. The
-  cost: a consumer that asks before it received the event is served too.
-  (2) The provider accepts the request while the finalization is on its
-  way and leaves the state to the outbox. The cost: if the delivery
-  fails in the end, a transfer exists under a terminated negotiation.
-  (3) Leave it, log the refusal, and say in DEPLOYING that a client
-  tries again.
-- **Next.** ROADMAP 0.13: decide; whatever is chosen, the provider logs
-  the refusal.
+- **Options considered.** (1) The provider treats a transfer request
+  under an agreement whose finalization is on its way as proof that the
+  event arrived, as a consumer's next negotiation message already is.
+  The cost: a consumer that asks before it received the event is served
+  too. (2) The provider accepts the request while the finalization is
+  on its way and leaves the state to the outbox. The cost: if the
+  delivery fails in the end, a transfer exists under a terminated
+  negotiation. (3) Leave it, log the refusal, and say in DEPLOYING that
+  a client tries again.
+- **Current state: Addressed (0.13).** The maintainer chose option (1)
+  on 2026-11-20
+  ([ADR 0007](adr/0007-outbox-and-proof-of-delivery.md), "Amendment for
+  0.13"). Such a request, from the agreement's consumer, settles the
+  negotiation as `FINALIZED` and is then checked as any other; any
+  other state is refused as before. The rule is in `portitor-dsp`
+  (`negotiation::provider::finalization_proved`,
+  `transfer::provider::TransferService::agreement`), the SQL in
+  `crates/portitor-connector/src/store/transfers.rs`. The provider now
+  logs the refusal `transfer request is refused; answered 400`
+  ([DEPLOYING](DEPLOYING.md), troubleshooting). Tested in the domain
+  and over HTTP with the SQLite store, also with 16 requests at once;
+  the benchmark was not run again.
 
 <a id="td-45"></a>
 ### TD-45 Each running pull holds about 0.8 MB of memory

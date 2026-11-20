@@ -494,13 +494,15 @@ pub(crate) fn read_signed(folder: &Path) -> Result<Signed, BundleSourceError> {
     Signed::from_parts(manifest_bytes, jws_bytes)
 }
 
-/// Reads every file the manifest lists from `folder`.
+/// Reads every file the manifest lists from `folder`, except those with
+/// a role this version does not know: they are skipped, not read
+/// (ADR 0005, amended in 0.13).
 pub(crate) fn read_listed_files(
     folder: &Path,
     manifest: &Manifest,
 ) -> Result<BTreeMap<String, Vec<u8>>, BundleSourceError> {
     let mut collected = CollectedFiles::default();
-    for entry in &manifest.files {
+    for entry in manifest.files_to_fetch() {
         // the path was checked when the manifest was read: relative, no
         // `..`, so it stays inside `folder`
         let bytes = read_limited(&folder.join(&entry.path), MAX_FILE_BYTES)?;
@@ -627,7 +629,9 @@ impl BundleSource for UrlSource {
             let (manifest, key) =
                 verify_with_authority(&signed, expected, self.directory.as_ref()).await?;
             let mut collected = CollectedFiles::default();
-            for entry in &manifest.files {
+            // a file with a role this version does not know is skipped:
+            // not downloaded (ADR 0005, amended in 0.13)
+            for entry in manifest.files_to_fetch() {
                 let bytes = self
                     .get(&format!("{version}/{}", entry.path), MAX_FILE_BYTES)
                     .await?;

@@ -51,6 +51,35 @@ versions may change behaviour and configuration.
 - `scripts/gaiax-e2e.sh` and `scripts/edc-interop.sh` share
   `scripts/gaiax-lib.sh` (test CA, test notary, a participant's Gaia-X
   files).
+- **Behaviour, connector as provider: a transfer request sent at once
+  after the agreement is no longer refused** (TD-44; maintainer,
+  2026-11-20; ADR 0007 amended). A transfer request from the
+  agreement's consumer that arrives while the finalization event is
+  still on its way (sent, its acknowledgement not yet recorded) proves
+  that the event arrived: the negotiation is recorded as `FINALIZED`
+  and the request is checked as any other. Before, it got HTTP 400 and
+  the consumer's transfer ended `TERMINATED` (2 to 4 times in 6,000 to
+  10,000 transfers in the 0.12 benchmark). An agreement of a
+  negotiation in any other state, or of another consumer, is refused as
+  before. No new migration: the lookup uses the index of migration 10.
+- Connector as provider: a transfer request refused because it names no
+  finalized agreement of the caller is now logged, `transfer request is
+  refused; answered 400` (INFO). The line names neither the agreement
+  nor the caller.
+- **Behaviour, connector: a bundle file with a role the connector does
+  not know is skipped** (maintainer, 2026-11-20; ADR 0005 amended;
+  ADR 0025, point 4). Before, such a manifest made the whole bundle
+  invalid. Now the file is not downloaded and not used, the other files
+  are, and the connector says so: a WARN line for each file
+  (`bundle file skipped: ...`, with path and role type), the new gauge
+  `portitor.bundle.file.skipped`, and the summary of the bundle run in
+  `GET /v1/harvest-jobs`. A bundle in which the connector knows no role
+  is refused like any invalid bundle. The limit: a connector that skips
+  a new kind of rule does not enforce it. Everything else in a manifest
+  is read as strictly as before, and the issuer still builds, signs and
+  serves only roles it knows. `docs/schemas/bundle-manifest.schema.json`
+  says the same: known roles are closed, a role object with another
+  type is valid, at least one file has a known role.
 
 ### Documentation
 
@@ -59,6 +88,13 @@ versions may change behaviour and configuration.
   Gaia-X steps show and do not show, the changes from RC7 to RC8, and
   how to use a kept run by hand (`KEEP=1`), with the new Bruno
   environment `_http/environments/edc-interop.bru`.
+- ODRL `dateTime` (R-26): the definition in the ODRL 2.2 vocabulary was
+  read and compared with ADR 0009 and the code. The text ADR 0009 used
+  from memory was the definition, and the code follows it; no code
+  changed. ADR 0009 has the quoted definition, its source and the
+  comparison, also with Eclipse EDC (`edc:inForceDate`). A test holds
+  the specification's own examples.
+
 - Close-out of 0.12: the roadmap and the website mark 0.12 released and
   0.13 as the current release; the website quickstart clones v0.12.0.
   CONTRIBUTING gives `cargo vet diff` with `--mode local`.

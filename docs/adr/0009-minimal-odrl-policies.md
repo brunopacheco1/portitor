@@ -38,6 +38,7 @@ Facts checked (2026-11-12):
   could not be read from this environment. From memory: "the date (and
   optional time and timezone) of exercising the action of the Rule", with
   an `xsd:date` or `xsd:dateTime` right operand. Check before 1.0.
+  (Checked on 2026-11-20: see the note at the end.)
 - The DSP TCK 1.0.2 sends offers with one `use` permission and an empty
   constraint list, so the checks below keep the TCK green.
 
@@ -176,3 +177,75 @@ has them; these are refused.
   agree on different terms. The typed readers already refused it; the
   places that read plain JSON first now do the same
   (`portitor_dsp::unique_keys`).
+
+## Note, 2026-11-20: the ODRL definition of `dateTime`, read and compared
+
+The context above used the definition from memory
+([R-26](../RISKS_AND_TECHNICAL_DEBTS.md#r-26)). It was read on
+2026-11-20.
+
+**Source.** `https://raw.githubusercontent.com/w3c/poe/gh-pages/vocab/ODRL22.ttl`,
+the ODRL 2.2 ontology in the repository of the W3C working group
+(`owl:versionInfo "2.2"`; SHA-256 of the file read
+`2c6e61cc54fd7a1706ef7aa279c80f4d07b7b80ee16b71e6bdabd4fea8ceb25b`).
+`https://www.w3.org/ns/odrl/2/ODRL22.ttl` and
+`https://www.w3.org/TR/odrl-vocab/` could not be reached from this
+environment (the proxy answered 403), so the copy at w3.org was not
+compared with it. The Information Model was read from the same
+repository (`model/index.html`).
+
+**The definition** (`odrl:dateTime`, a `LeftOperand`):
+
+> The date (and optional time and timezone) of exercising the action of
+> the Rule. Right operand value MUST be an xsd:date or xsd:dateTime as
+> defined by [[xmlschema11-2]].
+
+Its note, marked non-normative:
+
+> The use of Timezone information is strongly recommended. The Rule may
+> be exercised before (with operator lt/lteq) or after (with operator
+> gt/gteq) the date(time) defined by the Right operand. Example:
+> `dateTime gteq 2017-12-31T06:00Z` means the Rule can only be exercised
+> after (and including) 6:00AM on the 31st Decemeber 2017 UTC time.
+
+The Information Model has two examples with an `xsd:date`:
+`dateTime lt 2018-01-01` ("the permission can only be exercised until
+2018-01-01") and `dateTime lteq 2017-12-31` ("the permission is valid
+until the end of the year 2017"). It also says: "A Constraint MAY have none or one dataType
+property value for the data type of the rightOperand/Reference."
+
+**Result: the text from memory was the definition, word for word, and
+the code follows it.** Compared point by point
+(`portitor-dsp/src/policy.rs`, `portitor-time`):
+
+| The specification | Portitor |
+|---|---|
+| The time "of exercising the action" | Compared with the clock when the provider agrees and at each transfer request (ADR 0013, ADR 0019). The same |
+| Right operand: `xsd:date` or `xsd:dateTime` | Both are read, as plain text or as `{"@value": ..., "@type": ...}`. The same |
+| `lteq` on a date means to the end of that day (model example) | A date is its whole day: `lteq 2017-12-31` holds until the end of the day. The same |
+| `lt` on a date means before that day (model example) | The same |
+| `gteq 2017-12-31T06:00Z` includes 06:00 (note) | The same. That value has no seconds, which `xsd:dateTime` requires; it is read all the same, as DSP's examples write it too |
+| Operators: the note names `lt`, `lteq`, `gt`, `gteq` | These, and `eq` and `neq`, which ODRL defines for every left operand and does not exclude here |
+| Time zone: optional, "strongly recommended" | **Stricter, on purpose** (decision above): a date and time without a time zone is not understood, so the policy never holds. A date without one is read as UTC |
+| `xsd:dateTime` of XML Schema 1.1 | Two forms it allows are not read, so such a policy never holds: `24:00:00` for the end of a day, and years outside 0001 to 9999 |
+| `dataType` on the constraint | Refused as an unknown field (amendment of 2026-11-18); the type can be given inside `rightOperand` (`@type`), and is not compared with the value |
+
+No code changed. The three examples of the specification, and the
+refusal of a date and time without a time zone, are now a test
+(`the_date_time_examples_of_the_odrl_specification_hold_as_it_says`).
+
+For the maintainer to decide, not changed here because each changes
+which policies are understood: whether to read a date and time without
+a time zone (as UTC, as for a date, with a warning) since ODRL allows
+it; and whether to read `24:00:00`.
+
+**Eclipse EDC** (1.0.0-RC8, sources searched 2026-11-20): it has no
+built-in function for the ODRL `dateTime` left operand (no use outside
+tests). Its time constraint is its own term, `edc:inForceDate`
+(`ContractExpiryCheckFunction`): the right operand is an instant read
+with Java's `Instant.parse` (so with seconds and a time zone, no plain
+date), or `contractAgreement+<n>s|m|h|d`, compared with the current
+time at transfer and by the policy monitor. It is another term than
+`odrl:dateTime`: Portitor does not read it, and an EDC without an own
+function for `dateTime` does not evaluate Portitor's. What EDC does with
+a constraint it has no function for was not checked here.

@@ -164,7 +164,8 @@ What this says:
   when that message is acknowledged. A transfer requested in between
   finds no finalized agreement. It happened only with 16 at a time, never
   one at a time; the provider logs nothing for it. Asking again
-  works.
+  works. Release 0.13 closes this: such a request is accepted and the
+  refusal is logged (ADR 0007, amendment for 0.13); not measured again.
 
 ### Catalog
 

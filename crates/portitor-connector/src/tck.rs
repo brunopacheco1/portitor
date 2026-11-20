@@ -215,6 +215,21 @@ impl<A: Agreements> Agreements for TckAgreements<A> {
             profile: None,
         }))
     }
+
+    // the agreements of real negotiations are the stored ones; the test
+    // agreements above are always finalized, so these are not reached
+    // for them
+    fn negotiation_of(&self, agreement_id: &str) -> Result<Option<Negotiation>, StoreError> {
+        self.0.negotiation_of(agreement_id)
+    }
+
+    fn replace_negotiation_if(
+        &self,
+        negotiation: &Negotiation,
+        expected: u64,
+    ) -> Result<bool, StoreError> {
+        self.0.replace_negotiation_if(negotiation, expected)
+    }
 }
 
 /// The DSP TCK's participant id (TCK v1.0.2, `DspConstants.TCK_PARTICIPANT_ID`).

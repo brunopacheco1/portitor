@@ -550,3 +550,212 @@ async fn a_bundle_folder_is_checked_like_a_download() {
     ));
     authority.stop().await;
 }
+
+// ---- ADR 0005, amended in 0.13: a file whose role this version does not
+// ---- know is skipped; a bundle of which nothing is known is refused
+
+impl Authority {
+    /// Publishes `version` as a later version of the build tool would:
+    /// built as usual, then `change` is applied to the manifest (it adds
+    /// or changes roles this version does not know) and the manifest is
+    /// signed again with the bundle key. This version's `bundle build`
+    /// refuses such roles, so the test signs by hand.
+    fn publish_from_a_later_build_tool(
+        &self,
+        version: &str,
+        issued: &str,
+        change: impl Fn(&mut serde_json::Value),
+    ) {
+        self.publish(version, issued);
+        let folder = self.bundles.join(version);
+        let text = std::fs::read_to_string(folder.join("manifest.json")).unwrap();
+        let mut manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
+        change(&mut manifest);
+        let text = manifest.to_string();
+        std::fs::write(folder.join("manifest.json"), &text).unwrap();
+        let raw = serde_json::value::RawValue::from_string(text).unwrap();
+        let kid = format!("{}#bundle-key", self.did);
+        let jws = self
+            .bundle_key
+            .sign_json(&kid, portitor_dcp::bundle::JWS_TYPE, &raw)
+            .unwrap();
+        std::fs::write(folder.join("manifest.jws"), jws).unwrap();
+    }
+}
+
+/// Adds a file with a role of a later version to the manifest. The file
+/// itself is not put on disk: a connector that skips it never reads it.
+fn add_a_policies_file(manifest: &mut serde_json::Value) {
+    let later = serde_json::json!({
+        "path": "policies/odrl.jsonld",
+        "sha256": portitor_dcp::bundle::sha256_hex(b"never read"),
+        "mediaType": "application/ld+json",
+        "role": {"type": "policies", "appliesTo": ["offers"], "strict": true}
+    });
+    manifest["files"].as_array_mut().unwrap().push(later);
+}
+
+/// Gives every file a role of a later version.
+fn make_every_role_unknown(manifest: &mut serde_json::Value) {
+    for file in manifest["files"].as_array_mut().unwrap() {
+        file["role"] = serde_json::json!({"type": "policies"});
+    }
+}
+
+/// Log lines collected on the test's thread, as JSON.
+#[derive(Clone, Default)]
+struct Log(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for Log {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Log {
+    /// Collects until the guard is dropped.
+    fn start() -> (Self, tracing::subscriber::DefaultGuard) {
+        let log = Self::default();
+        let writer = log.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(move || writer.clone())
+            .finish();
+        (log, tracing::subscriber::set_default(subscriber))
+    }
+    fn lines(&self) -> Vec<serde_json::Value> {
+        let text = String::from_utf8(self.0.lock().unwrap().clone()).unwrap();
+        text.lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+}
+
+#[tokio::test]
+async fn a_newer_version_with_a_file_of_an_unknown_role_is_taken_and_the_file_is_skipped() {
+    let authority = Authority::start(true).await;
+    let settings = folder_settings(&authority);
+    let started = start(&settings).await.unwrap();
+    assert_eq!(started.job.summary, "version 2026.11.0 in use");
+    assert!(
+        started
+            .harvester
+            .copy()
+            .current()
+            .skipped_files()
+            .is_empty()
+    );
+
+    authority.publish_from_a_later_build_tool(
+        "2026.12.0",
+        "2026-12-01T00:00:00Z",
+        add_a_policies_file,
+    );
+    let (log, guard) = Log::start();
+    let (job, changed) = started.harvester.check(Trigger::Interval).await;
+    drop(guard);
+    assert_eq!(job.outcome, JobOutcome::Succeeded, "{}", job.summary);
+    assert!(changed);
+    assert_eq!(
+        job.summary,
+        "version 2026.12.0 in use (was 2026.11.0); \
+         1 file skipped (unknown role, its rules are not enforced)"
+    );
+    // the files it knows are used as before
+    let rules = started.harvester.copy().current();
+    assert_eq!(rules.version(), "2026.12.0");
+    assert!(rules.dataset_check().is_some(), "the datasets shapes");
+    let skipped = rules.skipped_files();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0].path, "policies/odrl.jsonld");
+    assert_eq!(skipped[0].role_type, "policies");
+
+    // one WARN names the path and the role type
+    let lines = log.lines();
+    let warnings: Vec<&serde_json::Value> = lines
+        .iter()
+        .filter(|line| {
+            let message = line["fields"]["message"].as_str().unwrap_or_default();
+            message.starts_with("bundle file skipped")
+        })
+        .collect();
+    assert_eq!(warnings.len(), 1, "{lines:?}");
+    assert_eq!(warnings[0]["level"], "WARN");
+    assert_eq!(warnings[0]["fields"]["path"], "policies/odrl.jsonld");
+    assert_eq!(warnings[0]["fields"]["role_type"], "policies");
+    assert_eq!(warnings[0]["fields"]["version"], "2026.12.0");
+
+    // the skipped file is not in the cache, and the cached copy is good:
+    // a start without the authority's folder takes it, and says so again
+    let cached = settings.cache_dir.join("2026.12.0");
+    assert!(cached.join("shapes/public.ttl").is_file());
+    assert!(!cached.join("policies").exists());
+    std::fs::remove_dir_all(&authority.bundles).unwrap();
+    let restarted = start(&settings).await.unwrap();
+    assert_eq!(restarted.harvester.in_use().version, "2026.12.0");
+    assert!(
+        restarted.job.summary.contains("1 file skipped"),
+        "{}",
+        restarted.job.summary
+    );
+    authority.stop().await;
+}
+
+/// Following `latest`: a newer version in which this connector knows no
+/// role would give no rules at all. It is refused like any invalid
+/// bundle, and the version in use stays, also after a restart.
+#[tokio::test]
+async fn a_newer_version_with_only_unknown_roles_is_not_taken() {
+    let authority = Authority::start(true).await;
+    let settings = folder_settings(&authority);
+    let started = start(&settings).await.unwrap();
+
+    authority.publish_from_a_later_build_tool(
+        "2026.12.0",
+        "2026-12-01T00:00:00Z",
+        make_every_role_unknown,
+    );
+    assert_eq!(source(&settings).latest().await.unwrap(), "2026.12.0");
+    assert_eq!(
+        source(&settings).fetch("2026.12.0").await.unwrap_err(),
+        BundleSourceError::Invalid(BundleError::NoKnownRole)
+    );
+    let (job, changed) = started.harvester.check(Trigger::Interval).await;
+    assert_eq!(job.outcome, JobOutcome::Failed);
+    assert!(!changed);
+    assert!(
+        job.summary
+            .contains("no file has a role this version knows")
+            && job.summary.contains("keeping version 2026.11.0"),
+        "{}",
+        job.summary
+    );
+    assert_eq!(started.harvester.in_use().version, VERSION);
+    let rules = started.harvester.copy().current();
+    assert_eq!(rules.version(), VERSION);
+    assert!(rules.dataset_check().is_some(), "the old rules still check");
+
+    // a restart keeps the version in use, and the run says why
+    let restarted = start(&settings).await.unwrap();
+    assert_eq!(restarted.harvester.in_use().version, VERSION);
+    assert_eq!(restarted.job.outcome, JobOutcome::Failed);
+    assert!(
+        restarted.job.summary.contains("keeping version 2026.11.0"),
+        "{}",
+        restarted.job.summary
+    );
+
+    // a connector that has no version yet does not start with it
+    let mut first_start = settings.clone();
+    first_start.cache_dir = scratch();
+    let error = start(&first_start).await.err().unwrap();
+    assert!(
+        error.contains("no file has a role this version knows"),
+        "{error}"
+    );
+    authority.stop().await;
+}

@@ -107,6 +107,29 @@ pub struct BundleRules {
     guard: Option<Arc<ShaclGuard>>,
     context_notes: Vec<String>,
     shape_notes: Vec<Warning>,
+    /// The bundle's files that are skipped because this version does not
+    /// know their role (ADR 0005, amended in 0.13).
+    skipped_files: Vec<SkippedBundleFile>,
+}
+
+/// A file of the bundle that is not used: this version does not know
+/// its role. Whatever rule it holds is not enforced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedBundleFile {
+    /// The file's path in the bundle.
+    pub path: String,
+    /// The `type` of its role in the manifest.
+    pub role_type: String,
+}
+
+/// The text for the job log when files are skipped; empty when none is.
+#[must_use]
+pub fn skipped_files_note(count: usize) -> String {
+    match count {
+        0 => String::new(),
+        1 => "; 1 file skipped (unknown role, its rules are not enforced)".to_owned(),
+        _ => format!("; {count} files skipped (unknown role, their rules are not enforced)"),
+    }
 }
 
 impl BundleRules {
@@ -147,13 +170,28 @@ impl BundleRules {
             contexts,
             by_access_right,
         });
+        let mut skipped_files = Vec::new();
+        for skipped in bundle.skipped_files() {
+            skipped_files.push(SkippedBundleFile {
+                path: skipped.path.to_owned(),
+                role_type: skipped.role_type.to_owned(),
+            });
+        }
         Ok(Self {
             version: bundle.version().to_owned(),
             dataset_check,
             guard,
             context_notes,
             shape_notes: shape_notes.into_iter().collect(),
+            skipped_files,
         })
+    }
+
+    /// The bundle's files that are skipped because this version does not
+    /// know their role. The connector does not enforce what they hold.
+    #[must_use]
+    pub fn skipped_files(&self) -> &[SkippedBundleFile] {
+        &self.skipped_files
     }
 
     /// The bundle version these rules come from.
@@ -187,11 +225,24 @@ impl BundleRules {
         &self.context_notes
     }
 
-    /// Logs, when the rules are taken, what they are and the notes above.
+    /// Logs, when the rules are taken, what they are, the skipped files
+    /// (one WARN each) and the notes above.
     /// The engine's notes about the upstream HealthDCAT-AP and DCAT-AP
     /// shapes (`sh:extends`, `sh:shape`, a property without path) are
     /// expected and logged at info; any other note at warn.
     pub fn log_start(&self) {
+        for skipped in &self.skipped_files {
+            // path and role type come from the signed manifest, and both
+            // are limited to letters, digits and a few signs when it is
+            // read (`portitor_dcp::bundle`)
+            tracing::warn!(
+                version = %self.version,
+                path = %skipped.path,
+                role_type = %skipped.role_type,
+                "bundle file skipped: this version does not know its role; \
+                 what the file holds is not enforced"
+            );
+        }
         for note in &self.context_notes {
             tracing::warn!(note = %note, "bundle context: not used");
         }
