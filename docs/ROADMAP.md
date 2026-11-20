@@ -55,7 +55,9 @@ Decisions about the plan itself that no ADR or changelog entry holds.
   on `main`: changes only through pull requests; one approval from a
   code owner, also of the latest push; stale approvals dismissed; the
   branch up to date before merge; signed commits; required status
-  checks; no force push or deletion. Admin bypass only for merging a
+  checks, by name `CI gate`, `TCK gate` and `Dependencies gate` (from
+  0.14; [CONTRIBUTING](../CONTRIBUTING.md#required-checks)); no force
+  push or deletion. Admin bypass only for merging a
   pull request, because a sole maintainer cannot approve their own
   ([R-02](RISKS_AND_TECHNICAL_DEBTS.md#r-02)). Private vulnerability
   reporting, secret scanning with push protection, Dependabot (weekly;
@@ -76,7 +78,8 @@ Decisions about the plan itself that no ADR or changelog entry holds.
 ### Still open from released versions
 
 - 0.9: the quickstart timed by the maintainer on a clean machine
-  (target: under 15 minutes). Now an exit criterion of 0.14.
+  (target: under 15 minutes). Now an exit criterion of 0.14: one timed
+  run, no new CI job.
 - 0.10 and 0.11: the README badges for the SonarQube Cloud quality gate
   and coverage. SonarQube Cloud still names its main branch `master`
   and analyses `main` as a short-lived branch, so the badges read "not
@@ -94,6 +97,9 @@ Decisions about the plan itself that no ADR or changelog entry holds.
   of this roadmap become one table; closed risks become one line each,
   with a "top risks" box; ARCHITECTURE describes the system as it is,
   not release by release; the ADRs get an [index](adr/README.md).
+  What an operator does after the first day (health, logs, metrics,
+  backup, key rotation, upgrades) is its own guide,
+  [OPERATING](OPERATING.md).
   DEPLOYING is for an operations team; running the demo on a laptop is
   in TESTING (maintainer, 2026-11-18). ADRs, the changelog and the
   spikes are records and are not shortened.
@@ -106,11 +112,39 @@ Decisions about the plan itself that no ADR or changelog entry holds.
   against, the Gaia-X Compliance Document and ICAM version among them:
   [ARCHITECTURE, "Specification versions"](ARCHITECTURE.md#specification-versions)
   ([TD-43](RISKS_AND_TECHNICAL_DEBTS.md#td-43)).
-- An interoperability test against the EDC Issuer Service of
-  IdentityHub 1.0.0-RC8 (DCP issuance). Until now the EDC test has one
-  issuer, `portitor-issuer`.
-- A review of the scope of the CI pipeline.
-- The leftovers of the 0.13 release review.
+- The EDC Issuer Service in the EDC interop test (DCP issuance). Until
+  now the test had one issuer, `portitor-issuer`. Its new step 8 adds
+  the Issuer Service of EDC IdentityHub 1.0.0-RC8 as a second issuer:
+  `portitor-identity` gets a credential from it over DCP; the Portitor
+  connector verifies that credential and reads its Bitstring Status
+  List; EDC accepts the credential when Portitor's identity presents
+  it; after the Issuer Service revokes a credential, its holder is
+  refused. The revocation by `portitor-issuer` is now step 9
+  ([TESTING](TESTING.md#a-second-issuer-the-edc-issuer-service)). No
+  change to Portitor was needed. What the test showed in EDC is
+  [R-46](RISKS_AND_TECHNICAL_DEBTS.md#r-46) and
+  [R-47](RISKS_AND_TECHNICAL_DEBTS.md#r-47).
+- A review of the CI pipeline (maintainer, 2026-11-20), and its
+  changes: a pull request that changes only prose no longer builds or
+  runs the tests, the TCKs and the dependency checks
+  (`scripts/ci_changes.sh`); each of `CI`, `TCK` and `Dependencies`
+  ends with one gate job, and only gate jobs are required checks
+  ([CONTRIBUTING](../CONTRIBUTING.md#required-checks)); the path
+  filters of the EDC, Gaia-X and fuzzing workflows name every file
+  those tests read; the release dry run runs on the release pull
+  request; a release tag must be on a commit of `main`
+  ([RELEASING](RELEASING.md#releasing-a-version)); a CodeQL finding
+  fails the CodeQL job.
+- The four leftovers of the 0.13 release review: an item of a list
+  setting may be at most 4096 bytes; the management call that reads a
+  catalog answers 502 when the catalog has no `participantId` or one
+  that differs from `counterPartyId`; a finalization event that a
+  transfer request settled is no longer counted in
+  `portitor.outbox.message.given_up`
+  ([ADR 0007](adr/0007-outbox-and-proof-of-delivery.md), note of 0.14);
+  the code of the catalog calls is split into smaller modules, with no
+  change in behaviour. What an operator must know:
+  [OPERATING, "From 0.13 to 0.14"](OPERATING.md#from-013-to-014).
 - The website gets an ancient Roman theme built on the two meanings of
   *portitor*, the customs officer and the ferryman (maintainer,
   2026-11-20). An open-licence font may be stored in the repository,
@@ -125,12 +159,16 @@ Decisions about the plan itself that no ADR or changelog entry holds.
 - Usable as it is (maintainer, 2026-11-15: 1.0 ships the release
   candidate only if what is built can be shown and used): a new user
   runs the website quickstart on a clean machine, and the docs say what
-  1.0 does and does not do.
+  1.0 does and does not do. The clean-machine run is one timed run by
+  the maintainer ([RELEASING](RELEASING.md#releasing-a-version), step
+  4). It gets no CI job of its own: `CI` already runs the Compose demo
+  (`scripts/demo-compose.sh`) that the quickstart uses.
 - Before 1.0: the formal trademark and domain check of the name
   ([R-25](RISKS_AND_TECHNICAL_DEBTS.md#r-25)), which blocks 1.0. A
   second maintainer ([R-02](RISKS_AND_TECHNICAL_DEBTS.md#r-02)) does not
   block 1.0.
 - Exit: Scorecard at least 8/10; the quickstart runs on a clean machine;
+  the EDC interop run with step 8 passes in CI; no open CodeQL alert;
   TD-39 and TD-43 addressed; R-25 done before 1.0.
 - Main risk: a fact lost while cutting; each removed paragraph names
   where its facts still live.

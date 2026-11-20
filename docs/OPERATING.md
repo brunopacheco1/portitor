@@ -668,3 +668,34 @@ new images.
 Rollback to 0.12: put the old names back in the configuration and the
 old field names in your clients; for the database, as above.
 
+
+### From 0.13 to 0.14
+
+0.14 is the release candidate for 1.0. No setting and no route changed
+([STABILITY](STABILITY.md)), the databases need no manual step, and no
+client has to change. Two checks are stricter; look at them before you
+start the new images.
+
+1. **Behaviour change, all three: an item of a list setting may be at
+   most 4096 bytes.** This holds for every comma-separated `PORTITOR_*`
+   setting (DIDs, DCP scopes, credential types, file paths;
+   [DEPLOYING](DEPLOYING.md#settings-of-every-component)). A service
+   with a longer item does not start; the log line names the setting and
+   the item (`has an item that is too long: item 2 ...`). Real values
+   are far shorter, so a long item is most often a missing comma.
+2. **Behaviour change, connector management API: the catalog must be
+   the provider's own.** `POST /v1/catalog/request` answers 502 in two
+   more cases: the provider's catalog has no `participantId` (DSP 2025-1
+   requires it; 0.13 handed such a catalog on), or its `participantId`
+   differs from the `counterPartyId` of the request. The `detail` says
+   which. Set `counterPartyId` to the id the provider names in its
+   catalog. `POST /v1/catalog/dataset/request` did not change: a dataset
+   has no `participantId`.
+
+To know: the metric `portitor.outbox.message.given_up` no longer counts
+a finalization event that the consumer's transfer request had already
+settled ([ADR 0007](adr/0007-outbox-and-proof-of-delivery.md), note of
+0.14). An alert on that metric may fire less often; an INFO log line
+says when a message is not counted.
+
+Rollback to 0.13: as above; 0.14 adds no migration.
