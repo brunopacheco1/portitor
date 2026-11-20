@@ -99,8 +99,15 @@ section[id] h2::after { content: ""; display: block; width: 3rem; height: 1px; m
 .hero { padding: 4.5rem 0 4rem; text-align: center; }
 .hero .wrap > * { margin-left: auto; margin-right: auto; }
 .mark { display: block; width: 11rem; height: auto; margin-bottom: 2rem; color: var(--text); }
-.mark .toll { stroke: var(--ornament); }
-.mark .ferry { stroke: var(--accent); }
+/* the mark: full in the hero, without its fine lines and with a heavier stroke as the logo */
+#mark, .river { stroke-width: var(--mark-stroke, 1.5); }
+#mark .toll { stroke: var(--ornament); }
+#mark .ferry { stroke: var(--accent); }
+#mark .fine { display: var(--mark-fine, inline); }
+.river { fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
+.brand-mark { flex: none; width: 2rem; height: 2rem; --mark-stroke: 5.5; --mark-fine: none; }
+.brand-mark .ferry { fill: var(--accent); }
+.brand-mark .oar { stroke-width: 4; }
 .eyebrow { color: var(--muted); font-size: .85rem; letter-spacing: .08em; margin: 0 0 1.25rem; }
 .hero h1 { font-size: clamp(1.9rem, 6.2vw, 3.5rem); line-height: 1.12; letter-spacing: .06em; margin: 0 0 1rem; }
 .motto { font: italic 1.2rem/1.4 "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif; color: var(--bronze); margin: 0 0 2.25rem; }
