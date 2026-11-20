@@ -79,12 +79,14 @@ def page(spec):
         <a href="identity-management-openapi.json">identity management API</a>,
         <a href="issuer-openapi.json">issuer (DID document, DCP issuer service, status lists, bundles)</a> and
         <a href="issuer-management-openapi.json">issuer management API</a>.</p>
-        <table>
-          <thead><tr><th>Method</th><th>Path</th><th>What it does</th><th>Responses</th></tr></thead>
-          <tbody>
-            {"".join(rows)}
-          </tbody>
-        </table>
+        <div class="table plain">
+          <table>
+            <thead><tr><th>Method</th><th>Path</th><th>What it does</th><th>Responses</th></tr></thead>
+            <tbody>
+              {"".join(rows)}
+            </tbody>
+          </table>
+        </div>
       </div>
     </section>
   </main>

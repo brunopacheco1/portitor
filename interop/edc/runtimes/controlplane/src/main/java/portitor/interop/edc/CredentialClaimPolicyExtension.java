@@ -32,10 +32,13 @@ import java.util.Objects;
  * scopes").
  *
  * <p>The constraint holds if the caller presented a credential of that
- * type with that claim value. Before this function runs, EDC has checked
- * the caller's presentation: signature, validity, revocation, and that the
- * issuer is a trusted one (edc.iam.trustedissuer.* in
- * config/edc-controlplane.properties).
+ * type with that claim value, issued by the test's EDC Issuer Service
+ * (the DID in {@value #ISSUER_SETTING}). Before this function runs, EDC
+ * has checked the caller's presentation: signature, validity, revocation,
+ * and that the issuer is a trusted one (edc.iam.trustedissuer.* in
+ * config/edc-controlplane.properties). Both issuers of the test are
+ * trusted for every type, so the function compares the issuer itself: a
+ * credential of this type from the other issuer does not meet the offer.
  */
 public class CredentialClaimPolicyExtension implements ServiceExtension {
 
@@ -44,6 +47,8 @@ public class CredentialClaimPolicyExtension implements ServiceExtension {
     static final String LEFT_OPERAND = CREDENTIAL_TYPE + "." + CLAIM;
     /** Where EDC keeps the credentials of a verified presentation (DcpDefaultServicesExtension). */
     static final String CREDENTIALS_CLAIM = "vc";
+    /** The setting with the DID of the EDC Issuer Service (config/edc-controlplane.properties). */
+    static final String ISSUER_SETTING = "edc.iam.trustedissuer.edcissuer.id";
 
     @Inject
     private PolicyEngine policyEngine;
@@ -61,11 +66,27 @@ public class CredentialClaimPolicyExtension implements ServiceExtension {
         // checked when a contract is negotiated, and again when a transfer is asked for
         ruleBindingRegistry.bind(LEFT_OPERAND, ContractNegotiationPolicyContext.NEGOTIATION_SCOPE);
         ruleBindingRegistry.bind(LEFT_OPERAND, TransferProcessPolicyContext.TRANSFER_SCOPE);
-        policyEngine.registerFunction(ContractNegotiationPolicyContext.class, Permission.class, LEFT_OPERAND, new ClaimFunction<>());
-        policyEngine.registerFunction(TransferProcessPolicyContext.class, Permission.class, LEFT_OPERAND, new ClaimFunction<>());
+        // the only issuer whose credential meets the constraint; a missing setting stops the start
+        var issuer = context.getConfig().getString(ISSUER_SETTING);
+        policyEngine.registerFunction(ContractNegotiationPolicyContext.class, Permission.class, LEFT_OPERAND, new ClaimFunction<>(issuer));
+        policyEngine.registerFunction(TransferProcessPolicyContext.class, Permission.class, LEFT_OPERAND, new ClaimFunction<>(issuer));
     }
 
     private static final class ClaimFunction<C extends ParticipantAgentPolicyContext> implements AtomicConstraintRuleFunction<Permission, C> {
+
+        /** The DID of the issuer whose credentials count. */
+        private final String issuer;
+
+        ClaimFunction(String issuer) {
+            this.issuer = issuer;
+        }
+
+        /** Whether the credential is of the test's type and from the test's issuer. */
+        private boolean isTheTestCredential(VerifiableCredential credential) {
+            return credential.getType().contains(CREDENTIAL_TYPE)
+                    && credential.getIssuer() != null
+                    && issuer.equals(credential.getIssuer().id());
+        }
 
         @Override
         public boolean evaluate(Operator operator, Object rightValue, Permission rule, C context) {
@@ -78,7 +99,7 @@ public class CredentialClaimPolicyExtension implements ServiceExtension {
                 return false;
             }
             for (var entry : credentials) {
-                if (entry instanceof VerifiableCredential credential && credential.getType().contains(CREDENTIAL_TYPE)) {
+                if (entry instanceof VerifiableCredential credential && isTheTestCredential(credential)) {
                     for (CredentialSubject subject : credential.getCredentialSubject()) {
                         if (Objects.equals(subject.getClaims().get(CLAIM), rightValue)) {
                             return true;
@@ -86,7 +107,7 @@ public class CredentialClaimPolicyExtension implements ServiceExtension {
                     }
                 }
             }
-            context.reportProblem("the caller presented no " + CREDENTIAL_TYPE + " with " + CLAIM + " " + rightValue);
+            context.reportProblem("the caller presented no " + CREDENTIAL_TYPE + " from " + issuer + " with " + CLAIM + " " + rightValue);
             return false;
         }
     }
