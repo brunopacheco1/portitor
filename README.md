@@ -85,7 +85,8 @@ the same without Docker, is in
 
 | You want to | Read |
 |---|---|
-| Deploy and operate it: order, settings, security, upgrades | [docs/DEPLOYING.md](docs/DEPLOYING.md) |
+| Deploy it: order, settings, security, known limits | [docs/DEPLOYING.md](docs/DEPLOYING.md) |
+| Operate it: health checks, logs, traces and metrics, backups, key changes, upgrades | [docs/OPERATING.md](docs/OPERATING.md) |
 | Call it: every HTTP route, as OpenAPI 3.1 | [docs/api/](docs/api/) (connector, identity, issuer; public and management) |
 | Know what 1.0 keeps stable, and what it does not do | [docs/STABILITY.md](docs/STABILITY.md) |
 | Understand the design | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), decisions in [docs/adr/](docs/adr/) |
