@@ -30,10 +30,18 @@
 #   BENCH_HISTORY  how many negotiations and transfers are stored (default 10000)
 #   BENCH_SECONDS  how long each steady load of the td40 part runs (default 30)
 #   BENCH_KEEP_LOGS  a folder to copy each part's logs to (default: not kept)
-# Needs curl, jq, openssl and python3. Prints key=value lines; exits
+# Needs Linux, curl, jq, openssl and python3. Prints key=value lines; exits
 # non-zero if a step fails. Every wait is bounded.
 
 set -euo pipefail
+# shellcheck source=scripts/require-bash.sh
+source "$(dirname "$0")/require-bash.sh"
+
+# Linux only: it reads /proc and uses GNU stat and date
+[[ $(uname -s) == Linux ]] || {
+  echo "$0 runs on Linux only (it reads /proc)." >&2
+  exit 1
+}
 
 cd "$(dirname "$0")/.."
 TARGET=${CARGO_TARGET_DIR:-target}

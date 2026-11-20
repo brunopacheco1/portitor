@@ -60,7 +60,7 @@ services:
   # OTLP receiver and OTLP/HTTP exporter, about half the size of the
   # contrib image. Apache-2.0.
   otel-collector:
-    image: otel/opentelemetry-collector:0.165.0@sha256:34b24b740c3c88d3467740e8642a397c13898ef76d7295c5425164c482ed1b73
+    image: docker.io/otel/opentelemetry-collector:0.165.0@sha256:34b24b740c3c88d3467740e8642a397c13898ef76d7295c5425164c482ed1b73
     volumes:
       - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
     depends_on: [jaeger, prometheus]
@@ -68,14 +68,14 @@ services:
   # Jaeger 2.23.0: all in one, traces kept in memory; takes
   # OTLP on 4317 (gRPC) and 4318 (HTTP). Apache-2.0.
   jaeger:
-    image: jaegertracing/jaeger:2.23.0@sha256:3823829974ccfc2485d2e48b165579091f32295022ae80ca49704e2f4834116e
+    image: docker.io/jaegertracing/jaeger:2.23.0@sha256:3823829974ccfc2485d2e48b165579091f32295022ae80ca49704e2f4834116e
     ports:
       - 127.0.0.1:16686:16686 # UI
 
   # Prometheus 3.16.0, with its OTLP receiver on
   # /api/v1/otlp/v1/metrics. Apache-2.0.
   prometheus:
-    image: prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
+    image: docker.io/prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
     command:
       # the image's own defaults, then the OTLP receiver
       - --config.file=/etc/prometheus/prometheus.yml

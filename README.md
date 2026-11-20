@@ -355,7 +355,8 @@ it, and [examples/healthdcat-datasets.json](examples/healthdcat-datasets.json)
 has datasets written for it. See [DEPLOYING](docs/DEPLOYING.md#schema-and-vocabulary-bundle).
 
 To see two participants agree a contract and transfer a file, run the demo
-in Docker Compose (needs Docker with the Compose plugin, `curl`, `jq` and
+in Docker Compose (needs Docker with the Compose plugin, or
+[Podman](docs/TESTING.md#docker-or-podman), and `curl`, `jq` and
 `openssl`). The [quickstart](https://bruno.pacheco.lu/portitor/#try) on the
 website walks through it: what to run, where to look, how to clean up.
 

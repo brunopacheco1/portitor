@@ -55,6 +55,8 @@
 #   ISSUER_KEY_FILE    the file holding the issuer's management API key
 
 set -euo pipefail
+# shellcheck source=scripts/require-bash.sh
+source "$(dirname "$0")/require-bash.sh"
 
 : "${PROVIDER:?}" "${MANAGEMENT:?}" "${KEY_FILE:?}" "${DATA:?}"
 : "${PROVIDER_MANAGEMENT:?}" "${PROVIDER_KEY_FILE:?}"

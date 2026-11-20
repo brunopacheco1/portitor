@@ -27,14 +27,115 @@ project checks every change. All commands run from the repository root.
 | Fuzzing | see [below](#fuzzing) | every PR (short), weekly (long) |
 | Two participants authenticate with DCP, agree a contract and transfer a file | `scripts/demo.sh`, see [below](#two-connectors) | every PR (`CI`) |
 | The same in Docker Compose | `scripts/demo-compose.sh` | every PR (`CI`) |
+| The container scripts with Podman instead of Docker | `CONTAINER_ENGINE=podman` and the script, see [below](#docker-or-podman) | no: by hand, last run noted there |
 | Images build and start | `docker build --target portitor-connector` / `--target portitor-identity` / `--target portitor-issuer`; the connector and the issuer refuse to start without their settings, the identity serves its DID document | every PR (`CI`) |
 | Static analysis | CodeQL, OpenSSF Scorecard, ORT | every PR or on `main` |
 
 You need: Rust (the version in `.github/workflows/ci.yml`; at least the
 `rust-version` in `Cargo.toml`), and for some checks `cargo-deny`, `cargo-vet`,
-`cargo-llvm-cov`, `reuse`, Java 21 and a nightly Rust toolchain. Before you
+`cargo-llvm-cov`, `reuse`, Java 21, a nightly Rust toolchain, and Docker or Podman
+([below](#docker-or-podman)). Before you
 open a pull request, run at least format, lint, tests, `cargo deny
 check` and `cargo vet --locked`.
+
+## Docker or Podman
+
+The scripts that start containers (`scripts/demo-compose.sh`,
+`scripts/edc-interop.sh`, `scripts/gaiax-e2e.sh`) run with Docker or with
+Podman. `scripts/container-engine.sh` chooses, and only that file:
+
+1. `CONTAINER_ENGINE=docker` or `CONTAINER_ENGINE=podman` in the
+   environment: that engine. Any other value is an error.
+2. Otherwise Docker, if the `docker` command exists and `docker info`
+   answers.
+3. Otherwise Podman, if the `podman` command exists and `podman info`
+   answers.
+
+A `docker` command that is Podman under another name counts as Podman.
+The commands in this file and in the other documents are written with
+`docker`; with Podman, write `podman` instead (`podman build`,
+`podman compose`, `podman run`).
+
+CI runs everything with Docker. The Podman runs are done by hand:
+
+| Script | Podman run that passed |
+|---|---|
+| `scripts/demo-compose.sh` | *none yet: date, Podman and Docker Compose versions, macOS version, to be filled in by the integrator after the maintainer's run* |
+| `scripts/gaiax-e2e.sh` | *none yet: to be filled in* |
+| `scripts/edc-interop.sh` | *none yet: to be filled in* |
+
+Until that table is filled in, the Podman path has been checked against
+Podman's documentation and source only, not run.
+
+**What Podman needs**
+
+- **Docker Compose** as the provider of `podman compose`: the
+  `docker-compose` binary (macOS: `brew install docker-compose`).
+  `podman compose` only starts a provider and prefers `docker-compose`
+  to `podman-compose`
+  ([podman-compose(1)](https://github.com/containers/podman/blob/main/docs/source/markdown/podman-compose.1.md.in)).
+  The scripts refuse `podman-compose`: its `run` has no `--quiet`
+  (podman-compose 1.6.0), and it has not been tried with these Compose
+  files.
+- **On macOS, a Podman machine** that runs (`podman machine start`), with
+  the repository under your home folder: the machine mounts `/Users`,
+  `/private` and `/var/folders`
+  ([containers.conf(5)](https://github.com/containers/common/blob/main/docs/containers.conf.5.md),
+  `[machine]`, `volumes`), and the scripts mount only files inside the
+  repository (`run/` folders).
+- **Enough memory for the EDC interop test.** A new machine has 2048 MiB.
+  The test builds three EDC runtimes with Gradle, then runs three JVMs,
+  Memgraph, the compliance service (Node.js), Vault, three web servers
+  and three Portitor components. An estimate, not measured: 4 CPUs,
+  8 GiB of memory, 40 GiB of disk
+  (`podman machine init --cpus 4 --memory 8192 --disk-size 40`, or
+  `podman machine set` on a stopped machine). The Compose demo and the
+  Gaia-X test should fit in 4 GiB (also an estimate).
+- **bash 4.4 or later** for every script in `scripts/` (they check it
+  first, `scripts/require-bash.sh`). macOS has bash 3.2 as `/bin/bash`:
+  `brew install bash`; the scripts start with `#!/usr/bin/env bash`, so
+  the newer one is used once it comes first in `PATH`. Also `jq`, and for
+  the two interop tests `python3` with `cryptography`. The scripts were
+  written with OpenSSL 3; they have not been run with the LibreSSL that
+  macOS ships as `/usr/bin/openssl` (`brew install openssl@3`).
+  `scripts/bench.sh` and `scripts/measure.sh` run on Linux only (they
+  read `/proc`).
+- **Linux binaries for the machine's architecture.** The `Dockerfile`
+  copies static binaries from `dist/<arch>/`. On an Apple Silicon Mac
+  the Podman machine is arm64: build `aarch64-unknown-linux-musl` and
+  copy to `dist/arm64/`. One way that needs nothing but the engine (not
+  run by us; it is what the release workflow does on an arm64 runner):
+
+  ```sh
+  podman run --rm -v "$PWD:/src" -w /src docker.io/library/rust:1.97.0 sh -c '
+    apt-get update -qq && apt-get install -y -qq musl-tools &&
+    rustup target add "$(uname -m)-unknown-linux-musl" &&
+    cargo build --release --locked --target "$(uname -m)-unknown-linux-musl" \
+      -p portitor-connector -p portitor-identity -p portitor-issuer'
+  mkdir -p dist/arm64
+  cp target/aarch64-unknown-linux-musl/release/portitor-{connector,identity,issuer} dist/arm64/
+  podman build --format docker --target portitor-connector -t portitor-connector:ci .
+  podman build --format docker --target portitor-identity -t portitor-identity:ci .
+  podman build --format docker --target portitor-issuer -t portitor-issuer:ci .
+  ```
+
+**Known differences, and what the repository does about them**
+
+| Difference | Handled by |
+|---|---|
+| Podman needs the registry in an image name unless short names are configured ([containers-registries.conf(5)](https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md), "Short-Name Aliasing"). | Every pulled image is written in full (`docker.io/library/nginx:...`) in the Compose files and Dockerfiles. Images built here (`portitor-connector:ci`) are found locally. |
+| `podman build` writes images in OCI format, and Podman reads a health check only from an image in Docker format ([libimage `inspect.go`](https://github.com/containers/common/blob/main/libimage/inspect.go); `--format` in podman-build(1)). The same holds for a pulled image with an OCI manifest. | No script relies on an image's `HEALTHCHECK`: `examples/compose/compose.yaml` has its own `healthcheck:` for the services others wait for. To keep the image's check, build with `podman build --format docker`; for `podman run`, pass `--health-cmd '["/portitor-connector", "health"]'`. |
+| Docker's name server inside a container is `127.0.0.11`; Podman's (aardvark-dns) listens on the network's gateway. | The `tls` web server of the two interop tests takes its `resolver` from the container's `/etc/resolv.conf` (the nginx image's `NGINX_ENTRYPOINT_LOCAL_RESOLVERS`). |
+| Rootless Podman (the default, also in a Podman machine): root in the container is the user who runs Podman; any other user id cannot write into that user's folders. | The demo bundle is built in a container as `0:0` with rootless Podman and as your user otherwise (`engine_bind_mount_user` in `scripts/container-engine.sh`). The scripts make the files they mount readable by all (`chmod a+rX`), as before: the images run as user 65532. |
+| `podman compose` prints a line about its provider on each call. | The scripts set `PODMAN_COMPOSE_WARNING_LOGS=false`. |
+| Docker Compose builds through Podman without BuildKit (`podman compose` sets `DOCKER_BUILDKIT=0`). | The Dockerfiles use no BuildKit-only syntax. If the build of the EDC images fails under Podman, build them with `podman build --target <controlplane, dataplane or identityhub> -t portitor-interop/edc-<target>:1.0.0-RC8 interop/edc/runtimes` and run `scripts/edc-interop.sh --no-build`. |
+
+Not needed, so not used: `host.docker.internal` (no container calls the
+host), ports below 1024 on the host (all published ports are 18000 and
+up, on `127.0.0.1`), SELinux labels on mounts (`:z`). Not handled: Podman
+on a Linux host with SELinux enforcing, where the mounted `run/` folders
+would need `:z`; and a Docker CLI that talks to a Podman socket
+(`DOCKER_HOST`), which the scripts take for Docker.
 
 ## Unit and integration tests
 
@@ -513,8 +614,8 @@ treats such a filter as "no filter" and answers with the whole catalog.
 ```sh
 # builds the Portitor images as CI does, then runs the test; the EDC
 # images are built from interop/edc/runtimes (Maven Central, no EDC images
-# are published); needs docker compose, curl, jq, openssl and python3
-# with `cryptography`
+# are published); needs Docker or Podman ("Docker or Podman" above), curl,
+# jq, openssl and python3 with `cryptography`
 mkdir -p dist/amd64
 cargo build --release --target x86_64-unknown-linux-musl -p portitor-connector -p portitor-identity -p portitor-issuer
 cp target/x86_64-unknown-linux-musl/release/portitor-{connector,identity,issuer} dist/amd64/
@@ -598,7 +699,7 @@ sources, Connector and IdentityHub):
 
   ```sh
   docker run --rm -v "$PWD/interop/edc/runtimes:/src" -w /src \
-    gradle:9.8.2-jdk21 gradle --no-daemon --write-verification-metadata sha256 shadowJar
+    docker.io/library/gradle:9.8.2-jdk21 gradle --no-daemon --write-verification-metadata sha256 shadowJar
   ```
 - **IdentityHub admin.** The Identity API (the IdentityHub's "oauth2"
   variant) takes a JWT checked against a key set. The script makes a
@@ -708,7 +809,7 @@ The public names (`portitor.gaiax.test`, `edc.gaiax.test`,
 Compose network; the `fetch` service reaches them and trusts the test CA.
 
 ```sh
-COMPOSE="docker compose -f interop/edc/compose.yaml"
+COMPOSE="docker compose -f interop/edc/compose.yaml" # or podman compose
 ID_KEY="authorization: Bearer $(cat interop/edc/run/portitor/identity-management.key)"
 CONN_KEY="authorization: Bearer $(cat interop/edc/run/portitor/connector-management.key)"
 EDC_KEY='x-api-key: edc-interop-test-key'
@@ -839,7 +940,7 @@ without a change in Portitor, hence the nightly run.
 
 ```sh
 # builds the Portitor images as for the EDC interop test (above), then:
-# needs docker compose, curl, jq, openssl and python3 with `cryptography`
+# needs Docker or Podman, curl, jq, openssl and python3 with `cryptography`
 scripts/gaiax-e2e.sh            # KEEP=1 leaves it running, with interop/gaiax/run/
 ```
 
@@ -1114,7 +1215,7 @@ with the harvest jobs, on `127.0.0.1:18081`, key in
 `examples/compose/run/provider/management.key`). The images must be 0.9
 or later: the Compose file starts each service once the ones it needs
 are healthy (`condition: service_healthy`), which needs the image's
-`HEALTHCHECK`. Running it again after `KEEP=1` works: the script first
+`health` subcommand. Running it again after `KEEP=1` works: the script first
 removes the containers and volumes of the last run
 (`docker compose down --volumes --remove-orphans`), then `run/`. CI runs
 both on every pull request, with the binaries and images it has just

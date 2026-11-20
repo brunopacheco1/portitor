@@ -22,6 +22,8 @@
 # (<did>#bundle-key, ADR 0005); the TCK must pass all the same.
 
 set -euo pipefail
+# shellcheck source=scripts/require-bash.sh
+source "$(dirname "$0")/require-bash.sh"
 
 TCK_JAR=${1:?usage: $0 PATH/TO/dcp-tck-1.2.1-all.jar}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)

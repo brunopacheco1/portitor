@@ -40,15 +40,24 @@
 #                Portitor images (compose.yaml)
 #   LOGS=FILE    on failure, write every container's whole log there
 #   KEEP=1       leave the containers running, and interop/gaiax/run/, at the end
-# Needs docker with the compose plugin, curl, jq, openssl, and python3
-# with the `cryptography` package.
+#   CONTAINER_ENGINE=docker|podman
+#                the container engine; without it, docker if it answers,
+#                then podman (scripts/container-engine.sh)
+# Needs Docker or Podman with Docker Compose (docs/TESTING.md, "Docker or
+# Podman"), bash 4.4 or later, curl, jq, openssl, and python3 with the
+# `cryptography` package.
 
 set -euo pipefail
+# shellcheck source=scripts/require-bash.sh
+source "$(dirname "$0")/require-bash.sh"
 
 cd "$(dirname "$0")/.."
 DIR=interop/gaiax
 RUN=$DIR/run
-COMPOSE=(docker compose -f "$DIR/compose.yaml")
+# ENGINE_COMPOSE: `docker compose` or `podman compose`
+# shellcheck source=scripts/container-engine.sh
+source scripts/container-engine.sh
+COMPOSE=("${ENGINE_COMPOSE[@]}" -f "$DIR/compose.yaml")
 
 # who is who
 AUTHORITY=did:web:issuer%3A8070

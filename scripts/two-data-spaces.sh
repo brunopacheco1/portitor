@@ -34,6 +34,8 @@
 # keeps the logs. Exits non-zero if a check fails. Not run by CI.
 
 set -euo pipefail
+# shellcheck source=scripts/require-bash.sh
+source "$(dirname "$0")/require-bash.sh"
 cd "$(dirname "$0")/.."
 MODE=${1:-}
 if [[ $MODE != shared && $MODE != separate ]]; then

@@ -32,9 +32,11 @@
 # Start order: the deployment order (DEPLOYING). The issuer starts first;
 # each identity once the issuer is healthy; each connector once its own
 # identity (and, for the provider, the issuer, which serves the bundle) is
-# healthy. "Healthy" is the image's HEALTHCHECK: `<binary> health`, the
-# component's own GET /api/check/readiness on its management port (ADR
-# 0023), which needs images from 0.9 on.
+# healthy. "Healthy" is `<binary> health`, the component's own
+# GET /api/check/readiness on its management port (ADR 0023), which needs
+# images from 0.9 on. The check is written here (healthcheck:) and not
+# left to the image's HEALTHCHECK, which Podman does not read from an
+# image in OCI format (docs/TESTING.md, "Docker or Podman").
 
 name: portitor-demo
 
@@ -44,6 +46,11 @@ x-identity: &identity
   depends_on:
     issuer:
       condition: service_healthy
+  healthcheck:
+    test: ["CMD", "/portitor-identity", "health"]
+    interval: 2s
+    timeout: 5s
+    retries: 30
 x-connector: &connector
   image: ${PORTITOR_IMAGE:-ghcr.io/brunopacheco1/portitor-connector:0.12.0}
 
@@ -78,10 +85,15 @@ services:
       - issuer-data:/data
     ports:
       - 127.0.0.1:18071:8071 # management API
+    healthcheck:
+      test: ["CMD", "/portitor-issuer", "health"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
 
   # the provider's data: a plain web server with examples/data
   data:
-    image: nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+    image: docker.io/library/nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
     volumes:
       - ../data:/usr/share/nginx/html:ro
 

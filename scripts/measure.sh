@@ -27,10 +27,18 @@
 #   DSP_LOAD       the dsp-load binary (default: built with cargo, release)
 #   TCK_CONNECTOR  a connector built with --features tck (optional)
 #   LOAD_SECONDS   how long each load runs (default 20)
-# Needs curl, jq, openssl and python3. Prints key=value lines; exits non-zero
+# Needs Linux, curl, jq, openssl and python3. Prints key=value lines; exits non-zero
 # if a step fails. Every wait is bounded.
 
 set -euo pipefail
+# shellcheck source=scripts/require-bash.sh
+source "$(dirname "$0")/require-bash.sh"
+
+# Linux only: it reads /proc and uses GNU stat and date
+[[ $(uname -s) == Linux ]] || {
+  echo "$0 runs on Linux only (it reads /proc)." >&2
+  exit 1
+}
 
 cd "$(dirname "$0")/.."
 if [[ $# -eq 0 ]]; then
