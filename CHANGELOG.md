@@ -46,7 +46,12 @@ and no route changed. Two checks are stricter; what to do:
   provider's own.** `POST /v1/catalog/request` answers 502 when the
   provider's catalog has no `participantId` (DSP 2025-1 requires it;
   0.13 handed such a catalog on) or one that differs from the
-  `counterPartyId` of the request. No new route, member or status code.
+  `counterPartyId` of the request. The two are compared as written,
+  with one exception: in a `did:web` DID the escaped colon before a port
+  may be `%3A` or `%3a`, as for the DID resolver. There is no setting to
+  turn the check off: a provider whose DSP `participantId` is not the
+  DID given as `counterPartyId` cannot be read with this call. No new
+  route, member or status code.
   `POST /v1/catalog/dataset/request` is unchanged.
 - The code of the two catalog calls is split into smaller modules
   (`management/catalog/`, `catalog_reader/`). No change in behaviour;

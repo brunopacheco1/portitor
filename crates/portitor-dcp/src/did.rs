@@ -209,9 +209,8 @@ pub fn did_web_url(did: &str) -> Result<String, Error> {
     let host = parts
         .next()
         .filter(|h| !h.is_empty())
-        .ok_or(Error::InvalidDid("empty host"))?
-        .replace("%3A", ":")
-        .replace("%3a", ":");
+        .ok_or(Error::InvalidDid("empty host"))?;
+    let host = host_with_port(host);
     if host.contains('/') {
         return Err(Error::InvalidDid("host contains '/'"));
     }
@@ -226,10 +225,88 @@ pub fn did_web_url(did: &str) -> Result<String, Error> {
     }
 }
 
+/// The host of a `did:web` as it is in a URL: the colon before a port is
+/// written `%3A` in the DID (did:web method, "Method-specific
+/// identifier"), and percent escapes may be in either letter case
+/// (RFC 3986, section 2.1), so `%3a` is read the same way.
+fn host_with_port(host_as_written: &str) -> String {
+    host_as_written.replace("%3A", ":").replace("%3a", ":")
+}
+
+/// Whether two texts name the same DID.
+///
+/// They do when they are equal as written, or when both are `did:web`
+/// DIDs that differ only in the letter case of the escaped colon before
+/// the port (`%3A` or `%3a`): [`did_web_url`] reads both spellings and
+/// resolves them to the same document. Nothing else is normalised: the
+/// letter case of the host, the path and any surrounding space count.
+#[must_use]
+pub fn same_did(one: &str, other: &str) -> bool {
+    if one == other {
+        return true;
+    }
+    match (did_web_host_and_path(one), did_web_host_and_path(other)) {
+        (Some((one_host, one_path)), Some((other_host, other_path))) => {
+            host_with_port(one_host) == host_with_port(other_host) && one_path == other_path
+        }
+        _ => false,
+    }
+}
+
+/// The host of a `did:web` DID as written, and what follows it (the path
+/// with its leading colon, or nothing). `None` for any other text.
+fn did_web_host_and_path(did: &str) -> Option<(&str, &str)> {
+    let rest = did.strip_prefix("did:web:")?;
+    match rest.find(':') {
+        Some(colon) => Some(rest.split_at(colon)),
+        None => Some((rest, "")),
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    /// The two spellings of the port's colon are one DID, as they are
+    /// one document for [`did_web_url`]; everything else is as written.
+    #[test]
+    fn two_did_web_dids_are_the_same_whatever_the_case_of_the_port_escape() {
+        let upper = "did:web:provider.example%3A8443:user:alice";
+        let lower = "did:web:provider.example%3a8443:user:alice";
+        assert!(same_did(upper, lower));
+        assert!(same_did(lower, upper));
+        assert!(same_did(upper, upper));
+        assert_eq!(did_web_url(upper).unwrap(), did_web_url(lower).unwrap());
+        // not a DID method we resolve: equal only as written
+        assert!(same_did("did:key:z6Mk", "did:key:z6Mk"));
+        assert!(!same_did("did:key:z6Mk%3A", "did:key:z6Mk%3a"));
+        for (one, other) in [
+            // a path segment is not a port
+            (
+                "did:web:provider.example%3A8443",
+                "did:web:provider.example:8443",
+            ),
+            (
+                "did:web:provider.example%3A8443",
+                "did:web:provider.example%3A8444",
+            ),
+            ("did:web:provider.example", "did:web:Provider.example"),
+            ("did:web:provider.example", "did:web:provider.example "),
+            ("did:web:provider.example", " did:web:provider.example"),
+            ("did:web:provider.example", "did:web:provider.example:x"),
+            // an escape in the path is not touched
+            (
+                "did:web:provider.example:a%3Ab",
+                "did:web:provider.example:a%3ab",
+            ),
+            ("did:web:provider.example", ""),
+        ] {
+            assert!(!same_did(one, other), "{one} and {other}");
+            assert!(!same_did(other, one), "{other} and {one}");
+        }
+    }
+
     #[test]
     fn did_web_resolution_urls() {
         assert_eq!(
