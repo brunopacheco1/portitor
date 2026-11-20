@@ -49,7 +49,7 @@ PIDS=()
 cleanup() {
   for pid in "${PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done
   wait 2>/dev/null || true
-  if [[ -n ${KEEP:-} ]]; then echo "logs kept in $WORK"; else rm -rf "$WORK"; fi
+  if [[ ${KEEP:-} == 1 ]]; then echo "logs kept in $WORK"; else rm -rf "$WORK"; fi
 }
 trap cleanup EXIT
 step() { printf '\n== %s\n' "$*"; }
@@ -261,7 +261,8 @@ if [[ $MODE == shared ]]; then
   VERIFIER_TOKEN=$(curl -sf -X POST http://127.0.0.1:19400/sts/token --data-urlencode grant_type=client_credentials \
     --data-urlencode "client_id=$(did_web 127.0.0.1:19400)" \
     --data-urlencode "client_secret=$(cat "$WORK/consumer-a-id/sts-client-secret")" \
-    --data-urlencode "audience=$(did_web 127.0.0.1:19300)" --data-urlencode "token=$ACCESS" | jq -r '.access_token')
+    --data-urlencode "audience=$(did_web 127.0.0.1:19300)" --data-urlencode "token=$ACCESS" | jq -r '.access_token') ||
+    fail "the STS of consumer A gave no token for the organisation's credential service"
   curl -s -X POST http://127.0.0.1:19300/cs/presentations/query -H "authorization: Bearer $VERIFIER_TOKEN" \
     -H 'content-type: application/json' -d '{"@context": ["https://w3id.org/dspace-dcp/v1.0/dcp.jsonld"],
       "type": "PresentationQueryMessage", "scope": ["org.eclipse.dspace.dcp.vc.type:MembershipCredential"]}' \

@@ -24,18 +24,31 @@ TERMS_AND_CONDITIONS=4bd7554097444c960292b4726c2efa1373485e8a5565d94d41195214c5e
 
 # --- the test CA and the certificates ---------------------------------------------
 
+# What openssl writes to stderr goes here, not to the terminal (it is
+# noisy when all is well). When a script fails, its cleanup shows the
+# end of it (gaiax_show_openssl_log): an openssl that differs (LibreSSL
+# on macOS) then says why it stopped.
+OPENSSL_LOG=$RUN/openssl.log
+
+gaiax_show_openssl_log() {
+  if [[ -s $OPENSSL_LOG ]]; then
+    printf -- '--- openssl (%s)\n' "$OPENSSL_LOG" >&2
+    tail -20 "$OPENSSL_LOG" >&2
+  fi
+}
+
 new_ec_key() { # file: a P-256 key
   local file=$1
-  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$file" 2>/dev/null
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$file" 2>>"$OPENSSL_LOG"
 }
 
 issue_certificate() { # key common-name dns-names(comma-separated) out: a leaf from the test CA
   local key=$1 name=$2 dns=$3 out=$4 extensions
   extensions=$(printf 'subjectAltName=%s\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth,clientAuth\n' \
     "DNS:${dns//,/,DNS:}")
-  openssl req -new -key "$key" -subj "/CN=$name/O=Portitor Gaia-X test (test only)" 2>/dev/null |
+  openssl req -new -key "$key" -subj "/CN=$name/O=Portitor Gaia-X test (test only)" 2>>"$OPENSSL_LOG" |
     openssl x509 -req -CA "$RUN/ca/ca.pem" -CAkey "$RUN/ca-key.pem" -set_serial "0x$(openssl rand -hex 16)" \
-      -days 30 -extfile <(echo "$extensions") -out "$out" 2>/dev/null
+      -days 30 -extfile <(echo "$extensions") -out "$out" 2>>"$OPENSSL_LOG"
 }
 
 chain() { # leaf out: the leaf, then the test CA
@@ -52,14 +65,14 @@ gaiax_test_ca() {
   new_ec_key "$RUN/ca-key.pem"
   openssl req -x509 -key "$RUN/ca-key.pem" -subj "/CN=Portitor Gaia-X test CA (test only)" -days 30 \
     -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign \
-    -out "$RUN/ca/ca.pem" 2>/dev/null
+    -out "$RUN/ca/ca.pem" 2>>"$OPENSSL_LOG"
   # the TLS certificate of every public name (config/tls.conf)
   new_ec_key "$RUN/tls/server-key.pem"
   issue_certificate "$RUN/tls/server-key.pem" gaiax.test "$names" "$RUN/tls/leaf.pem"
   chain "$RUN/tls/leaf.pem" "$RUN/tls/server.pem"
   # the compliance service signs with PS256: an RSA key; its DID document
   # serves the chain (x5u), and its answers are valid at most until it expires
-  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$RUN/compliance/private-key.pem" 2>/dev/null
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$RUN/compliance/private-key.pem" 2>>"$OPENSSL_LOG"
   issue_certificate "$RUN/compliance/private-key.pem" compliance.gaiax.test compliance.gaiax.test \
     "$RUN/compliance/leaf.pem"
   chain "$RUN/compliance/leaf.pem" "$RUN/compliance/certificate-chain.pem"
@@ -125,8 +138,9 @@ gaiax_participant() {
 
 gaiax_start_compliance_run() { # url key-file who: POST /v1/gaiax/compliance; 409: a run is on already
   local url=$1 key_file=$2 who=$3 status
-  status=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$url/v1/gaiax/compliance" \
-    -H "authorization: Bearer $(cat "$key_file")")
+  status=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$url/v1/gaiax/compliance" \
+    -H "authorization: Bearer $(cat "$key_file")") ||
+    fail "$who's compliance run: $url did not answer"
   [[ $status == 202 || $status == 409 ]] || fail "$who's compliance run: HTTP $status"
 }
 

@@ -193,6 +193,28 @@ identity_api_token() { # scope: a five-minute token for the Identity API
   echo "$input.$signature"
 }
 
+# Set before anything is written to run/, so that a failure in any step
+# cleans up (the keys of a run are test keys, but they are keys)
+cleanup() {
+  status=$?
+  if [[ $status -ne 0 ]]; then
+    gaiax_show_openssl_log
+    "${COMPOSE[@]}" logs --no-color --tail 60 >&2 2>/dev/null || true
+    if [[ -n ${LOGS:-} ]]; then "${COMPOSE[@]}" logs --no-color >"$LOGS" 2>&1 || true; fi
+  fi
+  if [[ ${KEEP:-} != 1 ]]; then
+    "${COMPOSE[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+    rm -rf "$RUN"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+
+# The containers of an earlier run kept with KEEP=1 still mount run/:
+# stop them before its files are deleted, or they would go on with the
+# old keys against the new files
+"${COMPOSE[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+
 step "Write the keys, the secrets and the Identity API's key set"
 rm -rf "$RUN"
 mkdir -p "$RUN/issuer" "$RUN/edc/www/.well-known" "$RUN/edc/www/credentials/gaiax"
@@ -215,20 +237,6 @@ cp "$RUN/edc/certificate-chain.pem" "$RUN/edc/www/.well-known/x509CertificateCha
 # the Portitor images run as user 65532 and must read them
 chmod -R a+rX "$RUN"
 find "$RUN" -type f -exec chmod a+r {} +
-
-cleanup() {
-  status=$?
-  if [[ $status -ne 0 ]]; then
-    "${COMPOSE[@]}" logs --no-color --tail 60 >&2 || true
-    if [[ -n ${LOGS:-} ]]; then "${COMPOSE[@]}" logs --no-color >"$LOGS" 2>&1 || true; fi
-  fi
-  if [[ ${KEEP:-} != 1 ]]; then
-    "${COMPOSE[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
-    rm -rf "$RUN"
-  fi
-  exit "$status"
-}
-trap cleanup EXIT
 
 step "Build and sign the HealthDCAT-AP demo bundle with the issuer image"
 # `portitor-issuer bundle build`, run in the issuer's image with this

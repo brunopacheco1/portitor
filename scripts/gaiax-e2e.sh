@@ -109,16 +109,13 @@ fetch() { # url [curl flags]: a request from inside the network, trusting the te
 
 # --- 1. the test CA and the certificates ------------------------------------------
 
-step "Make a test CA and its certificates"
-rm -rf "$RUN"
-mkdir -p "$RUN/issuer"
-# the TLS certificate covers every public name (config/tls.conf)
-gaiax_test_ca provider.gaiax.test,consumer.gaiax.test,compliance.gaiax.test,notary.gaiax.test
-
+# Set before anything is written to run/, so that a failure in any step
+# cleans up (the keys of a run are test keys, but they are keys)
 cleanup() {
   status=$?
   if [[ $status -ne 0 ]]; then
-    "${COMPOSE[@]}" logs --no-color --tail 60 >&2 || true
+    gaiax_show_openssl_log
+    "${COMPOSE[@]}" logs --no-color --tail 60 >&2 2>/dev/null || true
     if [[ -n ${LOGS:-} ]]; then "${COMPOSE[@]}" logs --no-color >"$LOGS" 2>&1 || true; fi
   fi
   if [[ ${KEEP:-} != 1 ]]; then
@@ -128,6 +125,17 @@ cleanup() {
   exit "$status"
 }
 trap cleanup EXIT
+
+# The containers of an earlier run kept with KEEP=1 still mount run/:
+# stop them before its files are deleted, or they would go on with the
+# old keys against the new files
+"${COMPOSE[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+
+step "Make a test CA and its certificates"
+rm -rf "$RUN"
+mkdir -p "$RUN/issuer"
+# the TLS certificate covers every public name (config/tls.conf)
+gaiax_test_ca provider.gaiax.test,consumer.gaiax.test,compliance.gaiax.test,notary.gaiax.test
 
 # --- 2. the participants' keys, credentials and participant files --------------
 
