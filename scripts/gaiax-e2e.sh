@@ -55,13 +55,11 @@ AUTHORITY=did:web:issuer%3A8070
 PROVIDER_DID=did:web:provider.gaiax.test
 CONSUMER_DID=did:web:consumer.gaiax.test
 OUTSIDER_DID=did:web:outsider-identity%3A8090
-COMPLIANCE_DID=did:web:compliance.gaiax.test
-NOTARY_DID=did:web:notary.gaiax.test
-# the Gaia-X ontology the compliance service validates against
-GAIAX_CONTEXT='https://w3id.org/gaia-x/development#'
-# the Gaia-X terms and conditions hash gx-compliance v2.16.0 accepts
-# (IssuersHaveTermsAndConditionsFilter)
-TERMS_AND_CONDITIONS=4bd7554097444c960292b4726c2efa1373485e8a5565d94d41195214c5e0ceb3
+# COMPLIANCE_DID, NOTARY_DID, GAIAX_CONTEXT and TERMS_AND_CONDITIONS, and the
+# functions for the test CA, the test notary, the participants' files and
+# the onboarding calls: shared with scripts/edc-interop.sh
+# shellcheck source=scripts/gaiax-lib.sh
+source scripts/gaiax-lib.sh
 MEMBER_OF="Portitor Gaia-X test dataspace"
 DATASET=gaiax-compliant-only # config/datasets.json
 DSP=dsp/2025-1
@@ -104,49 +102,11 @@ fetch() { # url [curl flags]: a request from inside the network, trusting the te
 
 # --- 1. the test CA and the certificates ------------------------------------------
 
-CA=$RUN/ca
-
-new_ec_key() { # file: a P-256 key
-  local file=$1
-  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$file" 2>/dev/null
-}
-
-issue_certificate() { # key common-name dns-names(comma-separated) out: a leaf from the test CA
-  local key=$1 name=$2 dns=$3 out=$4 extensions
-  extensions=$(printf 'subjectAltName=%s\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth,clientAuth\n' \
-    "DNS:${dns//,/,DNS:}")
-  openssl req -new -key "$key" -subj "/CN=$name/O=Portitor Gaia-X test (test only)" 2>/dev/null |
-    openssl x509 -req -CA "$CA/ca.pem" -CAkey "$RUN/ca-key.pem" -set_serial "0x$(openssl rand -hex 16)" \
-      -days 30 -extfile <(echo "$extensions") -out "$out" 2>/dev/null
-}
-
-chain() { # leaf out: the leaf, then the test CA
-  local leaf=$1 out=$2
-  cat "$leaf" "$CA/ca.pem" >"$out"
-}
-
 step "Make a test CA and its certificates"
 rm -rf "$RUN"
-mkdir -p "$CA" "$RUN/tls" "$RUN/compliance" "$RUN/issuer" "$RUN/notary/www/.well-known" "$RUN/notary/www/credentials"
-new_ec_key "$RUN/ca-key.pem"
-openssl req -x509 -key "$RUN/ca-key.pem" -subj "/CN=Portitor Gaia-X test CA (test only)" -days 30 \
-  -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign \
-  -out "$CA/ca.pem" 2>/dev/null
-# the TLS certificate of every public name (config/tls.conf)
-new_ec_key "$RUN/tls/server-key.pem"
-issue_certificate "$RUN/tls/server-key.pem" gaiax.test \
-  provider.gaiax.test,consumer.gaiax.test,compliance.gaiax.test,notary.gaiax.test "$RUN/tls/leaf.pem"
-chain "$RUN/tls/leaf.pem" "$RUN/tls/server.pem"
-# the compliance service signs with PS256: an RSA key; its DID document
-# serves the chain (x5u), and its answers are valid at most until it expires
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$RUN/compliance/private-key.pem" 2>/dev/null
-issue_certificate "$RUN/compliance/private-key.pem" compliance.gaiax.test compliance.gaiax.test \
-  "$RUN/compliance/leaf.pem"
-chain "$RUN/compliance/leaf.pem" "$RUN/compliance/certificate-chain.pem"
-# the test notary
-new_ec_key "$RUN/notary/key.pem"
-issue_certificate "$RUN/notary/key.pem" notary.gaiax.test notary.gaiax.test "$RUN/notary/leaf.pem"
-chain "$RUN/notary/leaf.pem" "$RUN/notary/www/.well-known/x509CertificateChain.pem"
+mkdir -p "$RUN/issuer"
+# the TLS certificate covers every public name (config/tls.conf)
+gaiax_test_ca provider.gaiax.test,consumer.gaiax.test,compliance.gaiax.test,notary.gaiax.test
 
 cleanup() {
   status=$?
@@ -165,45 +125,7 @@ trap cleanup EXIT
 # --- 2. the participants' keys, credentials and participant files --------------
 
 step "The test notary: its DID document"
-python3 scripts/gaiax_test_notary.py did "$RUN/notary/key.pem" "$NOTARY_DID" \
-  https://notary.gaiax.test/.well-known/x509CertificateChain.pem "$RUN/notary/www/.well-known/did.json"
-
-participant() { # name: keys and secrets of a participant
-  local name=$1
-  mkdir -p "$RUN/$name"
-  new_ec_key "$RUN/$name/identity-key.pem"
-  openssl rand -hex 32 >"$RUN/$name/identity-management.key"
-  openssl rand -hex 32 >"$RUN/$name/connector-management.key"
-  openssl rand -hex 32 >"$RUN/$name/sts-client-secret"
-}
-
-gaiax_participant() { # name host legal-name vat-id: what ADR 0021 needs
-  local name=$1 host=$2 legal_name=$3 vat_id=$4
-  local dir=$RUN/$name
-  local credential_id=https://$host/credentials/gaiax/registration-number
-  # the certificate for the identity key, then the CA
-  issue_certificate "$dir/identity-key.pem" "$host" "$host" "$dir/identity-certificate.pem"
-  chain "$dir/identity-certificate.pem" "$dir/certificate-chain.pem"
-  # the registration number credential, from the notary
-  python3 scripts/gaiax_test_notary.py vat "$RUN/notary/key.pem" "$NOTARY_DID" "$GAIAX_CONTEXT" \
-    "$credential_id" "$vat_id" LU "$dir/registration-number.jwt"
-  # the participant file (ADR 0021): Gaia-X terms only
-  jq -n --arg context "$GAIAX_CONTEXT" --arg name "$legal_name" --arg terms "$TERMS_AND_CONDITIONS" '{
-    context: $context,
-    legalPerson: {
-      name: $name,
-      "gx:legalAddress": {type: "gx:Address", "gx:countryCode": "LU",
-        "vcard:street-address": "1 Rue du Test", "vcard:locality": "Luxembourg",
-        "vcard:postal-code": "1111"},
-      "gx:headquartersAddress": {type: "gx:Address", "gx:countryCode": "LU",
-        "vcard:street-address": "1 Rue du Test", "vcard:locality": "Luxembourg",
-        "vcard:postal-code": "1111"}
-    },
-    termsAndConditions: $terms,
-    registrationNumberCredential: "/config/registration-number.jwt"
-  }' >"$dir/participant.json"
-  echo "$name: $host, $legal_name, VAT $vat_id"
-}
+gaiax_test_notary
 
 step "The participants: keys, certificates, registration numbers, participant files"
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$RUN/issuer/issuer-key.pem" 2>/dev/null
@@ -292,31 +214,15 @@ done
 # --- 5. Gaia-X onboarding -------------------------------------------------------------
 
 has_compliance_credential() { # name: true once it holds one from the compliance service
-  local name=$1
-  identity_api "$name" GET /v1/credentials | jq -e --arg issuer "$COMPLIANCE_DID" \
-    'any(.[]; (.types | index("gx:ParticipantComplianceCredential")) and .issuer == $issuer)' \
-    >/dev/null
+  gaiax_has_compliance_credential "${IDENTITY_MANAGEMENT[$1]}" "$RUN/$1/identity-management.key"
 }
 
 start_compliance_run() { # name: POST /v1/gaiax/compliance; 409: a run is on already
-  local name=$1 status
-  status=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${IDENTITY_MANAGEMENT[$name]}/v1/gaiax/compliance" \
-    -H "authorization: Bearer $(cat "$RUN/$name/identity-management.key")")
-  [[ $status == 202 || $status == 409 ]] || fail "the $name's compliance run: HTTP $status"
+  gaiax_start_compliance_run "${IDENTITY_MANAGEMENT[$1]}" "$RUN/$1/identity-management.key" "the $1"
 }
 
 until_compliance_run_ended() { # name: prints the newest run once it is no longer RUNNING
-  local name=$1 runs outcome=
-  for _ in $(seq 1 150); do
-    runs=$(identity_api "$name" GET /v1/gaiax/compliance) || fail "read the $name's compliance runs"
-    outcome=$(jq -r '.[0].outcome // empty' <<<"$runs")
-    if [[ -n $outcome && $outcome != RUNNING ]]; then
-      jq -c '.[0]' <<<"$runs"
-      return 0
-    fi
-    sleep 1
-  done
-  fail "the $name's compliance run is still ${outcome:-not started}"
+  gaiax_until_compliance_run_ended "${IDENTITY_MANAGEMENT[$1]}" "$RUN/$1/identity-management.key" "the $1"
 }
 
 step "The consumer's identity runs its Gaia-X onboarding (POST /v1/gaiax/compliance)"

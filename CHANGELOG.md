@@ -12,8 +12,32 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Changed
+
+- The EDC interop test (`scripts/edc-interop.sh`) runs against EDC
+  v1.0.0-RC8 (Connector and IdentityHub; before: RC7). The Gradle
+  dependency verification file is written again for RC8.
+- The EDC interop test now includes Gaia-X compliance, with the local
+  compliance service, test notary and test CA of the Gaia-X test:
+  Portitor's identity does its onboarding; a second dataset of the
+  Portitor provider asks for a `gx:ParticipantComplianceCredential`; the
+  EDC consumer is refused without one (`TERMINATED`) and gets a contract
+  and the data once its IdentityHub holds one. The EDC IdentityHub has no
+  Gaia-X onboarding, so the test-only `scripts/gaiax_test_onboarding.py`
+  signs for the EDC participant. Not covered: an EDC provider that asks
+  Portitor for the credential (see `docs/TESTING.md`). The participants
+  are now `did:web:portitor.gaiax.test` and `did:web:edc.gaiax.test`.
+- `scripts/gaiax-e2e.sh` and `scripts/edc-interop.sh` share
+  `scripts/gaiax-lib.sh` (test CA, test notary, a participant's Gaia-X
+  files).
+
 ### Documentation
 
+- `docs/TESTING.md`, "EDC interop test": every step with its expected
+  result, what is pinned, a "last run that passed" table, what the
+  Gaia-X steps show and do not show, the changes from RC7 to RC8, and
+  how to use a kept run by hand (`KEEP=1`), with the new Bruno
+  environment `_http/environments/edc-interop.bru`.
 - Close-out of 0.12: the roadmap and the website mark 0.12 released and
   0.13 as the current release; the website quickstart clones v0.12.0.
   CONTRIBUTING gives `cargo vet diff` with `--mode local`.

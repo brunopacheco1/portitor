@@ -1,0 +1,25 @@
+vars {
+  providerUrl: http://127.0.0.1:18080
+  dsp: http://127.0.0.1:18080/dsp/2025-1
+  providerId: did:web:portitor.gaiax.test
+  consumerId: did:web:portitor.gaiax.test
+  stsUrl: http://127.0.0.1:18190/sts/token
+  dcpScope: org.eclipse.dspace.dcp.vc.type:MembershipCredential:read
+  datasetId: https://portitor.example/datasets/portitor-interop
+  offerId: portitor-interop:offer:use
+  callbackAddress: http://127.0.0.1:9000
+  mgmtUrl: http://127.0.0.1:18081
+  identityMgmtUrl: http://127.0.0.1:18191
+  identityUrl: http://127.0.0.1:18190
+  identityDid: did:web:portitor.gaiax.test
+  issuerMgmtUrl: http://127.0.0.1:18371
+  issuerUrl: http://127.0.0.1:18372
+  issuerServiceUrl: http://127.0.0.1:18372/issuer
+  issuerDid: did:web:issuer%3A8070
+}
+vars:secret [
+  apiKey,
+  stsSecret,
+  identityApiKey,
+  issuerApiKey
+]

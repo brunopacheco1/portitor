@@ -14,6 +14,15 @@ SPDX-License-Identifier: Apache-2.0
   the compliance credential to the caller with Gaia-X's own integrity
   check; test Gaia-X between Portitor connectors; the EDC interop test
   stays without Gaia-X.
+- Update (2026-11-20, release 0.13, asked by the maintainer): the EDC
+  interop test now has Gaia-X steps, against EDC v1.0.0-RC8. An EDC
+  participant can hold a compliance credential in its IdentityHub and
+  present it, by configuration only, and a Portitor provider admits it by
+  the checks below. The IdentityHub still has no Gaia-X onboarding (a
+  test-only script signs for it), and an EDC provider still cannot ask
+  Portitor for the credential (`HasValidSubjectIds`, unchanged in RC8).
+  The decision below is not changed. See
+  [TESTING](../TESTING.md#gaia-x-with-edc-what-the-test-shows-and-what-it-does-not).
 
 ## Context
 

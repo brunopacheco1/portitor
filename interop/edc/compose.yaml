@@ -8,21 +8,79 @@
 # MembershipCredentials come from its portitor-issuer; each participant
 # asks for its own through its identity's API. The authority also serves
 # the HealthDCAT-AP demo bundle (scripts/demo-bundle.sh), which the Portitor
-# connector pins: its dataset (config/portitor-datasets.json) is checked
-# against it and offered with HealthDCAT-AP metadata. Test-only: plain HTTP
-# between the containers, a Vault in dev mode, keys made for each run.
+# connector pins: its datasets (config/portitor-datasets.json) are checked
+# against it and offered with HealthDCAT-AP metadata.
+#
+# Gaia-X compliance (ADRs 0021 and 0022) is part of the run: a local
+# Gaia-X compliance service (the one of the Gaia-X end-to-end test,
+# ../gaiax/compose.yaml, in the same test mode) gives each participant a
+# compliance credential, and the Portitor provider offers one dataset only
+# to holders of one. The "tls" service answers for the public names
+# (*.gaiax.test) with a certificate from a test CA made for each run: the
+# compliance service resolves did:web over HTTPS only.
+#
+#   Portitor  did:web:portitor.gaiax.test  its identity does the Gaia-X
+#             onboarding itself (ADR 0021)
+#   EDC       did:web:edc.gaiax.test  the EDC IdentityHub has no Gaia-X
+#             onboarding: scripts/edc-interop.sh does it with the
+#             participant's key and stores the result in the IdentityHub
+#
+# Test-only: plain HTTP between the containers, a Vault in dev mode, keys
+# made for each run, no real Gaia-X trust anchor (see ../gaiax/compose.yaml).
+# The compliance service needs the Gaia-X Registry and w3id.org (Internet).
 # scripts/edc-interop.sh runs it and checks the results; it writes the
-# run/ directory first (keys, secrets, the Identity API's JWKS).
+# run/ directory first (keys, secrets, certificates, the Identity API's
+# JWKS).
 #
 # PORTITOR_IMAGE, PORTITOR_IDENTITY_IMAGE and PORTITOR_ISSUER_IMAGE pick
 # the Portitor images (default: the ones CI builds, portitor-connector:ci,
 # portitor-identity:ci, portitor-issuer:ci).
-# The EDC images are built from runtimes/ (EDC v1.0.0-RC7 from Maven
-# Central).
+# The EDC images are built from runtimes/ (EDC v1.0.0-RC8 from Maven
+# Central, every file checked against runtimes/gradle/verification-metadata.xml).
+# Every image that is pulled is pinned by tag and digest.
 
 name: portitor-edc-interop
 
 services:
+  # --- Gaia-X: the compliance service and the public names ---------------------
+
+  # The local Gaia-X compliance service and its database, as in the Gaia-X
+  # end-to-end test: image, digest, test mode and health check come from
+  # ../gaiax/compose.yaml. did:web:compliance.gaiax.test; its key and the
+  # test CA are the ones scripts/edc-interop.sh writes for this run.
+  memgraph:
+    extends:
+      file: ../gaiax/compose.yaml
+      service: memgraph
+
+  compliance:
+    extends:
+      file: ../gaiax/compose.yaml
+      service: compliance
+    volumes:
+      - ./run/compliance:/keys:ro
+      - ./run/ca:/ca:ro
+    depends_on: [memgraph]
+
+  # the public names, over HTTPS and HTTP (config/tls.conf)
+  tls:
+    image: nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+    volumes:
+      - ./config/tls.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./run/tls:/tls:ro
+      - ./run/notary/www:/notary:ro
+      # the EDC participant's certificate chain and Gaia-X credentials
+      - ./run/edc/www:/edc:ro
+    networks:
+      default:
+        aliases:
+          - portitor.gaiax.test
+          - edc.gaiax.test
+          - compliance.gaiax.test
+          - notary.gaiax.test
+
+  # --- the data space's authority ------------------------------------------------
+
   # The data space's authority: did:web:issuer%3A8070, its issuer service
   # (credential requests from both identities, status lists) and its
   # management API (participants, revocation).
@@ -39,7 +97,10 @@ services:
       # the demo bundle, written by scripts/edc-interop.sh
       PORTITOR_ISSUER_BUNDLE_KEY_FILE: /config/bundle/bundle-key.jwk
       PORTITOR_ISSUER_BUNDLE_DIR: /config/bundle/bundles
+      # only the run's test CA: the test reaches nothing else over HTTPS
+      SSL_CERT_DIR: /ca
     volumes:
+      - ./run/ca:/ca:ro
       - ./run/issuer/issuer-key.pem:/config/issuer-key.pem:ro
       - ./run/issuer/management.key:/config/issuer-management.key:ro
       - ./config/issuer-credentials.json:/config/issuer-credentials.json:ro
@@ -47,6 +108,8 @@ services:
       - issuer-data:/data
     ports:
       - 127.0.0.1:18371:8071 # management API, for scripts/edc-interop.sh
+      - 127.0.0.1:18372:8070 # DID document, issuer service, status lists, bundle: for a run by hand (KEEP=1)
+    depends_on: [tls]
 
   # The key set of the tokens for the IdentityHub's Identity API
   # (http://identity-api-jwks/jwks.json), written by scripts/edc-interop.sh
@@ -61,9 +124,12 @@ services:
     volumes:
       - ./data:/usr/share/nginx/html:ro
 
+  # --- the EDC participant ---------------------------------------------------------
+
   # EDC keeps its secrets (the STS client secret, the participant's key) in
   # a Vault, shared by the IdentityHub and the control plane, as in EDC's
-  # Minimum Viable Dataspace
+  # Minimum Viable Dataspace. scripts/edc-interop.sh writes the participant's
+  # private key there before it creates the participant.
   vault:
     image: hashicorp/vault:2.2.1@sha256:962a92876e168d68eaaa24b0b8b49bbce1cb63024060a67bba95cd158a366fc2
     command: ["server", "-dev"]
@@ -73,7 +139,7 @@ services:
       SKIP_SETCAP: "true"
 
   edc-identityhub:
-    image: portitor-interop/edc-identityhub:1.0.0-RC7
+    image: portitor-interop/edc-identityhub:1.0.0-RC8
     build:
       context: ./runtimes
       target: identityhub
@@ -81,10 +147,10 @@ services:
       - ./config/edc-identityhub.properties:/config/runtime.properties:ro
     ports:
       - 127.0.0.1:18281:7081 # Identity API, for scripts/edc-interop.sh
-    depends_on: [vault, issuer, identity-api-jwks]
+    depends_on: [vault, issuer, identity-api-jwks, tls]
 
   edc-controlplane:
-    image: portitor-interop/edc-controlplane:1.0.0-RC7
+    image: portitor-interop/edc-controlplane:1.0.0-RC8
     build:
       context: ./runtimes
       target: controlplane
@@ -95,7 +161,7 @@ services:
     depends_on: [vault, edc-identityhub]
 
   edc-dataplane:
-    image: portitor-interop/edc-dataplane:1.0.0-RC7
+    image: portitor-interop/edc-dataplane:1.0.0-RC8
     build:
       context: ./runtimes
       target: dataplane
@@ -105,10 +171,12 @@ services:
       - 127.0.0.1:18180:8080 # signaling, and what the EDC consumer received
     depends_on: [data]
 
+  # --- the Portitor participant ----------------------------------------------------
+
   portitor-identity:
     image: ${PORTITOR_IDENTITY_IMAGE:-portitor-identity:ci}
     environment:
-      PORTITOR_PARTICIPANT_ID: did:web:portitor-identity%3A8090
+      PORTITOR_PARTICIPANT_ID: did:web:portitor.gaiax.test
       PORTITOR_IDENTITY_KEY_FILE: /config/identity-key.pem
       PORTITOR_CREDENTIAL_SERVICE_URL: http://portitor-identity:8090/cs
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8091
@@ -116,20 +184,33 @@ services:
       PORTITOR_STS_CLIENT_SECRET_FILE: /config/sts-client-secret
       PORTITOR_TRUSTED_ISSUERS: did:web:issuer%3A8070
       PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+      # Gaia-X (ADR 0021): the certificate chain of the identity key, the
+      # compliance service and the participant file
+      PORTITOR_IDENTITY_CERTIFICATE_CHAIN: /config/certificate-chain.pem
+      PORTITOR_GAIAX_COMPLIANCE_URL: https://compliance.gaiax.test
+      PORTITOR_GAIAX_COMPLIANCE_DID: did:web:compliance.gaiax.test
+      PORTITOR_GAIAX_PARTICIPANT_FILE: /config/participant.json
+      SSL_CERT_DIR: /ca
     volumes:
-      - ./run/portitor/identity-key.pem:/config/identity-key.pem:ro
-      - ./run/portitor/identity-management.key:/config/identity-management.key:ro
-      - ./run/portitor/sts-client-secret:/config/sts-client-secret:ro
+      # identity-key.pem, identity-management.key, sts-client-secret,
+      # certificate-chain.pem, participant.json, registration-number.jwt
+      - ./run/portitor:/config:ro
+      - ./run/ca:/ca:ro
       - portitor-identity-data:/data
     ports:
       - 127.0.0.1:18190:8090 # DID document, STS, credential service
       - 127.0.0.1:18191:8091 # management API
-    depends_on: [issuer]
+    depends_on:
+      tls: {condition: service_started}
+      issuer: {condition: service_started}
+      compliance: {condition: service_healthy}
+    # the same as the connector below: the start is tried again
+    restart: on-failure
 
   portitor-connector:
     image: ${PORTITOR_IMAGE:-portitor-connector:ci}
     environment:
-      PORTITOR_PARTICIPANT_ID: did:web:portitor-identity%3A8090
+      PORTITOR_PARTICIPANT_ID: did:web:portitor.gaiax.test
       PORTITOR_PUBLIC_URL: http://portitor-connector:8080
       PORTITOR_DATASETS_FILE: /config/datasets.json
       PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
@@ -143,6 +224,13 @@ services:
       PORTITOR_STATUS_LIST_CACHE_SECONDS: "0"
       # the same scope as the EDC control plane's (config/edc-controlplane.properties)
       PORTITOR_DCP_SCOPES: org.eclipse.dspace.dcp.vc.type:MembershipCredential:read
+      # ADR 0022: the compliance service it trusts, and the credential type
+      # its second offer constrains (ADR 0019). The type stands for the scope
+      # org.eclipse.dspace.dcp.vc.type:ParticipantComplianceCredential:read,
+      # the one config/edc-controlplane.properties maps to the same operand.
+      PORTITOR_GAIAX_COMPLIANCE_ISSUERS: did:web:compliance.gaiax.test
+      PORTITOR_POLICY_CREDENTIALS: ParticipantComplianceCredential
+      SSL_CERT_DIR: /ca
       # the data space's HealthDCAT-AP bundle, from the issuer
       # the newest version (latest.json), looked for every hour
       PORTITOR_BUNDLE_URL: http://issuer:8070/bundles/
@@ -151,19 +239,24 @@ services:
       - ./config/portitor-datasets.json:/config/datasets.json:ro
       - ./run/portitor/connector-management.key:/config/connector-management.key:ro
       - ./run/portitor/sts-client-secret:/config/sts-client-secret:ro
+      - ./run/ca:/ca:ro
       - portitor-connector-data:/data
     ports:
       - 127.0.0.1:18080:8080 # DSP
       - 127.0.0.1:18081:8081 # management API
-    depends_on: [portitor-identity, data, issuer]
+    depends_on: [portitor-identity, data, issuer, tls]
     # the bundle and the DID documents are read at start; until the issuer
     # and the identity answer, the start fails and is tried again
     restart: on-failure
 
   # `docker compose run --rm fetch <url>`: fetches inside the network, where
-  # the data planes' addresses resolve
+  # the data planes' addresses and the *.gaiax.test names resolve, trusting
+  # the test CA
   fetch:
     image: curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+    entrypoint: ["curl", "--cacert", "/ca/ca.pem"]
+    volumes:
+      - ./run/ca:/ca:ro
     profiles: [tools]
 
 volumes:
