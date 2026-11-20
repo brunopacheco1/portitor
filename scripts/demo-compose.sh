@@ -25,15 +25,24 @@
 #   EXTRA_COMPOSE=examples/compose/observability.yaml
 #                one more Compose file, used with compose.yaml (here: the
 #                optional observability stack)
-# Needs docker with the compose plugin, curl, jq and openssl.
+#   CONTAINER_ENGINE=docker|podman
+#                the container engine; without it, docker if it answers,
+#                then podman (scripts/container-engine.sh)
+# Needs Docker or Podman with Docker Compose (docs/TESTING.md, "Docker or
+# Podman"), bash 4.4 or later, curl, jq and openssl.
 
 set -euo pipefail
+# shellcheck source=scripts/require-bash.sh
+source "$(dirname "$0")/require-bash.sh"
 
 cd "$(dirname "$0")/.."
 if [[ $# -gt 0 ]]; then export PORTITOR_IMAGE=$1; fi
 if [[ $# -gt 1 ]]; then export PORTITOR_IDENTITY_IMAGE=$2; fi
 if [[ $# -gt 2 ]]; then export PORTITOR_ISSUER_IMAGE=$3; fi
-COMPOSE=(docker compose -f examples/compose/compose.yaml)
+# ENGINE_COMPOSE: `docker compose` or `podman compose`
+# shellcheck source=scripts/container-engine.sh
+source scripts/container-engine.sh
+COMPOSE=("${ENGINE_COMPOSE[@]}" -f examples/compose/compose.yaml)
 if [[ -n ${EXTRA_COMPOSE:-} ]]; then COMPOSE+=(-f "$EXTRA_COMPOSE"); fi
 RUN=examples/compose/run
 
@@ -95,11 +104,11 @@ step "Build and sign the HealthDCAT-AP demo bundle with the issuer image"
 # folder mounted at the same path
 cat >"$RUN/issuer-command" <<SCRIPT
 #!/bin/sh
-exec ${COMPOSE[*]} run --rm --no-deps -q --user "$(id -u):$(id -g)" \\
+exec ${COMPOSE[*]} run --rm --no-deps -q --user "$(engine_bind_mount_user)" \\
   -v "$PWD:$PWD" -w "$PWD" issuer "\$@"
 SCRIPT
 chmod +x "$RUN/issuer-command"
-mkdir -p "$RUN/issuer/bundle/bundles" # before Docker makes the mount point, as root
+mkdir -p "$RUN/issuer/bundle/bundles" # before the engine makes the mount point, as root
 AUTHORITY=$AUTHORITY scripts/demo-bundle.sh "$RUN/issuer/bundle" "$RUN/issuer-command" >/dev/null ||
   fail "build the demo bundle"
 # the images run as user 65532 and must read them
@@ -163,7 +172,6 @@ request_credentials consumer 18093 membership-vc20 data-processor-vc20
 PROVIDER=http://provider:8080 HERE=http://127.0.0.1:18080 \
   PROVIDER_MANAGEMENT=http://127.0.0.1:18081 PROVIDER_KEY_FILE="$RUN/provider/management.key" \
   MANAGEMENT=http://127.0.0.1:18091 KEY_FILE="$RUN/consumer/management.key" \
-  STS=http://127.0.0.1:18092/sts/token STS_SECRET_FILE="$RUN/consumer/sts-client-secret" \
   CONSUMER_ID="$CONSUMER_ID" PROVIDER_ID="$PROVIDER_ID" \
   ISSUER_MANAGEMENT="$ISSUER_MANAGEMENT" ISSUER_KEY_FILE="$RUN/issuer/management.key" \
   DATA=examples/data scripts/demo-steps.sh

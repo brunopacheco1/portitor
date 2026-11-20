@@ -22,6 +22,8 @@
 # (<did>#bundle-key, ADR 0005); the TCK must pass all the same.
 
 set -euo pipefail
+# shellcheck source=scripts/require-bash.sh
+source "$(dirname "$0")/require-bash.sh"
 
 TCK_JAR=${1:?usage: $0 PATH/TO/dcp-tck-1.2.1-all.jar}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -56,11 +58,11 @@ env PORTITOR_PARTICIPANT_ID="did:web:localhost%3A$ISSUER_PORT" \
   PORTITOR_BIND="127.0.0.1:$ISSUER_PORT" \
   PORTITOR_ISSUER_SERVICE_URL="http://localhost:$ISSUER_PORT/issuer" \
   PORTITOR_ISSUER_KEY_FILE="$WORK/issuer.pem" \
-  PORTITOR_ISSUER_CREDENTIALS_FILE="$ROOT/tck/issuer-credentials.json" \
+  PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE="$ROOT/tck/issuer-credentials.json" \
   PORTITOR_DB_FILE="$WORK/issuer.db" \
   PORTITOR_MANAGEMENT_BIND="127.0.0.1:$MANAGEMENT_PORT" \
   PORTITOR_MANAGEMENT_API_KEY_FILE="$WORK/api.key" \
-  PORTITOR_ALLOW_HTTP_CALLBACKS=true \
+  PORTITOR_ALLOW_HTTP=true \
   PORTITOR_ISSUER_MAX_ACTIVE_PER_HOLDER=100 \
   "${BUNDLE_SETTINGS[@]}" "$ISSUER_BIN" > issuer.log 2>&1 &
 ISSUER_PID=$!

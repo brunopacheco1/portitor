@@ -21,7 +21,8 @@ use portitor_connector::ports::Retry;
 use portitor_connector::ports::Shared;
 use portitor_connector::store::SqliteNegotiations;
 use portitor_connector::{Config, Ports};
-use portitor_dsp::negotiation::Agreement;
+use portitor_dsp::negotiation::provider::{Negotiation, Outgoing};
+use portitor_dsp::negotiation::{Agreement, NegotiationState, Transition};
 use portitor_dsp::policy::HeldCredential;
 use portitor_dsp::transfer::provider::{Agreements, DataFlows, StoreError, Transfer};
 use portitor_dsp::transfer::{DataAddress, DataAddressType, EndpointProperty};
@@ -83,6 +84,13 @@ impl Agreements for OneAgreement {
         });
         Ok((id == "a1").then(|| serde_json::from_value(agreement).unwrap()))
     }
+    // the fixed agreement belongs to no stored negotiation
+    fn negotiation_of(&self, _: &str) -> Result<Option<Negotiation>, StoreError> {
+        Ok(None)
+    }
+    fn replace_negotiation_if(&self, _: &Negotiation, _: u64) -> Result<bool, StoreError> {
+        Ok(false)
+    }
 }
 
 /// A data plane that serves `HttpData-PULL` and records its calls.
@@ -143,7 +151,7 @@ fn config() -> Config {
         public_url: "https://provider.example".into(),
         datasets_file: Some(path.into()),
         harvest_interval_seconds: 0,
-        allow_http_callbacks: false,
+        allow_http: false,
         db_file: "unused.db".into(),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
@@ -837,6 +845,426 @@ async fn sqlite_ports_use_the_stored_agreements() {
     let app = portitor_connector::router(&config(), p).unwrap();
     let (status, _) = call(&app, post(&format!("{BASE}/request"), &request("a1"))).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+// ---- ADR 0007, amended in 0.13 (TD-44): a transfer request that arrives
+// ---- before the acknowledgement of the finalization event is recorded
+
+/// The provider's negotiation `urn:uuid:n1` with the consumer, in the
+/// state the race of TD-44 finds it: `VERIFIED`, its agreement `a-new`
+/// for dataset `CAT0101` sent, the finalization event on its way.
+fn finalization_on_its_way() -> Negotiation {
+    let status_url = format!("{CALLBACK}/negotiations/urn:uuid:c1");
+    Negotiation {
+        provider_pid: "urn:uuid:n1".to_owned(),
+        consumer_pid: "urn:uuid:c1".to_owned(),
+        state: NegotiationState::Verified,
+        callback_address: CALLBACK.to_owned(),
+        counter_party: CONSUMER.to_owned(),
+        offer: serde_json::from_value(json!({
+            "@id": "o", "@type": "Offer", "target": "CAT0101",
+            "permission": [{"action": "use"}]
+        }))
+        .unwrap(),
+        agreement: Some(
+            serde_json::from_value(json!({
+                "@id": "a-new", "@type": "Agreement", "target": "CAT0101",
+                "assigner": "did:web:provider.example", "assignee": CONSUMER,
+                "timestamp": "2026-11-13T00:00:00Z", "permission": [{"action": "use"}]
+            }))
+            .unwrap(),
+        ),
+        pending: Some(Outgoing {
+            provider_pid: "urn:uuid:n1".to_owned(),
+            url: format!("{status_url}/events"),
+            body: json!({"@type": "ContractNegotiationEventMessage", "eventType": "FINALIZED"}),
+            transition: Transition::Finalize,
+            to: NegotiationState::Finalized,
+            status_url,
+            counter_party: CONSUMER.to_owned(),
+        }),
+        version: 4,
+    }
+}
+
+/// The connector with the `SQLite` store, as in production, holding
+/// `negotiation`.
+fn app_with_stored(negotiation: &Negotiation) -> (Router, Arc<SqliteNegotiations>, Arc<FakeFlows>) {
+    let (sender, flows) = (
+        Arc::new(FakeSender::default()),
+        Arc::new(FakeFlows::default()),
+    );
+    let file = Arc::new(SqliteNegotiations::in_memory().unwrap());
+    portitor_dsp::negotiation::provider::NegotiationStore::insert(&*file, negotiation).unwrap();
+    let mut p = ports(&sender, &flows);
+    p.use_sqlite(&file);
+    let app = portitor_connector::router(&config(), p).unwrap();
+    (app, file, flows)
+}
+
+fn stored(file: &SqliteNegotiations) -> Negotiation {
+    portitor_dsp::negotiation::provider::NegotiationStore::get(file, "urn:uuid:n1")
+        .unwrap()
+        .unwrap()
+}
+
+/// Log lines collected on the test's thread, as JSON.
+#[derive(Clone, Default)]
+struct Log(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for Log {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Log {
+    /// Collects until the guard is dropped.
+    fn start() -> (Self, tracing::subscriber::DefaultGuard) {
+        // other tests run at the same time on threads without a subscriber
+        portitor_runtime::telemetry::testing::keep_a_second_subscriber();
+        let log = Self::default();
+        let writer = log.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(move || writer.clone())
+            .finish();
+        (log, tracing::subscriber::set_default(subscriber))
+    }
+    fn lines(&self) -> Vec<Value> {
+        let text = String::from_utf8(self.0.lock().unwrap().clone()).unwrap();
+        text.lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+}
+
+#[tokio::test]
+async fn a_request_while_the_finalization_is_on_its_way_is_accepted_and_settles_it() {
+    let (app, file, flows) = app_with_stored(&finalization_on_its_way());
+    let (log, _guard) = Log::start();
+
+    let uri = format!("{BASE}/request");
+    let (status, ack) = call(&app, post(&uri, &request("a-new"))).await;
+    assert_eq!(status, StatusCode::CREATED, "{ack}");
+    assert_eq!(flows.calls(), ["start CAT0101"]);
+
+    let settled = stored(&file);
+    assert_eq!(settled.state, NegotiationState::Finalized);
+    assert_eq!(settled.pending, None);
+    assert_eq!(settled.version, 5);
+    assert!(
+        portitor_dsp::negotiation::provider::NegotiationStore::pending(&*file)
+            .unwrap()
+            .is_empty(),
+        "the event is not sent again after a restart"
+    );
+
+    // the state change is reported like every other one (ADR 0023)
+    let changes: Vec<Value> = log
+        .lines()
+        .into_iter()
+        .filter(|line| line["fields"]["portitor.dsp.process"] == "negotiation")
+        .collect();
+    assert_eq!(changes.len(), 1, "{changes:?}");
+    let fields = &changes[0]["fields"];
+    assert_eq!(fields["portitor.dsp.provider_pid"], "urn:uuid:n1");
+    assert_eq!(fields["portitor.dsp.previous_state"], "VERIFIED");
+    assert_eq!(fields["portitor.dsp.state"], "FINALIZED");
+}
+
+/// ADR 0013: only the agreement's consumer; and a negotiation in any
+/// other state is refused as before. Each refusal is one INFO line that
+/// names neither the agreement nor a participant.
+#[tokio::test]
+async fn a_request_that_proves_nothing_is_refused_logged_and_settles_nothing() {
+    let uri = format!("{BASE}/request");
+    let mut agreed_only = finalization_on_its_way();
+    agreed_only.state = NegotiationState::Agreed;
+    agreed_only.pending = None;
+    let mut terminated = agreed_only.clone();
+    terminated.state = NegotiationState::Terminated;
+    let cases = [
+        (finalization_on_its_way(), "did:web:stranger.example"),
+        (agreed_only, CONSUMER),
+        (terminated, CONSUMER),
+    ];
+    for (negotiation, caller) in cases {
+        let (app, file, flows) = app_with_stored(&negotiation);
+        let (log, _guard) = Log::start();
+        let (status, error) = call(&app, post_as(&uri, &request("a-new"), caller)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+        assert_eq!(stored(&file), negotiation, "nothing is written");
+        assert!(flows.calls().is_empty());
+
+        let lines = log.lines();
+        let refusals: Vec<&Value> = lines
+            .iter()
+            .filter(|line| line["fields"]["message"] == "transfer request is refused; answered 400")
+            .collect();
+        assert_eq!(refusals.len(), 1, "{lines:?}");
+        assert_eq!(refusals[0]["level"], "INFO");
+        let text = refusals[0].to_string();
+        assert!(text.contains("no finalized agreement"), "{text}");
+        for private in ["a-new", caller, "urn:uuid:n1", CONSUMER_PID] {
+            assert!(!text.contains(private), "{text}");
+        }
+    }
+}
+
+/// Sixteen transfer requests at once under one agreement whose
+/// finalization is on its way, on several threads: all are accepted, and
+/// the negotiation is written once (version 4 to 5). The requests that
+/// lose the version check read the negotiation again and find it
+/// FINALIZED (compare-and-update, ADR 0007: no lock, no wait).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn requests_at_once_while_the_finalization_is_on_its_way_settle_it_once() {
+    let (app, file, _flows) = app_with_stored(&finalization_on_its_way());
+    let uri = format!("{BASE}/request");
+    let mut running = Vec::new();
+    for number in 0..16 {
+        let mut body = request("a-new");
+        body["consumerPid"] = json!(format!("urn:uuid:consumer-{number}"));
+        let (app, uri) = (app.clone(), uri.clone());
+        running.push(tokio::spawn(
+            async move { call(&app, post(&uri, &body)).await },
+        ));
+    }
+    for task in running {
+        let (status, answer) = task.await.unwrap();
+        assert_eq!(status, StatusCode::CREATED, "{answer}");
+    }
+    let settled = stored(&file);
+    assert_eq!(settled.state, NegotiationState::Finalized);
+    assert_eq!(settled.pending, None);
+    assert_eq!(settled.version, 5, "written once");
+}
+
+/// `finalization_on_its_way()` moved to `state`, with `pending` on its
+/// way instead of the finalization event.
+fn negotiation_in(state: NegotiationState, pending: Option<Transition>) -> Negotiation {
+    let mut negotiation = finalization_on_its_way();
+    negotiation.state = state;
+    negotiation.pending = match (negotiation.pending, pending) {
+        (Some(message), Some(transition)) => Some(Outgoing {
+            transition,
+            to: match transition {
+                Transition::Finalize => NegotiationState::Finalized,
+                Transition::Terminate => NegotiationState::Terminated,
+                _ => state,
+            },
+            ..message
+        }),
+        _ => None,
+    };
+    negotiation
+}
+
+/// The table of ADR 0007 (amended in 0.13) through HTTP and the `SQLite`
+/// store, for every state of the negotiation and every message that can
+/// be on its way when the transfer request arrives: it is served only
+/// under a `FINALIZED` negotiation, or a `VERIFIED` one whose
+/// finalization event is on its way. Every other request gets 400 and
+/// the stored negotiation stays as it was.
+#[tokio::test]
+async fn a_request_is_served_only_when_finalized_or_when_the_finalization_is_on_its_way() {
+    use NegotiationState::{Accepted, Agreed, Finalized, Offered, Requested, Terminated, Verified};
+    use Transition::{Agree, Finalize, Offer, Terminate};
+    let uri = format!("{BASE}/request");
+    let every_state = [
+        Requested, Offered, Accepted, Agreed, Verified, Finalized, Terminated,
+    ];
+    let on_its_way = [
+        None,
+        Some(Offer),
+        Some(Agree),
+        Some(Finalize),
+        Some(Terminate),
+    ];
+    for state in every_state {
+        for pending in on_its_way {
+            let served = state == Finalized || (state == Verified && pending == Some(Finalize));
+            let negotiation = negotiation_in(state, pending);
+            let (app, file, flows) = app_with_stored(&negotiation);
+            let (status, answer) = call(&app, post(&uri, &request("a-new"))).await;
+            let case = format!("{state:?} with {pending:?} on its way: {answer}");
+            if served {
+                assert_eq!(status, StatusCode::CREATED, "{case}");
+                assert_eq!(stored(&file).state, Finalized, "{case}");
+                assert_eq!(flows.calls(), ["start CAT0101"], "{case}");
+            } else {
+                assert_eq!(status, StatusCode::BAD_REQUEST, "{case}");
+                assert_eq!(stored(&file), negotiation, "{case}");
+                assert!(flows.calls().is_empty(), "{case}");
+            }
+        }
+    }
+}
+
+/// ADR 0007, amended in 0.13: "The negotiation is settled when the
+/// request names the agreement and the caller is its consumer, also if
+/// the request is then refused for another reason. The proof is that the
+/// consumer asked, not that the transfer is granted."
+#[tokio::test]
+async fn a_request_refused_for_another_reason_still_settles_the_finalization() {
+    let uri = format!("{BASE}/request");
+    let mut other_format = request("a-new");
+    other_format["format"] = json!("HttpData-PUSH");
+    // a push transfer, which this connector does not do (ADR 0013)
+    let mut push = request("a-new");
+    push["dataAddress"] = json!({
+        "@type": "DataAddress",
+        "endpointType": "https://w3id.org/idsa/v4.1/HTTP",
+        "endpoint": "https://consumer.example/in"
+    });
+    for (name, body) in [("another format", other_format), ("push", push)] {
+        let (app, file, flows) = app_with_stored(&finalization_on_its_way());
+        let (status, error) = call(&app, post(&uri, &body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name}: {error}");
+        assert!(flows.calls().is_empty(), "{name}");
+        let settled = stored(&file);
+        assert_eq!(settled.state, NegotiationState::Finalized, "{name}");
+        assert_eq!(settled.pending, None, "{name}");
+        assert_eq!(settled.version, 5, "{name}");
+        // and the next, good request is served without another write
+        let (status, ack) = call(&app, post(&uri, &request("a-new"))).await;
+        assert_eq!(status, StatusCode::CREATED, "{name}: {ack}");
+        assert_eq!(stored(&file), settled, "{name}");
+    }
+}
+
+/// What the code does today, written down: a request that is refused
+/// before the agreement is looked up settles nothing. These are requests
+/// that are no valid `TransferRequestMessage`, have no caller, or name a
+/// callback address the connector may not call.
+#[tokio::test]
+async fn a_request_refused_before_the_agreement_is_looked_up_settles_nothing() {
+    let uri = format!("{BASE}/request");
+    let mut no_format = request("a-new");
+    no_format.as_object_mut().unwrap().remove("format");
+    let mut http_callback = request("a-new");
+    http_callback["callbackAddress"] = json!("http://consumer.example/cb");
+    let json_body = |body: &Value| Body::from(body.to_string());
+    let cases = [
+        (
+            "not a valid message",
+            post(&uri, &no_format),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "an http callback",
+            post(&uri, &http_callback),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "no caller",
+            Request::post(&uri)
+                .header("content-type", "application/json")
+                .body(json_body(&request("a-new")))
+                .unwrap(),
+            StatusCode::NOT_FOUND,
+        ),
+    ];
+    for (name, req, expected) in cases {
+        let (app, file, flows) = app_with_stored(&finalization_on_its_way());
+        let (status, error) = call(&app, req).await;
+        assert_eq!(status, expected, "{name}: {error}");
+        assert_eq!(stored(&file), finalization_on_its_way(), "{name}");
+        assert!(flows.calls().is_empty(), "{name}");
+    }
+}
+
+/// The connector on the `SQLite` file `path`. With `after_a_start`,
+/// what the file holds as pending is sent again, as `main` does it.
+/// Returns the router, what it sends, and how many messages were sent
+/// again.
+fn connector_on(path: &std::path::Path, after_a_start: bool) -> (Router, Arc<FakeSender>, usize) {
+    let (sender, flows) = (
+        Arc::new(FakeSender::default()),
+        Arc::new(FakeFlows::default()),
+    );
+    let mut p = ports(&sender, &flows);
+    p.use_sqlite(&Arc::new(SqliteNegotiations::open(path).unwrap()));
+    let (app, negotiator) = portitor_connector::build(&config(), p).unwrap();
+    let sent_again = if after_a_start {
+        negotiator.resume().unwrap()
+    } else {
+        0
+    };
+    (app, sender, sent_again)
+}
+
+/// A restart between the transfer request that settled the finalization
+/// and the acknowledgement that never came: the file says `FINALIZED`,
+/// the finalization event is not sent again ("It is not sent again after
+/// a restart", ADR 0007), the transfer is still there and the agreement
+/// serves another one.
+#[tokio::test]
+async fn after_a_restart_a_settled_finalization_is_not_sent_again() {
+    use portitor_dsp::negotiation::provider::NegotiationStore as _;
+
+    let folder = portitor_runtime::testing::TempDir::new("td-44");
+    let path = folder.path().join("portitor.db");
+    let file = SqliteNegotiations::open(&path).unwrap();
+    file.insert(&finalization_on_its_way()).unwrap();
+    let uri = format!("{BASE}/request");
+
+    // the event is on its way (nothing answers it); the request arrives
+    let (app, _sender, _) = connector_on(&path, false);
+    let (status, first) = call(&app, post(&uri, &request("a-new"))).await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    let pid = first["providerPid"].as_str().unwrap().to_owned();
+    wait_for(&app, &pid, "STARTED").await;
+    drop(app);
+
+    // the restart
+    let (app, sender, sent_again) = connector_on(&path, true);
+    assert_eq!(sent_again, 0, "nothing was pending");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(sender.sent().is_empty(), "{:?}", sender.sent());
+    let settled = file.get("urn:uuid:n1").unwrap().unwrap();
+    assert_eq!(settled.state, NegotiationState::Finalized);
+    assert_eq!(settled.pending, None);
+    assert_eq!(settled.version, 5);
+    assert_eq!(state(&app, &pid).await, "STARTED");
+    let mut second = request("a-new");
+    second["consumerPid"] = json!("urn:uuid:consumer-2");
+    let (status, answer) = call(&app, post(&uri, &second)).await;
+    assert_eq!(status, StatusCode::CREATED, "{answer}");
+    assert_eq!(file.get("urn:uuid:n1").unwrap().unwrap(), settled);
+}
+
+/// The other order: the restart comes first and finds the finalization
+/// event still pending. It is sent again; a transfer request that
+/// arrives before the consumer answers it is served all the same.
+#[tokio::test]
+async fn after_a_restart_with_the_finalization_still_on_its_way_a_request_is_served() {
+    use portitor_dsp::negotiation::provider::NegotiationStore as _;
+
+    let folder = portitor_runtime::testing::TempDir::new("td-44");
+    let path = folder.path().join("portitor.db");
+    let file = SqliteNegotiations::open(&path).unwrap();
+    file.insert(&finalization_on_its_way()).unwrap();
+
+    let (app, sender, sent_again) = connector_on(&path, true);
+    assert_eq!(sent_again, 1, "the finalization event");
+    let (status, answer) = call(&app, post(&format!("{BASE}/request"), &request("a-new"))).await;
+    assert_eq!(status, StatusCode::CREATED, "{answer}");
+    // the event's acknowledgement and the transfer's start message
+    let all = sent(&sender, 2).await;
+    let events = all.iter().filter(|(url, _)| url.ends_with("/events"));
+    assert_eq!(events.count(), 1, "{all:?}");
+    let settled = file.get("urn:uuid:n1").unwrap().unwrap();
+    assert_eq!(settled.state, NegotiationState::Finalized);
+    assert_eq!(settled.pending, None);
+    assert_eq!(
+        settled.version, 5,
+        "written once: by the request or by the acknowledgement"
+    );
 }
 
 /// Serves `hello` as CSV at `/file` on a free local port; returns its URL.

@@ -187,7 +187,7 @@ pub struct BundleConfig {
     /// (`PORTITOR_BUNDLE_REFRESH_SECONDS`); 0: only at start. Only used
     /// with [`VersionChoice::Latest`].
     pub refresh_seconds: u64,
-    /// Plain-HTTP URLs and DIDs allowed (`PORTITOR_ALLOW_HTTP_CALLBACKS`,
+    /// Plain-HTTP URLs and DIDs allowed (`PORTITOR_ALLOW_HTTP`,
     /// development and tests only).
     pub allow_http: bool,
 }
@@ -206,11 +206,8 @@ impl BundleConfig {
         db_file: &Path,
         allow_http: bool,
     ) -> Result<Option<Self>, BundleSourceError> {
-        let text = |name: &str| {
-            var(name)
-                .map(|value| value.to_string_lossy().trim().to_owned())
-                .filter(|value| !value.is_empty())
-        };
+        // trimmed, and `None` for an empty value
+        let text = |name: &str| portitor_runtime::settings::text(&var, name);
         let config_error = |why: String| Err(BundleSourceError::Config(why));
         let location = match (text("PORTITOR_BUNDLE_URL"), text("PORTITOR_BUNDLE_DIR")) {
             (Some(_), Some(_)) => {
@@ -494,13 +491,15 @@ pub(crate) fn read_signed(folder: &Path) -> Result<Signed, BundleSourceError> {
     Signed::from_parts(manifest_bytes, jws_bytes)
 }
 
-/// Reads every file the manifest lists from `folder`.
+/// Reads every file the manifest lists from `folder`, except those with
+/// a role this version does not know: they are skipped, not read
+/// (ADR 0005, amended in 0.13).
 pub(crate) fn read_listed_files(
     folder: &Path,
     manifest: &Manifest,
 ) -> Result<BTreeMap<String, Vec<u8>>, BundleSourceError> {
     let mut collected = CollectedFiles::default();
-    for entry in &manifest.files {
+    for entry in manifest.files_to_fetch() {
         // the path was checked when the manifest was read: relative, no
         // `..`, so it stays inside `folder`
         let bytes = read_limited(&folder.join(&entry.path), MAX_FILE_BYTES)?;
@@ -627,7 +626,9 @@ impl BundleSource for UrlSource {
             let (manifest, key) =
                 verify_with_authority(&signed, expected, self.directory.as_ref()).await?;
             let mut collected = CollectedFiles::default();
-            for entry in &manifest.files {
+            // a file with a role this version does not know is skipped:
+            // not downloaded (ADR 0005, amended in 0.13)
+            for entry in manifest.files_to_fetch() {
                 let bytes = self
                     .get(&format!("{version}/{}", entry.path), MAX_FILE_BYTES)
                     .await?;

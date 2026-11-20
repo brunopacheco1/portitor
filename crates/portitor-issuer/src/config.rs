@@ -10,7 +10,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub use portitor_runtime::settings::base_path;
-use portitor_runtime::settings::path_list;
+use portitor_runtime::settings::{self, ALLOW_HTTP_CALLBACKS, RemovedSetting, refuse_removed};
 
 /// Where the public server listens unless `PORTITOR_BIND` says otherwise.
 pub const DEFAULT_BIND: &str = "0.0.0.0:8070";
@@ -29,6 +29,17 @@ pub const DEFAULT_DB_FILE: &str = "/data/portitor-issuer.db";
 /// during the 0.6 review).
 pub const DEFAULT_MAX_ACTIVE_PER_HOLDER: u64 = 10;
 
+/// The settings the issuer no longer has. When one of them is set, the
+/// issuer refuses to start and names what to set instead.
+pub const REMOVED_SETTINGS: &[RemovedSetting] = &[
+    ALLOW_HTTP_CALLBACKS,
+    // the file holds credential definitions, not credentials
+    RemovedSetting {
+        name: "PORTITOR_ISSUER_CREDENTIALS_FILE",
+        advice: "was renamed in 0.13; set PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE instead",
+    },
+];
+
 /// Everything the issuer needs to start.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
@@ -40,8 +51,8 @@ pub struct Config {
     /// listed in the DID document but never used to sign
     /// (`PORTITOR_ISSUER_RETIRED_KEY_FILES`, comma-separated; TD-05).
     pub retired_key_files: Vec<PathBuf>,
-    /// The credential definitions, JSON (`PORTITOR_ISSUER_CREDENTIALS_FILE`).
-    pub credentials_file: PathBuf,
+    /// The credential definitions, JSON (`PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE`).
+    pub credential_definitions_file: PathBuf,
     /// The issuer service's public base URL, written into the DID
     /// document as `IssuerService` (`PORTITOR_ISSUER_SERVICE_URL`). The
     /// status lists are served under it too, so it must not change once
@@ -54,7 +65,7 @@ pub struct Config {
     /// The management port: always the health checks, and the management
     /// API when `PORTITOR_MANAGEMENT_API_KEY_FILE` is set.
     pub management: ManagementConfig,
-    /// Plain-HTTP DIDs and URLs allowed (`PORTITOR_ALLOW_HTTP_CALLBACKS`,
+    /// Plain-HTTP DIDs and URLs allowed (`PORTITOR_ALLOW_HTTP`,
     /// tests only).
     pub allow_http: bool,
     /// The most credentials of one definition a holder may have that are
@@ -99,12 +110,11 @@ impl Config {
     /// # Errors
     /// A required setting is missing or a setting is invalid.
     pub fn from_vars(var: impl Fn(&str) -> Option<OsString>) -> Result<Self, ConfigError> {
-        let text = |name: &str| var(name).map(|v| v.to_string_lossy().trim().to_owned());
-        let required = |name: &'static str| {
-            text(name)
-                .filter(|v| !v.is_empty())
-                .ok_or_else(|| invalid(name, "required"))
-        };
+        // trimmed, and `None` for an empty value: empty means "not set"
+        // (the rule of every setting, `portitor_runtime::settings`)
+        let text = |name: &str| settings::text(&var, name);
+        let required = |name: &'static str| text(name).ok_or_else(|| invalid(name, "required"));
+        refuse_removed(&var, REMOVED_SETTINGS).map_err(removed)?;
         let participant_id = required("PORTITOR_PARTICIPANT_ID")?;
         portitor_dcp::did_web_url(&participant_id)
             .map_err(|e| invalid("PORTITOR_PARTICIPANT_ID", &e.to_string()))?;
@@ -125,30 +135,37 @@ impl Config {
             },
         };
         let management = ManagementConfig::from_vars(DEFAULT_MANAGEMENT_BIND, &var);
+        // a list that is set must name something (`settings::list`)
+        let retired_key_files = settings::list(&var, "PORTITOR_ISSUER_RETIRED_KEY_FILES")
+            .map_err(|e| invalid("PORTITOR_ISSUER_RETIRED_KEY_FILES", &e))?
+            .unwrap_or_default();
+        let allow_http = settings::switch(&var, "PORTITOR_ALLOW_HTTP")
+            .map_err(|e| invalid("PORTITOR_ALLOW_HTTP", &e))?;
         Ok(Self {
             participant_id,
             key_file: PathBuf::from(required("PORTITOR_ISSUER_KEY_FILE")?),
-            retired_key_files: path_list(
-                &text("PORTITOR_ISSUER_RETIRED_KEY_FILES").unwrap_or_default(),
-            ),
-            credentials_file: PathBuf::from(required("PORTITOR_ISSUER_CREDENTIALS_FILE")?),
+            retired_key_files: retired_key_files.into_iter().map(PathBuf::from).collect(),
+            credential_definitions_file: PathBuf::from(required(
+                "PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE",
+            )?),
             issuer_service_url: issuer_service_url.trim_end_matches('/').to_owned(),
             bind: text("PORTITOR_BIND").unwrap_or_else(|| DEFAULT_BIND.to_owned()),
             db_file: PathBuf::from(
                 text("PORTITOR_DB_FILE").unwrap_or_else(|| DEFAULT_DB_FILE.to_owned()),
             ),
             management,
-            allow_http: text("PORTITOR_ALLOW_HTTP_CALLBACKS")
-                .is_some_and(|v| v.eq_ignore_ascii_case("true")),
+            allow_http,
             max_active_per_holder,
-            bundle_key_file: text("PORTITOR_ISSUER_BUNDLE_KEY_FILE")
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from),
-            bundle_dir: text("PORTITOR_ISSUER_BUNDLE_DIR")
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from),
+            bundle_key_file: text("PORTITOR_ISSUER_BUNDLE_KEY_FILE").map(PathBuf::from),
+            bundle_dir: text("PORTITOR_ISSUER_BUNDLE_DIR").map(PathBuf::from),
         })
     }
+}
+
+/// The error for a removed setting that is still set: its old name, and
+/// what to set instead.
+fn removed(setting: RemovedSetting) -> ConfigError {
+    invalid(setting.name, setting.advice)
 }
 
 fn invalid(name: &'static str, problem: &str) -> ConfigError {
@@ -167,11 +184,20 @@ mod tests {
         Config::from_vars(portitor_runtime::testing::vars(pairs))
     }
 
+    /// Old names (refused) and the new name each error must give.
+    const RENAMED: &[(&str, &str)] = &[
+        ("PORTITOR_ALLOW_HTTP_CALLBACKS", "PORTITOR_ALLOW_HTTP"),
+        (
+            "PORTITOR_ISSUER_CREDENTIALS_FILE",
+            "PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE",
+        ),
+    ];
+
     const MINIMAL: &[(&str, &str)] = &[
         ("PORTITOR_PARTICIPANT_ID", "did:web:issuer.example"),
         ("PORTITOR_ISSUER_KEY_FILE", "/run/secrets/issuer.pem"),
         (
-            "PORTITOR_ISSUER_CREDENTIALS_FILE",
+            "PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE",
             "/config/credentials.json",
         ),
         (
@@ -179,6 +205,71 @@ mod tests {
             "https://issuer.example/issuer/",
         ),
     ];
+
+    #[test]
+    fn a_renamed_setting_is_refused_with_its_new_name() {
+        for (old, new) in RENAMED {
+            let mut vars = MINIMAL.to_vec();
+            vars.push((old, "anything"));
+            let error = read(&vars).unwrap_err();
+            assert_eq!(error.name, *old);
+            assert!(error.to_string().contains(new), "{error}");
+        }
+    }
+
+    /// A list that is set names something, and a switch is `true` or
+    /// `false`: anything else stops the start.
+    #[test]
+    fn a_list_of_commas_or_a_switch_that_is_not_true_or_false_is_refused() {
+        for (name, value) in [
+            ("PORTITOR_ISSUER_RETIRED_KEY_FILES", ",,"),
+            ("PORTITOR_ALLOW_HTTP", "1"),
+            ("PORTITOR_ALLOW_HTTP", "yes"),
+        ] {
+            let mut vars = MINIMAL.to_vec();
+            vars.push((name, value));
+            let error = read(&vars).unwrap_err();
+            assert_eq!(error.name, name, "{error}");
+        }
+        let mut vars = MINIMAL.to_vec();
+        vars.push(("PORTITOR_ALLOW_HTTP", "FALSE"));
+        assert!(!read(&vars).unwrap().allow_http);
+    }
+
+    /// The rule of every setting: spaces around a value are dropped, and
+    /// an empty value means "not set".
+    #[test]
+    fn an_empty_value_is_not_set_and_values_are_trimmed() {
+        // an optional setting that is empty takes its default
+        let mut vars = MINIMAL.to_vec();
+        for optional in [
+            "PORTITOR_BIND",
+            "PORTITOR_DB_FILE",
+            "PORTITOR_ISSUER_RETIRED_KEY_FILES",
+            "PORTITOR_ISSUER_MAX_ACTIVE_PER_HOLDER",
+            "PORTITOR_ISSUER_BUNDLE_KEY_FILE",
+            "PORTITOR_ISSUER_BUNDLE_DIR",
+            "PORTITOR_ALLOW_HTTP",
+            "PORTITOR_MANAGEMENT_BIND",
+            "PORTITOR_MANAGEMENT_API_KEY_FILE",
+        ] {
+            vars.push((optional, " "));
+        }
+        assert_eq!(read(&vars).unwrap(), read(MINIMAL).unwrap());
+        // a required setting that is empty is missing
+        for required in MINIMAL.iter().map(|(name, _)| *name) {
+            let mut vars = MINIMAL.to_vec();
+            vars.push((required, ""));
+            assert_eq!(read(&vars).unwrap_err(), invalid(required, "required"));
+        }
+        // spaces around a value are dropped
+        let mut vars = MINIMAL.to_vec();
+        vars.push(("PORTITOR_BIND", " 127.0.0.1:9 "));
+        vars.push(("PORTITOR_ISSUER_MAX_ACTIVE_PER_HOLDER", " 3 "));
+        let config = read(&vars).unwrap();
+        assert_eq!(config.bind, "127.0.0.1:9");
+        assert_eq!(config.max_active_per_holder, 3);
+    }
 
     #[test]
     fn defaults() {
@@ -231,7 +322,7 @@ mod tests {
     fn management_api_needs_a_key_file() {
         let mut vars = MINIMAL.to_vec();
         vars.push(("PORTITOR_MANAGEMENT_API_KEY_FILE", "/run/secrets/api"));
-        vars.push(("PORTITOR_ALLOW_HTTP_CALLBACKS", "TRUE"));
+        vars.push(("PORTITOR_ALLOW_HTTP", "TRUE"));
         let config = read(&vars).unwrap();
         assert_eq!(
             config.management,

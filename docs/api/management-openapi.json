@@ -2,12 +2,12 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Portitor management API",
-    "description": "Starts and follows contract negotiations and transfers in which this connector is the consumer, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only.",
+    "description": "Reads a provider's catalog, starts and follows contract negotiations and transfers in which this connector is the consumer, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only. The API key is opaque (see the api_key security scheme). HTTP 403 is reserved for tokens with limited rights in 1.x; 1.0 never answers it. Every route answers 503 with a problem document when the request took longer than 60 seconds; at most 4 catalog or dataset answers are read from providers at a time, and a further request waits within those 60 seconds. The data plane token (the authorization property of a transfer's dataAddress) is opaque too: send it as it is, do not parse it; a 1.x release may issue another form.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.12.0"
+    "version": "0.13.0"
   },
   "paths": {
     "/api/check/health": {
@@ -124,6 +124,167 @@
         }
       }
     },
+    "/v1/catalog/dataset/request": {
+      "post": {
+        "tags": [
+          "Catalog"
+        ],
+        "summary": "Read one dataset from a provider (DSP 2025-1 `Dataset`), by its\n`@id`. Works as `POST /v1/catalog/request` does: the connector's own\nDCP token, one try, the provider's JSON as it came.",
+        "operationId": "request_dataset",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The dataset (DSP 2025-1 Dataset), as the provider sent it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, a protocol other than dataspace-protocol-http:2025-1, a dataset id that is \".\" or \"..\", or an address that is not an https URL",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API key",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reserved for scoped access in 1.x (ADR 0025): the caller is known but may not make this call. Not returned today. The API key (PORTITOR_MANAGEMENT_API_KEY_FILE) keeps every right and never gets this answer.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "No dataset: the provider refused (the detail has its HTTP status; 404 for a dataset it does not have or does not show us), did not answer, answered with something that is not a JSON object or whose @type is not Dataset (a dataset without @type is accepted), or the identity component gave no token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/catalog/request": {
+      "post": {
+        "tags": [
+          "Catalog"
+        ],
+        "summary": "Read a provider's catalog (DSP 2025-1 `Catalog`): the datasets it\noffers, each with its offers (`hasPolicy`). The connector asks the\nprovider with its own DCP token and waits for the answer (one try, at\nmost 30 seconds); nothing is stored.",
+        "description": "The answer is the provider's JSON as it came. At most 16 MiB are\nread. If the provider sends its catalog in pages (DSP 2025-1, \"Catalog\nHTTPS Binding\", \"Pagination\"), this is the first page only, and the\nprovider's `Link` headers are copied to the answer.",
+        "operationId": "request_catalog",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The provider's catalog (DSP 2025-1 Catalog), as the provider sent it",
+            "headers": {
+              "Link": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The provider's Link headers, when it sent its catalog in pages; only this first page is returned"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, a protocol other than dataspace-protocol-http:2025-1, a querySpec, or an address that is not an https URL",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API key",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reserved for scoped access in 1.x (ADR 0025): the caller is known but may not make this call. Not returned today. The API key (PORTITOR_MANAGEMENT_API_KEY_FILE) keeps every right and never gets this answer.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "No catalog: the provider refused (the detail has its HTTP status), did not answer, answered with more than 16 MiB or with something that is not a Catalog, or the identity component gave no token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/harvest-jobs": {
       "get": {
         "tags": [
@@ -184,6 +345,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Reserved for scoped access in 1.x (ADR 0025): the caller is known but may not make this call. Not returned today. The API key (PORTITOR_MANAGEMENT_API_KEY_FILE) keeps every right and never gets this answer.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -236,6 +407,16 @@
           },
           "401": {
             "description": "Missing or wrong API key",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reserved for scoped access in 1.x (ADR 0025): the caller is known but may not make this call. Not returned today. The API key (PORTITOR_MANAGEMENT_API_KEY_FILE) keeps every right and never gets this answer.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -320,6 +501,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Reserved for scoped access in 1.x (ADR 0025): the caller is known but may not make this call. Not returned today. The API key (PORTITOR_MANAGEMENT_API_KEY_FILE) keeps every right and never gets this answer.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -374,6 +565,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Reserved for scoped access in 1.x (ADR 0025): the caller is known but may not make this call. Not returned today. The API key (PORTITOR_MANAGEMENT_API_KEY_FILE) keeps every right and never gets this answer.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -414,6 +615,16 @@
           },
           "401": {
             "description": "Missing or wrong API key",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reserved for scoped access in 1.x (ADR 0025): the caller is known but may not make this call. Not returned today. The API key (PORTITOR_MANAGEMENT_API_KEY_FILE) keeps every right and never gets this answer.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -498,6 +709,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Reserved for scoped access in 1.x (ADR 0025): the caller is known but may not make this call. Not returned today. The API key (PORTITOR_MANAGEMENT_API_KEY_FILE) keeps every right and never gets this answer.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -552,6 +773,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Reserved for scoped access in 1.x (ADR 0025): the caller is known but may not make this call. Not returned today. The API key (PORTITOR_MANAGEMENT_API_KEY_FILE) keeps every right and never gets this answer.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -592,6 +823,16 @@
           },
           "401": {
             "description": "Missing or wrong API key",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reserved for scoped access in 1.x (ADR 0025): the caller is known but may not make this call. Not returned today. The API key (PORTITOR_MANAGEMENT_API_KEY_FILE) keeps every right and never gets this answer.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -667,6 +908,16 @@
               }
             }
           },
+          "403": {
+            "description": "Reserved for scoped access in 1.x (ADR 0025): the caller is known but may not make this call. Not returned today. The API key (PORTITOR_MANAGEMENT_API_KEY_FILE) keeps every right and never gets this answer.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Unknown transfer",
             "content": {
@@ -734,6 +985,16 @@
               }
             }
           },
+          "403": {
+            "description": "Reserved for scoped access in 1.x (ADR 0025): the caller is known but may not make this call. Not returned today. The API key (PORTITOR_MANAGEMENT_API_KEY_FILE) keeps every right and never gets this answer.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Unknown transfer",
             "content": {
@@ -755,6 +1016,80 @@
   },
   "components": {
     "schemas": {
+      "CatalogRequest": {
+        "type": "object",
+        "description": "Ask a provider for its catalog.\n\nThe body is the `CatalogRequest` of Eclipse EDC's management API v4\n(EDC v1.0.0-RC8: `catalog-request-schema.json` in\n`management-api-schema-validator`, `CatalogRequest.java` and\n`CatalogRequestValidator.java`), so a client written for EDC can send\nthe same body. What Portitor does with each member:\n\n- `counterPartyAddress`, `counterPartyId`: required, as in EDC. A\n  negotiation (`POST /v1/negotiations`) names the provider with the same\n  two members.\n- `protocol` or `profile` (EDC's newer name for it): exactly one is\n  required, as in EDC's schema, and it must be\n  `dataspace-protocol-http:2025-1`, the only protocol this\n  connector speaks. Any other value is refused with 400.\n- `additionalScopes`: optional, honoured as in EDC: the scopes are\n  added to the configured ones in the token for the provider.\n- `querySpec`: refused with 400 when present. EDC sends it to the\n  provider as the `filter` of the `CatalogRequestMessage`; DSP 2025-1\n  leaves the content of `filter` to each implementation, and a\n  provider that does not support it must refuse the request, as\n  Portitor's own provider side does. Portitor always asks for the\n  whole catalog.\n- `@context`: optional and not read. EDC requires it (its bodies are\n  JSON-LD); Portitor reads the member names as written.\n- `@type`: optional; when present it must be `CatalogRequest`.\n- Any other member (EDC's schema also lists `@id`, which EDC does\n  not use) is refused with 400, as on every management call.",
+        "required": [
+          "counterPartyAddress",
+          "counterPartyId"
+        ],
+        "properties": {
+          "@context": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Accepted so that a body written for Eclipse EDC works unchanged;\nnot read.",
+            "example": [
+              "https://w3id.org/edc/connector/management/v2"
+            ]
+          },
+          "@type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CatalogRequest`, when present.",
+            "example": "CatalogRequest"
+          },
+          "additionalScopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Scopes the provider may read from our Credential Service with our\ntoken, on top of the configured ones (`PORTITOR_DCP_SCOPES`): for\ndatasets a provider shows only to holders of a credential.",
+            "example": [
+              "org.eclipse.dspace.dcp.vc.type:MembershipCredential:read"
+            ]
+          },
+          "counterPartyAddress": {
+            "type": "string",
+            "description": "The provider's DSP endpoint, for example\n`https://provider.example/dsp/2025-1`: the `counterPartyAddress`\nof a negotiation. The catalog is read at\n`<counterPartyAddress>/catalog/request`.",
+            "example": "https://provider.example/dsp/2025-1"
+          },
+          "counterPartyId": {
+            "type": "string",
+            "description": "The provider's participant id: a `did:web` DID, the\n`counterPartyId` of a negotiation. Our token is made for it.",
+            "example": "did:web:provider.example"
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Eclipse EDC's newer name for `protocol`; the same value."
+          },
+          "protocol": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`dataspace-protocol-http:2025-1`. Exactly one of `protocol` and\n`profile` is required.",
+            "example": "dataspace-protocol-http:2025-1"
+          },
+          "querySpec": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Not supported: a request with a `querySpec` is refused with 400.\nThe whole catalog is always asked for."
+          }
+        },
+        "additionalProperties": false
+      },
       "ComponentResult": {
         "type": "object",
         "description": "The result of one check: EDC's `HealthCheckResult`.",
@@ -784,6 +1119,69 @@
             "description": "Whether the check passed."
           }
         }
+      },
+      "DatasetRequest": {
+        "type": "object",
+        "description": "Ask a provider for one dataset.\n\nThe body is the `DatasetRequest` of Eclipse EDC's management API v4\n(EDC v1.0.0-RC8: `dataset-request-schema.json`, `DatasetRequest.java`\nand `DatasetRequestValidator.java`). `@id` (the dataset's id),\n`counterPartyAddress` and `counterPartyId` are required, and exactly\none of `protocol` and `profile`; all are read as in\n[`CatalogRequest`]. EDC's `DatasetRequest` has no `querySpec` and no\n`additionalScopes`, so neither is taken here.",
+        "required": [
+          "@id",
+          "counterPartyAddress",
+          "counterPartyId"
+        ],
+        "properties": {
+          "@context": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Accepted so that a body written for Eclipse EDC works unchanged;\nnot read.",
+            "example": [
+              "https://w3id.org/edc/connector/management/v2"
+            ]
+          },
+          "@id": {
+            "type": "string",
+            "description": "The dataset's `@id` in the provider's catalog.",
+            "example": "urn:uuid:dataset-1"
+          },
+          "@type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`DatasetRequest`, when present.",
+            "example": "DatasetRequest"
+          },
+          "counterPartyAddress": {
+            "type": "string",
+            "description": "The provider's DSP endpoint. The dataset is read at\n`<counterPartyAddress>/catalog/datasets/<@id>`.",
+            "example": "https://provider.example/dsp/2025-1"
+          },
+          "counterPartyId": {
+            "type": "string",
+            "description": "The provider's participant id: a `did:web` DID.",
+            "example": "did:web:provider.example"
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Eclipse EDC's newer name for `protocol`; the same value."
+          },
+          "protocol": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`dataspace-protocol-http:2025-1`. Exactly one of `protocol` and\n`profile` is required.",
+            "example": "dataspace-protocol-http:2025-1"
+          }
+        },
+        "additionalProperties": false
       },
       "Failure": {
         "type": "object",
@@ -1065,8 +1463,8 @@
         "required": [
           "consumerPid",
           "state",
-          "providerAddress",
-          "providerId",
+          "counterPartyAddress",
+          "counterPartyId",
           "offer"
         ],
         "properties": {
@@ -1081,17 +1479,17 @@
             "type": "string",
             "description": "Our process id."
           },
+          "counterPartyAddress": {
+            "type": "string",
+            "description": "The other party's DSP endpoint: the provider's, as this connector\nis the consumer of every negotiation it lists."
+          },
+          "counterPartyId": {
+            "type": "string",
+            "description": "The other party's participant id: the provider's."
+          },
           "offer": {
             "type": "object",
             "description": "The latest offer (DSP 2025-1 `Offer`)."
-          },
-          "providerAddress": {
-            "type": "string",
-            "description": "The provider's DSP endpoint."
-          },
-          "providerId": {
-            "type": "string",
-            "description": "The provider's participant id."
           },
           "providerPid": {
             "type": [
@@ -1134,34 +1532,34 @@
       },
       "StartNegotiation": {
         "type": "object",
-        "description": "Start a negotiation as consumer.",
+        "description": "Start a negotiation as consumer.\n\nThe other party is named as in the catalog calls and as Eclipse EDC\nnames it: `counterPartyAddress` and `counterPartyId` (before 0.13:\n`providerAddress` and `providerId`, which are now refused as unknown\nmembers). EDC's `ContractRequest` and `TransferRequest` carry only\n`counterPartyAddress` (EDC v1.0.0-RC8, `ContractRequest.java`,\n`TransferRequest.java`); `counterPartyId` is the name of EDC's\n`CatalogRequest` and of its `ContractNegotiation` view, and Portitor\nrequires it here, because its token is made for that participant.",
         "required": [
-          "providerAddress",
-          "providerId",
+          "counterPartyAddress",
+          "counterPartyId",
           "offer"
         ],
         "properties": {
+          "counterPartyAddress": {
+            "type": "string",
+            "description": "The provider's DSP endpoint, for example\n`https://provider.example/dsp/2025-1` (the catalog's\n`DataService` `endpointURL`).",
+            "example": "https://provider.example/dsp/2025-1"
+          },
+          "counterPartyId": {
+            "type": "string",
+            "description": "The provider's participant id (the catalog's `participantId`): a\n`did:web` DID. Our DSP requests are tokens for it, and only it may\nanswer.",
+            "example": "did:web:provider.example"
+          },
           "datasetId": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The dataset id. Optional if the offer has a `target`; offers in a\ncatalog have none, as the dataset holds them.",
+            "description": "The dataset id. Optional if the offer has a `target`; offers in a\ncatalog have none, as the dataset holds them. An empty one is\nrefused.",
             "example": "urn:uuid:dataset-1"
           },
           "offer": {
             "type": "object",
             "description": "The offer from the provider's catalog (a DSP 2025-1 `Offer`), copied\nunchanged from the dataset's `hasPolicy`."
-          },
-          "providerAddress": {
-            "type": "string",
-            "description": "The provider's DSP endpoint, for example\n`https://provider.example/dsp/2025-1` (the catalog's\n`DataService` `endpointURL`).",
-            "example": "https://provider.example/dsp/2025-1"
-          },
-          "providerId": {
-            "type": "string",
-            "description": "The provider's participant id (the catalog's `participantId`): a\n`did:web` DID. Our DSP requests are tokens for it, and only it may\nanswer.",
-            "example": "did:web:provider.example"
           }
         },
         "additionalProperties": false
@@ -1215,8 +1613,8 @@
         "required": [
           "consumerPid",
           "state",
-          "providerAddress",
-          "providerId",
+          "counterPartyAddress",
+          "counterPartyId",
           "agreementId",
           "format"
         ],
@@ -1229,24 +1627,24 @@
             "type": "string",
             "description": "Our process id."
           },
+          "counterPartyAddress": {
+            "type": "string",
+            "description": "The other party's DSP endpoint: the provider's, as this connector\nis the consumer of every transfer it lists."
+          },
+          "counterPartyId": {
+            "type": "string",
+            "description": "The other party's participant id: the provider's."
+          },
           "dataAddress": {
             "type": [
               "object",
               "null"
             ],
-            "description": "Where to fetch the data, with the access token (DSP 2025-1\n`DataAddress`): send `GET <endpoint>` with `Authorization: Bearer\n<the authorization property>` (its `authType` property says\n`bearer`). Present while the transfer is `STARTED` or `SUSPENDED`;\nthe token works only while it is `STARTED`."
+            "description": "Where to fetch the data, with the access token (DSP 2025-1\n`DataAddress`): send `GET <endpoint>` with `Authorization: Bearer\n<the authorization property>` (its `authType` property says\n`bearer`). Present while the transfer is `STARTED` or `SUSPENDED`;\nthe token works only while it is `STARTED`. The token is an opaque\nstring: send it as it is and do not parse it; a 1.x release may\nissue another form."
           },
           "format": {
             "type": "string",
             "description": "The format asked for."
-          },
-          "providerAddress": {
-            "type": "string",
-            "description": "The provider's DSP endpoint."
-          },
-          "providerId": {
-            "type": "string",
-            "description": "The provider's participant id."
           },
           "providerPid": {
             "type": [
@@ -1267,11 +1665,15 @@
       "api_key": {
         "type": "http",
         "scheme": "bearer",
-        "description": "The key from PORTITOR_MANAGEMENT_API_KEY_FILE: Authorization: Bearer <key>"
+        "description": "The key from PORTITOR_MANAGEMENT_API_KEY_FILE: Authorization: Bearer <key>. The key is an opaque string: a client must not parse it or rely on its length or alphabet, and a 1.x release may accept other forms of token."
       }
     }
   },
   "tags": [
+    {
+      "name": "Catalog",
+      "description": "A provider's catalog and datasets, read as consumer (DSP 2025-1). The request bodies are those of Eclipse EDC's management API v4."
+    },
     {
       "name": "Negotiations",
       "description": "Contract negotiations as consumer (DSP 2025-1)"

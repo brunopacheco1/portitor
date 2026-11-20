@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.12.0"
+    "version": "0.13.0"
   },
   "externalDocs": {
     "description": "Decentralized Claims Protocol v1.0.1",
@@ -58,7 +58,7 @@
       ],
       "get": {
         "summary": "Issuer Metadata API (DCP 6.7)",
-        "description": "One CredentialObject per credential definition (PORTITOR_ISSUER_CREDENTIALS_FILE); its id is the definition's, stable across restarts. Open to anyone. Each object has credentialType, credentialSchema (the URL from the definition; the issuer publishes it and does not fetch it), offerReason (always reissue, as the schema requires the property), bindingMethods (did:web) and profile, so the answer passes the DCP v1.0.1 schema. issuancePolicy is left out (TD-14).",
+        "description": "One CredentialObject per credential definition (PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE); its id is the definition's, stable across restarts. Open to anyone. Each object has credentialType, credentialSchema (the URL from the definition; the issuer publishes it and does not fetch it), offerReason (always reissue, as the schema requires the property), bindingMethods (did:web) and profile, so the answer passes the DCP v1.0.1 schema. issuancePolicy is left out (TD-14).",
         "operationId": "issuerMetadata",
         "responses": {
           "200": {

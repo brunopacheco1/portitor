@@ -36,6 +36,9 @@ use portitor_runtime::directory::Directory;
 use portitor_runtime::http::Sender;
 use portitor_runtime::system::{new_uuid, now_secs};
 use portitor_runtime::testing::TempDir;
+use portitor_runtime::testing::management_calls::{
+    Call, statuses_other_than, with_a_wrong_body, with_odd_paths_and_queries, without_the_key,
+};
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
@@ -347,7 +350,7 @@ impl World {
             participant_id: ISSUER.to_owned(),
             key_file: "unused".into(),
             retired_key_files: setup.retired_key_files,
-            credentials_file: "unused".into(),
+            credential_definitions_file: "unused".into(),
             issuer_service_url: SERVICE.to_owned(),
             bind: "unused".to_owned(),
             db_file: "unused".into(),
@@ -1418,7 +1421,7 @@ fn the_issuer_does_not_start_with_its_own_key_as_retired() {
         participant_id: ISSUER.to_owned(),
         key_file: "unused".into(),
         retired_key_files: vec![current_file],
-        credentials_file: "unused".into(),
+        credential_definitions_file: "unused".into(),
         issuer_service_url: SERVICE.to_owned(),
         bind: "unused".to_owned(),
         db_file: "unused".into(),
@@ -1753,7 +1756,10 @@ fn start_and_wait_for_the_stop(
             "https://issuer.example/issuer",
         )
         .env("PORTITOR_ISSUER_KEY_FILE", key_file)
-        .env("PORTITOR_ISSUER_CREDENTIALS_FILE", definitions_file)
+        .env(
+            "PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE",
+            definitions_file,
+        )
         .env("PORTITOR_DB_FILE", dir.path().join("issuer.db"))
         .env("PORTITOR_BIND", "127.0.0.1:0")
         .envs(more_settings.iter().copied())
@@ -1803,7 +1809,7 @@ fn the_issuer_does_not_start_without_a_valid_credential_schema() {
         let (ended_well, logged) = start_and_wait_for_the_stop(&entry(credential_schema), &[]);
         assert!(!ended_well, "{credential_schema}: {logged}");
         assert!(
-            logged.contains("PORTITOR_ISSUER_CREDENTIALS_FILE"),
+            logged.contains("PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE"),
             "{credential_schema}: {logged}"
         );
         assert!(logged.contains(reason), "{credential_schema}: {logged}");
@@ -1855,4 +1861,70 @@ async fn request_bodies_over_the_limits_get_413() {
         authed(Request::post("/v1/participants")).header(header::CONTENT_TYPE, "application/json")
     };
     assert_size_limit(&management, participants, 100_000).await;
+}
+
+/// Every route of the management API, with a body it accepts where it
+/// reads one.
+fn every_management_call() -> Vec<Call> {
+    let participant = json!({"did": "did:web:new.example", "claims": {"role": "consumer"}});
+    let offer = json!({
+        "participantDid": HOLDER,
+        "credentialIds": ["membership-vc20"],
+        "offerReason": "reissue"
+    });
+    vec![
+        Call::post("/v1/participants", participant),
+        Call::without_body("GET", "/v1/participants"),
+        Call::without_body("DELETE", "/v1/participants/did:web:nobody.example"),
+        Call::post("/v1/offers", offer),
+        Call::without_body("GET", "/v1/credentials"),
+        Call::without_body("POST", "/v1/credentials/urn:uuid:1/revoke"),
+    ]
+}
+
+#[tokio::test]
+async fn every_management_route_answers_401_without_the_key_and_never_403() {
+    let world = World::new();
+    let answers = without_the_key(&world.management, &every_management_call(), API_KEY).await;
+    assert_eq!(answers.len(), 6 * 6);
+    assert_eq!(statuses_other_than(&[401], &answers), "");
+}
+
+/// What is not answered 400 today. An `offerReason` is taken whatever
+/// it is, empty or 100 000 letters long, and sent to the holder in the
+/// offer (204). A `participantDid` that is no DID is looked up and not
+/// found (404).
+const WRONG_BODIES_NOT_ANSWERED_400: &str = "\
+POST /v1/offers, offerReason is empty: 204
+POST /v1/offers, offerReason is only spaces: 204
+POST /v1/offers, offerReason is very long: 204
+POST /v1/offers, participantDid is empty: 404
+POST /v1/offers, participantDid is only spaces: 404
+POST /v1/offers, participantDid is very long: 404
+";
+
+#[tokio::test]
+async fn every_management_route_refuses_a_wrong_body_with_400() {
+    let world = World::new();
+    world.register(HOLDER, json!({})).await;
+    let answers = with_a_wrong_body(&world.management, &every_management_call(), API_KEY).await;
+    assert!(answers.len() > 40, "{}", answers.len());
+    assert_eq!(
+        statuses_other_than(&[400], &answers),
+        WRONG_BODIES_NOT_ANSWERED_400
+    );
+}
+
+#[tokio::test]
+async fn odd_management_paths_and_queries_are_never_an_error_of_the_server() {
+    let world = World::new();
+    world.register(HOLDER, json!({})).await;
+    let answers =
+        with_odd_paths_and_queries(&world.management, &every_management_call(), API_KEY).await;
+    assert_eq!(answers.len(), 6 * 14);
+    // 409: the good body of a new participant, sent a second time
+    assert_eq!(
+        statuses_other_than(&[200, 201, 204, 400, 404, 409], &answers),
+        ""
+    );
 }

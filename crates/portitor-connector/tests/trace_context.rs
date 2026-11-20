@@ -76,7 +76,7 @@ async fn the_outbox_sends_no_trace_context() {
         public_url: "https://consumer.example".into(),
         datasets_file: None,
         harvest_interval_seconds: 0,
-        allow_http_callbacks: true,
+        allow_http: true,
         db_file: "unused.db".into(),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
@@ -87,8 +87,8 @@ async fn the_outbox_sends_no_trace_context() {
     let (_, negotiator) = portitor_connector::build(&config, ports).unwrap();
     let app = router(negotiator, ApiKey::new(KEY).unwrap());
     let body = json!({
-        "providerAddress": format!("{base}/dsp/2025-1"),
-        "providerId": "did:web:provider.example",
+        "counterPartyAddress": format!("{base}/dsp/2025-1"),
+        "counterPartyId": "did:web:provider.example",
         "offer": {"@id": "d:offer", "@type": "Offer", "target": "d",
                   "permission": [{"action": "use"}]}
     });

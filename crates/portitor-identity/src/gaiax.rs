@@ -118,7 +118,7 @@ pub trait GaiaxCompliance: Send + Sync {
 }
 
 /// Adapter: the compliance service's REST API over the shared HTTP client
-/// (HTTPS only unless `PORTITOR_ALLOW_HTTP_CALLBACKS`, size limit, no
+/// (HTTPS only unless `PORTITOR_ALLOW_HTTP`, size limit, no
 /// redirects): `POST {base}/api/credential-offers/standard-compliance?vcid=<id>`
 /// with `Content-Type: application/vp+jwt`.
 #[derive(Debug)]

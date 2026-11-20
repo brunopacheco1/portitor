@@ -3,10 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # The EDC interop test (docs/TESTING.md): Portitor (connector and identity)
-# against EDC v1.0.0-RC7 (control plane, data plane, IdentityHub); both
+# against EDC v1.0.0-RC8 (control plane, data plane, IdentityHub); both
 # ask portitor-issuer for their MembershipCredential. Catalog, negotiation
-# and pull transfer both ways, then revocation both ways. The EDC runtimes are
-# built from Maven Central (interop/edc/runtimes); there are no EDC images.
+# and pull transfer both ways, a dataset that asks for Gaia-X compliance
+# (gx-compliance, a test notary and a test CA, as in the Gaia-X test), then
+# revocation both ways. The EDC runtimes are built from Maven Central
+# (interop/edc/runtimes); there are no EDC images.
 name: EDC interop
 on:
   pull_request:
@@ -15,7 +17,13 @@ on:
       - "Cargo.lock"
       - "Dockerfile"
       - "interop/edc/**"
+      - "interop/gaiax/compose.yaml" # the compliance service and its graph database come from there
       - "scripts/edc-interop.sh"
+      - "scripts/container-engine.sh"
+      - "scripts/require-bash.sh"
+      - "scripts/gaiax-lib.sh"
+      - "scripts/gaiax_test_notary.py"
+      - "scripts/gaiax_test_onboarding.py"
       - ".github/workflows/edc-interop.yml"
   schedule:
     - cron: "37 2 * * *" # nightly: EDC's side changes without our code changing
@@ -32,14 +40,14 @@ jobs:
   edc:
     name: Portitor and EDC
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust
         run: |
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal -t x86_64-unknown-linux-musl
           rustup default "$RUST_TOOLCHAIN"
-          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools python3-cryptography
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build the Portitor images (as CI does)
         run: |

@@ -42,7 +42,7 @@ fn ports() -> (Router, Router) {
         public_url: "https://provider.example".into(),
         datasets_file: None,
         harvest_interval_seconds: 0,
-        allow_http_callbacks: false,
+        allow_http: false,
         db_file: "unused.db".into(),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),

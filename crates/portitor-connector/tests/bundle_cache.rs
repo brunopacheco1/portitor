@@ -68,12 +68,15 @@ enum Serve {
 struct Files {
     folder: PathBuf,
     serve: Mutex<Serve>,
+    /// Every path asked for.
+    requested: Mutex<Vec<String>>,
 }
 
 /// `GET /bundles/<path>`: the file from the bundles root, unless the test
 /// broke it.
 async fn serve_file(State(files): State<Arc<Files>>, UrlPath(path): UrlPath<String>) -> Response {
     let serve = *files.serve.lock().unwrap();
+    files.requested.lock().unwrap().push(path.clone());
     if path == format!("{VERSION}/{BROKEN_FILE}") {
         match serve {
             Serve::AsBuilt => {}
@@ -92,6 +95,7 @@ async fn serve_file(State(files): State<Arc<Files>>, UrlPath(path): UrlPath<Stri
 /// The authority (an issuer, for its DID document) and the file server.
 struct Authority {
     did: String,
+    bundle_key: SigningKey,
     files: Arc<Files>,
     files_url: String,
     servers: Vec<tokio::task::JoinHandle<()>>,
@@ -109,7 +113,7 @@ impl Authority {
             participant_id: did.clone(),
             key_file: "unused".into(),
             retired_key_files: Vec::new(),
-            credentials_file: "unused".into(),
+            credential_definitions_file: "unused".into(),
             issuer_service_url: format!("http://127.0.0.1:{port}/issuer"),
             bind: "unused".to_owned(),
             db_file: "unused".into(),
@@ -137,6 +141,7 @@ impl Authority {
         let files = Arc::new(Files {
             folder: bundles,
             serve: Mutex::new(Serve::AsBuilt),
+            requested: Mutex::new(Vec::new()),
         });
         let files_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let files_port = files_listener.local_addr().unwrap().port();
@@ -148,6 +153,7 @@ impl Authority {
         });
         Self {
             did,
+            bundle_key,
             files,
             files_url: format!("http://127.0.0.1:{files_port}/bundles/"),
             servers: vec![issuer_server, files_server],
@@ -269,5 +275,58 @@ async fn a_downloaded_file_with_another_digest_does_not_fall_back() {
     authority.serve(Serve::Missing);
     let started = start(&authority.settings(&cache)).await.unwrap();
     assert_eq!(started.harvester.in_use().version, VERSION);
+    authority.stop().await;
+}
+
+/// ADR 0005, amended in 0.13: a file whose role this version does not
+/// know is not downloaded. Here the manifest, as a later build tool
+/// would sign it, lists such a file, and the server does not have it: the
+/// bundle is taken all the same, and the file is never asked for.
+#[tokio::test]
+async fn a_file_of_an_unknown_role_is_not_downloaded() {
+    let authority = Authority::start().await;
+    let folder = authority.files.folder.join(VERSION);
+    let text = std::fs::read_to_string(folder.join("manifest.json")).unwrap();
+    let mut manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let later = serde_json::json!({
+        "path": "policies/odrl.jsonld",
+        "sha256": portitor_dcp::bundle::sha256_hex(b"never read"),
+        "mediaType": "application/ld+json",
+        "role": {"type": "policies", "appliesTo": ["offers"]}
+    });
+    manifest["files"].as_array_mut().unwrap().push(later);
+    let text = manifest.to_string();
+    std::fs::write(folder.join("manifest.json"), &text).unwrap();
+    let raw = serde_json::value::RawValue::from_string(text).unwrap();
+    let kid = format!("{}#bundle-key", authority.did);
+    let jws = authority
+        .bundle_key
+        .sign_json(&kid, portitor_dcp::bundle::JWS_TYPE, &raw)
+        .unwrap();
+    std::fs::write(folder.join("manifest.jws"), jws).unwrap();
+
+    let cache = scratch();
+    let started = start(&authority.settings(&cache)).await.unwrap();
+    assert_eq!(started.job.outcome, JobOutcome::Succeeded);
+    assert!(
+        started.job.summary.contains("1 file skipped"),
+        "{}",
+        started.job.summary
+    );
+    let requested = authority.files.requested.lock().unwrap().clone();
+    assert!(
+        requested.contains(&format!("{VERSION}/{BROKEN_FILE}")),
+        "{requested:?}"
+    );
+    assert!(
+        !requested.iter().any(|path| path.contains("policies")),
+        "{requested:?}"
+    );
+    // the cached copy, read back when the authority is down, is good
+    // without the skipped file
+    authority.serve(Serve::Missing);
+    let again = start(&authority.settings(&cache)).await.unwrap();
+    assert_eq!(again.job.snapshot_sha256, None, "the cached copy");
+    assert_eq!(again.harvester.copy().current().skipped_files().len(), 1);
     authority.stop().await;
 }

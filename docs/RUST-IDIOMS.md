@@ -1013,6 +1013,13 @@ context loader). `.into()` turns a `String` into such a boxed error
   `portitor-dcp/src/bundle.rs` signs the manifest's bytes this way, so
   the signature covers exactly the file that is published, not a copy
   that serde wrote again (with other spaces or field order).
+- `serde::de::IgnoredAny`: takes any JSON value and keeps nothing of it.
+  A field of that type is accepted and not read (`_context` in
+  `CatalogRequest`, `portitor-connector/src/management.rs`: the `_` in
+  front says the field is never used). A type with only the fields
+  that matter skips all the others the same way, without building them
+  in memory: `TypeOnly` in `portitor-connector/src/catalog_reader.rs`
+  reads the `@type` of a catalog of many megabytes.
 - `#[must_use]`: the caller should use the return value.
   `#[must_use = "..."]` adds the reason to the compiler's warning:
   `Telemetry` says to call `shutdown()`, and `CallerTrace::join` that the
@@ -1051,6 +1058,63 @@ by hand (`Constraint` in `portitor-dsp/src/lib.rs`):
 
 The body first reads the JSON whole into a `serde_json::Value`, then
 decides from its fields what it is.
+
+### Reading JSON in two steps: strict for known names, open for others
+
+```rust
+impl<'de> Deserialize<'de> for Role {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = Box::<RawValue>::deserialize(deserializer)?;       // keep the JSON text
+        let RoleTypeOnly { type_name } = serde_json::from_str(text.get())?;  // step 1
+        if KNOWN_ROLE_TYPES.contains(&type_name.as_str()) {
+            let known: KnownRole = serde_json::from_str(text.get())?;        // step 2
+            return Ok(known.into());
+        }
+        Ok(Role::Unknown { type_name })
+    }
+}
+```
+
+(Shortened from `Role` in `portitor-dcp/src/bundle.rs`; the real code
+also turns the errors into `D::Error` and checks the name.)
+
+The rule is "read the roles I know strictly, and keep only the name of
+any other". serde's derive cannot say that: `deny_unknown_fields`
+refuses every unknown name, and `#[serde(other)]` cannot keep the name
+or allow extra fields. So the rule is written out:
+
+- `RawValue` (from `serde_json`) is a piece of JSON kept as text,
+  not yet read into a type. `text.get()` gives that text.
+- Step 1 reads the same text into a small struct that has only the
+  field `type`; serde passes over the other fields.
+- Step 2, only for a known name, reads the text again into
+  `KnownRole`, an enum with `deny_unknown_fields`, so a field a known
+  role does not have is still an error.
+- Any other name becomes the variant `Role::Unknown { type_name }`. A
+  `match` on `Role` must then say what happens to an unknown role, and
+  the compiler checks that it does.
+
+Reading the text twice costs little here: a role is a few dozen bytes.
+
+### `#[serde(try_from = "...")]`: read as written, then check
+
+```rust
+#[derive(Deserialize)]
+#[serde(try_from = "FileEntryAsWritten")]
+pub struct FileEntry { /* ... media_type: MediaType, role: Role */ }
+
+impl TryFrom<FileEntryAsWritten> for FileEntry {
+    type Error = String;
+    fn try_from(written: FileEntryAsWritten) -> Result<Self, String> { /* ... */ }
+}
+```
+
+A second, shorter way to read in two steps. serde first reads the JSON
+into `FileEntryAsWritten` (the same fields, the media type still a
+text), then calls `try_from` to make the real type; its error becomes
+the read error. Used where one field's rule depends on another: which
+media types a bundle file may have depends on its role
+(`crates/portitor-dcp/src/bundle.rs`).
 
 ## Macros: `name!(...)`
 

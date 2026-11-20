@@ -1,0 +1,43 @@
+meta {
+  name: Request catalog (as consumer)
+  type: http
+  seq: 16
+}
+
+post {
+  url: {{mgmtUrl}}/v1/catalog/request
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "@context": ["https://w3id.org/edc/connector/management/v2"],
+    "@type": "CatalogRequest",
+    "counterPartyAddress": "{{dsp}}",
+    "counterPartyId": "{{counterPartyId}}",
+    "protocol": "dataspace-protocol-http:2025-1"
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body["@type"]: eq Catalog
+}
+
+docs {
+  Use the "two-connectors" environment (docs/TESTING.md, Two connectors).
+  This is the consumer's management API, not the DSP endpoint POST /catalog/request:
+  the connector gets a DCP token from its own STS, asks the provider and returns the
+  provider's Catalog as it came. Run it before "Start negotiation": the offer to
+  negotiate is in a dataset's hasPolicy.
+  The body is the CatalogRequest of Eclipse EDC's management API v4. protocol (or
+  profile) must be dataspace-protocol-http:2025-1; a querySpec gets 400; additionalScopes
+  are added to the token. @context and @type may be left out.
+  502 when the provider refuses, does not answer or sends more than 16 MiB; the detail
+  says which.
+}

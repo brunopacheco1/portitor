@@ -91,7 +91,7 @@ fn provider_config(datasets_file: Option<&str>) -> portitor_connector::Config {
         public_url: "https://provider.example".into(),
         datasets_file: datasets_file.map(Into::into),
         harvest_interval_seconds: 0,
-        allow_http_callbacks: false,
+        allow_http: false,
         db_file: "unused.db".into(),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
@@ -440,57 +440,158 @@ async fn unreadable_or_malformed_files_leave_an_empty_catalog() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// The two connector settings without a default (from 0.13).
+const ID: (&str, &str) = ("PORTITOR_PARTICIPANT_ID", "did:web:p.example");
+const URL: (&str, &str) = ("PORTITOR_PUBLIC_URL", "https://p.example");
+
+/// The connector's configuration from [`ID`], [`URL`] and then `more`
+/// (a name given again in `more` wins).
+fn config_with(
+    more: &[(&str, &str)],
+) -> Result<portitor_connector::Config, portitor_connector::ConfigError> {
+    let mut all = vec![ID, URL];
+    all.extend_from_slice(more);
+    portitor_connector::Config::from_vars(portitor_runtime::testing::vars(&all))
+}
+
+/// The id must be a did:web DID and the URL an http(s) URL, as for the
+/// identity component and the issuer: a wrong one would only fail later,
+/// in front of a partner. A switch is `true` or `false`.
+#[test]
+fn a_wrong_id_url_or_switch_stops_the_start() {
+    for (name, value) in [
+        ("PORTITOR_PARTICIPANT_ID", "p.example"),
+        ("PORTITOR_PARTICIPANT_ID", "did:key:z6Mk"),
+        ("PORTITOR_PUBLIC_URL", "p.example"),
+        ("PORTITOR_PUBLIC_URL", "ftp://p.example"),
+        ("PORTITOR_PUBLIC_URL", "https://p.example/dsp?x=1"),
+        ("PORTITOR_PUBLIC_URL", "https://p.example#x"),
+        ("PORTITOR_ALLOW_HTTP", "1"),
+        ("PORTITOR_ALLOW_HTTP", "yes"),
+    ] {
+        let error = config_with(&[(name, value)]).unwrap_err();
+        assert!(
+            matches!(&error, portitor_connector::ConfigError::Refused(n, _) if *n == name),
+            "{name}={value}: {error}"
+        );
+        assert!(error.to_string().starts_with(name), "{error}");
+    }
+    for (name, value) in [
+        ("PORTITOR_PUBLIC_URL", "http://localhost:8080/base/"),
+        ("PORTITOR_PARTICIPANT_ID", "did:web:p.example:connector"),
+        ("PORTITOR_ALLOW_HTTP", "False"),
+    ] {
+        assert!(config_with(&[(name, value)]).is_ok(), "{name}={value}");
+    }
+}
+
+/// The rule of every setting: spaces around a value are dropped, and an
+/// empty value means "not set", so the default is used.
+#[test]
+fn an_empty_setting_is_not_set_and_values_are_trimmed() {
+    let read = config_with;
+    let defaults = read(&[]).unwrap();
+    let trimmed = read(&[
+        ("PORTITOR_PARTICIPANT_ID", " did:web:q.example "),
+        ("PORTITOR_DB_FILE", " /data/y.db\n"),
+        ("PORTITOR_DATA_TOKEN_SECONDS", " 60 "),
+        ("PORTITOR_ALLOW_HTTP", " true "),
+    ])
+    .unwrap();
+    assert_eq!(trimmed.participant_id, "did:web:q.example");
+    assert_eq!(trimmed.db_file, std::path::PathBuf::from("/data/y.db"));
+    assert_eq!(trimmed.data_token_seconds, 60);
+    assert!(trimmed.allow_http);
+    let empty = read(&[
+        ("PORTITOR_DATASETS_FILE", ""),
+        ("PORTITOR_DB_FILE", "  "),
+        ("PORTITOR_HARVEST_INTERVAL_SECONDS", ""),
+        ("PORTITOR_DATA_TOKEN_SECONDS", " "),
+        ("PORTITOR_ALLOW_HTTP", ""),
+        ("PORTITOR_POLICY_CREDENTIALS", ""),
+        // a removed name that is empty is not set either
+        ("PORTITOR_DATASETS", ""),
+    ])
+    .unwrap();
+    assert_eq!(empty.datasets_file, None);
+    assert_eq!(empty.db_file, defaults.db_file);
+    assert_eq!(empty.harvest_interval_seconds, 3_600);
+    assert_eq!(empty.data_token_seconds, 3_600);
+    assert!(!empty.allow_http);
+    assert_eq!(empty.credential_types, defaults.credential_types);
+}
+
 #[test]
 fn config_from_variables() {
     use portitor_runtime::testing::vars;
     let file = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/datasets.json");
 
-    let defaults = portitor_connector::Config::from_vars(vars(&[])).unwrap();
-    assert_eq!(defaults.participant_id, "did:web:localhost%3A8080");
-    assert_eq!(defaults.public_url, "http://localhost:8080");
+    let read = config_with;
+
+    // the id and the URL are required: nothing is assumed for them
+    for (given, missing) in [
+        (vec![], "PORTITOR_PARTICIPANT_ID"),
+        (vec![URL], "PORTITOR_PARTICIPANT_ID"),
+        (vec![ID], "PORTITOR_PUBLIC_URL"),
+        (
+            vec![ID, ("PORTITOR_PUBLIC_URL", " ")],
+            "PORTITOR_PUBLIC_URL",
+        ),
+    ] {
+        let error = portitor_connector::Config::from_vars(vars(&given)).unwrap_err();
+        let expected = format!("{missing}: required");
+        assert!(error.to_string().starts_with(&expected), "{error}");
+    }
+
+    let defaults = read(&[]).unwrap();
+    assert_eq!(defaults.participant_id, "did:web:p.example");
+    assert_eq!(defaults.public_url, "https://p.example");
     assert_eq!(defaults.datasets_file, None);
     assert_eq!(defaults.harvest_interval_seconds, 3_600);
-    assert!(!defaults.allow_http_callbacks);
+    assert!(!defaults.allow_http);
     assert_eq!(defaults.db_file, std::path::PathBuf::from("portitor.db"));
 
-    let set = portitor_connector::Config::from_vars(vars(&[
-        ("PORTITOR_PARTICIPANT_ID", "did:web:p.example"),
-        ("PORTITOR_PUBLIC_URL", "https://p.example"),
+    let set = read(&[
         ("PORTITOR_DATASETS_FILE", file),
         ("PORTITOR_HARVEST_INTERVAL_SECONDS", "0"),
-        ("PORTITOR_ALLOW_HTTP_CALLBACKS", "TRUE"),
+        ("PORTITOR_ALLOW_HTTP", "TRUE"),
         ("PORTITOR_DB_FILE", "/data/x.db"),
-    ]))
+    ])
     .unwrap();
     assert_eq!(set.participant_id, "did:web:p.example");
-    assert!(set.allow_http_callbacks);
+    assert!(set.allow_http);
     assert_eq!(set.db_file, std::path::PathBuf::from("/data/x.db"));
     assert_eq!(set.datasets_file, Some(std::path::PathBuf::from(file)));
     assert_eq!(set.harvest_interval_seconds, 0);
 
-    let removed =
-        portitor_connector::Config::from_vars(vars(&[("PORTITOR_DATASETS", "a,b")])).unwrap_err();
+    let removed = read(&[("PORTITOR_DATASETS", "a,b")]).unwrap_err();
     assert!(removed.to_string().contains("PORTITOR_DATASETS_FILE"));
+    // renamed in 0.13: the old name stops the start and names the new one
+    let renamed = read(&[("PORTITOR_ALLOW_HTTP_CALLBACKS", "true")]).unwrap_err();
+    assert_eq!(
+        renamed.to_string(),
+        "PORTITOR_ALLOW_HTTP_CALLBACKS was renamed in 0.13; set PORTITOR_ALLOW_HTTP instead"
+    );
 
     // above one year: refused, as a schedule that far ahead overflows the
     // clock (and would abort the connector) instead of a config error
     let too_large = ["31536001", "18446744073709551615"];
-    for bad in ["hourly", "-1", ""].into_iter().chain(too_large) {
+    for bad in ["hourly", "-1", "1 h"].into_iter().chain(too_large) {
         for name in [
             "PORTITOR_HARVEST_INTERVAL_SECONDS",
             "PORTITOR_DATA_TOKEN_SECONDS",
         ] {
-            let invalid = portitor_connector::Config::from_vars(vars(&[(name, bad)])).unwrap_err();
+            let invalid = read(&[(name, bad)]).unwrap_err();
             assert!(
                 invalid.to_string().contains(name),
                 "{name}={bad}: {invalid}"
             );
         }
     }
-    let one_year = portitor_connector::Config::from_vars(vars(&[
+    let one_year = read(&[
         ("PORTITOR_HARVEST_INTERVAL_SECONDS", "31536000"),
         ("PORTITOR_DATA_TOKEN_SECONDS", "31536000"),
-    ]))
+    ])
     .unwrap();
     assert_eq!(
         one_year.harvest_interval_seconds,
@@ -498,18 +599,11 @@ fn config_from_variables() {
     );
     assert_eq!(one_year.data_token_seconds, 31_536_000);
     // a token must live at least one second
-    assert!(
-        portitor_connector::Config::from_vars(vars(&[("PORTITOR_DATA_TOKEN_SECONDS", "0")]))
-            .is_err()
-    );
+    assert!(read(&[("PORTITOR_DATA_TOKEN_SECONDS", "0")]).is_err());
 
     // the file is read by the harvest, not here: a missing file is no
     // configuration error (since 0.7)
-    let missing = portitor_connector::Config::from_vars(vars(&[(
-        "PORTITOR_DATASETS_FILE",
-        "/nonexistent.json",
-    )]))
-    .unwrap();
+    let missing = read(&[("PORTITOR_DATASETS_FILE", "/nonexistent.json")]).unwrap();
     assert!(missing.datasets_file.is_some());
 }
 

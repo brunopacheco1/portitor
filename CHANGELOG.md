@@ -12,11 +12,232 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-20
+
+### Added
+
+- **Docker or Podman.** `scripts/demo-compose.sh`,
+  `scripts/gaiax-e2e.sh` and `scripts/edc-interop.sh` run with either:
+  Docker if it answers, otherwise Podman, or the one named in
+  `CONTAINER_ENGINE` (`scripts/container-engine.sh`). For Podman, every
+  pulled image is named with its registry, the Compose demo has its own
+  health checks, and the interop tests' web server takes its name server
+  from the container. Every script checks for bash 4.4 or later first.
+  CI stays on Docker; the Podman runs are by hand (TESTING, "Docker or
+  Podman").
+- **Connector management API: read a provider's catalog** (TD-38).
+  `POST /v1/catalog/request` returns the provider's DSP `Catalog` and
+  `POST /v1/catalog/dataset/request` one `Dataset`, as the provider
+  sent them. The connector gets the DCP token from its STS, so no
+  hand-made STS call is needed. The bodies are the `CatalogRequest`
+  and `DatasetRequest` of Eclipse EDC's management API v4
+  (`counterPartyAddress`, `counterPartyId`, `protocol` or `profile`,
+  `additionalScopes`, `@id`). `protocol` must be
+  `dataspace-protocol-http:2025-1`; a `querySpec` is refused with 400.
+  A provider that refuses or does not answer gives 502. At most 16 MiB
+  are read (a fixed limit; other answers keep 64 KiB), and of a catalog
+  in pages only the first, with the provider's `Link` headers (README,
+  "Management API"; DEPLOYING, "Known limits").
+- The demo, the Gaia-X and the EDC interoperability scripts and the
+  Bruno collection read catalogs through the new call.
+
+### Changed
+
+Six changes made before the interface freeze (maintainer, 2026-11-20);
+after 1.0 they could only be made in 2.0. What to do:
+[DEPLOYING, From 0.12 to 0.13](docs/DEPLOYING.md#from-012-to-013).
+
+- **Breaking, all three: `PORTITOR_ALLOW_HTTP_CALLBACKS` is now
+  `PORTITOR_ALLOW_HTTP`.** It allows plain `http://` for every outgoing
+  call, not only callbacks. A service that finds the old name set does
+  not start and names the new one. `PORTITOR_STS_ALLOW_HTTP` is
+  unchanged.
+- **Breaking, identity: `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` is now
+  `PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE`** (it is a file path). The
+  old name stops the start.
+- **Breaking, issuer: `PORTITOR_ISSUER_CREDENTIALS_FILE` is now
+  `PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE`** (it holds credential
+  definitions). The old name stops the start.
+- **Breaking, connector management API: `providerAddress` and
+  `providerId` are now `counterPartyAddress` and `counterPartyId`**, in
+  the body of `POST /v1/negotiations` and in the negotiation and
+  transfer views that `/v1/negotiations` and `/v1/transfers` return:
+  the names of Eclipse EDC (`ContractRequest`, `TransferRequest`,
+  `CatalogRequest`, EDC v1.0.0-RC8) and of the catalog calls. The old
+  names are refused with 400 as unknown fields. `providerPid` and
+  `consumerPid` keep their DSP names.
+- **Breaking, connector: `PORTITOR_PARTICIPANT_ID` and
+  `PORTITOR_PUBLIC_URL` are required.** They defaulted to
+  `did:web:localhost%3A8080` and `http://localhost:8080`; the connector
+  now refuses to start without them, as the identity and the issuer do.
+- **Breaking, all three: one rule for every setting.** Spaces around a
+  value are dropped, and an empty value means "not set": a required
+  setting that is empty stops the start, an optional one takes its
+  default. The connector did not trim and took an empty value as set.
+  Changed for a value that is set but empty: `PORTITOR_DCP_SCOPES` and
+  `PORTITOR_ISSUER_MAX_ACTIVE_PER_HOLDER` (were refused, now the
+  default), `PORTITOR_SCOPE_TYPE_ALIASES` (was "no alias", now the
+  default alias), `PORTITOR_BIND` and `PORTITOR_DB_FILE` (now the
+  default), and the connector's settings in seconds (now the default).
+- **Bundle manifest: a file with a role the reader does not know may
+  have any media type** of the shape `type/subtype` (RFC 6838,
+  section 4.2), so a later role that needs another media type does not
+  make a 1.0 connector refuse the bundle. Files with the four known
+  roles keep the three media types. The JSON schema had the closed list
+  for every file and is corrected (ADR 0005, amended).
+- The management OpenAPI descriptions say in one shared place (the
+  `api_key` security scheme) that the API key is opaque; the
+  connector's also says it for the data plane token.
+- DEPLOYING, "Known limits": a repeated transfer request does not
+  start a second transfer (since 0.12, TD-34); the sentence was stale.
+- `docs/STABILITY.md` reserves two things for 1.x: a 1.x release may
+  refuse internal network addresses on URLs that a partner chooses, by
+  default, with a setting to allow them (F-01, R-17); and it says that
+  each service needs its own host name.
+- The connector's management OpenAPI lists HTTP 403 on every route
+  that needs the key. Nothing answers 403 today: it is reserved for
+  scoped access in 1.x, and the API key keeps every right (ADR 0025).
+- The EDC interop test (`scripts/edc-interop.sh`) runs against EDC
+  v1.0.0-RC8 (Connector and IdentityHub; before: RC7). The Gradle
+  dependency verification file is written again for RC8.
+- The EDC interop test now includes Gaia-X compliance, with the local
+  compliance service, test notary and test CA of the Gaia-X test:
+  Portitor's identity does its onboarding; a second dataset of the
+  Portitor provider asks for a `gx:ParticipantComplianceCredential`; the
+  EDC consumer is refused without one (`TERMINATED`) and gets a contract
+  and the data once its IdentityHub holds one. The EDC IdentityHub has no
+  Gaia-X onboarding, so the test-only `scripts/gaiax_test_onboarding.py`
+  signs for the EDC participant. Not covered: an EDC provider that asks
+  Portitor for the credential (see `docs/TESTING.md`). The participants
+  are now `did:web:portitor.gaiax.test` and `did:web:edc.gaiax.test`.
+- `scripts/gaiax-e2e.sh` and `scripts/edc-interop.sh` share
+  `scripts/gaiax-lib.sh` (test CA, test notary, a participant's Gaia-X
+  files).
+- **Behaviour, connector as provider: a transfer request sent at once
+  after the agreement is no longer refused** (TD-44; maintainer,
+  2026-11-20; ADR 0007 amended). A transfer request from the
+  agreement's consumer that arrives while the finalization event is
+  still on its way (sent, its acknowledgement not yet recorded) proves
+  that the event arrived: the negotiation is recorded as `FINALIZED`
+  and the request is checked as any other. Before, it got HTTP 400 and
+  the consumer's transfer ended `TERMINATED` (2 to 4 times in 6,000 to
+  10,000 transfers in the 0.12 benchmark). An agreement of a
+  negotiation in any other state, or of another consumer, is refused as
+  before. No new migration: the lookup uses the index of migration 10.
+- Connector as provider: a transfer request refused because it names no
+  finalized agreement of the caller is now logged, `transfer request is
+  refused; answered 400` (INFO). The line names neither the agreement
+  nor the caller.
+- **Behaviour, connector: a bundle file with a role the connector does
+  not know is skipped** (maintainer, 2026-11-20; ADR 0005 amended;
+  ADR 0025, point 4). Before, such a manifest made the whole bundle
+  invalid. Now the file is not downloaded and not used, the other files
+  are, and the connector says so: a WARN line for each file
+  (`bundle file skipped: ...`, with path and role type), the new gauge
+  `portitor.bundle.file.skipped`, and the summary of the bundle run in
+  `GET /v1/harvest-jobs`. A bundle in which the connector knows no role
+  is refused like any invalid bundle. The limit: a connector that skips
+  a new kind of rule does not enforce it. Everything else in a manifest
+  is read as strictly as before, and the issuer still builds, signs and
+  serves only roles it knows. `docs/schemas/bundle-manifest.schema.json`
+  says the same: known roles are closed, a role object with another
+  type is valid, at least one file has a known role.
+- **Found by the engineering review of the release, changed before the
+  freeze** (DEPLOYING, "From 0.12 to 0.13", points 7 to 9):
+  - **Connector: `PORTITOR_PARTICIPANT_ID` and `PORTITOR_PUBLIC_URL`
+    are checked at start**, as the identity's and the issuer's are: a
+    `did:web` DID, and an `http(s)` URL without a query or fragment.
+    Anything else stops the start.
+  - **All three: a switch is `true` or `false`.** Any other value of
+    `PORTITOR_ALLOW_HTTP` or `PORTITOR_STS_ALLOW_HTTP` (`1`, `yes`)
+    stops the start; before, it was read as off without a word.
+  - **All three: a list setting that is set must name something.** A
+    value of commas only (`","`) stops the start, for every
+    comma-separated setting. Before, some read it as an empty list
+    (`PORTITOR_GAIAX_COMPLIANCE_ISSUERS`, `PORTITOR_SCOPE_TYPE_ALIASES`,
+    the retired key files) and some stopped.
+  - **Connector management port: a time limit.** A request that takes
+    longer than 60 seconds is answered 503 with a problem document, as
+    on the public port, and at most 4 provider catalogs or datasets are
+    read at a time (each may hold 16 MiB); a further request waits.
+    Before, the port had no limit on time or on such reads.
+  - **Catalog calls.** A provider's `Dataset` without `@type` is
+    accepted (DSP 2025-1 does not require it there; a different `@type`
+    is still 502), an answer that is not a JSON object is refused also
+    when it is an array naming the type, and a dataset id of `.` or
+    `..` is refused with 400.
+  - **Bundle: a role type that is a known one in other letter case**
+    (`Messages`) is refused as a mistake, not skipped as a later role.
+    The manifest's JSON Schema says the same, and it now also refuses
+    the version `latest` in any letter case, as the code always did.
+  - **Management API: an empty id is refused.** `datasetId` of
+    `POST /v1/negotiations` (connector) and `holderPid` of
+    `POST /v1/credential-requests` (identity) that are empty or only
+    spaces answer 400. Before, a `datasetId` of spaces started a
+    negotiation, an empty `holderPid` got a new id and one of spaces
+    was stored. Leave `holderPid` out for a new id.
+  - **Transfer request while the finalization is on its way** (TD-44):
+    nothing is written unless the caller is also the agreement's
+    assignee (it always was in practice), and ADR 0007 now says what
+    the rule shows: the consumer acts on the agreement after verifying
+    it, not that the event arrived.
+  - The interop scripts stop the containers of an earlier `KEEP=1` run
+    before they delete its files, clean up from their first line, and
+    say why they stop when `curl` or `openssl` fails.
+
+### Fixed
+
+- Connector management API, `POST /v1/catalog/request` and
+  `POST /v1/catalog/dataset/request`: a provider's answer that is not
+  UTF-8 text inside a member the connector does not read was handed on
+  with HTTP 200 as `application/json`. It is now refused with 502, as
+  any other answer that is not JSON (RFC 8259, section 8.1).
+
 ### Documentation
+
+- `docs/TESTING.md`, "EDC interop test": every step with its expected
+  result, what is pinned, a "last run that passed" table, what the
+  Gaia-X steps show and do not show, the changes from RC7 to RC8, and
+  how to use a kept run by hand (`KEEP=1`), with the new Bruno
+  environment `_http/environments/edc-interop.bru`.
+- ODRL `dateTime` (R-26): the definition in the ODRL 2.2 vocabulary was
+  read and compared with ADR 0009 and the code. The text ADR 0009 used
+  from memory was the definition, and the code follows it; no code
+  changed. ADR 0009 has the quoted definition, its source and the
+  comparison, also with Eclipse EDC (`edc:inForceDate`). A test holds
+  the specification's own examples.
 
 - Close-out of 0.12: the roadmap and the website mark 0.12 released and
   0.13 as the current release; the website quickstart clones v0.12.0.
   CONTRIBUTING gives `cargo vet diff` with `--mode local`.
+- Identity and issuer management APIs: every route that needs the API
+  key documents HTTP 403 in the OpenAPI files, reserved for tokens with
+  limited rights in 1.x (ADR 0025, freeze point 2). 1.0 never answers
+  403: the API key grants every right. The descriptions say that the
+  API key is an opaque string (freeze point 1).
+- **API and configuration freeze.** New `docs/STABILITY.md`: the HTTP
+  routes, environment variables, file formats and command line that 1.0
+  keeps stable under semantic versioning, what is not part of the stable
+  interface (metric, span and log names; the Rust crates; development
+  aids), and what 1.0 does not do. Migrations stay forward only (TD-22,
+  confirmed by the maintainer, 2026-11-20). README and DEPLOYING say
+  that the management API key and the data plane token are opaque.
+- Tests: a freeze guard (`tests/frozen_interface.rs` in the three
+  binaries' crates) fails when a route or environment variable listed
+  in `docs/STABILITY.md` leaves the code, and when the code gains one
+  that is not listed.
+- **Decisions of the maintainer (2026-11-20), recorded.**
+  [ADR 0024](docs/adr/0024-several-data-spaces.md) accepted: 1.0 is one
+  connector per data space; one DID per data space is the default, a
+  shared DID is allowed. [ADR 0025](docs/adr/0025-users-and-roles.md)
+  accepted: 1.0 stays system to system; access tokens with scopes are
+  planned for 1.5. New
+  [ADR 0026](docs/adr/0026-tls-termination.md): TLS stays the
+  operator's job (TD-19). TD-03, TD-04, TD-19 and TD-22 updated.
+- DEPLOYING: new sections "Two data spaces" and "Users and roles". The
+  two-connector setup was run by hand with the new
+  `scripts/two-data-spaces.sh` (a manual test, TESTING), with a shared
+  identity and with one identity per data space.
 
 ## [0.12.0] - 2026-11-19
 

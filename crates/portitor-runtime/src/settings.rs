@@ -4,6 +4,102 @@
 
 //! Helpers for reading settings from environment variables, shared by
 //! the connector, the identity component and the issuer.
+//!
+//! One rule for every setting of the three binaries, from 0.13: spaces
+//! around a value are dropped, and an empty value means "not set". So a
+//! required setting that is empty is missing, and an optional one takes
+//! its default. Read a setting with [`text`] (or a helper built on it),
+//! never with `std::env::var` directly, so that the rule holds
+//! everywhere.
+//!
+//! The functions take the lookup as `var`: `std::env::var_os` in a
+//! binary, a list of pairs in tests (`crate::testing::vars`).
+
+use std::ffi::OsString;
+
+/// The value of the setting `name`, without the spaces around it. `None`
+/// when the setting is not set, or when its value is empty or only
+/// spaces: an empty value means "not set".
+pub fn text(var: impl Fn(&str) -> Option<OsString>, name: &str) -> Option<String> {
+    let value = var(name)?;
+    // `to_string_lossy`: a value that is not UTF-8 is read with its bad
+    // bytes replaced, so it fails later as an invalid value, with its name
+    let value = value.to_string_lossy();
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_owned())
+    }
+}
+
+/// [`text`] of the environment variable `name`.
+#[must_use]
+pub fn text_from_env(name: &str) -> Option<String> {
+    text(|name| std::env::var_os(name), name)
+}
+
+/// Whether the switch `name` is on: `true` or `false`, in any case. Not
+/// set (or empty) is off.
+///
+/// # Errors
+/// Any other value, with what is wrong, written to follow the name:
+/// `must be true or false, not "1"`. A value such as `1` or `yes` that
+/// was silently read as off would leave the operator with a switch they
+/// believe is on.
+pub fn switch(var: impl Fn(&str) -> Option<OsString>, name: &str) -> Result<bool, String> {
+    match text(var, name) {
+        None => Ok(false),
+        Some(value) if value.eq_ignore_ascii_case("true") => Ok(true),
+        Some(value) if value.eq_ignore_ascii_case("false") => Ok(false),
+        Some(value) => Err(format!("must be true or false, not {value:?}")),
+    }
+}
+
+/// A setting that a release took away or renamed. A service that finds
+/// it set refuses to start and says what to set instead
+/// ([`refuse_removed`]): an old name that is silently ignored would
+/// leave the operator with a default they did not choose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemovedSetting {
+    /// The old name.
+    pub name: &'static str,
+    /// What happened and what to do, written to follow the name: `was
+    /// renamed in 0.13; set PORTITOR_NEW instead`.
+    pub advice: &'static str,
+}
+
+impl std::fmt::Display for RemovedSetting {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.name, self.advice)
+    }
+}
+
+/// `PORTITOR_ALLOW_HTTP_CALLBACKS`, the name of `PORTITOR_ALLOW_HTTP`
+/// before 0.13, in the three binaries. The setting allows plain `http://`
+/// for every outgoing call, not only for callbacks.
+pub const ALLOW_HTTP_CALLBACKS: RemovedSetting = RemovedSetting {
+    name: "PORTITOR_ALLOW_HTTP_CALLBACKS",
+    advice: "was renamed in 0.13; set PORTITOR_ALLOW_HTTP instead",
+};
+
+/// Looks for a removed setting that is still set (to a value that is not
+/// empty). Each binary calls this first when it reads its settings.
+///
+/// # Errors
+/// The first of `removed` that is set; show it to the operator and do
+/// not start.
+pub fn refuse_removed(
+    var: impl Fn(&str) -> Option<OsString>,
+    removed: &[RemovedSetting],
+) -> Result<(), RemovedSetting> {
+    for setting in removed {
+        if text(&var, setting.name).is_some() {
+            return Err(*setting);
+        }
+    }
+    Ok(())
+}
 
 /// The items of a comma-separated setting, trimmed, without empty ones:
 /// `"a, b,,c "` is `["a", "b", "c"]`.
@@ -17,6 +113,30 @@ pub fn comma_list(text: &str) -> Vec<String> {
         }
     }
     items
+}
+
+/// The items of the comma-separated setting `name` ([`comma_list`]);
+/// `None` when it is not set (or empty).
+///
+/// # Errors
+/// The setting is set but names nothing (only commas and spaces), with
+/// what is wrong, written to follow the name. One rule for every list:
+/// such a value is most likely a mistake, and whether it would mean
+/// "the default" or "nothing at all" differs from list to list.
+pub fn list(
+    var: impl Fn(&str) -> Option<OsString>,
+    name: &str,
+) -> Result<Option<Vec<String>>, String> {
+    let Some(value) = text(var, name) else {
+        return Ok(None);
+    };
+    let items = comma_list(&value);
+    if items.is_empty() {
+        return Err(format!(
+            "names nothing ({value:?}): list at least one item, or leave it unset"
+        ));
+    }
+    Ok(Some(items))
 }
 
 /// Reads a whole-number setting named `name`. `value` is the
@@ -66,8 +186,11 @@ pub fn base_path(url: &str) -> Option<String> {
     let rest = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))?;
+    if rest.contains(['?', '#']) {
+        return None;
+    }
     let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
-    if host.is_empty() || path.contains(['?', '#']) {
+    if host.is_empty() {
         return None;
     }
     Some(format!("/{path}").trim_end_matches('/').to_owned())
@@ -77,6 +200,70 @@ pub fn base_path(url: &str) -> Option<String> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_value_is_trimmed_and_an_empty_one_is_not_set() {
+        let var = crate::testing::vars(&[("A", " a b "), ("EMPTY", ""), ("SPACES", " \t ")]);
+        assert_eq!(text(&var, "A").as_deref(), Some("a b"));
+        assert_eq!(text(&var, "EMPTY"), None);
+        assert_eq!(text(&var, "SPACES"), None);
+        assert_eq!(text(&var, "MISSING"), None);
+    }
+
+    #[test]
+    fn a_switch_is_true_or_false_and_nothing_else() {
+        let var = crate::testing::vars(&[
+            ("ON", " TRUE "),
+            ("ALSO_ON", "true"),
+            ("OFF", "False"),
+            ("EMPTY", ""),
+            ("ONE", "1"),
+            ("YES", "yes"),
+            ("TYPO", "ture"),
+        ]);
+        assert_eq!(switch(&var, "ON"), Ok(true));
+        assert_eq!(switch(&var, "ALSO_ON"), Ok(true));
+        assert_eq!(switch(&var, "OFF"), Ok(false));
+        assert_eq!(switch(&var, "EMPTY"), Ok(false));
+        assert_eq!(switch(&var, "MISSING"), Ok(false));
+        assert_eq!(
+            switch(&var, "ONE"),
+            Err("must be true or false, not \"1\"".to_owned())
+        );
+        assert!(switch(&var, "YES").is_err());
+        assert!(switch(&var, "TYPO").is_err());
+    }
+
+    #[test]
+    fn a_list_that_is_set_names_something() {
+        let var = crate::testing::vars(&[("LIST", " a, ,b "), ("COMMAS", " , ,"), ("EMPTY", "")]);
+        assert_eq!(
+            list(&var, "LIST"),
+            Ok(Some(vec!["a".to_owned(), "b".to_owned()]))
+        );
+        assert_eq!(list(&var, "EMPTY"), Ok(None));
+        assert_eq!(list(&var, "MISSING"), Ok(None));
+        let refused = list(&var, "COMMAS").unwrap_err();
+        assert!(refused.starts_with("names nothing"), "{refused}");
+    }
+
+    #[test]
+    fn a_removed_setting_that_is_set_is_refused_with_its_advice() {
+        let removed = [ALLOW_HTTP_CALLBACKS];
+        let unset = crate::testing::vars(&[("PORTITOR_ALLOW_HTTP", "true")]);
+        assert_eq!(refuse_removed(&unset, &removed), Ok(()));
+        // empty means not set, for an old name too
+        let empty = crate::testing::vars(&[("PORTITOR_ALLOW_HTTP_CALLBACKS", " ")]);
+        assert_eq!(refuse_removed(&empty, &removed), Ok(()));
+        // any value refuses, also `false`: the operator must move to the
+        // new name
+        let set = crate::testing::vars(&[("PORTITOR_ALLOW_HTTP_CALLBACKS", "false")]);
+        let refused = refuse_removed(&set, &removed).unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            "PORTITOR_ALLOW_HTTP_CALLBACKS was renamed in 0.13; set PORTITOR_ALLOW_HTTP instead"
+        );
+    }
 
     #[test]
     fn base_paths() {
@@ -89,6 +276,8 @@ mod tests {
         assert_eq!(base_path("ftp://id.example"), None);
         assert_eq!(base_path("https:///cs"), None);
         assert_eq!(base_path("https://id.example/cs?x=1"), None);
+        assert_eq!(base_path("https://id.example?x=1"), None);
+        assert_eq!(base_path("https://id.example#x"), None);
     }
 
     #[test]

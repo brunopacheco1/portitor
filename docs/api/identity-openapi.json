@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.12.0"
+    "version": "0.13.0"
   },
   "externalDocs": {
     "description": "Decentralized Claims Protocol v1.0.1",
@@ -23,7 +23,7 @@
     "/.well-known/did.json": {
       "get": {
         "summary": "The participant's DID document (did:web)",
-        "description": "Served at the path the did:web method gives for PORTITOR_PARTICIPANT_ID: /.well-known/did.json for a DID without a path, /<path>/did.json otherwise. One P-256 verification method for the current key (authentication, assertionMethod, capabilityInvocation), whose publicKeyJwk has alg ES256 (RFC 7517 section 4.4) and, when PORTITOR_IDENTITY_CERTIFICATE_CHAIN is set, x5u: the URL of /.well-known/x509CertificateChain.pem, below the DID path for a DID with one (RFC 7517 section 4.6, ADR 0021); after it, one for each retired public key in PORTITOR_IDENTITY_RETIRED_KEY_FILES, with the same relationships and alg, never x5u (TD-05); each id is <did>#<JWK thumbprint>; and the CredentialService entry.",
+        "description": "Served at the path the did:web method gives for PORTITOR_PARTICIPANT_ID: /.well-known/did.json for a DID without a path, /<path>/did.json otherwise. One P-256 verification method for the current key (authentication, assertionMethod, capabilityInvocation), whose publicKeyJwk has alg ES256 (RFC 7517 section 4.4) and, when PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE is set, x5u: the URL of /.well-known/x509CertificateChain.pem, below the DID path for a DID with one (RFC 7517 section 4.6, ADR 0021); after it, one for each retired public key in PORTITOR_IDENTITY_RETIRED_KEY_FILES, with the same relationships and alg, never x5u (TD-05); each id is <did>#<JWK thumbprint>; and the CredentialService entry.",
         "operationId": "didDocument",
         "responses": {
           "200": {
@@ -218,7 +218,7 @@
     "/.well-known/x509CertificateChain.pem": {
       "get": {
         "summary": "The X.509 certificate chain of the participant's key",
-        "description": "The file PORTITOR_IDENTITY_CERTIFICATE_CHAIN, PEM: the certificate for the key in the DID document first, then its chain. The DID document's JWK points here with x5u (RFC 7517 section 4.6), as Gaia-X needs (ADR 0021). For a DID with a path (did:web:host:participants:a) the route is below that path: /participants/a/.well-known/x509CertificateChain.pem. A renewed file for the same key is served without a restart. 404 when no chain is set.",
+        "description": "The file PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE, PEM: the certificate for the key in the DID document first, then its chain. The DID document's JWK points here with x5u (RFC 7517 section 4.6), as Gaia-X needs (ADR 0021). For a DID with a path (did:web:host:participants:a) the route is below that path: /participants/a/.well-known/x509CertificateChain.pem. A renewed file for the same key is served without a restart. 404 when no chain is set.",
         "operationId": "certificateChain",
         "responses": {
           "200": {

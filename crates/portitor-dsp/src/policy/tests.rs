@@ -251,3 +251,49 @@ fn terms_are_compared_without_ids() {
     assert!(same_terms(&a, &agreement));
     assert!(!same_terms(&agreement, &c));
 }
+
+/// The examples the ODRL 2.2 specification itself gives for `dateTime`
+/// evaluate as its text says (ADR 0009, note of 2026-11-20; R-26).
+#[test]
+fn the_date_time_examples_of_the_odrl_specification_hold_as_it_says() {
+    let holds_at = |constraint: serde_json::Value, now: &str| {
+        permissions_hold(
+            &offer(json!([constraint])),
+            now,
+            &CallerCredentials::default(),
+        )
+        .is_ok()
+    };
+    // ODRL Vocabulary, `dateTime`, note: "dateTime gteq 2017-12-31T06:00Z
+    // means the Rule can only be exercised after (and including) 6:00AM
+    // on the 31st December 2017 UTC time."
+    let after_six = date_time("gteq", json!("2017-12-31T06:00Z"));
+    assert!(!holds_at(after_six.clone(), "2017-12-31T05:59:59Z"));
+    assert!(holds_at(after_six.clone(), "2017-12-31T06:00:00Z"));
+    assert!(holds_at(after_six, "2018-06-01T00:00:00Z"));
+
+    // ODRL Information Model, "Constraint property with a Rule": "the
+    // permission can only be exercised until 2018-01-01."
+    let until_2018 = date_time("lt", json!({"@value": "2018-01-01", "@type": "xsd:date"}));
+    assert!(holds_at(until_2018.clone(), "2017-12-31T23:59:59Z"));
+    assert!(!holds_at(until_2018, "2018-01-01T00:00:00Z"));
+
+    // ODRL Information Model, "Permission Class": "the permission is
+    // valid until the end of the year 2017."
+    let whole_2017 = date_time("lteq", json!({"@value": "2017-12-31", "@type": "xsd:date"}));
+    assert!(holds_at(whole_2017.clone(), "2017-12-31T23:59:59Z"));
+    assert!(!holds_at(whole_2017, "2018-01-01T00:00:00Z"));
+
+    // The one place Portitor is stricter than the definition, on purpose
+    // (ADR 0009): ODRL lets the time zone out ("optional", "strongly
+    // recommended"); a date and time without one is not understood here.
+    let no_time_zone = date_time("gteq", json!("2017-12-31T06:00:00"));
+    assert!(matches!(
+        permissions_hold(
+            &offer(json!([no_time_zone])),
+            NOW,
+            &CallerCredentials::default()
+        ),
+        Err(PolicyError::Unsupported(_))
+    ));
+}

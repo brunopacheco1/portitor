@@ -151,7 +151,7 @@ impl Identity {
         let certificate = match &config.certificate_chain_file {
             Some(file) => {
                 let chain = CertificateChain::load(file, &key.public_jwk())
-                    .map_err(|e| format!("PORTITOR_IDENTITY_CERTIFICATE_CHAIN: {e}"))?;
+                    .map_err(|e| format!("PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE: {e}"))?;
                 let url = format!("{public_base}{}", certificate::CHAIN_PATH);
                 portitor_runtime::did_document::add_x5u(&mut document, &kid, &url);
                 Some(Arc::new(chain))

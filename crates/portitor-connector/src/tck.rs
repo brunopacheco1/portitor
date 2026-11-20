@@ -187,6 +187,33 @@ impl ConsumerTransferDecider for TckConsumerTransferDecider {
     }
 }
 
+/// The stored agreements, reached without [`crate::ports::Shared`].
+///
+/// `Shared` reports a state change each time it settles a negotiation
+/// (`replace_negotiation_if`). The connector wraps [`TckAgreements`] in a
+/// `Shared` of its own, so wrapping a `Shared` inside it too would report
+/// the same change twice. This type passes every call straight to the
+/// adapter and reports nothing.
+pub struct StoredAgreements(pub Arc<dyn Agreements + Send + Sync>);
+
+impl Agreements for StoredAgreements {
+    fn finalized(&self, agreement_id: &str) -> Result<Option<Agreement>, StoreError> {
+        self.0.finalized(agreement_id)
+    }
+
+    fn negotiation_of(&self, agreement_id: &str) -> Result<Option<Negotiation>, StoreError> {
+        self.0.negotiation_of(agreement_id)
+    }
+
+    fn replace_negotiation_if(
+        &self,
+        negotiation: &Negotiation,
+        expected: u64,
+    ) -> Result<bool, StoreError> {
+        self.0.replace_negotiation_if(negotiation, expected)
+    }
+}
+
 /// The agreements as stored, plus the provider transfer tests' agreements
 /// (`ATP*`), finalized, for dataset `CAT0101`, held by any caller.
 #[derive(Debug, Clone)]
@@ -214,6 +241,21 @@ impl<A: Agreements> Agreements for TckAgreements<A> {
             obligation: Vec::new(),
             profile: None,
         }))
+    }
+
+    // the agreements of real negotiations are the stored ones; the test
+    // agreements above are always finalized, so these are not reached
+    // for them
+    fn negotiation_of(&self, agreement_id: &str) -> Result<Option<Negotiation>, StoreError> {
+        self.0.negotiation_of(agreement_id)
+    }
+
+    fn replace_negotiation_if(
+        &self,
+        negotiation: &Negotiation,
+        expected: u64,
+    ) -> Result<bool, StoreError> {
+        self.0.replace_negotiation_if(negotiation, expected)
     }
 }
 
@@ -330,6 +372,25 @@ impl<S: Sender> Sender for LateStart<S> {
         authorization: &'a str,
     ) -> BoxFuture<'a, Result<serde_json::Value, String>> {
         self.0.get_authorized(url, authorization)
+    }
+    // a catalog read is never a start message: handed on as it is
+    fn post_authorized_within<'a>(
+        &'a self,
+        url: &'a str,
+        body: &'a serde_json::Value,
+        authorization: &'a str,
+        limits: crate::http_client::AnswerLimits,
+    ) -> BoxFuture<'a, Result<crate::http_client::RawAnswer, crate::http_client::HttpError>> {
+        self.0
+            .post_authorized_within(url, body, authorization, limits)
+    }
+    fn get_authorized_within<'a>(
+        &'a self,
+        url: &'a str,
+        authorization: &'a str,
+        limits: crate::http_client::AnswerLimits,
+    ) -> BoxFuture<'a, Result<crate::http_client::RawAnswer, crate::http_client::HttpError>> {
+        self.0.get_authorized_within(url, authorization, limits)
     }
 }
 

@@ -44,7 +44,7 @@ fn negotiator(db_file: &std::path::Path) -> Negotiator {
         public_url: "https://consumer.example".into(),
         datasets_file: None,
         harvest_interval_seconds: 0,
-        allow_http_callbacks: false,
+        allow_http: false,
         db_file: db_file.to_path_buf(),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),

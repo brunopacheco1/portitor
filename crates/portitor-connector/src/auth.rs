@@ -41,7 +41,7 @@ use portitor_dsp::transfer::TransferError;
 use portitor_runtime::BoxFuture;
 use portitor_runtime::api_key::problem;
 use portitor_runtime::did::{CACHE_SETTING as DID_CACHE_SETTING, ResolveError};
-use portitor_runtime::settings::{bounded_number, comma_list};
+use portitor_runtime::settings::{self, bounded_number, comma_list};
 use portitor_runtime::telemetry::metrics::{self, Refusal};
 
 pub mod dcp;
@@ -471,7 +471,7 @@ const VC_TYPE_PREFIX: &str = "org.eclipse.dspace.dcp.vc.type:";
 pub fn policy_credentials(
     var: impl Fn(&str) -> Option<OsString>,
 ) -> Result<CredentialTypes, String> {
-    let text = |name: &str| var(name).map(|v| v.to_string_lossy().trim().to_owned());
+    let text = |name: &str| settings::text(&var, name);
     let dcp_scopes = text("PORTITOR_DCP_SCOPES").map(|scopes| comma_list(&scopes));
     let membership_scope = dcp_scopes
         .unwrap_or_default()
@@ -480,7 +480,9 @@ pub fn policy_credentials(
         .unwrap_or_else(|| DEFAULT_SCOPE.to_owned());
     let mut types = CredentialTypes::new(&membership_scope);
     let mut listed: Vec<String> = Vec::new();
-    for entry in comma_list(&text("PORTITOR_POLICY_CREDENTIALS").unwrap_or_default()) {
+    let entries = settings::list(&var, "PORTITOR_POLICY_CREDENTIALS")
+        .map_err(|e| format!("PORTITOR_POLICY_CREDENTIALS {e}"))?;
+    for entry in entries.unwrap_or_default() {
         let (credential_type, scope) = parse_policy_entry(&entry)?;
         let credential_type = credential_type.as_str();
         if listed.iter().any(|t| t == credential_type) {
@@ -609,7 +611,7 @@ pub struct AuthSettings {
     /// Scopes asked for, on both sides (`PORTITOR_DCP_SCOPES`,
     /// comma-separated).
     pub scopes: Vec<String>,
-    /// Allow plain-HTTP DIDs and URLs (`PORTITOR_ALLOW_HTTP_CALLBACKS`;
+    /// Allow plain-HTTP DIDs and URLs (`PORTITOR_ALLOW_HTTP`;
     /// tests and the TCKs only).
     pub allow_http: bool,
     /// How long a verified status list credential is kept, in seconds
@@ -669,12 +671,16 @@ impl AuthSettings {
         allow_http: bool,
         var: impl Fn(&str) -> Option<OsString>,
     ) -> Result<Option<Self>, String> {
-        let text = |name: &str| var(name).map(|v| v.to_string_lossy().trim().to_owned());
-        let Some(sts_url) = text("PORTITOR_STS_URL").filter(|url| !url.is_empty()) else {
+        // trimmed, and `None` for an empty value (the rule of every
+        // setting, `portitor_runtime::settings`)
+        let text = |name: &str| settings::text(&var, name);
+        let Some(sts_url) = text("PORTITOR_STS_URL") else {
             return Ok(None);
         };
-        let sts_allow_http =
-            text("PORTITOR_STS_ALLOW_HTTP").is_some_and(|v| v.eq_ignore_ascii_case("true"));
+        // a list that is set must name something (`settings::list`)
+        let list = |name: &str| settings::list(&var, name).map_err(|e| format!("{name} {e}"));
+        let sts_allow_http = settings::switch(&var, "PORTITOR_STS_ALLOW_HTTP")
+            .map_err(|e| format!("PORTITOR_STS_ALLOW_HTTP {e}"))?;
         let plain_http = sts_url
             .get(..7)
             .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"));
@@ -692,32 +698,18 @@ impl AuthSettings {
         if sts_client_secret.is_empty() {
             return Err(format!("the STS client secret file {secret_file} is empty"));
         }
-        let trusted_issuers = comma_list(
-            text("PORTITOR_TRUSTED_ISSUERS")
-                .as_deref()
-                .unwrap_or_default(),
-        );
-        if trusted_issuers.is_empty() {
+        let Some(trusted_issuers) = list("PORTITOR_TRUSTED_ISSUERS")? else {
             return Err("PORTITOR_TRUSTED_ISSUERS is required: the DIDs trusted to issue MembershipCredential".to_owned());
-        }
-        let gaiax_compliance_issuers = comma_list(
-            text("PORTITOR_GAIAX_COMPLIANCE_ISSUERS")
-                .as_deref()
-                .unwrap_or_default(),
-        );
+        };
+        let gaiax_compliance_issuers =
+            list("PORTITOR_GAIAX_COMPLIANCE_ISSUERS")?.unwrap_or_default();
         for did in &gaiax_compliance_issuers {
             // resolved like any did:web DID (with a path, as the Gaia-X
             // Lab's did:web:compliance.lab.gaia-x.eu:v2)
             portitor_dcp::did_web_url(did)
                 .map_err(|e| format!("PORTITOR_GAIAX_COMPLIANCE_ISSUERS: {did}: {e}"))?;
         }
-        let scopes = match text("PORTITOR_DCP_SCOPES") {
-            Some(scopes) => comma_list(&scopes),
-            None => vec![DEFAULT_SCOPE.to_owned()],
-        };
-        if scopes.is_empty() {
-            return Err("PORTITOR_DCP_SCOPES is set but empty".to_owned());
-        }
+        let scopes = list("PORTITOR_DCP_SCOPES")?.unwrap_or_else(|| vec![DEFAULT_SCOPE.to_owned()]);
         for scope in &scopes {
             // the DCP aliases only: they are what other Credential Services
             // must understand
@@ -732,7 +724,6 @@ impl AuthSettings {
             sts_url,
             sts_allow_http,
             sts_client_id: text("PORTITOR_STS_CLIENT_ID")
-                .filter(|id| !id.is_empty())
                 .unwrap_or_else(|| participant_id.to_owned()),
             sts_client_secret,
             trusted_issuers,
@@ -946,6 +937,79 @@ mod tests {
                 "{refused}: {err}"
             );
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The rule of every setting: an empty value means "not set".
+    #[test]
+    fn an_empty_value_is_not_set() {
+        let (dir, secret) = secret_file("empty-values");
+        let me = "did:web:me.example";
+        let base = [
+            ("PORTITOR_STS_URL", " https://identity.example/sts/token "),
+            ("PORTITOR_STS_CLIENT_SECRET_FILE", secret.as_str()),
+            ("PORTITOR_TRUSTED_ISSUERS", "did:web:a"),
+        ];
+        // optional settings that are empty take their defaults
+        let mut empty = base.to_vec();
+        for optional in [
+            "PORTITOR_DCP_SCOPES",
+            "PORTITOR_STS_CLIENT_ID",
+            "PORTITOR_STS_ALLOW_HTTP",
+            "PORTITOR_GAIAX_COMPLIANCE_ISSUERS",
+            "PORTITOR_STATUS_LIST_CACHE_SECONDS",
+            "PORTITOR_DID_CACHE_SECONDS",
+        ] {
+            empty.push((optional, " "));
+        }
+        let settings = AuthSettings::from_vars(me, false, vars(&empty))
+            .unwrap()
+            .unwrap();
+        assert_eq!(settings.sts_url, "https://identity.example/sts/token");
+        assert_eq!(settings.scopes, [DEFAULT_SCOPE]);
+        assert_eq!(settings.sts_client_id, me);
+        assert_eq!(settings.status_list_cache_seconds, 300);
+        assert_eq!(settings.did_cache_seconds, 300);
+        // a list of commas only is set, and names nothing: refused
+        let mut commas = base.to_vec();
+        commas.push(("PORTITOR_DCP_SCOPES", " , "));
+        let error = AuthSettings::from_vars(me, false, vars(&commas)).unwrap_err();
+        assert!(
+            error.starts_with("PORTITOR_DCP_SCOPES names nothing"),
+            "{error}"
+        );
+        // the same for every list, and a switch is true or false
+        for (name, value, problem) in [
+            ("PORTITOR_TRUSTED_ISSUERS", ",", "names nothing"),
+            ("PORTITOR_GAIAX_COMPLIANCE_ISSUERS", " ,, ", "names nothing"),
+            ("PORTITOR_STS_ALLOW_HTTP", "1", "must be true or false"),
+        ] {
+            let mut wrong = base.to_vec();
+            wrong.push((name, value));
+            let error = AuthSettings::from_vars(me, false, vars(&wrong)).unwrap_err();
+            assert!(error.starts_with(name), "{error}");
+            assert!(error.contains(problem), "{error}");
+        }
+        let commas = vars(&[("PORTITOR_POLICY_CREDENTIALS", ",")]);
+        let error = policy_credentials(commas).unwrap_err();
+        assert!(
+            error.starts_with("PORTITOR_POLICY_CREDENTIALS names nothing"),
+            "{error}"
+        );
+        // required settings that are empty are missing
+        for required in [
+            "PORTITOR_STS_CLIENT_SECRET_FILE",
+            "PORTITOR_TRUSTED_ISSUERS",
+        ] {
+            let mut missing = base.to_vec();
+            missing.push((required, ""));
+            let error = AuthSettings::from_vars(me, false, vars(&missing)).unwrap_err();
+            assert!(error.starts_with(required), "{error}");
+            assert!(error.contains("is required"), "{error}");
+        }
+        // an empty STS URL is no STS URL
+        let none = AuthSettings::from_vars(me, false, vars(&[("PORTITOR_STS_URL", "")]));
+        assert!(none.unwrap().is_none());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -23,8 +23,9 @@
 use crate::Context;
 use crate::WRITE_ATTEMPTS;
 use crate::catalog::CatalogDatasets;
-use crate::negotiation::Agreement;
 pub use crate::negotiation::provider::{Environment, StoreError};
+use crate::negotiation::provider::{Negotiation, finalization_proved};
+use crate::negotiation::{Agreement, NegotiationState};
 use crate::policy::CallerCredentials;
 
 use super::{
@@ -144,6 +145,30 @@ pub trait Agreements {
     ///
     /// The store cannot be read.
     fn finalized(&self, agreement_id: &str) -> Result<Option<Agreement>, StoreError>;
+
+    /// The provider's negotiation that made the agreement with this
+    /// `@id`, in whatever state it is. Read only when
+    /// [`Agreements::finalized`] found nothing, to see whether the
+    /// finalization event is on its way (ADR 0007, amended in 0.13).
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be read.
+    fn negotiation_of(&self, agreement_id: &str) -> Result<Option<Negotiation>, StoreError>;
+
+    /// Replaces a negotiation only if its stored `version` is still
+    /// `expected`, atomically, exactly as
+    /// [`NegotiationStore::replace_if`](crate::negotiation::provider::NegotiationStore::replace_if)
+    /// does. Returns `false` when another write came first.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be written.
+    fn replace_negotiation_if(
+        &self,
+        negotiation: &Negotiation,
+        expected: u64,
+    ) -> Result<bool, StoreError>;
 }
 
 /// Port: the data plane, as the transfer process needs it. The connector
@@ -257,6 +282,27 @@ pub enum Failure {
     DataPlane(String),
 }
 
+/// The reason a transfer request is refused with when it names no
+/// finalized agreement of the caller.
+const NO_FINALIZED_AGREEMENT: &str = "no finalized agreement with this id for the caller";
+
+impl Failure {
+    /// Whether a transfer request was refused because it names no
+    /// finalized agreement of the caller (unknown id, another consumer's
+    /// agreement, or a negotiation that is not finalized). The adapter
+    /// logs this refusal (TD-44).
+    #[must_use]
+    pub fn is_no_finalized_agreement(&self) -> bool {
+        match self {
+            Failure::BadRequest(error) => error
+                .reason
+                .iter()
+                .any(|reason| reason.as_str() == Some(NO_FINALIZED_AGREEMENT)),
+            Failure::NotFound(_) | Failure::Store(_) | Failure::DataPlane(_) => false,
+        }
+    }
+}
+
 /// The acknowledgement for the HTTP response and, possibly, the next
 /// message to send.
 pub type Handled = Result<(TransferProcess, Option<Outgoing>), Failure>;
@@ -309,19 +355,98 @@ where
     /// assignee: the adapter derives from it the credentials to ask for
     /// before [`TransferService::request`] (ADR 0019).
     ///
+    /// An agreement whose finalization event is still on its way to
+    /// `caller` counts too, and its negotiation is recorded as
+    /// `FINALIZED` by this call: see
+    /// [`TransferService::settle_finalization_on_its_way`].
+    ///
     /// # Errors
     ///
-    /// The store failed.
-    pub fn agreement(
+    /// The store failed, or the negotiation kept changing.
+    pub fn agreement_settling_finalization(
         &self,
         agreement_id: &str,
         caller: &str,
     ) -> Result<Option<Agreement>, Failure> {
-        Ok(self
+        let finalized = self
             .agreements
             .finalized(agreement_id)
-            .map_err(Failure::Store)?
-            .filter(|a| a.assignee == caller))
+            .map_err(Failure::Store)?;
+        match finalized {
+            // another consumer's agreement looks like a missing one
+            Some(agreement) => Ok(Some(agreement).filter(|a| a.assignee == caller)),
+            None => self.settle_finalization_on_its_way(agreement_id, caller),
+        }
+    }
+
+    /// Settles a finalization that is on its way (ADR 0007, amended in
+    /// 0.13). The provider records `FINALIZED` only when the consumer
+    /// acknowledged the finalization event; the consumer records it on
+    /// receipt, a moment earlier, and may ask for a transfer at once
+    /// (TD-44). So when `caller`, the consumer of the negotiation that
+    /// made `agreement_id`, names that agreement while our finalization
+    /// event is pending, the consumer acts on the agreement after
+    /// verifying it, and that is taken as enough: the negotiation is
+    /// written as `FINALIZED` with nothing pending, and the agreement is
+    /// returned. It does not prove that the event itself arrived: the
+    /// consumer knows the agreement's id from the agreement message.
+    ///
+    /// Returns `None`, and writes nothing, when there is no such
+    /// agreement, when `caller` is not its consumer and its assignee
+    /// (both checked before anything is written, ADR 0013), or when the
+    /// negotiation is in any other state (for example `AGREED`, or
+    /// `TERMINATED`).
+    ///
+    /// No lock and no wait: the write compares the negotiation's
+    /// `version`. If another write came first (a second transfer request,
+    /// or the acknowledgement itself), the negotiation is read again; it
+    /// is then usually `FINALIZED` already.
+    fn settle_finalization_on_its_way(
+        &self,
+        agreement_id: &str,
+        caller: &str,
+    ) -> Result<Option<Agreement>, Failure> {
+        for _ in 0..WRITE_ATTEMPTS {
+            let found = self
+                .agreements
+                .negotiation_of(agreement_id)
+                .map_err(Failure::Store)?;
+            let Some(negotiation) = found else {
+                return Ok(None);
+            };
+            if negotiation.counter_party != caller {
+                return Ok(None);
+            }
+            let agreement = negotiation
+                .agreement
+                .clone()
+                .filter(|a| a.id == agreement_id && a.assignee == caller);
+            // not the agreement's assignee: nothing is written
+            let Some(agreement) = agreement else {
+                return Ok(None);
+            };
+            if negotiation.state == NegotiationState::Finalized {
+                // another write settled it since `finalized` was read
+                return Ok(Some(agreement));
+            }
+            let Some(mut proved) = finalization_proved(&negotiation) else {
+                return Ok(None);
+            };
+            let expected = negotiation.version;
+            proved.version = expected.wrapping_add(1);
+            if self
+                .agreements
+                .replace_negotiation_if(&proved, expected)
+                .map_err(Failure::Store)?
+            {
+                return Ok(Some(agreement));
+            }
+        }
+        Err(bad(
+            "",
+            "",
+            "the negotiation keeps changing concurrently; retry",
+        ))
     }
 
     /// `POST /transfers/request`: checks the request against the agreement
@@ -427,13 +552,9 @@ where
         }
         // an unknown agreement and another consumer's agreement get the
         // same answer, so a caller cannot learn which agreement ids exist
-        let agreement = self.agreement(&msg.agreement_id, caller)?.ok_or_else(|| {
-            bad(
-                "",
-                cpid,
-                "no finalized agreement with this id for the caller",
-            )
-        })?;
+        let agreement = self
+            .agreement_settling_finalization(&msg.agreement_id, caller)?
+            .ok_or_else(|| bad("", cpid, NO_FINALIZED_AGREEMENT))?;
         // checked again at each new transfer, with the credentials of this
         // request: a credential revoked since the agreement stops it
         crate::policy::permissions_hold(&agreement, &self.env.now(), credentials).map_err(|e| {

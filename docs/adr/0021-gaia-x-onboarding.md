@@ -70,6 +70,8 @@ Facts this ADR relies on (checked 2026-11-15; details in
 ### The key and its certificate
 
 - The identity keeps its one P-256 key (ADR 0015).
+- Note, 2026-11-20: the next setting was renamed in 0.13 to
+  `PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE`.
 - `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` (optional): a PEM file, the
   certificate for the identity key first, then its chain. When set:
   - at start the identity refuses to run if the first certificate's

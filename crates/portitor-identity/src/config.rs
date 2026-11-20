@@ -8,7 +8,9 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use portitor_runtime::settings::{comma_list, path_list};
+use portitor_runtime::settings::{
+    self, ALLOW_HTTP_CALLBACKS, RemovedSetting, comma_list, refuse_removed,
+};
 
 /// The default scope aliases that mean "credentials of this type", on top
 /// of DCP's own `org.eclipse.dspace.dcp.vc.type`: EDC's (`portitor_dcp::scope`).
@@ -23,6 +25,17 @@ pub const DEFAULT_MANAGEMENT_BIND: &str = "127.0.0.1:8091";
 
 /// The `SQLite` file unless `PORTITOR_DB_FILE` says otherwise.
 pub const DEFAULT_DB_FILE: &str = "/data/portitor-identity.db";
+
+/// The settings the identity no longer has. When one of them is set, the
+/// identity refuses to start and names what to set instead.
+pub const REMOVED_SETTINGS: &[RemovedSetting] = &[
+    ALLOW_HTTP_CALLBACKS,
+    // the value is the path of a file, and the name now says so
+    RemovedSetting {
+        name: "PORTITOR_IDENTITY_CERTIFICATE_CHAIN",
+        advice: "was renamed in 0.13; set PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE instead",
+    },
+];
 
 /// Everything the identity component needs to start.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,11 +68,11 @@ pub struct Config {
     /// Extra scope aliases for "credentials of this type"
     /// (`PORTITOR_SCOPE_TYPE_ALIASES`).
     pub scope_type_aliases: Vec<String>,
-    /// Plain-HTTP DIDs and URLs allowed (`PORTITOR_ALLOW_HTTP_CALLBACKS`,
+    /// Plain-HTTP DIDs and URLs allowed (`PORTITOR_ALLOW_HTTP`,
     /// tests only).
     pub allow_http: bool,
     /// The X.509 chain of the identity key, PEM, the key's certificate
-    /// first (`PORTITOR_IDENTITY_CERTIFICATE_CHAIN`, ADR 0021).
+    /// first (`PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE`, ADR 0021).
     pub certificate_chain_file: Option<PathBuf>,
     /// Gaia-X onboarding, if `PORTITOR_GAIAX_COMPLIANCE_URL` is set.
     pub gaiax: Option<GaiaxConfig>,
@@ -110,12 +123,11 @@ impl Config {
     /// # Errors
     /// A required setting is missing or a setting is invalid.
     pub fn from_vars(var: impl Fn(&str) -> Option<OsString>) -> Result<Self, ConfigError> {
-        let text = |name: &str| var(name).map(|v| v.to_string_lossy().trim().to_owned());
-        let required = |name: &'static str| {
-            text(name)
-                .filter(|v| !v.is_empty())
-                .ok_or_else(|| invalid(name, "required"))
-        };
+        // trimmed, and `None` for an empty value: empty means "not set"
+        // (the rule of every setting, `portitor_runtime::settings`)
+        let text = |name: &str| settings::text(&var, name);
+        let required = |name: &'static str| text(name).ok_or_else(|| invalid(name, "required"));
+        refuse_removed(&var, REMOVED_SETTINGS).map_err(removed)?;
         let participant_id = required("PORTITOR_PARTICIPANT_ID")?;
         portitor_dcp::did_web_url(&participant_id)
             .map_err(|e| invalid("PORTITOR_PARTICIPANT_ID", &e.to_string()))?;
@@ -126,10 +138,13 @@ impl Config {
                 "not an http(s) URL",
             ));
         }
-        let trusted_issuers = comma_list(&required("PORTITOR_TRUSTED_ISSUERS")?);
-        if trusted_issuers.is_empty() {
+        // a list that is set must name something (`settings::list`)
+        let list = |name: &'static str| settings::list(&var, name).map_err(|e| invalid(name, &e));
+        let switch =
+            |name: &'static str| settings::switch(&var, name).map_err(|e| invalid(name, &e));
+        let Some(trusted_issuers) = list("PORTITOR_TRUSTED_ISSUERS")? else {
             return Err(invalid("PORTITOR_TRUSTED_ISSUERS", "required"));
-        }
+        };
         for issuer in &trusted_issuers {
             portitor_dcp::did_web_url(issuer)
                 .map_err(|e| invalid("PORTITOR_TRUSTED_ISSUERS", &format!("{issuer}: {e}")))?;
@@ -137,20 +152,17 @@ impl Config {
         let management = ManagementConfig::from_vars(DEFAULT_MANAGEMENT_BIND, &var);
         let key_file = PathBuf::from(required("PORTITOR_IDENTITY_KEY_FILE")?);
         let retired_key_files =
-            path_list(&text("PORTITOR_IDENTITY_RETIRED_KEY_FILES").unwrap_or_default());
+            paths(list("PORTITOR_IDENTITY_RETIRED_KEY_FILES")?.unwrap_or_default());
         // the one STS client is the participant's own connector, so it is
         // named by the participant's DID unless set
-        let sts_client_id = text("PORTITOR_STS_CLIENT_ID")
-            .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| participant_id.clone());
+        let sts_client_id =
+            text("PORTITOR_STS_CLIENT_ID").unwrap_or_else(|| participant_id.clone());
         let sts_client_secret_file = PathBuf::from(required("PORTITOR_STS_CLIENT_SECRET_FILE")?);
-        let scope_type_aliases =
-            text("PORTITOR_SCOPE_TYPE_ALIASES").unwrap_or_else(|| DEFAULT_TYPE_ALIASES.to_owned());
-        let allow_http =
-            text("PORTITOR_ALLOW_HTTP_CALLBACKS").is_some_and(|v| v.eq_ignore_ascii_case("true"));
-        let certificate_chain_file = text("PORTITOR_IDENTITY_CERTIFICATE_CHAIN")
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from);
+        let scope_type_aliases = list("PORTITOR_SCOPE_TYPE_ALIASES")?
+            .unwrap_or_else(|| comma_list(DEFAULT_TYPE_ALIASES));
+        let allow_http = switch("PORTITOR_ALLOW_HTTP")?;
+        let certificate_chain_file =
+            text("PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE").map(PathBuf::from);
         let gaiax = gaiax_config(&text, certificate_chain_file.is_some(), allow_http)?;
         Ok(Self {
             participant_id,
@@ -165,7 +177,7 @@ impl Config {
             sts_client_id,
             sts_client_secret_file,
             trusted_issuers,
-            scope_type_aliases: comma_list(&scope_type_aliases),
+            scope_type_aliases,
             allow_http,
             certificate_chain_file,
             gaiax,
@@ -177,13 +189,13 @@ impl Config {
 /// set; then the participant file and the certificate chain are required
 /// (ADR 0021, "Onboarding"), and the URL must be one the shared HTTP
 /// client may call (`https://`, or `http://` with
-/// `PORTITOR_ALLOW_HTTP_CALLBACKS`).
+/// `PORTITOR_ALLOW_HTTP`).
 fn gaiax_config(
     text: &impl Fn(&str) -> Option<String>,
     has_chain: bool,
     allow_http: bool,
 ) -> Result<Option<GaiaxConfig>, ConfigError> {
-    let Some(url) = text("PORTITOR_GAIAX_COMPLIANCE_URL").filter(|v| !v.is_empty()) else {
+    let Some(url) = text("PORTITOR_GAIAX_COMPLIANCE_URL") else {
         return Ok(None);
     };
     if !portitor_runtime::http::outbound_url_allowed(&url, allow_http) {
@@ -192,14 +204,12 @@ fn gaiax_config(
             "not an https:// URL",
         ));
     }
-    let compliance_did = text("PORTITOR_GAIAX_COMPLIANCE_DID")
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| {
-            invalid(
-                "PORTITOR_GAIAX_COMPLIANCE_DID",
-                "required with PORTITOR_GAIAX_COMPLIANCE_URL",
-            )
-        })?;
+    let compliance_did = text("PORTITOR_GAIAX_COMPLIANCE_DID").ok_or_else(|| {
+        invalid(
+            "PORTITOR_GAIAX_COMPLIANCE_DID",
+            "required with PORTITOR_GAIAX_COMPLIANCE_URL",
+        )
+    })?;
     // resolved like any did:web DID, with a path as the Gaia-X Lab's
     if portitor_dcp::did_web_url(&compliance_did).is_err() {
         return Err(invalid(
@@ -207,17 +217,15 @@ fn gaiax_config(
             "not a did:web DID",
         ));
     }
-    let participant_file = text("PORTITOR_GAIAX_PARTICIPANT_FILE")
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| {
-            invalid(
-                "PORTITOR_GAIAX_PARTICIPANT_FILE",
-                "required with PORTITOR_GAIAX_COMPLIANCE_URL",
-            )
-        })?;
+    let participant_file = text("PORTITOR_GAIAX_PARTICIPANT_FILE").ok_or_else(|| {
+        invalid(
+            "PORTITOR_GAIAX_PARTICIPANT_FILE",
+            "required with PORTITOR_GAIAX_COMPLIANCE_URL",
+        )
+    })?;
     if !has_chain {
         return Err(invalid(
-            "PORTITOR_IDENTITY_CERTIFICATE_CHAIN",
+            "PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE",
             "required with PORTITOR_GAIAX_COMPLIANCE_URL",
         ));
     }
@@ -226,6 +234,17 @@ fn gaiax_config(
         compliance_did,
         participant_file: PathBuf::from(participant_file),
     }))
+}
+
+/// The error for a removed setting that is still set: its old name, and
+/// what to set instead.
+fn removed(setting: RemovedSetting) -> ConfigError {
+    invalid(setting.name, setting.advice)
+}
+
+/// The file paths of a list setting.
+fn paths(items: Vec<String>) -> Vec<PathBuf> {
+    items.into_iter().map(PathBuf::from).collect()
 }
 
 fn invalid(name: &'static str, problem: &str) -> ConfigError {
@@ -246,6 +265,15 @@ mod tests {
         Config::from_vars(portitor_runtime::testing::vars(pairs))
     }
 
+    /// Old names (refused) and the new name each error must give.
+    const RENAMED: &[(&str, &str)] = &[
+        ("PORTITOR_ALLOW_HTTP_CALLBACKS", "PORTITOR_ALLOW_HTTP"),
+        (
+            "PORTITOR_IDENTITY_CERTIFICATE_CHAIN",
+            "PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE",
+        ),
+    ];
+
     const MINIMAL: &[(&str, &str)] = &[
         ("PORTITOR_PARTICIPANT_ID", "did:web:identity.example"),
         ("PORTITOR_IDENTITY_KEY_FILE", "/run/secrets/key.pem"),
@@ -259,6 +287,74 @@ mod tests {
             "did:web:issuer.example, did:web:other.example",
         ),
     ];
+
+    #[test]
+    fn a_renamed_setting_is_refused_with_its_new_name() {
+        for (old, new) in RENAMED {
+            let mut vars = MINIMAL.to_vec();
+            vars.push((old, "anything"));
+            let error = read(&vars).unwrap_err();
+            assert_eq!(error.name, *old);
+            assert!(error.to_string().contains(new), "{error}");
+        }
+    }
+
+    /// A list that is set names something, and a switch is `true` or
+    /// `false`: anything else stops the start.
+    #[test]
+    fn a_list_of_commas_or_a_switch_that_is_not_true_or_false_is_refused() {
+        for (name, value) in [
+            ("PORTITOR_SCOPE_TYPE_ALIASES", ","),
+            ("PORTITOR_TRUSTED_ISSUERS", " , "),
+            ("PORTITOR_IDENTITY_RETIRED_KEY_FILES", ",,"),
+            ("PORTITOR_ALLOW_HTTP", "1"),
+            ("PORTITOR_ALLOW_HTTP", "yes"),
+        ] {
+            let mut vars = MINIMAL.to_vec();
+            vars.push((name, value));
+            let error = read(&vars).unwrap_err();
+            assert_eq!(error.name, name, "{error}");
+        }
+        let mut vars = MINIMAL.to_vec();
+        vars.push(("PORTITOR_ALLOW_HTTP", "FALSE"));
+        assert!(!read(&vars).unwrap().allow_http);
+    }
+
+    /// The rule of every setting: spaces around a value are dropped, and
+    /// an empty value means "not set".
+    #[test]
+    fn an_empty_value_is_not_set_and_values_are_trimmed() {
+        // an optional setting that is empty takes its default
+        let mut vars = MINIMAL.to_vec();
+        for optional in [
+            "PORTITOR_BIND",
+            "PORTITOR_DB_FILE",
+            "PORTITOR_STS_CLIENT_ID",
+            "PORTITOR_SCOPE_TYPE_ALIASES",
+            "PORTITOR_IDENTITY_RETIRED_KEY_FILES",
+            "PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE",
+            "PORTITOR_GAIAX_COMPLIANCE_URL",
+            "PORTITOR_ALLOW_HTTP",
+            "PORTITOR_MANAGEMENT_BIND",
+            "PORTITOR_MANAGEMENT_API_KEY_FILE",
+        ] {
+            vars.push((optional, " "));
+        }
+        assert_eq!(read(&vars).unwrap(), read(MINIMAL).unwrap());
+        // a required setting that is empty is missing
+        for required in MINIMAL.iter().map(|(name, _)| *name) {
+            let mut vars = MINIMAL.to_vec();
+            vars.push((required, ""));
+            assert_eq!(read(&vars).unwrap_err(), invalid(required, "required"));
+        }
+        // spaces around a value are dropped
+        let mut vars = MINIMAL.to_vec();
+        vars.push(("PORTITOR_BIND", " 127.0.0.1:9 "));
+        vars.push(("PORTITOR_IDENTITY_KEY_FILE", " /run/key.pem\n"));
+        let config = read(&vars).unwrap();
+        assert_eq!(config.bind, "127.0.0.1:9");
+        assert_eq!(config.key_file, PathBuf::from("/run/key.pem"));
+    }
 
     #[test]
     fn defaults() {
@@ -331,9 +427,12 @@ mod tests {
         ));
         assert_eq!(
             read(&vars).unwrap_err().name,
-            "PORTITOR_IDENTITY_CERTIFICATE_CHAIN"
+            "PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE"
         );
-        vars.push(("PORTITOR_IDENTITY_CERTIFICATE_CHAIN", "/config/chain.pem"));
+        vars.push((
+            "PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE",
+            "/config/chain.pem",
+        ));
         let config = read(&vars).unwrap();
         assert_eq!(
             config.gaiax,
@@ -353,7 +452,7 @@ mod tests {
             read(&vars).unwrap_err().name,
             "PORTITOR_GAIAX_COMPLIANCE_URL"
         );
-        vars.push(("PORTITOR_ALLOW_HTTP_CALLBACKS", "true"));
+        vars.push(("PORTITOR_ALLOW_HTTP", "true"));
         assert!(read(&vars).is_ok());
     }
 
@@ -386,9 +485,8 @@ mod tests {
         assert!(read(&vars).is_err());
         let mut vars = MINIMAL.to_vec();
         vars.push(("PORTITOR_TRUSTED_ISSUERS", " , "));
-        assert_eq!(
-            read(&vars).unwrap_err(),
-            invalid("PORTITOR_TRUSTED_ISSUERS", "required")
-        );
+        let error = read(&vars).unwrap_err();
+        assert_eq!(error.name, "PORTITOR_TRUSTED_ISSUERS");
+        assert!(error.problem.starts_with("names nothing"), "{error}");
     }
 }

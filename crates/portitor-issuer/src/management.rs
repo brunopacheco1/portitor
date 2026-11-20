@@ -168,6 +168,7 @@ pub struct CredentialFilter {
         (status = 201, description = "Registered", body = ParticipantView),
         (status = 400, description = "Invalid body, DID or claims", body = Problem, content_type = "application/problem+json"),
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.", body = Problem, content_type = "application/problem+json"),
         (status = 409, description = "The DID is registered already", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = [])),
@@ -213,6 +214,7 @@ async fn create_participant(
     responses(
         (status = 200, description = "The participants", body = [ParticipantView]),
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = [])),
     tag = "Participants"
@@ -239,6 +241,7 @@ async fn list_participants(State(issuer): State<Arc<Issuer>>) -> Response {
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "Not registered", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = [])),
@@ -269,6 +272,7 @@ async fn delete_participant(
         (status = 204, description = "The participant's credential service took the offer"),
         (status = 400, description = "Invalid body, or an unknown credential id", body = Problem, content_type = "application/problem+json"),
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "The participant is not registered", body = Problem, content_type = "application/problem+json"),
         (status = 502, description = "The participant's credential service cannot be reached or refused", body = Problem, content_type = "application/problem+json"),
     ),
@@ -356,6 +360,7 @@ fn offered_objects(
     responses(
         (status = 200, description = "The issued credentials", body = [CredentialView]),
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = [])),
     tag = "Credentials"
@@ -387,6 +392,7 @@ async fn list_credentials(
     responses(
         (status = 204, description = "Revoked (now or before)"),
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "No such credential", body = Problem, content_type = "application/problem+json"),
         (status = 500, description = "The revocation is stored but the status list was not signed again; repeat the call", body = Problem, content_type = "application/problem+json"),
     ),
@@ -416,7 +422,7 @@ async fn revoke(State(issuer): State<Arc<Issuer>>, Path(id): Path<String>) -> Re
 #[openapi(
     info(
         title = "Portitor issuer management API",
-        description = "Participants, offers, issued credentials and revocation of the dataspace authority's issuer. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only.",
+        description = "Participants, offers, issued credentials and revocation of the dataspace authority's issuer. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only. The API key is opaque (see the api_key security scheme). HTTP 403 is reserved for tokens with limited rights in 1.x; 1.0 never answers it.",
         license(name = "Apache-2.0", identifier = "Apache-2.0"),
     ),
     paths(create_participant, list_participants, delete_participant, send_offer, list_credentials, revoke),

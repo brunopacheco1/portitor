@@ -117,7 +117,7 @@ fn config(allow_http: bool) -> Config {
         public_url: "https://provider.example".into(),
         datasets_file: Some(path.into()),
         harvest_interval_seconds: 0,
-        allow_http_callbacks: allow_http,
+        allow_http,
         db_file: "unused.db".into(),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),

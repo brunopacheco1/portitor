@@ -731,7 +731,7 @@ async fn a_chain_for_another_key_stops_the_start() {
     .err()
     .unwrap();
     assert!(
-        refused.contains("PORTITOR_IDENTITY_CERTIFICATE_CHAIN"),
+        refused.contains("PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE"),
         "{refused}"
     );
     assert!(refused.contains("another key"), "{refused}");

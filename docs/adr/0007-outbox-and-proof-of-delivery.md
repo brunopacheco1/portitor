@@ -109,6 +109,83 @@ partner that refuses us answers with 404 too), and the process ends. Our
 log shows `HTTP 404`; only the partner's log says whether it refused us
 or did not know the process.
 
+### Amendment for 0.13: a transfer request settles a finalization that is on its way (2026-11-20)
+
+The provider records `FINALIZED` only when the consumer acknowledged the
+finalization event. The consumer records it on receipt, a moment
+earlier. A transfer request sent in that moment found no finalized
+agreement, got HTTP 400, and the consumer's transfer ended `TERMINATED`
+([TD-44](../RISKS_AND_TECHNICAL_DEBTS.md#td-44); 2 to 4 times in 6,000
+to 10,000 transfers in the 0.12 benchmark).
+
+The maintainer decided (2026-11-20) to apply "Proof of delivery" above
+to this case too:
+
+- A `TransferRequestMessage` that names the agreement of a negotiation
+  whose finalization event is pending (state `VERIFIED`, the event saved
+  in the outbox, not yet acknowledged), sent by that negotiation's
+  consumer, shows that the consumer acts on the agreement after
+  verifying it. That is taken as enough; it does not prove that the
+  event itself arrived (see "The cost" below). The negotiation is written
+  as `FINALIZED` with nothing pending, exactly as its acknowledgement
+  would write it, and the request is then checked as any other
+  (ADR 0013).
+- **The caller is checked first.** Nothing is written unless the caller
+  is the negotiation's consumer and the agreement's `assignee`
+  (ADR 0013, rule 2). Another caller gets the same 400 as for an
+  agreement that does not exist.
+- **Any other state is refused as before**: `AGREED` (not verified),
+  `VERIFIED` with no message or with our termination pending,
+  `TERMINATED`.
+- **No lock and no wait.** The write is the compare-and-update on the
+  negotiation's `version`. Two transfer requests at once: one write
+  wins, the other reads the negotiation again and finds it `FINALIZED`.
+  The acknowledgement at the same moment: whichever write comes first
+  wins, the other changes nothing.
+- **The event's later acknowledgement or failure is harmless.** The
+  outbox still holds the event it is sending. Its acknowledgement, and
+  its failure after the retries, find it no longer pending and change
+  nothing ("A failure only acts on its own message"). It is not sent
+  again after a restart.
+- The negotiation is settled when the request names the agreement and
+  the caller is its consumer, also if the request is then refused for
+  another reason (the agreement no longer allows it, the format). What
+  counts is that the consumer asked, not that the transfer is granted.
+
+The cost, accepted: a consumer knows the agreement's id from the
+agreement message, so one that asks for a transfer after it sent its
+verification, but before it received the finalization event, is served
+too. If that event is then lost and the provider restarts, the provider
+shows `FINALIZED` and such a consumer `VERIFIED`. The same holds for a
+consumer whose callback address cannot be reached: it never receives the
+event, but can get `FINALIZED` and a transfer this way, and the outbox
+then still logs and counts the event as given up
+(`portitor.outbox.message.given_up`). A consumer that follows DSP asks only
+after `FINALIZED`.
+
+Compared with Eclipse EDC (checked by the integrator in EDC 1.0.0-RC8):
+EDC accepts a transfer request as soon as the agreement record exists
+and does not look at the negotiation's state
+(`TransferProcessProtocolServiceImpl.fetchContractAgreement`; the SQL is
+`SELECT * FROM <agreement table> where <id>=?`,
+`BaseSqlDialectStatements.getFindContractAgreementTemplate`). EDC
+records `FINALIZED` after the finalization event was dispatched
+successfully (`NegotiationProcessorsImpl.processFinalizing`). So this
+rule is stricter than EDC: Portitor still refuses a transfer under an
+agreement that the consumer has not verified.
+
+Whatever the outcome, the provider now logs a transfer request refused
+for this reason: `transfer request is refused; answered 400` (INFO)
+with `reason` "no finalized agreement with this id for the caller". The
+line names neither the agreement nor the caller.
+
+Where: the rule is in the domain
+(`portitor-dsp`: `negotiation::provider::finalization_proved`,
+`transfer::provider::TransferService::agreement_settling_finalization`); the `Agreements` port
+got the read of a negotiation by agreement id and the versioned write;
+the SQL is in the connector (`store/transfers.rs`) and uses the index of
+migration 10, so there is no new migration.
+
 ## Consequences
 
 - The 3 second wait is gone; messages that race their acknowledgement are

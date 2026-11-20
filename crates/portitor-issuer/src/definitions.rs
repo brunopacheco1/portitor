@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! What the issuer can issue: the credential definitions file
-//! (`PORTITOR_ISSUER_CREDENTIALS_FILE`, ADR 0018, "Credential
+//! (`PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE`, ADR 0018, "Credential
 //! definitions"), checked at start, and the issuer metadata built from it
 //! (DCP v1.0.1, section 6.7).
 //!

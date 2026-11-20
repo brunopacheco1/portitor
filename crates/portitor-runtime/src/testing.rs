@@ -4,7 +4,14 @@
 
 //! Helpers shared by the tests of this crate and of the binaries
 //! (feature `test-support`): settings from a list instead of the
-//! environment, and a temporary directory.
+//! environment, a temporary directory, the tools of the freeze guard
+//! ([`frozen`]), the checks of the rule for settings
+//! ([`settings_rule`]) and wrong calls to a management API
+//! ([`management_calls`]).
+
+pub mod frozen;
+pub mod management_calls;
+pub mod settings_rule;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

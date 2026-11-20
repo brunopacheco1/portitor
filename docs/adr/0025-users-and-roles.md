@@ -6,7 +6,8 @@ SPDX-License-Identifier: Apache-2.0
 
 # ADR 0025: Users and roles
 
-- Status: **Proposed** (2026-11-18; waits for the maintainer)
+- Status: **Accepted** (2026-11-20, by the maintainer; see
+  [Answers of the maintainer](#answers-of-the-maintainer-2026-11-20))
 - Date: 2026-11-18
 - Scope: research only, no code (ROADMAP 0.11, "Research, docs only, in
   0.11 and 0.12"). Answers [TD-04](../RISKS_AND_TECHNICAL_DEBTS.md#td-04)
@@ -297,13 +298,49 @@ existing settings has to change. Four small points do:
    warning). This is the only format question found. It is shared with
    the 1.2 policy shapes and with
    [TD-01](../RISKS_AND_TECHNICAL_DEBTS.md#td-01).
+   **Decided (maintainer, 2026-11-20), done in 0.13:** the connector
+   skips the file, with a warning and a metric, and refuses a bundle in
+   which it knows no role; the issuer stays strict
+   ([ADR 0005](0005-schema-and-vocabulary-registry.md), "Amendment for
+   0.13"). This also answers open question 5.
 
 Already decided elsewhere and needed here: the strict reading of policy
 terms (TD-32), done in 0.12. Not needed now: any new environment variable.
 User settings come in 1.5, per connector or per data space profile (ADR
 0024).
 
+## Answers of the maintainer (2026-11-20)
+
+The maintainer accepted the decision above and answered the open
+questions below. The numbers are those of the questions.
+
+1. **Option A for 1.0.** Portitor stays system to system; users stop at
+   the organisation's own reverse proxy.
+2. **For 1.5 the plan is option B,** behind its own code ADR.
+3. **Scopes, with EDC's scope names.** They are named in that code ADR.
+4. **The provider's data plane does not identify persons in 1.x.**
+5. **A bundle file with a role the connector does not know: skip the
+   file with a warning. If no file with a known role is left, refuse
+   the bundle.** Point 4 of "What must be settled before the 0.13
+   freeze" has the details.
+6. **`403` goes into the OpenAPI files now.** Done in 0.13 for the three
+   management APIs: every route that needs the key lists it as
+   reserved. 1.0 never answers it.
+7. **The data pull audit line** (flow, agreement, consumer DID, bytes)
+   goes on the roadmap for 1.1 or 1.2.
+8. **User-to-system access can be tested against Simpl-Open,** which has
+   implemented user-to-system actions. This is the maintainer's
+   statement; it was not checked for this ADR. What was verified about
+   Simpl-Open is in [ADR 0017](0017-simpl-open.md) and in the table
+   above.
+
+Freeze points 1 and 3 (opaque bearer values; `dataAddress` stays
+optional) are stated in [STABILITY](../STABILITY.md), in the README and
+in DEPLOYING.
+
 ## Open questions for the maintainer
+
+All eight were answered on 2026-11-20, see above; kept as asked.
 
 1. Is option A enough for 1.0? Recommendation: yes.
 2. Should 1.5 build option B, or stay with A until a user asks?
@@ -380,6 +417,8 @@ User settings come in 1.5, per connector or per data space profile (ADR
 ## Consequences
 
 - TD-04 points here; it stays Open until the maintainer decides.
+  Update 2026-11-20: decided. TD-04 is Accepted for 1.0; the code of
+  option B is planned for 1.5.
 - With decision 1: DEPLOYING gets "Users and roles" before 0.13, and
   ARCHITECTURE says that the provider's data plane does not know
   persons.

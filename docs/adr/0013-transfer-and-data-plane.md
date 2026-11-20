@@ -38,7 +38,10 @@ A `TransferRequestMessage` is accepted only if all of these hold. Any
 failure is a `TransferError` (HTTP 400) and no transfer is created.
 
 1. `agreementId` names an agreement from one of the provider's own
-   negotiations, and that negotiation is FINALIZED.
+   negotiations, and that negotiation is FINALIZED. From 0.13 a
+   negotiation whose finalization event is still on its way to the
+   caller counts, and is settled as FINALIZED by the request
+   (ADR 0007, amendment for 0.13).
 2. The agreement's `assignee` is the caller. Until DCP authentication
    (0.5) every caller is the placeholder `urn:portitor:unauthenticated`,
    so this check only becomes effective then; the code is in place now.

@@ -300,6 +300,16 @@ fn read_entries(input_folder: &Path) -> Result<(Vec<FileEntry>, Vec<FileBytes>),
     let mut contents = Vec::new();
     let mut total: usize = 0;
     for file in input.files {
+        // A connector skips a file whose role it does not know (ADR 0005,
+        // amended in 0.13). The build tool is strict: it never publishes
+        // a role it does not know, for example a misspelt one.
+        if let Role::Unknown { type_name } = &file.role {
+            return Err(format!(
+                "{}: {}: the role type {type_name:?} is not known \
+                 (known: datasets, messages, vocabulary, context)",
+                INPUT_FILE, file.path
+            ));
+        }
         let bytes = read_input_file(input_folder, &file.path)?;
         total = total.saturating_add(bytes.len());
         if total > MAX_BUNDLE_BYTES {

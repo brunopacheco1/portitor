@@ -50,7 +50,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_env()?;
     let limits = RequestLimits::from_env()?;
     if config.allow_http {
-        tracing::warn!("plain-http DIDs and URLs allowed (PORTITOR_ALLOW_HTTP_CALLBACKS)");
+        tracing::warn!("plain-http DIDs and URLs allowed (PORTITOR_ALLOW_HTTP)");
     }
     let key = read_key(&config)?;
     let sts_client_secret = ApiKey::read(&config.sts_client_secret_file)

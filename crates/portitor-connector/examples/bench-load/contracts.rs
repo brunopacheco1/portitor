@@ -159,8 +159,8 @@ async fn worker(settings: Arc<Settings>, left: Arc<AtomicU64>) -> Vec<Result<Mad
 async fn one_contract(settings: &Settings) -> Result<Made, String> {
     let start = Instant::now();
     let request = json!({
-        "providerAddress": settings.provider_address,
-        "providerId": settings.provider_id,
+        "counterPartyAddress": settings.provider_address,
+        "counterPartyId": settings.provider_id,
         "datasetId": settings.dataset,
         "offer": {
             "@id": format!("{}:offer:use", settings.dataset),

@@ -17,6 +17,9 @@ use portitor_connector::management::{
 };
 use portitor_connector::{Config, Ports};
 use portitor_runtime::BoxFuture;
+use portitor_runtime::testing::management_calls::{
+    Call, statuses_other_than, with_a_wrong_body, with_odd_paths_and_queries, without_the_key,
+};
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
@@ -48,7 +51,7 @@ fn app() -> Router {
         public_url: "https://consumer.example".into(),
         datasets_file: None,
         harvest_interval_seconds: 0,
-        allow_http_callbacks: false,
+        allow_http: false,
         db_file: "unused.db".into(),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
@@ -79,8 +82,8 @@ fn authed(req: axum::http::request::Builder) -> axum::http::request::Builder {
 
 fn start_body(dataset: &str) -> Value {
     json!({
-        "providerAddress": "https://provider.example/dsp/2025-1",
-        "providerId": "did:web:provider.example",
+        "counterPartyAddress": "https://provider.example/dsp/2025-1",
+        "counterPartyId": "did:web:provider.example",
         "offer": {"@id": format!("{dataset}:offer"), "@type": "Offer", "target": dataset,
                   "permission": [{"action": "use"}]}
     })
@@ -161,7 +164,7 @@ async fn start_read_and_page() {
     let (s, _, n) = call(&app, get(&format!("/v1/negotiations/{}", pids[0]))).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(n["consumerPid"], pids[0].as_str());
-    assert_eq!(n["providerId"], "did:web:provider.example");
+    assert_eq!(n["counterPartyId"], "did:web:provider.example");
 
     let (s, ct, _) = call(&app, get("/v1/negotiations/unknown")).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
@@ -202,7 +205,7 @@ async fn start_read_and_page() {
 async fn bad_requests_are_problems() {
     let app = app();
     let mut http = start_body("d");
-    http["providerAddress"] = json!("http://provider.example/dsp/2025-1");
+    http["counterPartyAddress"] = json!("http://provider.example/dsp/2025-1");
     let mut no_target = start_body("d");
     no_target["offer"].as_object_mut().unwrap().remove("target");
     let mut extra = start_body("d");
@@ -210,7 +213,21 @@ async fn bad_requests_are_problems() {
     let mut differ = start_body("d");
     differ["datasetId"] = json!("other");
     let mut not_a_did = start_body("d");
-    not_a_did["providerId"] = json!("provider");
+    not_a_did["counterPartyId"] = json!("provider");
+    // the names before 0.13 are unknown members now: no alias
+    let mut old_names = start_body("d");
+    let fields = old_names.as_object_mut().unwrap();
+    let address = fields.remove("counterPartyAddress").unwrap();
+    let id = fields.remove("counterPartyId").unwrap();
+    fields.insert("providerAddress".to_owned(), address);
+    fields.insert("providerId".to_owned(), id);
+    let (status, _, problem) = call(&app, start(&old_names)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let detail = problem["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("unknown field `providerAddress`"),
+        "{detail}"
+    );
     for body in [http, no_target, extra, differ, not_a_did, json!({})] {
         let (s, ct, p) = call(&app, start(&body)).await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{body}");
@@ -344,7 +361,7 @@ fn harvesting_app() -> Router {
         public_url: "https://provider.example".into(),
         datasets_file: None,
         harvest_interval_seconds: 0,
-        allow_http_callbacks: false,
+        allow_http: false,
         db_file: "unused.db".into(),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
@@ -404,7 +421,7 @@ async fn a_harvest_job_shows_at_most_the_first_errors() {
         public_url: "https://provider.example".into(),
         datasets_file: None,
         harvest_interval_seconds: 0,
-        allow_http_callbacks: false,
+        allow_http: false,
         db_file: "unused.db".into(),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
@@ -467,4 +484,100 @@ async fn a_harvest_job_shows_its_entry_errors() {
         detail.contains("errors") && detail.contains("HarvestJobView"),
         "{detail}"
     );
+}
+
+/// Every route of the management API, with a body it accepts where it
+/// reads one. The provider of these tests acknowledges a negotiation,
+/// so `POST /v1/negotiations` with its good body starts one.
+fn every_call() -> Vec<Call> {
+    let catalog = json!({
+        "counterPartyAddress": "https://provider.example/dsp/2025-1",
+        "counterPartyId": "did:web:provider.example",
+        "protocol": "dataspace-protocol-http:2025-1",
+        "additionalScopes": ["org.eclipse.dspace.dcp.vc.type:MembershipCredential:read"]
+    });
+    let dataset = json!({
+        "@id": "urn:uuid:dataset-1",
+        "counterPartyAddress": "https://provider.example/dsp/2025-1",
+        "counterPartyId": "did:web:provider.example",
+        "protocol": "dataspace-protocol-http:2025-1"
+    });
+    // as from a catalog: the offer has no target, the dataset id is apart
+    let mut negotiation = start_body("d");
+    negotiation["offer"] =
+        json!({"@id": "d:offer", "@type": "Offer", "permission": [{"action": "use"}]});
+    negotiation["datasetId"] = json!("d");
+    let transfer = json!({"agreementId": "urn:uuid:a", "format": "HttpData-PULL"});
+    let with_old_names = |path, body| Call {
+        old_names: &OLD_NAMES,
+        ..Call::post(path, body)
+    };
+    vec![
+        with_old_names("/v1/catalog/request", catalog),
+        with_old_names("/v1/catalog/dataset/request", dataset),
+        with_old_names("/v1/negotiations", negotiation),
+        Call::without_body("GET", "/v1/negotiations"),
+        Call::without_body("GET", "/v1/negotiations/urn:uuid:1"),
+        Call::post("/v1/transfers", transfer),
+        Call::without_body("GET", "/v1/transfers"),
+        Call::without_body("GET", "/v1/transfers/urn:uuid:1"),
+        Call::without_body("POST", "/v1/transfers/urn:uuid:1/completion"),
+        Call::without_body("POST", "/v1/transfers/urn:uuid:1/termination"),
+        Call::without_body("GET", "/v1/harvest-jobs"),
+        Call::without_body("GET", "/v1/harvest-jobs/1"),
+    ]
+}
+
+/// The names of 0.12 that 0.13 replaced.
+const OLD_NAMES: [(&str, &str); 2] = [
+    ("counterPartyAddress", "providerAddress"),
+    ("counterPartyId", "providerId"),
+];
+
+#[tokio::test]
+async fn every_route_answers_401_without_the_key_and_never_403() {
+    let answers = without_the_key(&app(), &every_call(), KEY).await;
+    assert_eq!(answers.len(), 12 * 6);
+    assert_eq!(statuses_other_than(&[401], &answers), "");
+}
+
+/// What is not refused today. No member has a longest length of its
+/// own (only the request as a whole has one, `PORTITOR_MAX_REQUEST_BYTES`),
+/// so a very long dataset id or scope is taken and sent on: 502 here,
+/// because the provider of these tests gives no catalog. A
+/// `datasetId` that is empty or only spaces is refused.
+const WRONG_BODIES_NOT_REFUSED: &str = "\
+POST /v1/catalog/request, additionalScopes holds a very long text: 502
+POST /v1/catalog/dataset/request, @id is very long: 502
+POST /v1/negotiations, datasetId is very long: 201
+";
+
+#[tokio::test]
+async fn every_route_refuses_a_wrong_body_with_400() {
+    let answers = with_a_wrong_body(&app(), &every_call(), KEY).await;
+    assert!(answers.len() > 100, "{}", answers.len());
+    assert_eq!(
+        statuses_other_than(&[400], &answers),
+        WRONG_BODIES_NOT_REFUSED
+    );
+}
+
+/// 502 is the answer of the two catalog calls with their good body: the
+/// provider of these tests gives no catalog. The query is not read.
+#[tokio::test]
+async fn odd_paths_and_queries_are_never_an_error_of_the_server() {
+    let answers = with_odd_paths_and_queries(&app(), &every_call(), KEY).await;
+    assert_eq!(answers.len(), 12 * 14);
+    assert_eq!(
+        statuses_other_than(&[200, 201, 400, 404, 502], &answers),
+        ""
+    );
+    let catalog_calls: Vec<_> = answers
+        .iter()
+        .filter(|answer| answer.status == 502)
+        .map(|answer| answer.call.split(',').next().unwrap_or_default())
+        .collect();
+    for call in catalog_calls {
+        assert!(call.starts_with("POST /v1/catalog/"), "{call}");
+    }
 }

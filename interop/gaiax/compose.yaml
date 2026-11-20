@@ -38,13 +38,13 @@ x-portitor: &portitor
   restart: on-failure
 x-portitor-environment: &portitor-environment
   PORTITOR_TRUSTED_ISSUERS: did:web:issuer%3A8070
-  PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+  PORTITOR_ALLOW_HTTP: "true"
   # only the run's test CA: the test reaches nothing else over HTTPS
   SSL_CERT_DIR: /ca
 
 services:
   memgraph:
-    image: memgraph/memgraph:3.9.0@sha256:50c64e0446d79b82999de87715dfd5d2abc35f8c8545d6f4cdf28948f2e17d5a
+    image: docker.io/memgraph/memgraph:3.9.0@sha256:50c64e0446d79b82999de87715dfd5d2abc35f8c8545d6f4cdf28948f2e17d5a
 
   # did:web:compliance.gaiax.test (from BASE_URL); its key is RSA (PS256),
   # its certificate from the test CA
@@ -80,9 +80,14 @@ services:
 
   # the public names, over HTTPS and HTTP (config/tls.conf)
   tls:
-    image: nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+    image: docker.io/library/nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+    environment:
+      # the image's entrypoint puts the container's name servers
+      # (/etc/resolv.conf) in NGINX_LOCAL_RESOLVERS and fills them into
+      # tls.conf, a template: Docker's are at 127.0.0.11, Podman's are not
+      NGINX_ENTRYPOINT_LOCAL_RESOLVERS: "1"
     volumes:
-      - ./config/tls.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./config/tls.conf:/etc/nginx/templates/default.conf.template:ro
       - ./run/tls:/tls:ro
       - ./run/notary/www:/notary:ro
     networks:
@@ -101,10 +106,10 @@ services:
       PORTITOR_PARTICIPANT_ID: did:web:issuer%3A8070
       PORTITOR_ISSUER_SERVICE_URL: http://issuer:8070/issuer
       PORTITOR_ISSUER_KEY_FILE: /config/issuer-key.pem
-      PORTITOR_ISSUER_CREDENTIALS_FILE: /credentials/issuer-credentials.json
+      PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE: /credentials/issuer-credentials.json
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8071
       PORTITOR_MANAGEMENT_API_KEY_FILE: /config/management.key
-      PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+      PORTITOR_ALLOW_HTTP: "true"
       # it delivers to the Gaia-X participants' credential services over HTTPS
       SSL_CERT_DIR: /ca
     volumes:
@@ -128,7 +133,7 @@ services:
       PORTITOR_MANAGEMENT_API_KEY_FILE: /config/identity-management.key
       PORTITOR_STS_CLIENT_SECRET_FILE: /config/sts-client-secret
       # Gaia-X (ADR 0021)
-      PORTITOR_IDENTITY_CERTIFICATE_CHAIN: /config/certificate-chain.pem
+      PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE: /config/certificate-chain.pem
       PORTITOR_GAIAX_COMPLIANCE_URL: https://compliance.gaiax.test
       PORTITOR_GAIAX_COMPLIANCE_DID: did:web:compliance.gaiax.test
       PORTITOR_GAIAX_PARTICIPANT_FILE: /config/participant.json
@@ -180,7 +185,7 @@ services:
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8091
       PORTITOR_MANAGEMENT_API_KEY_FILE: /config/identity-management.key
       PORTITOR_STS_CLIENT_SECRET_FILE: /config/sts-client-secret
-      PORTITOR_IDENTITY_CERTIFICATE_CHAIN: /config/certificate-chain.pem
+      PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE: /config/certificate-chain.pem
       PORTITOR_GAIAX_COMPLIANCE_URL: https://compliance.gaiax.test
       PORTITOR_GAIAX_COMPLIANCE_DID: did:web:compliance.gaiax.test
       PORTITOR_GAIAX_PARTICIPANT_FILE: /config/participant.json
@@ -254,10 +259,10 @@ services:
       - 127.0.0.1:18483:8081 # management API
     depends_on: [outsider-identity]
 
-  # `docker compose run --rm fetch <url>`: fetches inside the network, where
+  # `docker compose run --rm fetch <url>` (or `podman compose`): fetches inside the network, where
   # the *.gaiax.test names resolve, trusting the test CA
   fetch:
-    image: curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+    image: docker.io/curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
     entrypoint: ["curl", "--cacert", "/ca/ca.pem"]
     volumes:
       - ./run/ca:/ca:ro

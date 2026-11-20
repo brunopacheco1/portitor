@@ -57,11 +57,11 @@ checks this file:
 | [R-02](#r-02) | One maintainer: no two-person review | Delivery, security | 0.1 (ADR 0012, maintainer, 2026-11-11) | Accepted | until a second maintainer (not a 1.0 blocker) |
 | [R-03](#r-03) | Pre-1.0 JSON-LD and VC crates | Dependency | 0.0 (ADR 0002, 2026-11-11) | Mitigated | — |
 | [R-04](#r-04) | Dependencies are not audited crate by crate (cargo-vet) | Dependency, security | 0.1 (maintainer, 2026-11-11 and 2026-11-12) | Mitigated | 0.10 |
-| [R-05](#r-05) | No written OpenSSF Baseline level 1 self-assessment | Security | 0.1 (ADR 0012, maintainer, 2026-11-12) | Open | 0.13 |
+| [R-05](#r-05) | No written OpenSSF Baseline level 1 self-assessment | Security | 0.1 (ADR 0012, maintainer, 2026-11-12) | Open | 0.14 |
 | [R-06](#r-06) | Data Plane Signaling is a draft (v1.0-RC4) | Upstream churn | 0.0 (ARCHITECTURE, 2026-11-11) | Mitigated | until Signaling 1.0 |
 | [R-07](#r-07) | Upstream findings not reported yet | Upstream churn, interoperability | 0.4 to 0.8 (maintainer, 2026-11-13 to 2026-11-15) | Addressed | 0.10 |
 | [R-08](#r-08) | The DSP TCK v1.0.2 needs a test-only build | Interoperability | 0.4, 0.5 (ADR 0014, ADR 0016, 2026-11-13) | Mitigated | — |
-| [R-09](#r-09) | EDC is tested at a release candidate (1.0.0-RC7) | Interoperability, dependency | 0.5 (maintainer, 2026-11-13) | Mitigated | pin 1.0.0 when it ships |
+| [R-09](#r-09) | EDC is tested at a release candidate (1.0.0-RC8) | Interoperability, dependency | 0.5 (maintainer, 2026-11-13) | Mitigated | pin 1.0.0 when it ships |
 | [R-10](#r-10) | EDC refuses the Gaia-X compliance credential | Interoperability | 0.8 (ADR 0022, maintainer, 2026-11-15) | Accepted | Later |
 | [R-11](#r-11) | Gaia-X does not use DCP; Portitor's binding and scope rules are its own reading | Interoperability, upstream churn | 0.8 (ADR 0021, ADR 0022, 2026-11-15) | Open | — |
 | [R-12](#r-12) | Gaia-X never tested with a real trust anchor or the Gaia-X Lab | Interoperability, security | 0.8 (maintainer, 2026-11-15) | Open | Later |
@@ -77,8 +77,8 @@ checks this file:
 | [R-22](#r-22) | Bundle: unsigned `latest.json`, and a revoked bundle key not seen while offline | Security | 0.7 (ADR 0005, SECURITY-ASSURANCE) | Mitigated | — |
 | [R-23](#r-23) | A wrong host clock gives wrong policy and token decisions | Security | 0.3 (ADR 0009, 2026-11-12) | Mitigated | — |
 | [R-24](#r-24) | Simpl-Open: parked, facts not verified, and it changes fast | Interoperability, upstream churn | 0.5 (ADR 0017, maintainer, 2026-11-13) | Accepted | Later |
-| [R-25](#r-25) | Name not checked for trademarks and domains | Delivery, legal | 0.3 (ADR 0008, 2026-11-12) | Open | 0.13 (blocks 1.0) |
-| [R-26](#r-26) | ODRL `dateTime` definition read from memory | Interoperability | 0.3 (ADR 0009, 2026-11-12) | Open | 0.13 |
+| [R-25](#r-25) | Name not checked for trademarks and domains | Delivery, legal | 0.3 (ADR 0008, 2026-11-12) | Open | 0.14 (blocks 1.0) |
+| [R-26](#r-26) | ODRL `dateTime` definition read from memory | Interoperability | 0.3 (ADR 0009, 2026-11-12) | Addressed (0.13) | — |
 | [R-27](#r-27) | CI downloads from Maven Central and GitHub | Delivery | 0.8 (2026-11-15) | Mitigated | — |
 | [R-28](#r-28) | 0.8 Gaia-X code had no fuzz target | Security | 0.8 (sweep for this file, 2026-11-15) | Addressed | 0.8 |
 | [R-29](#r-29) | DCP costs about 2 ms per request and 13 times fewer requests under load | Performance | 0.5 (ADR 0002 section 7, 2026-11-13) | Open (measured again in 0.12) | with TD-07 |
@@ -100,8 +100,8 @@ checks this file:
 | [R-45](#r-45) | No request limit per partner | Security | 0.11 threat model review (F-10, 2026-11-17) | Open | — |
 | [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | 0.7 (maintainer, 2026-11-14) | Open | research, with TD-03 |
 | [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | research; code 1.5 |
-| [TD-03](#td-03) | A provider in several data spaces, each with its own rules | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | research, before the 0.13 freeze |
-| [TD-04](#td-04) | User to system authentication and authorisation, governed per data space | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | research before the 0.13 freeze; code 1.5 |
+| [TD-03](#td-03) | A provider in several data spaces, each with its own rules | Technical debt | 0.8 (maintainer, 2026-11-15) | Accepted ([ADR 0024](adr/0024-several-data-spaces.md), 2026-11-20) | profiles in one connector: after 1.0 |
+| [TD-04](#td-04) | User to system authentication and authorisation, governed per data space | Technical debt | 0.8 (maintainer, 2026-11-15) | Accepted ([ADR 0025](adr/0025-users-and-roles.md), 2026-11-20) | code 1.5 |
 | [TD-05](#td-05) | Key custody and key rotation | Technical debt | 0.5 (ADR 0015); 0.7 close-out (maintainer, 2026-11-15) | Open | two keys listed done in 0.11; 1.4 (OpenBao) |
 | [TD-06](#td-06) | Status lists are not cached in the connector's DCP verifier | Technical debt | 0.6 (maintainer, 2026-11-14) | Addressed | done in 0.11 |
 | [TD-07](#td-07) | STS tokens and presentations are not cached | Technical debt | 0.5 (ADR 0016) | Open | 1.4, if 0.11 measurements need it |
@@ -116,7 +116,7 @@ checks this file:
 | [TD-16](#td-16) | One harvest source; no data space registry; other catalogs not checked; no bundle expiry or bundle key rotation | Technical debt | 0.7 (ADR 0005, ADR 0020, 2026-11-14) | Open | Later |
 | [TD-17](#td-17) | The data plane runs inside the connector process | Technical debt | 0.0 (maintainer, 2026-11-11) | Accepted | when Signaling 1.0 is released |
 | [TD-18](#td-18) | Operations: no metrics, traces or readiness check | Technical debt | 0.1 (ARCHITECTURE principle 11) | Addressed | done in 0.9 |
-| [TD-19](#td-19) | No TLS inside the services | Technical debt | 0.1 (SECURITY-ASSURANCE) | Open | 0.13 (decision) |
+| [TD-19](#td-19) | No TLS inside the services | Technical debt | 0.1 (SECURITY-ASSURANCE) | Accepted ([ADR 0026](adr/0026-tls-termination.md), 2026-11-20) | — |
 | [TD-20](#td-20) | A holder must delete a revoked credential by hand after a reissue | Technical debt | 0.6 (DEPLOYING, 2026-11-14) | Open | 1.4 |
 | [TD-21](#td-21) | Gaia-X beyond 0.8 | Technical debt | 0.8 (maintainer, 2026-11-15) | Open | Later |
 | [TD-22](#td-22) | Migrations run forward only; a rollback needs the backup | Technical debt | 0.3 (DEPLOYING) | Accepted | — |
@@ -132,20 +132,20 @@ checks this file:
 | [TD-32](#td-32) | Policy terms that are not understood are dropped without an error | Technical debt, security | 2026-11-18 review (D1) | Addressed (0.12) | — |
 | [TD-33](#td-33) | The issuer's metadata does not pass the DCP JSON schema | Technical debt, interoperability | 2026-11-18 review (C1) | Addressed (0.12) | — |
 | [TD-34](#td-34) | A repeated transfer request starts a second transfer | Technical debt, interoperability | 2026-11-18 review (D3) | Addressed (0.12) | — |
-| [TD-35](#td-35) | No negotiation started by the provider | Technical debt, interoperability | 2026-11-18 review (D2) | Open | 0.13, if not expensive |
-| [TD-36](#td-36) | DSP details: who may terminate, 401 or 404, agreement timestamp, `consumerPid` check, no catalog pages | Technical debt, interoperability | 2026-11-18 review (D4, D5) | Addressed (0.12); catalog pages open | 0.13 (catalog pages, with TD-38) |
+| [TD-35](#td-35) | No negotiation started by the provider | Technical debt, interoperability | 2026-11-18 review (D2) | Open | after 1.0 (maintainer, 2026-11-20) |
+| [TD-36](#td-36) | DSP details: who may terminate, 401 or 404, agreement timestamp, `consumerPid` check, no catalog pages | Technical debt, interoperability | 2026-11-18 review (D4, D5) | Addressed (0.12; the answer limit in 0.13); catalog pages are neither sent nor followed | — (pages: when a partner needs them) |
 | [TD-37](#td-37) | DCP details: `token` claim required, presentations as JWT strings only, no `/.well-known/dspace-trust` | Technical debt, interoperability | 2026-11-18 review (C2) | Addressed (0.12) | — |
-| [TD-38](#td-38) | No management call to read a provider's catalog | Technical debt, usability | 2026-11-18 review (Q1) | Open | 0.13 |
-| [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | 2026-11-18 review (Q2, Q7) | Open | 0.13; 1.x (Helm chart) |
+| [TD-38](#td-38) | No management call to read a provider's catalog | Technical debt, usability | 2026-11-18 review (Q1) | Addressed (0.13) | — |
+| [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | 2026-11-18 review (Q2, Q7) | Open | 0.14; 1.x (Helm chart) |
 | [TD-40](#td-40) | Database calls block the async runtime | Technical debt | 2026-11-18 review (Q3) | Accepted (0.12, measured) | measure again each release |
 | [TD-41](#td-41) | A panic stopped the whole process (`panic = "abort"`) | Technical debt, security | 2026-11-18 review (Q4) | Addressed (0.12) | — |
-| [TD-42](#td-42) | Four near-copies of the negotiation and transfer logic | Technical debt | 2026-11-18 review (Q5) | Open | 0.13 (note); 1.x (merge) |
-| [TD-43](#td-43) | The Gaia-X documents name several versions of the rules | Technical debt | 2026-11-18 review (G1) | Open | 0.13 |
-| [TD-44](#td-44) | A transfer request sent at once after the agreement can be refused | Technical debt, interoperability | 0.12 benchmark (2026-11-19) | Open | 0.13 (decision) |
+| [TD-42](#td-42) | Four near-copies of the negotiation and transfer logic | Technical debt | 2026-11-18 review (Q5) | Open | 0.14 (note); 1.x (merge) |
+| [TD-43](#td-43) | The Gaia-X documents name several versions of the rules | Technical debt | 2026-11-18 review (G1) | Open | 0.14 |
+| [TD-44](#td-44) | A transfer request sent at once after the agreement can be refused | Technical debt, interoperability | 0.12 benchmark (2026-11-19) | Addressed (0.13) | — |
 | [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | 0.12 benchmark (2026-11-19) | Open | — |
 
 Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
-31 technical debts (Open 18, Accepted 5, Addressed 8).
+31 technical debts (Open 17, Accepted 5, Addressed 9).
 
 ## Risks
 
@@ -169,7 +169,7 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
   parameters (`ProviderService<S, D, C, E>`), four macros that write
   types (RUST-IDIOMS covers them in one paragraph), five files above
   1,000 lines, and `Negotiator`, which also handles transfers and the
-  harvest. ROADMAP 0.13: a "read the code in this order" page that
+  harvest. ROADMAP 0.14: a "read the code in this order" page that
   follows one request from the route to the store; see also
   [TD-42](#td-42). ROADMAP "Code quality in 1.x" (maintainer,
   2026-11-18): split the files above 1,000 lines, simplify the types
@@ -240,7 +240,7 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
   says it comes in the release candidate, 0.13. ADR 0012 says "0.9
   hardening release": written before the renumbering of 2026-11-14 and
   the split of 0.10 into 0.10 to 0.13 (maintainer, 2026-11-15).
-- **Next.** ROADMAP 0.13, last, so it assesses the final state; decide
+- **Next.** ROADMAP 0.14, last, so it assesses the final state; decide
   there whether 1.0 aims higher.
 
 <a id="r-06"></a>
@@ -350,12 +350,12 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
   ships.
 
 <a id="r-09"></a>
-### R-09 EDC is tested at a release candidate (1.0.0-RC7)
+### R-09 EDC is tested at a release candidate (1.0.0-RC8)
 
-- **What.** The EDC interop test runs EDC 1.0.0-RC7
+- **What.** The EDC interop test runs EDC 1.0.0-RC8 (RC7 until 0.12)
   (`interop/edc/runtimes/gradle.properties`). The plan was to pin 1.0.0
   when it ships (ROADMAP 0.5). The IdentityHub Identity API the test uses
-  is marked unstable in RC7 ([TESTING](TESTING.md#edc-interop-test)).
+  is in the package `v1.unstable` in RC8 ([TESTING](TESTING.md#edc-interop-test)).
   EDC's reading of a specification can change (ADR 0011).
 - **Why it matters.** Interoperability with the final EDC release is not
   proven.
@@ -493,7 +493,7 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
 - **Why it matters.** A partner could make the connector call an internal
   service.
 - **Current state: Mitigated.** Only `https://` (unless
-  `PORTITOR_ALLOW_HTTP_CALLBACKS` for tests), no redirects, time and size
+  `PORTITOR_ALLOW_HTTP` for tests), no redirects, time and size
   limits, the callback's answer body is never read, a 10 s timeout;
   DEPLOYING asks for an egress firewall. Internal addresses are not
   blocked (checked: no such check in the code).
@@ -626,7 +626,7 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
   ([ADR 0008](adr/0008-project-name.md)).
 - **Why it matters.** A rename after 1.0 is expensive.
 - **Current state: Open.**
-- **Next.** ROADMAP 0.13; it blocks 1.0 (maintainer, 2026-11-15).
+- **Next.** ROADMAP 0.14; it blocks 1.0 (maintainer, 2026-11-15).
 
 <a id="r-26"></a>
 ### R-26 ODRL `dateTime` definition read from memory
@@ -634,8 +634,23 @@ Totals: 45 risks (Open 14, Mitigated 17, Accepted 4, Addressed 10);
 - **What.** ADR 0009 could not read the ODRL 2.2 definition of `dateTime`
   and used it from memory: "check before 1.0".
 - **Why it matters.** Another connector may read it differently.
-- **Current state: Open.**
-- **Next.** ROADMAP 0.13, before 1.0.
+- **Current state: Addressed (0.13).** The definition was read on
+  2026-11-20 from the W3C working group's repository
+  (`https://raw.githubusercontent.com/w3c/poe/gh-pages/vocab/ODRL22.ttl`;
+  w3.org could not be reached). The text from memory was the definition
+  word for word, and the code follows it; a test now holds the
+  specification's own examples
+  ([ADR 0009](adr/0009-minimal-odrl-policies.md), note of 2026-11-20).
+  No code changed.
+- **What is left.** Portitor is stricter in one point, on purpose: a
+  date and time without a time zone is not understood (ODRL: optional,
+  "strongly recommended"). Two `xsd:dateTime` forms are not read
+  (`24:00:00`, years outside 0001 to 9999). Eclipse EDC has no built-in
+  `odrl:dateTime`; its own term is `edc:inForceDate`. So a time limit
+  is not interoperable with EDC out of the box, whatever the reading.
+- **Next.** The maintainer decides whether to read a date and time
+  without a time zone; compare the file with the copy at w3.org when it
+  can be reached.
 
 <a id="r-27"></a>
 ### R-27 CI downloads from Maven Central and GitHub
@@ -919,6 +934,15 @@ keep them.
 Mitigation today: the source and the store are their own crate,
 `portitor-bundle`, so they can be replaced as a whole (ADR 0005).
 
+Note for 0.13 (2026-11-20): the manifest format is frozen for 1.0 with
+one opening for later versions. A connector skips a file whose role
+type it does not know, with a warning and a metric, and refuses a bundle
+in which it knows no role (ADR 0005, "Amendment for 0.13"). So a later
+format can add roles without breaking 1.0 connectors. The limit: a
+connector that skips a new kind of rule does not enforce it. The rest
+of this debt (which standard to follow, where schemas are kept) is
+unchanged.
+
 <a id="td-02"></a>
 ### TD-02 Who calls the data plane, and with which credentials
 
@@ -949,7 +973,8 @@ Standards check and an ADR before any code.
 ### TD-03 A provider in several data spaces, each with its own rules
 
 Raised by the maintainer, 2026-11-15 (to be investigated). Status:
-**Open**; research ADR before the 0.13 freeze (ROADMAP 0.11).
+**Accepted** for 1.0 (maintainer, 2026-11-20,
+[ADR 0024](adr/0024-several-data-spaces.md)); see "Decided" below.
 
 A data provider may belong to several data spaces at once: long-lived
 ones that may or may not interoperate with each other (for example EHDS
@@ -977,18 +1002,29 @@ the catalog it asks); how EHDS and other data spaces publish their
 schemas; how short-lived data spaces are joined and left. Standards
 check and an ADR before any code.
 
-Next: [ADR 0024](adr/0024-several-data-spaces.md) (Proposed, 2026-11-17)
-compares the options with what EDC, Simpl-Open, DSP, DCP and Gaia-X do;
-the maintainer decides before the 0.13 freeze. It also covers the
-0.11 threat model finding F-08: today any trusted issuer is trusted for
-every credential type.
+[ADR 0024](adr/0024-several-data-spaces.md) compares the options with
+what EDC, Simpl-Open, DSP, DCP and Gaia-X do. It also covers the 0.11
+threat model finding F-08: today any trusted issuer is trusted for every
+credential type.
+
+Decided (maintainer, 2026-11-20; ADR 0024 Accepted): 1.0 is one
+connector per data space. One DID per data space is the documented
+default; a shared DID is allowed, and DEPLOYING names what it discloses
+([Two data spaces](DEPLOYING.md#two-data-spaces)). The setup was run by
+hand on 2026-11-20, with a shared identity and with one identity per
+data space (`scripts/two-data-spaces.sh`).
+
+What remains, after 1.0: one connector with several data space profiles
+(option (b)), behind its own ADR; and trusted issuers by credential type
+(F-08), which is additive. No release is named yet for either.
 
 <a id="td-04"></a>
 ### TD-04 User to system authentication and authorisation, governed per data space
 
 Raised by the maintainer, 2026-11-15 (to be investigated). Status:
-**Open**; research ADR before the 0.13 freeze (ROADMAP 0.11), code in
-1.5.
+**Accepted** for 1.0 (maintainer, 2026-11-20,
+[ADR 0025](adr/0025-users-and-roles.md)); code in 1.5. See "Decided"
+below.
 
 Today every credential is system to system: held by a participant (an
 organisation with one DID) and checked between connectors (see "Who
@@ -1017,6 +1053,20 @@ only checks the transfer's bearer token. To investigate:
   per data space, not per connector.
 
 Linked to [TD-02](#td-02). Standards check and an ADR before any code.
+
+Decided (maintainer, 2026-11-20; ADR 0025 Accepted): 1.0 stays system
+to system. Users stop at the organisation's own reverse proxy
+([DEPLOYING, users and roles](DEPLOYING.md#users-and-roles)), and the
+provider's data plane does not identify persons in 1.x. Done at the
+0.13 freeze: the management API key and the data plane token are
+stated as opaque, HTTP 403 is documented as reserved on the management
+routes, and `dataAddress` stays optional
+([STABILITY](STABILITY.md)).
+
+What remains: in 1.5, access tokens of the organisation's identity
+provider on the management APIs, with EDC's scope names, behind its own
+code ADR (option B); the data pull audit line in 1.1 or 1.2
+([TD-31](#td-31)).
 
 <a id="td-05"></a>
 ### TD-05 Key custody and key rotation
@@ -1242,6 +1292,9 @@ certificate and compliance run at each key change (ADR 0021).
   over HTTP before 1.0 if it is not expensive. ROADMAP 0.13: estimate
   it first, with the state of the Signaling specification (R-06); build
   it if the estimate is small, otherwise state it as not in 1.0.
+- **Decision (maintainer, 2026-11-20).** Not in 1.0: the work is
+  large, and it can be added later without a breaking change.
+  [STABILITY](STABILITY.md#what-10-does-not-do) says so.
 
 <a id="td-18"></a>
 ### TD-18 Operations: no metrics, traces or readiness check
@@ -1266,10 +1319,12 @@ certificate and compliance run at each key change (ADR 0021).
 - **What.** The services speak plain HTTP; operators run them behind a
   TLS-terminating proxy. The management ports must stay on a private
   network (SECURITY-ASSURANCE, DEPLOYING).
-- **Current state: Open.** "Not on the roadmap yet"
-  (SECURITY-ASSURANCE).
-- **Next.** ROADMAP 0.13: an ADR decides whether it stays the
-  operator's job.
+- **Current state: Accepted** (maintainer, 2026-11-20,
+  [ADR 0026](adr/0026-tls-termination.md)): TLS stays the operator's
+  job. The services speak plain HTTP behind a TLS-terminating reverse
+  proxy; the management ports stay on a private network.
+- **Next.** None. Optional TLS in the services would be additive; it
+  is not planned.
 
 <a id="td-20"></a>
 ### TD-20 A holder must delete a revoked credential by hand after a reissue
@@ -1305,8 +1360,11 @@ certificate and compliance run at each key change (ADR 0021).
   going back means restoring the backup, and data written since is lost
   (DEPLOYING, "Upgrade and rollback").
 - **Current state: Accepted** (DEPLOYING, since 0.3; each upgrade note
-  says which database moves).
-- **Next.** Revisit at the 0.13 API and config freeze.
+  says which database moves). Confirmed by the maintainer at the 0.13
+  freeze (2026-11-20): migrations stay forward only in 1.x
+  ([STABILITY](STABILITY.md#database), DEPLOYING "Upgrade and
+  rollback").
+- **Next.** None.
 
 <a id="td-23"></a>
 ### TD-23 ADRs 0021 and 0022 were built but still Proposed
@@ -1555,6 +1613,9 @@ certificate and compliance run at each key change (ADR 0021).
   expensive.
 - **Next.** ROADMAP 0.13, before the API freeze: estimate it first;
   build it if the estimate is small, otherwise state it as not in 1.0.
+- **Decision (maintainer, 2026-11-20).** Not in 1.0: the work is
+  large, and it can be added later without a breaking change.
+  [STABILITY](STABILITY.md#what-10-does-not-do) says so.
 
 <a id="td-36"></a>
 ### TD-36 DSP details: who may terminate, 401 or 404, agreement timestamp, `consumerPid` check, no catalog pages
@@ -1600,10 +1661,25 @@ certificate and compliance run at each key change (ADR 0021).
   ([BENCHMARKS](BENCHMARKS.md)) measured a catalog of 10,000 datasets:
   2.6 MB in 13 ms, 150 MB of memory on the provider. A national gateway
   lists about 1,100 datasets, so pages are not needed for the provider.
-  But Portitor's own HTTP client reads at most 64 kB of an answer
+  But Portitor's own HTTP client reads at most 64 KiB of an answer
   (`MAX_ANSWER`), about 250 datasets: this limits the management call
   that reads a partner's catalog ([TD-38](#td-38)), and is decided with
   it.
+- **Decided with TD-38 (0.13).** The management call that reads a
+  catalog has its own limit: 16 MiB and 30 seconds
+  (`MAX_CATALOG_ANSWER`, `CATALOG_TIMEOUT` in
+  `crates/portitor-connector/src/catalog_reader.rs`), fixed, with no
+  setting; every other answer keeps 64 KiB. Pages stay as they were:
+  as provider Portitor sends its catalog in one answer, and as
+  consumer it reads the first answer only. When a provider sends
+  `Link` headers (DSP 2025-1, "Catalog HTTPS Binding", "Pagination"),
+  the management call returns that first page with the headers copied,
+  and logs a warning; it does not follow `rel="next"`. The
+  specification names the header but not how the pages of a catalog
+  are joined into one answer, and Eclipse EDC 1.0.0-RC8 returns the
+  body it received and does not read the header either
+  (`DspCatalogHttpDispatcherExtension.java`, `ByteArrayBodyExtractor`).
+  Following pages waits for a partner that sends them.
 
 <a id="td-37"></a>
 ### TD-37 DCP details: `token` claim required, presentations as JWT strings only, no `/.well-known/dspace-trust`
@@ -1645,10 +1721,32 @@ certificate and compliance run at each key change (ADR 0021).
   (`scripts/demo-steps.sh`; [review](reviews/2026-11-18-specifications-and-code-quality.md), Q1).
 - **Why it matters.** It is the first step of every new user and the
   hardest one; it also puts the STS secret in the operator's hands.
-- **Current state: Open.**
-- **Next.** ROADMAP 0.13, before the API freeze: a management call that
-  takes the provider's address and returns its catalog. The request
-  shape follows EDC's management API, not a new one.
+- **Current state: Addressed (0.13).** Two calls on the connector's
+  management API (`crates/portitor-connector/src/management.rs`,
+  `catalog_reader.rs`; tests in `tests/management_catalog.rs`):
+  `POST /v1/catalog/request` returns the provider's DSP `Catalog`, and
+  `POST /v1/catalog/dataset/request` one `Dataset`, each as the provider
+  sent it. The connector gets the token from its STS, as for every DSP
+  request, so the operator needs neither the STS secret nor curl against
+  the provider. `scripts/demo-steps.sh`, `scripts/gaiax-e2e.sh` and
+  `scripts/edc-interop.sh` use the call.
+  The request bodies are the `CatalogRequest` and `DatasetRequest` of
+  Eclipse EDC's management API v4, read in EDC v1.0.0-RC8
+  (`catalog-request-schema.json`, `dataset-request-schema.json`,
+  `CatalogRequestValidator.java`, `CatalogApiV4Controller.java`):
+  - taken as in EDC: `counterPartyAddress`, `counterPartyId`,
+    `additionalScopes`, and `@id` for a dataset;
+  - `protocol` or `profile`: exactly one is required, as in EDC's
+    schema, and only `dataspace-protocol-http:2025-1` is accepted;
+  - `querySpec`: refused with 400. EDC sends it to the provider as the
+    DSP `filter`, whose content DSP 2025-1 leaves to each
+    implementation; Portitor cannot promise what a provider does with
+    it, and its own provider side refuses a filter that selects;
+  - `@context` is accepted and not read; `@type` is optional (EDC
+    requires both); any other member is refused.
+  A failure on the provider's side is HTTP 502, as in EDC
+  (`BaseCatalogApiController.java`). Limits and pages:
+  [TD-36](#td-36), and DEPLOYING, "Known limits".
 
 <a id="td-39"></a>
 ### TD-39 DEPLOYING is not in deployment order; the docs are long
@@ -1663,7 +1761,7 @@ certificate and compliance run at each key change (ADR 0021).
 - **Why it matters.** The learning curve to deploy and troubleshoot
   should be as small as possible (maintainer, 2026-11-18).
 - **Current state: Open.**
-- **Next.** ROADMAP 0.13, documentation review: a short "first
+- **Next.** ROADMAP 0.14, documentation review: a short "first
   deployment" path at the top of DEPLOYING, sections in deployment
   order, a "top risks" box here.
 - **Helm chart (maintainer, 2026-11-18).** In a 1.x release (ROADMAP
@@ -1737,7 +1835,7 @@ certificate and compliance run at each key change (ADR 0021).
   connector. The in-memory stores live in production code ([review](reviews/2026-11-18-specifications-and-code-quality.md), Q5).
 - **Why it matters.** A fix in one may be needed in the other three.
 - **Current state: Open.**
-- **Next.** No merge before 1.0. ROADMAP 0.13: TESTING gets a note,
+- **Next.** No merge before 1.0. ROADMAP 0.14: TESTING gets a note,
   "changed one, check the other three". ROADMAP "Code quality in 1.x"
   (maintainer, 2026-11-18): one shared core in a 1.x release, best
   before 1.1 adds push; the in-memory stores move into the tests.
@@ -1755,7 +1853,7 @@ certificate and compliance run at each key change (ADR 0021).
 - **Why it matters.** A reader cannot tell which version Portitor was
   checked against.
 - **Current state: Open.** ADR 0021 has an update note (2026-11-18).
-- **Next.** ROADMAP 0.13, documentation review: one place that says
+- **Next.** ROADMAP 0.14, documentation review: one place that says
   which Compliance Document and ICAM version were checked, and the same
   name everywhere.
 
@@ -1774,19 +1872,28 @@ certificate and compliance run at each key change (ADR 0021).
 - **Why it matters.** A person who starts a transfer by hand never meets
   it. A program that starts the transfer in the same second can, and
   sees a transfer refused for no visible reason.
-- **Current state: Open.** Not changed in 0.12: each way to close it
-  touches ADR 0007 and needs the maintainer's choice.
-- **Options.** (1) The provider treats a transfer request under an
-  agreement whose finalization is on its way as proof that the event
-  arrived, as a consumer's next negotiation message already is. The
-  cost: a consumer that asks before it received the event is served too.
-  (2) The provider accepts the request while the finalization is on its
-  way and leaves the state to the outbox. The cost: if the delivery
-  fails in the end, a transfer exists under a terminated negotiation.
-  (3) Leave it, log the refusal, and say in DEPLOYING that a client
-  tries again.
-- **Next.** ROADMAP 0.13: decide; whatever is chosen, the provider logs
-  the refusal.
+- **Options considered.** (1) The provider treats a transfer request
+  under an agreement whose finalization is on its way as proof that the
+  event arrived, as a consumer's next negotiation message already is.
+  The cost: a consumer that asks before it received the event is served
+  too. (2) The provider accepts the request while the finalization is
+  on its way and leaves the state to the outbox. The cost: if the
+  delivery fails in the end, a transfer exists under a terminated
+  negotiation. (3) Leave it, log the refusal, and say in DEPLOYING that
+  a client tries again.
+- **Current state: Addressed (0.13).** The maintainer chose option (1)
+  on 2026-11-20
+  ([ADR 0007](adr/0007-outbox-and-proof-of-delivery.md), "Amendment for
+  0.13"). Such a request, from the agreement's consumer, settles the
+  negotiation as `FINALIZED` and is then checked as any other; any
+  other state is refused as before. The rule is in `portitor-dsp`
+  (`negotiation::provider::finalization_proved`,
+  `transfer::provider::TransferService::agreement_settling_finalization`), the SQL in
+  `crates/portitor-connector/src/store/transfers.rs`. The provider now
+  logs the refusal `transfer request is refused; answered 400`
+  ([DEPLOYING](DEPLOYING.md), troubleshooting). Tested in the domain
+  and over HTTP with the SQLite store, also with 16 requests at once;
+  the benchmark was not run again.
 
 <a id="td-45"></a>
 ### TD-45 Each running pull holds about 0.8 MB of memory

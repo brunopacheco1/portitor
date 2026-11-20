@@ -7,7 +7,7 @@
 # (portitor-identity). DSP requests are authenticated with DCP: the
 # caller shows a MembershipCredential from a trusted issuer, here the data
 # space's portitor-issuer (did:web:issuer%3A8070). Not a production setup:
-# plain HTTP between the containers (PORTITOR_ALLOW_HTTP_CALLBACKS), and
+# plain HTTP between the containers (PORTITOR_ALLOW_HTTP), and
 # the issuer next to the participants. The issuer also serves the data
 # space's HealthDCAT-AP demo bundle (scripts/demo-bundle.sh), which the
 # provider pins and checks its datasets (../healthdcat-datasets.json)
@@ -32,37 +32,44 @@
 # Start order: the deployment order (DEPLOYING). The issuer starts first;
 # each identity once the issuer is healthy; each connector once its own
 # identity (and, for the provider, the issuer, which serves the bundle) is
-# healthy. "Healthy" is the image's HEALTHCHECK: `<binary> health`, the
-# component's own GET /api/check/readiness on its management port (ADR
-# 0023), which needs images from 0.9 on.
+# healthy. "Healthy" is `<binary> health`, the component's own
+# GET /api/check/readiness on its management port (ADR 0023), which needs
+# images from 0.9 on. The check is written here (healthcheck:) and not
+# left to the image's HEALTHCHECK, which Podman does not read from an
+# image in OCI format (docs/TESTING.md, "Docker or Podman").
 
 name: portitor-demo
 
 # shared by both participants
 x-identity: &identity
-  image: ${PORTITOR_IDENTITY_IMAGE:-ghcr.io/brunopacheco1/portitor-identity:0.12.0}
+  image: ${PORTITOR_IDENTITY_IMAGE:-ghcr.io/brunopacheco1/portitor-identity:0.13.0}
   depends_on:
     issuer:
       condition: service_healthy
+  healthcheck:
+    test: ["CMD", "/portitor-identity", "health"]
+    interval: 2s
+    timeout: 5s
+    retries: 30
 x-connector: &connector
-  image: ${PORTITOR_IMAGE:-ghcr.io/brunopacheco1/portitor-connector:0.12.0}
+  image: ${PORTITOR_IMAGE:-ghcr.io/brunopacheco1/portitor-connector:0.13.0}
 
 services:
   # The data space's authority: did:web:issuer%3A8070, its issuer service
   # (credential requests, status lists) and its management API, where
   # scripts/demo-compose.sh registers the participants.
   issuer:
-    image: ${PORTITOR_ISSUER_IMAGE:-ghcr.io/brunopacheco1/portitor-issuer:0.12.0}
+    image: ${PORTITOR_ISSUER_IMAGE:-ghcr.io/brunopacheco1/portitor-issuer:0.13.0}
     environment:
       PORTITOR_PARTICIPANT_ID: did:web:issuer%3A8070
       PORTITOR_ISSUER_SERVICE_URL: http://issuer:8070/issuer
       PORTITOR_ISSUER_KEY_FILE: /run/secrets/issuer-key
       # MembershipCredential (claims memberOf, role) and
       # DataProcessorCredential (claim processing)
-      PORTITOR_ISSUER_CREDENTIALS_FILE: /config/issuer-credentials.json
+      PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE: /config/issuer-credentials.json
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8071
       PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/issuer-management-key
-      PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+      PORTITOR_ALLOW_HTTP: "true"
       # the demo bundle: its public key in the DID document
       # (did:web:issuer%3A8070#bundle-key), the signed versions served at
       # http://issuer:8070/bundles/<version>/, the newest named in
@@ -78,10 +85,15 @@ services:
       - issuer-data:/data
     ports:
       - 127.0.0.1:18071:8071 # management API
+    healthcheck:
+      test: ["CMD", "/portitor-issuer", "health"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
 
   # the provider's data: a plain web server with examples/data
   data:
-    image: nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+    image: docker.io/library/nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
     volumes:
       - ../data:/usr/share/nginx/html:ro
 
@@ -99,7 +111,7 @@ services:
       PORTITOR_TRUSTED_ISSUERS: did:web:issuer%3A8070
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8091
       PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/provider-identity-management-key
-      PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+      PORTITOR_ALLOW_HTTP: "true"
     secrets:
       - provider-identity-key
       - provider-sts-secret
@@ -132,7 +144,7 @@ services:
       PORTITOR_BUNDLE_AUTHORITY: did:web:issuer%3A8070
       # the offer for EU processors checks a DataProcessorCredential claim (ADR 0019)
       PORTITOR_POLICY_CREDENTIALS: DataProcessorCredential
-      PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+      PORTITOR_ALLOW_HTTP: "true"
       # the harvest jobs (GET /v1/harvest-jobs)
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8081
       PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/provider-management-key
@@ -168,7 +180,7 @@ services:
       PORTITOR_TRUSTED_ISSUERS: did:web:issuer%3A8070
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8091
       PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/consumer-identity-management-key
-      PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+      PORTITOR_ALLOW_HTTP: "true"
     secrets:
       - consumer-identity-key
       - consumer-sts-secret
@@ -191,7 +203,7 @@ services:
       PORTITOR_STATUS_LIST_CACHE_SECONDS: "0"
       PORTITOR_PUBLIC_URL: http://consumer:8080
       PORTITOR_POLICY_CREDENTIALS: DataProcessorCredential
-      PORTITOR_ALLOW_HTTP_CALLBACKS: "true"
+      PORTITOR_ALLOW_HTTP: "true"
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8081
       PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/consumer-management-key
     secrets:

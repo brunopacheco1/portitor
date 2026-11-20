@@ -88,6 +88,10 @@ cargo vet --locked
 - **Commits** are signed; `main` changes only through reviewed pull
   requests. Never force-push `main`, never disable a check or skip a test to
   get green.
+- **Frozen interface** (from 0.13): never remove or rename an HTTP
+  route or an environment variable listed in `docs/STABILITY.md`. A new
+  one gets a line there in the same pull request. The
+  `frozen_interface` tests of the three binaries check both.
 - **Telemetry** ([ADR 0023](docs/adr/0023-observability.md)):
   OpenTelemetry code goes only in `crates/portitor-runtime/src/telemetry*`.
   A new metric is a function in `telemetry/metrics.rs` with fixed

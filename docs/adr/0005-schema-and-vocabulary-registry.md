@@ -152,7 +152,8 @@ SHACL 1.2 draft).
   authority's DID, the profile
   IRI used as `dct:conformsTo`, and one entry per file with its path,
   SHA-256, media type (`text/turtle`, `application/n-triples` or
-  `application/ld+json`) and role:
+  `application/ld+json`) and role (a role of another type is skipped
+  from 0.13, see the amendment below):
   - `datasets`: shapes for dataset metadata, with the `dct:accessRights`
     values they apply to;
   - `messages`: shapes for DSP messages;
@@ -233,6 +234,70 @@ SHACL 1.2 draft).
   replaced as a whole.
 - The engine ignores `sh:extends` and `sh:shape` with a warning when the
   bundle is loaded, and refuses any other term it does not implement.
+
+### Amendment for 0.13: a file with a role the connector does not know is skipped (2026-11-20)
+
+The bundle format is frozen in 0.13 for 1.0, and later releases will add
+roles (1.2: policy shapes). Until 0.13 a manifest with a file whose
+`role.type` was not `datasets`, `messages`, `vocabulary` or `context`
+made the whole bundle invalid: an authority could not add a role before
+every member had upgraded. The maintainer decided (2026-11-20;
+[ADR 0025](0025-users-and-roles.md), point 4):
+
+- **A connector skips a file whose role type it does not know.** It
+  writes one WARN line for each such file, with its path and role type
+  (`bundle file skipped: ...`), sets the gauge
+  `portitor.bundle.file.skipped` to their number, and the bundle run in
+  the job log (`GET /v1/harvest-jobs`) says how many were skipped. The
+  other files are used as before.
+- **The skipped file is not downloaded, not hashed and not kept in the
+  cache.** This is safe, and simpler than fetching it: the signature
+  covers the manifest, so the path, digest and role of the skipped file
+  are the authority's, and nothing uses its bytes. Not reading bytes of
+  a kind the connector does not know is also less to attack, and a
+  missing or broken file of a new kind cannot stop a connector that
+  would not use it. The cost: such a connector does not notice a broken
+  file of the new kind; a connector that knows the role does. The size
+  limits count only the files that are fetched.
+- **A bundle in which the connector knows no role is refused**, exactly
+  as an invalid bundle is: the connector keeps the version in use, or
+  does not start if it has none. With no shapes the connector would
+  check nothing and say nothing (there is no message check without
+  `messages` shapes), a silent failure to the open side.
+- **Everything else stays strict.** A field the format does not have is
+  an error in the manifest, in a file entry and inside the four known
+  roles. A role must be a JSON object with a `type` that is a string of
+  1 to 64 letters, digits, `-` or `_`, starting with a letter (so every
+  later role name is safe to log); anything else is an error. Only a
+  well-formed role object with another type is skipped, and it may have
+  any other fields. A file entry with such a role is still checked:
+  path, digest, and the shape of its media type (see below).
+- **The issuer stays strict.** `portitor-issuer bundle build` refuses a
+  role it does not know (it already did, with a less clear message),
+  `sign_manifest` refuses to sign one, and the issuer's bundle route
+  does not serve the files of a bundle whose manifest has one. An
+  authority publishes a new role with the issuer version that knows it.
+- The JSON Schema (`docs/schemas/bundle-manifest.schema.json`) says the
+  same: the four known roles are closed, a role object with another
+  type is valid, and at least one file must have a known role.
+
+**The limit:** a connector that skips a new kind of rule does not
+enforce it. An authority that needs every member to enforce a new role
+must wait until they have upgraded (the WARN line and the gauge show
+who has not), or make membership depend on the version.
+
+The media type of a file with an unknown role is open too (same day,
+before the freeze): it may be any `type/subtype` of the shape RFC 6838
+section 4.2 gives (restricted names, no parameters), so a later role
+that needs a media type outside the three is skipped by a 1.0 connector
+and does not make it refuse the bundle; for a file with one of the four
+known roles the three media types stay the only valid ones.
+
+Where: `portitor_dcp::bundle` (`Role::Unknown`, read in two named steps
+in `impl Deserialize for Role`; `Manifest::files_to_fetch`,
+`check_files`), `portitor-bundle` (`source.rs`), the connector
+(`shacl.rs`, `bundle_harvest.rs`), the issuer (`bundle_build.rs`,
+`bundles.rs`).
 
 ## Spike result (2026-11-14)
 

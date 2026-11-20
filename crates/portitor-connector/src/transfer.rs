@@ -15,6 +15,7 @@ use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use portitor_dsp::negotiation::Agreement;
+use portitor_dsp::negotiation::provider::{Negotiation, NegotiationStore};
 use portitor_dsp::policy::{CallerCredentials, credential_scopes};
 use portitor_dsp::transfer::provider::{
     Agreements, DataFlows, Failure, Handled, Outgoing, StoreError, Transfer, TransferService,
@@ -117,6 +118,25 @@ impl Agreements for InMemoryNegotiations {
             .values()
             .find_map(|negotiation| finalized_agreement(negotiation, agreement_id)))
     }
+
+    fn negotiation_of(&self, agreement_id: &str) -> Result<Option<Negotiation>, StoreError> {
+        let map = self.map();
+        let made_it = |negotiation: &&Negotiation| {
+            negotiation
+                .agreement
+                .as_ref()
+                .is_some_and(|agreement| agreement.id == agreement_id)
+        };
+        Ok(map.values().find(made_it).cloned())
+    }
+
+    fn replace_negotiation_if(
+        &self,
+        negotiation: &Negotiation,
+        expected: u64,
+    ) -> Result<bool, StoreError> {
+        NegotiationStore::replace_if(self, negotiation, expected)
+    }
 }
 
 /// The data plane until one is configured (0.4 PR 4): it supports no
@@ -192,7 +212,13 @@ impl TransferProvider {
     /// its agreement `agreement_id`, if it holds that agreement (ADR 0019).
     async fn credentials(&self, caller: &Caller, agreement_id: &str) -> CallerCredentials {
         let types = &self.link.credential_types;
-        let scopes = match self.service.agreement(agreement_id, &caller.id) {
+        // not only a read: an agreement whose finalization event is on
+        // its way to this caller is recorded as FINALIZED here (ADR 0007,
+        // amended in 0.13), before the request itself is checked
+        let held = self
+            .service
+            .agreement_settling_finalization(agreement_id, &caller.id);
+        let scopes = match held {
             Ok(Some(agreement)) => credential_scopes(&agreement, types),
             // the request is refused anyway
             Ok(None) | Err(_) => Vec::new(),
@@ -330,7 +356,25 @@ pub(crate) async fn request(
     // the agreement is evaluated again with fresh credentials (ADR 0019)
     let credentials = provider.credentials(&caller, &msg.agreement_id).await;
     let handled = provider.service.request(&msg, &caller.id, &credentials);
+    if let Err(failure) = &handled
+        && failure.is_no_finalized_agreement()
+    {
+        log_no_finalized_agreement();
+    }
     provider.finish(handled, StatusCode::CREATED)
+}
+
+/// One INFO line for a transfer request refused because it names no
+/// finalized agreement of the caller, so that the operator can see why a
+/// partner's transfer ended (TD-44). The line names neither the agreement
+/// nor the caller: the id in the request is the caller's claim and may be
+/// another participant's agreement.
+fn log_no_finalized_agreement() {
+    tracing::info!(
+        message_type = "TransferRequestMessage",
+        reason = "no finalized agreement with this id for the caller",
+        "transfer request is refused; answered 400"
+    );
 }
 
 /// `POST /transfers/{providerPid}/start`.
