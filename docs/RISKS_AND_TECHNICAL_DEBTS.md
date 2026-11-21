@@ -469,7 +469,7 @@ are closed.
 
 - **What.** Simpl-Open's connector uses no DCP; agents authenticate
   with x509 and mTLS at their Tier 2 gateway
-  ([ADR 0017](adr/0017-simpl-open.md), Proposed). Several facts could
+  ([ADR 0017](adr/0017-simpl-open.md), Accepted 2026-11-21). Several facts could
   not be verified (ADR 0017, "Not verified"). Simpl-Open's schemas are
   not signed (ADR 0005).
 - **Why it matters.** Portitor is not a Simpl participant; reference

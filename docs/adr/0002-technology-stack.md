@@ -9,6 +9,11 @@ SPDX-License-Identifier: Apache-2.0
 - Status: **Accepted** (2026-11-11). The maintainer first chose "Rust, after a
   3-day bake-off", asked for Java on Quarkus native to be measured too, and
   accepted Rust after the side-by-side results (section 7).
+- Note (2026-11-21): the Simpl-Open row of the facts table is a
+  misreading of the Simpl-Open Q&A. Simpl-Open does not use DCP, inside
+  or outside its agent; agents authenticate with x509 and mTLS at their
+  Tier 2 gateway. See [ADR 0017](0017-simpl-open.md), which corrects it.
+  The rest of this ADR is unchanged.
 - Date: 2026-11-11
 - Spike owner: maintainers
 

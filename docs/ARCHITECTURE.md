@@ -362,7 +362,7 @@ ports.
 | # | Component (image) | Role | Mandatory? | Protocols |
 |---|---|---|---|---|
 | 1 | Database: one SQLite file per image today; PostgreSQL (external, not built by Portitor) later | State of negotiations, transfers, credentials | Mandatory | none |
-| 2 | `portitor-identity` | Holds the participant's DID, keys and credentials; asks issuers for credentials; answers presentation queries. Optionally it publishes the X.509 chain of its key and gets its Gaia-X compliance credential from a Gaia-X compliance service ([ADR 0021](adr/0021-gaia-x-onboarding.md)) | Mandatory for each participant, unless an external DCP wallet is used, or the participant uses Simpl-Open x509 only | DCP (credential service) |
+| 2 | `portitor-identity` | Holds the participant's DID, keys and credentials; asks issuers for credentials; answers presentation queries. Optionally it publishes the X.509 chain of its key and gets its Gaia-X compliance credential from a Gaia-X compliance service ([ADR 0021](adr/0021-gaia-x-onboarding.md)) | Mandatory for each participant, unless an external DCP wallet is used. Simpl-Open does not use DCP between participants; how Portitor would join a Simpl-Open data space is in [ADR 0017](adr/0017-simpl-open.md) | DCP (credential service) |
 | 3 | `portitor-connector` | Control plane: catalog (datasets harvested into a read copy), contract negotiation, transfer; verifies DCP presentations, including Gaia-X compliance credentials ([ADR 0022](adr/0022-gaia-x-compliance-in-policies.md)); checks datasets and DSP messages against the authority's SHACL shapes. The data plane is its own module, linked into the connector ([below](#data-plane-inside-the-connector-or-separate)) | Mandatory | DSP, DCP (verifier) |
 | 4 | `portitor-issuer` ([ADR 0018](adr/0018-issuer-component.md)) | Issues and revokes credentials (for example membership) to the participants the authority registered; publishes their status lists. It also serves the signed schema and vocabulary bundle, which `portitor-issuer bundle build` signs offline ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)) | Optional: one per dataspace, run by the dataspace authority, never on a participant's host | DCP (issuance) |
 
@@ -654,8 +654,9 @@ can sit in another network zone near the data, and allows several data
 plane types (HTTP, S3, Kafka). The cost: a fourth component, and an
 internal control-to-data-plane API. DSP does not define that API. The
 Eclipse Data Plane Signaling spec does, but it is still incubating with no
-release. EDC (and so Simpl-Open) is moving to Data Plane Signaling, so
-building our own interface now risks rework.
+release. EDC is moving to Data Plane Signaling (Simpl-Open's connector
+is built on EDC, [ADR 0017](adr/0017-simpl-open.md)), so building our own
+interface now risks rework.
 
 **Decision.** Option A, with the data plane behind an internal interface
 that follows Eclipse Data Plane Signaling v1.0-RC4
