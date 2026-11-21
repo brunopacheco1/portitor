@@ -53,9 +53,9 @@ Decisions about the plan itself that no ADR or changelog entry holds.
   document that names "0.9 hardening" or "0.10" for key rotation or the
   Baseline self-assessment was written before these moves.
 - **Repository settings** (0.1, set by the owner in GitHub). A ruleset
-  on `main`: changes only through pull requests; one approval (not
-  tied to a code owner or to the latest push; stale approvals are not
-  dismissed; as read from the ruleset on 2026-11-21); the
+  on `main`: changes only through pull requests; one approval, of the latest
+  push, dismissed when new commits are pushed, not tied to a code owner
+  (as read from the ruleset on 2026-11-21); the
   branch up to date before merge; signed commits; required status
   checks, by name `CI gate`, `TCK gate`, `Dependencies gate`,
   `Analyze (rust)` and `Analyze (actions)` (from 0.14; [CONTRIBUTING](../CONTRIBUTING.md#required-checks)); no force

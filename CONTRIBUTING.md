@@ -83,7 +83,8 @@ The build enforces the style, so a pull request that breaks it fails:
    with the same reason.
 7. Commits must be signed, and `main` only changes through pull requests
    that pass the required checks, are up to date with `main`, and have
-   one approval. `.github/CODEOWNERS` names who is asked to review; the
+   one approval of the latest push (an approval is dismissed when new
+   commits are pushed). `.github/CODEOWNERS` names who is asked to review; the
    ruleset does not require the approval to be a code owner's.
 
 ## Code review
