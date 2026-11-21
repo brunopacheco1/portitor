@@ -1174,7 +1174,7 @@ and the reason. One finding more than the count fails. A count that is
 higher than what was found is only reported: a pull request run may
 hold fewer findings than a run on `main`.
 
-The accepted list today: six findings of the rule `rust/unsafe-deserialization`, entered as proposed false positives with their reasons; the maintainer has not yet decided whether they stay on the list or the query is left out of the analysis.
+The accepted list today: six findings of the rule `rust/unsafe-deserialization`, entered as false positives with their reasons; the maintainer dismissed the six alerts on GitHub on 2026-11-21.
 
 What to do with a finding is in
 [CONTRIBUTING](../CONTRIBUTING.md#pull-requests).
