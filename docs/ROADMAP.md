@@ -398,7 +398,7 @@ feature starts with research and an ADR.
 | Datasets can carry a data quality and utility label (Art. 78); people can opt out of secondary use (Art. 71). | Regulation (EU) 2025/327 |
 | HealthData@EU, the cross-border infrastructure, connects national contact points through dispatchers and eDelivery access points: "Messaging is based on ebMS3 ... and its payload-agnostic AS4 Conformance Profile", with Domibus as reference. Metadata is HealthDCAT-AP. It does not name DSP, DCP, connectors or Simpl. | [TEHDAS2 D7.3](https://tehdas.eu/wp-content/uploads/2026/05/d7.3-technical-specification-for-health-data-access-bodies-on-the-implementation-of-the-common-it-infrastructure.pdf), sections 4.1, 5.1, 6 ([ADR 0025](adr/0025-users-and-roles.md)) |
 | The HealthData@EU central platform is open source (EUPL-1.2) since release 3 (March 2025). Its Health Data Dispatcher replaced the "EHDS2 Pilot connector" and talks AS4 only. | [EC Digital Building Blocks, 2025-03-27](https://ec.europa.eu/digital-building-blocks/sites/pages/viewpage.action?pageId=887383631), [code.europa.eu/healthdataeu](https://code.europa.eu/healthdataeu/healthdataeu-eu-dataset-catalogue) |
-| Simpl-Open: Gdynia (4.0) released July 2026; Hamburg (4.1, target October 2026) and Innsbruck (5.0, target Q4 2026) planned. The development status page names no DSP version, sandbox or conformance kit. Its connector is built on EDC, behind a Tier 2 gateway with mutual TLS and an "ephemeral proof". | [Development status](https://simpl-programme.ec.europa.eu/documentation/development-status), [ADR 0017](adr/0017-simpl-open.md) |
+| Simpl-Open: Gdynia (4.0) released July 2026; Hamburg (4.1.0) released 2026-11-05 ([ADR 0017](adr/0017-simpl-open.md#running-a-governance-authority-locally)); Innsbruck (5.0, target Q4 2026) planned. The development status page names no DSP version, sandbox or conformance kit. Its connector is built on EDC, behind a Tier 2 gateway with mutual TLS and an "ephemeral proof". | [Development status](https://simpl-programme.ec.europa.eu/documentation/development-status), [ADR 0017](adr/0017-simpl-open.md) |
 
 Not verified yet: D7.3 beyond its first third (an end-to-end test
 framework and an ITB conformance use case are mentioned in its annexes)
@@ -428,28 +428,46 @@ first, with clean hand-overs to the second.
 ### 1.7 Simpl-Open tests
 
 Replaces the "Simpl-Open" item of "Later": no shared sandbox exists, so
-the test runs a Simpl-Open agent locally from its public code (Helm on a
-local cluster, as its installation guide does).
+the test runs Simpl-Open locally from its public code. The plan follows
+the maintainer's answers to [ADR 0017](adr/0017-simpl-open.md#maintainers-answers-2026-11-21)
+(2026-11-21).
 
-- Step 1, the protocol: Portitor and the Simpl-Open data provider and
-  consumer agents exchange catalog, negotiation and transfer, both
-  directions, with the Tier 2 gateway left out in the lab. It answers
-  which DSP version Simpl-Open speaks, which the programme does not
-  publish.
-- Step 2, the way in: Portitor joins through the Tier 2 gateway, with
-  the login adapter of [ADR 0017](adr/0017-simpl-open.md) (x509 client
-  certificate from the governance authority, ephemeral proof). ADR 0017
-  is accepted or changed first.
+- Step 1, the protocol: a DSP-level test against Simpl-Open's connector,
+  `connector-be`, in its own local mode (mocked identity attributes, no
+  Tier 2 gateway). Catalog, negotiation and transfer, both directions.
+  Portitor sends Simpl's JSON token only in the test build. It needs no
+  governance authority and no Kubernetes. It confirms on the wire the
+  DSP version `connector-be` speaks (its 1.3.0 tag notes say 2025-1).
+- Step 2, the way in: Simpl-Open's governance authority runs locally
+  from its Helm charts, with the common components it needs, on a local
+  Kubernetes cluster; Portitor gets an x509 certificate and identity
+  attributes from it and is called through a Simpl Tier 2 gateway.
+  Before step 2: the maintainer reviews the "trusted Simpl gateway"
+  adapter again (ADR 0017, answer 3, deferred) and it gets its own ADR.
+  What a local governance authority needs, from Simpl-Open's
+  installation guide (read 2026-11-21): Kubernetes 1.33, Helm 3.14+,
+  Argo CD 3.2+ (the charts are installed by Argo CD), a load balancer
+  such as MetalLB, ingress-nginx, cert-manager, an NFS provisioner,
+  kube-state-metrics, DNS names under one domain, and about 8 CPU and
+  32 GB RAM for the authority and common components alone
+  ([ADR 0017](adr/0017-simpl-open.md#running-a-governance-authority-locally)).
 - Step 3, users: the user-to-system test of 1.5 run again against the
   newest Simpl-Open release.
 - A CI job only if the Simpl-Open stack fits a runner; otherwise a
-  runbook, like the demo.
+  runbook, like the demo. Step 1 should fit; step 2 likely does not.
 - Exit: steps 1 and 2 pass, or each failure is written down with its
-  cause and reported upstream; STABILITY says what was tested, with
-  which Simpl-Open release.
-- Main risk: the Hamburg or Innsbruck code is not public or does not
-  install outside the programme's own cloud. Then the test waits, and
-  the step that failed is written down.
+  cause; STABILITY says what was tested, with which Simpl-Open release.
+  No upstream reports or questions: Portitor watches Simpl-Open's
+  releases only (maintainer, 2026-11-17 and 2026-11-21).
+- Main risk: the governance authority does not install outside a cloud
+  like the one Simpl tests on (OVH), or needs more than one machine can
+  give. Then step 2 waits, and the step that failed is written down.
+- Watch, at each Simpl-Open release until 1.7 starts (maintainer,
+  2026-11-21): which protocol "SSI Tier 2" (planned for Innsbruck, 5.0)
+  uses between agents. Today Simpl-Open uses OpenID4VP only for people
+  signing in (Tier 1, a Keycloak extension with a walt.id verifier).
+  If agents move to DCP, the gateway adapter is no longer needed; if
+  they move to OpenID4VP, ADR 0017 is reviewed.
 
 ### 1.8 Data user and HDAB: permits, requests and the SPE
 

@@ -6,7 +6,10 @@ SPDX-License-Identifier: Apache-2.0
 
 # ADR 0017: Joining a Simpl-Open data space
 
-- Status: **Proposed** (2026-11-13; waits for the maintainer)
+- Status: **Accepted** (2026-11-21, by the maintainer; answers in
+  [Maintainer's answers](#maintainers-answers-2026-11-21)). The second
+  authentication mode of decision 2 is accepted in principle only and
+  reviewed again before it is built.
 - Note (2026-11-20): still Proposed at the 0.13 freeze; interoperability with Simpl-Open has not been tested ([STABILITY](../STABILITY.md)).
 - Date: 2026-11-13
 - Scope: the Simpl-Open spike of release 0.5 (roadmap, 0.5). Builds on
@@ -160,7 +163,7 @@ Portitor keeps DCP (0.5) and joins wherever Simpl uses DCP.
   API with mTLS, not over DCP. If SSI Tier 2 moves to DCP, (c) becomes
   the cheap path.
 
-## Decision (proposed)
+## Decision
 
 1. **No x509/mTLS profile in Portitor** (option b), not in 0.5 and not
    planned. Revisit only if Simpl publishes the Tier 2 protocol as a
@@ -170,9 +173,11 @@ Portitor keeps DCP (0.5) and joins wherever Simpl uses DCP.
    "trusted Simpl gateway" authentication adapter. It is built only
    when there is a Simpl data space (or the Simpl sandbox) to test
    against, after a short test of how the gateway forwards identity.
-3. **Keep DCP as Portitor's own identity model** (option c) and ask the
-   Simpl programme whether SSI Tier 2 will use DCP. That would make the
-   adapter of point 2 unnecessary.
+3. **Keep DCP as Portitor's own identity model** (option c) and watch
+   each Simpl-Open release for how SSI Tier 2 is built (DCP, OpenID4VP,
+   OpenID4VCI or something else). If agents talk DCP to each other, the
+   adapter of point 2 is no longer needed. No questions upstream and no
+   GitLab account (maintainer, 2026-11-17 and 2026-11-21).
 
 Reasons: DSP already matches (2025-1), so the gap is only identity, and
 Simpl places identity in its gateway, not in the connector. Using that
@@ -197,29 +202,72 @@ Portitor invests in.
 - **Later (when a Simpl data space needs Portitor):** the "trusted
   Simpl gateway" adapter, the participant id mapping, and S3 push
   (already under "Later" in the roadmap).
+- **1.7 (Simpl-Open tests, after the maintainer's answers of
+  2026-11-21):** step 1 is the DSP-level test against `connector-be`
+  above; step 2 runs Simpl-Open's governance authority locally from its
+  Helm charts, to get a Tier 2 certificate and identity attributes, and
+  needs the review of answer 3 first
+  ([ROADMAP, 1.7](../ROADMAP.md#17-simpl-open-tests)).
 
-## Open questions for the maintainer
+## Maintainer's answers (2026-11-21)
 
-1. Is there a real Simpl-Open data space (or the Simpl sandbox) that
-   Portitor should join, and by when? Without one, decision 2 waits.
-2. Is it acceptable that a Simpl participant runs Simpl's Java Tier 2
-   stack next to Portitor (option a)?
-3. Is a second authentication mode that trusts a gateway on a private
-   network acceptable next to DCP?
-4. Should we ask the Simpl programme (forum or a GitLab discussion)
-   whether SSI Tier 2 will use DCP, and whether non-EDC connectors are
-   in scope?
-5. Should the 0.9 Simpl-Open interop test be reduced to the DSP-level
-   test against `connector-be` described above?
-6. ADRs 0002 and 0003 and ARCHITECTURE say Simpl-Open uses DCP "outside
-   its agent". That is a misreading (see Context). Correct them, or
-   leave the accepted ADRs and let this ADR stand as the correction?
+The six questions this ADR asked, with the maintainer's answers.
+
+| # | Question | Answer | What it changes |
+|---|---|---|---|
+| 1 | Is there a real Simpl-Open data space (or the Simpl sandbox) that Portitor should join, and by when? | No shared one. "We can run locally Simpl-Open governance authority with helm-charts to set it up." | Decision 2 no longer waits for a sandbox: the test runs a governance authority locally (1.7, step 2). What that needs is under [Running a governance authority locally](#running-a-governance-authority-locally). |
+| 2 | Is it acceptable that a Simpl participant runs Simpl's Java Tier 2 stack next to Portitor (option a)? | Yes. | Option (a) stays the path into a Simpl data space. |
+| 3 | Is a second authentication mode that trusts a gateway on a private network acceptable next to DCP? | "In principle yes, but let's review this in a later state." | **Deferred, not decided.** The "trusted Simpl gateway" adapter is not built until the maintainer reviews it again, with its own ADR, before 1.7 step 2. Until then DCP stays the only way to call Portitor. |
+| 4 | Should we ask the Simpl programme whether SSI Tier 2 will use DCP, and whether non-EDC connectors are in scope? | No question upstream. "Let's keep an eye on Simpl-Open releases, I remember reading something about implementing OIDC4VC and OIDC4VP." | Decision 3 now says "watch releases" instead of "ask". What was found about OpenID4VP and OpenID4VCI is under [OpenID for Verifiable Credentials in Simpl-Open](#openid-for-verifiable-credentials-in-simpl-open). |
+| 5 | Should the Simpl-Open interop test be the DSP-level test against `connector-be`? | Yes. | 1.7 step 1 is that test. |
+| 6 | ADRs 0002, 0003 and ARCHITECTURE say Simpl-Open uses DCP "outside its agent". Correct them? | "Yes, fix them." | ARCHITECTURE is corrected; ADRs 0002 and 0003 keep their text and get a note that points here. |
+
+### Running a governance authority locally
+
+Read on 2026-11-21 in Simpl-Open's public code.
+
+| Fact | Source |
+|---|---|
+| Hamburg (4.1) is out: the governance authority chart 4.1.0 is dated 2026-11-05, "Part of the Hamburg release", latest 4.1.2 of 2026-11-10. The Installation Guide D1.6.5 is at version 4.1 (5 Nov 2026). This answers the first item of "Not verified". | [governance-authority-agent-chart CHANGELOG](https://code.europa.eu/simpl/simpl-open/cross-cutting/agents/governance-authority-agent-chart/-/blob/main/CHANGELOG.md), [Installation Guide](https://code.europa.eu/simpl/simpl-open/cross-cutting/documentation/installation-guide/-/blob/main/README.md) |
+| The governance authority is a master Helm chart that creates one **Argo CD `Application`**; Argo CD then installs the sub-charts `authority-iaa` (identity, authentication and authorisation, 1.9.19), `authority-gaia-x-edc` (1.2.7) and `authority-monitoring` (1.0.1) from the code.europa.eu Helm registry. So Argo CD is needed, not only Helm, and the cluster must reach code.europa.eu. | [governance-authority-agent-chart README and values.yaml](https://code.europa.eu/simpl/simpl-open/cross-cutting/agents/governance-authority-agent-chart) |
+| The "Common Components" are installed first, by their own master chart: OpenBao (3 replicas by default), the Vault secrets webhook, Kafka (Strimzi), the Zalando Postgres operator, Elastic (ECK), plus optional development tools (Redpanda console, pgAdmin, Mailpit). | [common-components-chart](https://code.europa.eu/simpl/simpl-open/cross-cutting/agents/common-components-chart) |
+| Tools, in install order: Git 2.47+, Helm 3.14+, Kubernetes 1.33.x (mandatory, tested on OVH), a load balancer (MetalLB, NodePort or a tunnel for a local cluster), ingress-nginx 1.13+, cert-manager 1.19+, nfs-provisioner 4.0+, Argo CD 3.2+ (last). external-dns is optional; kube-state-metrics 2.18+ is needed by the common components. | [Prerequisites](https://code.europa.eu/simpl/simpl-open/cross-cutting/documentation/installation-guide/-/blob/main/Prerequisites.md) |
+| Smallest size ("experimental environment", `resourcePreset: low`, one person, idle): governance authority + common components need 2 worker nodes of 4 CPU and 16 GB RAM each, and 11 GB of ReadWriteOnce volumes. A data provider + common components need the same again. | [Prerequisites](https://code.europa.eu/simpl/simpl-open/cross-cutting/documentation/installation-guide/-/blob/main/Prerequisites.md) |
+| Network: one IP for the ingress and one more per agent for its Tier 2 gateway (`tls.authority.{namespaceTag}.{domainSuffix}`), and DNS names under a domain suffix for each front end and back end. | [governance-authority-agent-chart README](https://code.europa.eu/simpl/simpl-open/cross-cutting/agents/governance-authority-agent-chart), [Prerequisites](https://code.europa.eu/simpl/simpl-open/cross-cutting/documentation/installation-guide/-/blob/main/Prerequisites.md) |
+| After deployment the authority must be initialised by hand through an HTTP API; the Tier 2 proxy does not work until then. | [governance-authority-agent-chart README](https://code.europa.eu/simpl/simpl-open/cross-cutting/agents/governance-authority-agent-chart), [authority-iaa-chart user manual](https://code.europa.eu/simpl/simpl-open/cross-cutting/agents/agent-iaa/authority-iaa-chart/-/blob/v1.5.32/documents/user-manual/README.md) |
+| `connector-be` is still v1.3.0 (2026-11-13) on EDC 0.17.0. | [connector-be tags](https://code.europa.eu/simpl/simpl-open/integration/resource-sharing/resource-sharing-runtime/connector/connector-be/-/tags) |
+
+So step 1 of the 1.7 test (DSP against `connector-be` in its local
+mode) needs no governance authority. Step 2 needs the governance
+authority and the common components on a local Kubernetes cluster of
+about 8 CPU and 32 GB RAM, plus a Simpl participant agent whose Tier 2
+gateway sits in front of Portitor, which needs more (the guide gives no
+figure for both agents on one cluster).
+
+### OpenID for Verifiable Credentials in Simpl-Open
+
+Read on 2026-11-21.
+
+| Fact | Source |
+|---|---|
+| Simpl-Open has an "SSI Verifier" Keycloak extension (v0.2.0, 2026-11-20, R4.1 fixes). It adds a Keycloak identity provider of type "OpenID for Verifiable Presentation": a user signs in by presenting a credential from a wallet (QR code, `openid4vp://` request). The verifier itself is walt.id (the only supported type); accepted credentials are DCQL queries kept in the Users and Roles service. | [ssi-verifier keycloak-extension README and user manual](https://code.europa.eu/simpl/simpl-open/security/access-control-and-trust/authentication-provider-federation/ssi-verifier/keycloak-extension) |
+| That is **Tier 1** (people signing in to an agent), the Hamburg item "SSI Tier 1": "Enable end users to authenticate using verifiable credentials stored in digital wallets". | [Hamburg items](https://simpl-programme.ec.europa.eu/development/development-status/simpl-open-roadmap-items-hamburg-4.1) |
+| The extension's test guide gets a credential from walt.id's demo issuer with an `openid-credential-offer://` link (OpenID4VCI). No Simpl-Open issuer that speaks OpenID4VCI was found: the README of Simpl's `issuer-service-be` describes an issuing and verifying API, not OpenID4VCI. | [ssi-verifier user manual](https://code.europa.eu/simpl/simpl-open/security/access-control-and-trust/authentication-provider-federation/ssi-verifier/keycloak-extension/-/blob/main/documents/user-manual/README.md), [issuer-service-be](https://code.europa.eu/simpl/simpl-open/security/credential-management/vc-issuance-verification/issuer-service/issuer-service-be) |
+| Agent to agent (**Tier 2**) stays mTLS with an ephemeral proof. "SSI Tier 2" is planned for Innsbruck (5.0) and its roadmap text names verifiable credentials and decentralized identifiers, but no protocol (not DCP, not OpenID4VP). | [Innsbruck items](https://simpl-programme.ec.europa.eu/development/development-status/simpl-open-roadmap-items-innsbruck-5.0) |
+
+So the maintainer's memory is right for OpenID4VP, but for user sign-in
+(Tier 1), not for connectors. It matters for Portitor's own user
+sign-in work (roadmap 1.5) more than for DSP calls. What to watch at
+each Simpl-Open release: the protocol SSI Tier 2 uses between agents.
 
 ## Not verified
 
-- Whether Hamburg (4.1) has been released, and whether `connector-be`
-  1.3.0 belongs to a Simpl-Open release. The status page still lists
-  Hamburg with a target date.
+- Whether `connector-be` 1.3.0 belongs to a Simpl-Open release
+  (Hamburg 4.1.0 was released on 2026-11-05, before that tag; see
+  [Running a governance authority locally](#running-a-governance-authority-locally)).
+- Whether the governance authority and the common components install on
+  a local cluster (kind, k3d or similar) on a laptop: the guide is
+  tested on OVH, and says other Kubernetes versions "may work".
 - How the provider's gateway passes the caller's identity to
   `connector-be`: the gateway README says it removes `Authorization`
   on the session route and strips untrusted identity headers, while
@@ -244,11 +292,15 @@ Portitor invests in.
 ## Consequences
 
 - No new authentication code in 0.5. Portitor's 0.5 identity stays DCP
-  only.
+  only. After the maintainer's answers (2026-11-21) this still holds:
+  the gateway adapter waits for its review (answer 3).
 - Joining a Simpl data space needs, later, a small adapter in Portitor
   and the Simpl Tier 2 stack beside it. Until then Portitor is not a
   Simpl participant.
 - The roadmap's 0.5 spike line is corrected and links here; ADR 0011
   gets a short correction on what Simpl-Open's connector is.
 - Simpl changes fast. Re-check these facts before any Simpl work, and
-  at each Simpl release.
+  at each Simpl release (roadmap watch item: SSI Tier 2 protocol).
+- ADRs 0002 and 0003 carry a note that points here; ARCHITECTURE no
+  longer says a Simpl participant can use "Simpl-Open x509 only" instead
+  of `portitor-identity`.

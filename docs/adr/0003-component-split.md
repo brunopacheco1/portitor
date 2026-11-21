@@ -7,6 +7,13 @@ SPDX-License-Identifier: Apache-2.0
 # ADR 0003: Component split (modules and images)
 
 - Status: **Accepted** (2026-11-11, by the maintainer)
+- Note (2026-11-21): the Simpl-Open fact below ("connectors outside it
+  use DCP via an Identity Hub") and the "Simpl-Open x509-only"
+  exceptions for the identity image are a misreading of the Simpl-Open
+  Q&A. Simpl-Open does not use DCP between participants, and a Simpl
+  participant would reach Portitor through Simpl's own Tier 2 gateway.
+  See [ADR 0017](0017-simpl-open.md), which corrects it. The split into
+  three images is unchanged.
 - Date: 2026-11-11
 
 ## Context
