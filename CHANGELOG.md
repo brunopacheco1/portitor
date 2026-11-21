@@ -39,6 +39,12 @@ versions may change behaviour and configuration.
 
 ### Documentation
 
+- ROADMAP: the next twelve months, to the end of 2027. Releases 1.6 to
+  1.9 add the functions an EHDS dataspace participant may need (dataset
+  descriptions with the minimum metadata of Art. 77(4), permits, data
+  requests, hand-over to a secure processing environment, opt-out
+  research, the hand-over to HealthData@EU) and tests against
+  Simpl-Open, plus what Portitor does not plan to do.
 - CONTRIBUTING has a "Code review" section: what a reviewer checks
   before a pull request merges.
 - Close-out of 0.14: the roadmap and the website mark 0.14 released and

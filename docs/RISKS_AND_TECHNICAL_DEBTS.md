@@ -477,10 +477,12 @@ are closed.
   counterpart number two
   ([ADR 0011](adr/0011-interoperability-targets.md)) is untested.
 - **Current state: Accepted** (parked by the maintainer, 2026-11-13,
-  until a Simpl-Open sandbox exists).
+  until a Simpl-Open sandbox exists; planned again for 1.7 without a
+  shared sandbox, 2026-11-21).
   [STABILITY](STABILITY.md#what-10-does-not-do) says it is not tested.
-- **Next.** ROADMAP "Later"; check the facts again before any Simpl
-  work.
+- **Next.** ROADMAP 1.7, "Simpl-Open tests" (maintainer, 2026-11-21):
+  a Simpl-Open agent run locally from its public code; check the facts
+  again first.
 
 <a id="r-25"></a>
 ### R-25 Name not checked for trademarks and domains
