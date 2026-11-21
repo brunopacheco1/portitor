@@ -42,11 +42,13 @@ versions may change behaviour and configuration.
 - ADR 0017 (joining a Simpl-Open data space) is Accepted, with the
   maintainer's answers to its six questions. The "trusted Simpl gateway"
   adapter is accepted in principle only and reviewed again before it is
-  built. The ADR adds what running Simpl-Open's governance authority
-  locally needs (Argo CD, Kubernetes 1.33, about 8 CPU and 32 GB RAM)
-  and where Simpl-Open uses OpenID4VP today (user sign-in, Tier 1).
-  ROADMAP 1.7: step 1 is a DSP-level test against `connector-be`, step 2
-  runs the governance authority locally, and a watch item follows the
+  built. The ADR adds what Simpl-Open's Helm install of the governance
+  authority needs (Argo CD, Kubernetes 1.33, about 8 CPU and 32 GB RAM),
+  why the local test uses a Compose file of the needed components
+  instead, and where Simpl-Open uses OpenID4VP today (user sign-in,
+  Tier 1). ROADMAP 1.7: step 1 is a DSP-level test against
+  `connector-be`, step 2 runs the governance authority parts it needs
+  from that Compose file, and a watch item follows the
   protocol of Simpl-Open's SSI Tier 2. ARCHITECTURE no longer says a
   Simpl participant can skip `portitor-identity` with "x509 only"; ADRs
   0002 and 0003 get a note that their Simpl-Open fact is corrected by

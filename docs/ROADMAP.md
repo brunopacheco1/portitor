@@ -438,30 +438,32 @@ the maintainer's answers to [ADR 0017](adr/0017-simpl-open.md#maintainers-answer
   Portitor sends Simpl's JSON token only in the test build. It needs no
   governance authority and no Kubernetes. It confirms on the wire the
   DSP version `connector-be` speaks (its 1.3.0 tag notes say 2025-1).
-- Step 2, the way in: Simpl-Open's governance authority runs locally
-  from its Helm charts, with the common components it needs, on a local
-  Kubernetes cluster; Portitor gets an x509 certificate and identity
-  attributes from it and is called through a Simpl Tier 2 gateway.
-  Before step 2: the maintainer reviews the "trusted Simpl gateway"
-  adapter again (ADR 0017, answer 3, deferred) and it gets its own ADR.
-  What a local governance authority needs, from Simpl-Open's
-  installation guide (read 2026-11-21): Kubernetes 1.33, Helm 3.14+,
-  Argo CD 3.2+ (the charts are installed by Argo CD), a load balancer
-  such as MetalLB, ingress-nginx, cert-manager, an NFS provisioner,
-  kube-state-metrics, DNS names under one domain, and about 8 CPU and
-  32 GB RAM for the authority and common components alone
-  ([ADR 0017](adr/0017-simpl-open.md#running-a-governance-authority-locally)).
+- Step 2, the way in: a Compose file, built in this release, runs the
+  governance authority components the Tier 2 handshake needs from
+  Simpl-Open's published images, plus a Tier 2 gateway in front of
+  Portitor. Portitor gets an x509 certificate and identity attributes
+  from it and is called through that gateway. Not Simpl-Open's Helm
+  install: it needs Argo CD, Kubernetes 1.33 with several add-ons and
+  about 8 CPU and 32 GB RAM for the authority alone, too much for a
+  local test (maintainer, 2026-11-21;
+  [ADR 0017](adr/0017-simpl-open.md#running-a-governance-authority-locally)).
+  The component list comes from Simpl-Open's `authority-iaa` chart when
+  the file is built. Before step 2: the maintainer reviews the "trusted
+  Simpl gateway" adapter again (ADR 0017, answer 3, deferred) and it
+  gets its own ADR.
 - Step 3, users: the user-to-system test of 1.5 run again against the
   newest Simpl-Open release.
 - A CI job only if the Simpl-Open stack fits a runner; otherwise a
-  runbook, like the demo. Step 1 should fit; step 2 likely does not.
+  runbook, like the demo. Step 1 should fit; step 2 is checked once the
+  Compose file exists.
 - Exit: steps 1 and 2 pass, or each failure is written down with its
   cause; STABILITY says what was tested, with which Simpl-Open release.
   No upstream reports or questions: Portitor watches Simpl-Open's
   releases only (maintainer, 2026-11-17 and 2026-11-21).
-- Main risk: the governance authority does not install outside a cloud
-  like the one Simpl tests on (OVH), or needs more than one machine can
-  give. Then step 2 waits, and the step that failed is written down.
+- Main risk: Simpl-Open publishes and tests only its Helm install, so
+  the Compose file can break with each Simpl-Open release, or a needed
+  component may not run outside Kubernetes. Then step 2 waits, and the
+  step that failed is written down.
 - Watch, at each Simpl-Open release until 1.7 starts (maintainer,
   2026-11-21): which protocol "SSI Tier 2" (planned for Innsbruck, 5.0)
   uses between agents. Today Simpl-Open uses OpenID4VP only for people

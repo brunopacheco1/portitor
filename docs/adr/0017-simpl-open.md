@@ -204,9 +204,10 @@ Portitor invests in.
   (already under "Later" in the roadmap).
 - **1.7 (Simpl-Open tests, after the maintainer's answers of
   2026-11-21):** step 1 is the DSP-level test against `connector-be`
-  above; step 2 runs Simpl-Open's governance authority locally from its
-  Helm charts, to get a Tier 2 certificate and identity attributes, and
-  needs the review of answer 3 first
+  above; step 2 runs the parts of Simpl-Open's governance authority
+  that the Tier 2 handshake needs from a Compose file built later, to
+  get a Tier 2 certificate and identity attributes, and needs the review
+  of answer 3 first
   ([ROADMAP, 1.7](../ROADMAP.md#17-simpl-open-tests)).
 
 ## Maintainer's answers (2026-11-21)
@@ -215,7 +216,7 @@ The six questions this ADR asked, with the maintainer's answers.
 
 | # | Question | Answer | What it changes |
 |---|---|---|---|
-| 1 | Is there a real Simpl-Open data space (or the Simpl sandbox) that Portitor should join, and by when? | No shared one. "We can run locally Simpl-Open governance authority with helm-charts to set it up." | Decision 2 no longer waits for a sandbox: the test runs a governance authority locally (1.7, step 2). What that needs is under [Running a governance authority locally](#running-a-governance-authority-locally). |
+| 1 | Is there a real Simpl-Open data space (or the Simpl sandbox) that Portitor should join, and by when? | No shared one. "We can run locally Simpl-Open governance authority with helm-charts to set it up." After reading what the Helm install needs (below), the maintainer changed the approach the same day: "build later a compose file with the relevant components of governance authority". | Decision 2 no longer waits for a sandbox: the test runs the relevant parts of a governance authority locally from a Compose file (1.7, step 2). Why not the Helm charts is under [Running a governance authority locally](#running-a-governance-authority-locally). |
 | 2 | Is it acceptable that a Simpl participant runs Simpl's Java Tier 2 stack next to Portitor (option a)? | Yes. | Option (a) stays the path into a Simpl data space. |
 | 3 | Is a second authentication mode that trusts a gateway on a private network acceptable next to DCP? | "In principle yes, but let's review this in a later state." | **Deferred, not decided.** The "trusted Simpl gateway" adapter is not built until the maintainer reviews it again, with its own ADR, before 1.7 step 2. Until then DCP stays the only way to call Portitor. |
 | 4 | Should we ask the Simpl programme whether SSI Tier 2 will use DCP, and whether non-EDC connectors are in scope? | No question upstream. "Let's keep an eye on Simpl-Open releases, I remember reading something about implementing OIDC4VC and OIDC4VP." | Decision 3 now says "watch releases" instead of "ask". What was found about OpenID4VP and OpenID4VCI is under [OpenID for Verifiable Credentials in Simpl-Open](#openid-for-verifiable-credentials-in-simpl-open). |
@@ -238,11 +239,23 @@ Read on 2026-11-21 in Simpl-Open's public code.
 | `connector-be` is still v1.3.0 (2026-11-13) on EDC 0.17.0. | [connector-be tags](https://code.europa.eu/simpl/simpl-open/integration/resource-sharing/resource-sharing-runtime/connector/connector-be/-/tags) |
 
 So step 1 of the 1.7 test (DSP against `connector-be` in its local
-mode) needs no governance authority. Step 2 needs the governance
-authority and the common components on a local Kubernetes cluster of
-about 8 CPU and 32 GB RAM, plus a Simpl participant agent whose Tier 2
-gateway sits in front of Portitor, which needs more (the guide gives no
-figure for both agents on one cluster).
+mode) needs no governance authority. The Helm way for step 2 would need
+the governance authority and the common components on a local
+Kubernetes cluster of about 8 CPU and 32 GB RAM, plus a Simpl
+participant agent whose Tier 2 gateway sits in front of Portitor, which
+needs more (the guide gives no figure for both agents on one cluster).
+
+**Approach chosen (maintainer, 2026-11-21): a Compose file, built
+later.** It runs only the governance authority components the Tier 2
+handshake needs, from Simpl-Open's published container images, and
+leaves out what the handshake does not need (for example monitoring
+and the development tools). The installation guide allows this in
+principle: on a Docker platform "it will be possible to start from the
+provided OCI containers images". The exact list of components is taken
+from the `authority-iaa` chart and its sub-charts when the file is
+built, not guessed now. Risk: Simpl-Open publishes and tests only the
+Helm install, so the Compose file is Portitor's to keep in step with
+each Simpl-Open release.
 
 ### OpenID for Verifiable Credentials in Simpl-Open
 
