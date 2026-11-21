@@ -6,23 +6,33 @@ SPDX-License-Identifier: Apache-2.0
 
 # AGENTS.md
 
-Instructions for AI coding agents working on Portitor, a data space
+Instructions for AI coding agents working on Portitor, a dataspace
 connector. Humans should read `CONTRIBUTING.md`; this file adds what an
 agent needs to work safely and in line with the project.
 
 ## What this project is
 
 A small connector that implements the Eclipse Dataspace Protocol (DSP
-2025-1), the Decentralized Claims Protocol (DCP v1.0.1) and, from 0.8, the
-Gaia-X Trust Framework (Danube). It must interoperate with Eclipse EDC and
+2025-1), the Decentralized Claims Protocol (DCP v1.0.1) and the Gaia-X
+Trust Framework (Danube). It must interoperate with Eclipse EDC and
 Simpl-Open. Read these first:
 
 - `docs/ARCHITECTURE.md`: components, deployment order, **architecture
-  principles** (every change must respect them).
-- `docs/adr/`: decisions. Do not reverse an accepted ADR in code; propose
-  a new ADR instead.
-- `docs/ROADMAP.md`: what belongs in which 0.x release. Do not pull work
+  principles** (every change must respect them), and "Specification
+  versions": the one table of the specification and test kit versions
+  Portitor is checked against. Do not state a version anywhere else;
+  link to that table.
+- `docs/adr/`: decisions, indexed in `docs/adr/README.md`. Do not
+  reverse an accepted ADR in code; propose a new ADR instead, and add
+  its row to the index.
+- `docs/ROADMAP.md`: what belongs in which release. Do not pull work
   forward without being asked.
+- `docs/READING-THE-CODE.md`: the order to read the code in, and one
+  request followed from the route to the outbox. Update it when you
+  rename or move a file or function it names.
+- `docs/RISKS_AND_TECHNICAL_DEBTS.md`: the single list of risks and
+  debts. A closed item is one line in its "Closed" table and keeps its
+  anchor; never reuse an id.
 
 ## Repository layout
 
@@ -42,7 +52,7 @@ Today's crates:
 - `crates/portitor-identity`: the identity component binary (ADR 0015): DID document, STS, credential service (presentation, Storage and offer APIs), management API, SQLite store, X.509 certificate chain and Gaia-X onboarding (ADR 0021); its own image.
 - `crates/portitor-issuer`: the issuer component binary (ADR 0018), run once per dataspace by its authority: DID document, DCP issuer service (metadata, credential requests and status), delivery outbox, status lists, management API, SQLite store; its own image. Also `portitor-issuer bundle build`, which signs a schema and vocabulary bundle offline, and the read-only bundle route.
 - `examples/`: the demos' datasets, data and Compose file, and the sources of the HealthDCAT-AP demo bundle (`examples/bundle/`).
-- `docs/`: architecture, ADRs, roadmap, risks and technical debts, security assurance, releasing.
+- `docs/`: architecture, ADRs (with an index), roadmap, risks and technical debts, the reading guide for the code, security assurance, releasing.
 - `site/`: the project website (added in 0.1).
 
 ## Commands
@@ -104,3 +114,5 @@ cargo vet --locked
 ## Writing style
 
 Docs are short and plain: simple words, short sentences, facts with sources.
+One fact has one home: write it once and link to it from the other
+files.

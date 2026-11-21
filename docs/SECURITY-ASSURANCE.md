@@ -12,8 +12,9 @@ the common weaknesses countered, and the evidence. How to report a
 vulnerability is in [SECURITY.md](../SECURITY.md); the design is in
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
-Status: **0.x, prototype.** This case grows with each release. Items marked
-*(planned, 0.N)* are not implemented yet; do not rely on them.
+Status: **0.14, the release candidate for 1.0.** This case describes the
+release candidate. Items marked *(planned)* are not implemented; do not
+rely on them.
 
 ## What users can and cannot expect
 
@@ -142,7 +143,8 @@ dataspace participants over HTTPS.
 ### Threat model review 0.11 (2026-11-17)
 
 **Method.** The maintainer kept the table above and asked for a STRIDE
-pass over each trust boundary (maintainer, 2026-11-17, ROADMAP 0.11).
+pass over each trust boundary (maintainer, 2026-11-17; the 0.11 plan,
+now one row of [ROADMAP, "Released"](ROADMAP.md#released)).
 For each boundary and each STRIDE category (Spoofing, Tampering,
 Repudiation, Information disclosure, Denial of service, Elevation of
 privilege) the tables below name the threat in one line and how it is
@@ -326,7 +328,7 @@ happened in (`crates/portitor-runtime/src/panics.rs`):
 
 Every case is one log line at ERROR and a count
 (`portitor.http.request.panicked`, `portitor.task.panicked`;
-DEPLOYING, "Traces and metrics"). The panic's message is never logged
+OPERATING, "Traces and metrics"). The panic's message is never logged
 or sent, only the place in the code: the message can quote the value
 that caused it, which may come from a request.
 
@@ -377,7 +379,9 @@ one connection.
   old key retired leaves no verification gap (TESTING, "Unit and
   integration tests").
 - **Static analysis:** Clippy pedantic with warnings as errors; CodeQL and
-  SonarQube Cloud quality gate on every pull request.
+  SonarQube Cloud quality gate on every pull request. A CodeQL finding
+  that is not on the list of accepted findings fails the CodeQL job, on
+  a pull request and on `main` ([TESTING](TESTING.md#codeql)).
 - **Supply chain:** pinned workflow actions, least-privilege workflow
   tokens, REUSE compliance; OpenSSF Scorecard; cargo-vet, so a new or
   bumped crate needs a recorded audit or exemption before it merges.
@@ -440,6 +444,92 @@ Notes:
 
 ## OpenSSF Baseline
 
-Target: **level 1** (Baseline version 2026-08-28) for all of 0.x ([ADR 0012](adr/0012-openssf-baseline.md)). The
-self-assessment, control by control, is added here in the 0.13 release
-candidate, so it assesses the final state of 0.x.
+Target: **level 1** of the OpenSSF Open Source Project Security Baseline,
+version 2026-08-28 ([ADR 0012](adr/0012-openssf-baseline.md)). The target
+stays level 1 for 1.0 (maintainer, 2026-11-20;
+[R-05](RISKS_AND_TECHNICAL_DEBTS.md#r-05)).
+
+### Level 1 self-assessment (2026-11-20)
+
+**Source.** The control list is the Baseline's own source, tag
+[`v2026.08.28`](https://github.com/ossf/security-baseline/tree/v2026.08.28/baseline)
+(commit `a26a796`): every requirement that applies to maturity level 1.
+The requirement column is our short paraphrase; the Baseline's text
+decides.
+
+**Scope.** The repository at version 0.14.0, the release candidate.
+
+**Status.** *Met*: the evidence is in the repository, or is a GitHub
+setting read through the GitHub API on 2026-11-20, and was checked
+there. *Met, to confirm*: the evidence is a GitHub setting that could
+not be read; the maintainer confirms it in the
+[settings checklist](#settings-to-confirm) below. *Not met* and *Not
+applicable* mean what they say.
+
+**Result.** 24 requirements apply (one more is retired): 18 met, 4 met,
+to confirm, 1 not met (OSPS-VM-02.01), 1 not applicable.
+Level 1 is reached when private vulnerability reporting is on and the
+four settings are confirmed.
+
+| Control | Requirement (paraphrase) | Status | Evidence |
+|---|---|---|---|
+| OSPS-AC-01.01 | Reading or changing a sensitive resource of the repository needs multi-factor authentication | Met, to confirm | The only account with such access is the maintainer's ([GOVERNANCE, "Roles"](../GOVERNANCE.md#roles)). The repository belongs to a personal account, so no organisation rule can show it. Checklist 1 |
+| OSPS-AC-02.01 | A new collaborator gets permissions by hand, or the lowest ones by default | Met, to confirm | Only the owner can add a collaborator, by hand; none is planned without a record in [GOVERNANCE](../GOVERNANCE.md#roles). Checklist 2 |
+| OSPS-AC-03.01 | A direct commit to the primary branch is prevented | Met | The ruleset `main`, as read: active, on the default branch, with the rule "pull request" (one approval) and required status checks; an admin may bypass it only to merge a pull request ([R-02](RISKS_AND_TECHNICAL_DEBTS.md#r-02)). Described in [ROADMAP, "Repository settings"](ROADMAP.md#decisions-recorded-here) |
+| OSPS-AC-03.02 | Deleting the primary branch is prevented or needs explicit confirmation | Met | The same ruleset, as read: the rules "deletion" and "non fast forward" (no deletion, no force push) |
+| OSPS-BR-01.01 | Untrusted metadata (branch names, titles, tags) is validated before the pipeline uses it | Met | No `run:` step holds an untrusted `${{ }}` expression: values reach scripts as environment variables ([`changes.yml`](../.github/workflows/changes.yml), step "Which jobs does this change need?"); the tag name is matched against a pattern before use ([`release.yml`](../.github/workflows/release.yml), job `verify`); values fetched for the website are reduced to plain characters ([`pages.yml`](../.github/workflows/pages.yml), `clean`). CodeQL analyses the workflows ([`codeql.yml`](../.github/workflows/codeql.yml), language `actions`) |
+| OSPS-BR-01.02 | Retired by the Baseline | Retired | |
+| OSPS-BR-01.03 | Untrusted code (a pull request) cannot reach privileged credentials | Met, to confirm | No workflow uses `pull_request_target`. Every workflow starts with `permissions: contents: read`. The only repository secret a pull request job reads, `SONAR_TOKEN`, goes to the scan step alone, and GitHub gives no secrets to a pull request from a fork ([`ci.yml`](../.github/workflows/ci.yml), job `sonar`). Pushing, signing and releasing run only for a tag, in the `release` environment ([`release.yml`](../.github/workflows/release.yml), jobs `images` and `release`). Checklist 3 |
+| OSPS-BR-03.01 | Every official project address is served over an encrypted channel only | Met, to confirm | The project's addresses are `https://github.com/brunopacheco1/portitor` and `https://bruno.pacheco.lu/portitor/` ([README](../README.md)). The website is on GitHub Pages with its own domain. Checklist 4 |
+| OSPS-BR-03.02 | Distribution channels are protected against an attacker in the middle | Met | Images come from `ghcr.io` and release files from GitHub Releases, both over HTTPS; each image is signed and has provenance ([RELEASING, "Checking a release"](RELEASING.md#checking-a-release)) |
+| OSPS-BR-07.01 | Secrets are kept out of version control | Met | Secret scanning and push protection are on, as read ([ROADMAP, "Repository settings"](ROADMAP.md#decisions-recorded-here)); the rule and the naming of test keys ([AGENTS, "Rules"](../AGENTS.md#rules)); checkouts do not keep the workflow token (`persist-credentials: false`), except the tag check of the release |
+| OSPS-DO-01.01 | User guides for all basic functionality | Met | [README](../README.md), [DEPLOYING](DEPLOYING.md), [OPERATING](OPERATING.md), the OpenAPI files in [`docs/api/`](api/), and the quickstart on the [website](https://bruno.pacheco.lu/portitor/) |
+| OSPS-DO-02.01 | A guide for reporting defects | Met | [CONTRIBUTING](../CONTRIBUTING.md#before-you-start); the issue forms in [`.github/ISSUE_TEMPLATE/`](../.github/ISSUE_TEMPLATE/); vulnerabilities in [SECURITY](../SECURITY.md#reporting-a-vulnerability) |
+| OSPS-GV-02.01 | A public place to discuss proposed changes and problems of use | Met | GitHub issues (on, as read) and pull requests ([CONTRIBUTING](../CONTRIBUTING.md#before-you-start); [GOVERNANCE, "Decisions"](../GOVERNANCE.md#decisions)) |
+| OSPS-GV-03.01 | The contribution process is explained | Met | [CONTRIBUTING](../CONTRIBUTING.md#pull-requests) |
+| OSPS-LE-02.01 | The source code licence is an open source licence (OSI or FSF) | Met | Apache-2.0 ([LICENSE](../LICENSE)); every file carries its licence, checked by `reuse lint` in [`ci.yml`](../.github/workflows/ci.yml) (job `reuse`) |
+| OSPS-LE-02.02 | The licence of the released software is an open source licence | Met | The images are Apache-2.0 and hold one third-party file, the CA certificate bundle, MPL-2.0 ([NOTICE](../NOTICE)). Crates linked into the binaries must have a licence on the allowlist in [`deny.toml`](../deny.toml) (cargo-deny in [`dependencies.yml`](../.github/workflows/dependencies.yml)) |
+| OSPS-LE-03.01 | The source licence is in `LICENSE`, `COPYING` or `LICENSES/` | Met | [LICENSE](../LICENSE) and [`LICENSES/`](../LICENSES/) |
+| OSPS-LE-03.02 | The licence of the released software is in the released source, or in a licence file next to the release assets | Met | The released source (the tag) holds `LICENSE` and `LICENSES/`; each GitHub release also has `THIRD-PARTY-NOTICES.txt` ([`release.yml`](../.github/workflows/release.yml), job `release`). The images hold no licence file: they name the licence in the label `org.opencontainers.image.licenses` ([Dockerfile](../Dockerfile)) |
+| OSPS-QA-01.01 | The source repository is public, at a fixed address | Met | `https://github.com/brunopacheco1/portitor` (public, as read) |
+| OSPS-QA-01.02 | A public record of every change: what, who and when | Met | The Git history, with signed commits ([CONTRIBUTING, "Pull requests"](../CONTRIBUTING.md#pull-requests), step 6) |
+| OSPS-QA-02.01 | A dependency list for the direct language dependencies | Met | [`Cargo.toml`](../Cargo.toml) and [`Cargo.lock`](../Cargo.lock) (also `fuzz/Cargo.lock`) |
+| OSPS-QA-04.01 | A project with several repositories lists its codebases | Not applicable | One repository ([AGENTS, "Repository layout"](../AGENTS.md#repository-layout)) |
+| OSPS-QA-05.01 | No generated executable in version control | Met | Checked on 2026-11-20: the files Git marks executable are shell and Python scripts. Scorecard's Binary-Artifacts check runs weekly ([`scorecard.yml`](../.github/workflows/scorecard.yml)) |
+| OSPS-QA-05.02 | No binary in version control that cannot be reviewed | Met | Checked on 2026-11-20: two binary files, neither executable. A font for the website (`site/fonts/cinzel-regular.woff2`, source and licence in [NOTICE](../NOTICE)) and a test-only RSA key in DER (`crates/portitor-dcp/tests/fixtures/test-only-rsa-2048.der`) |
+| OSPS-VM-02.01 | The documentation names security contacts | **Not met** | [SECURITY, "Reporting a vulnerability"](../SECURITY.md#reporting-a-vulnerability) names one contact: a private report through GitHub. As read, private vulnerability reporting is off for the repository, so that contact does not work. Turning it on meets the control. Checklist 5 |
+
+### Settings to confirm
+
+Read through the GitHub API on 2026-11-20, so not in this list: the
+ruleset `main`, secret scanning and push protection, the repository's
+visibility and its issue tracker. The maintainer checks the rest in
+GitHub and writes the date here.
+
+| # | Control | Where in GitHub | What must be true |
+|---|---|---|---|
+| 1 | OSPS-AC-01.01 | The maintainer's account: Settings, Password and authentication, Two-factor authentication | Two-factor authentication is on |
+| 2 | OSPS-AC-02.01 | Repository: Settings, Collaborators | No collaborator, or only people named in GOVERNANCE |
+| 3 | OSPS-BR-01.03 | Repository: Settings, Actions, General (approval for fork pull request workflows); Settings, Environments, `release`; Settings, Secrets and variables, Actions | Workflows of outside contributors wait for approval; `release` deploys only from tags `v*`; `SONAR_TOKEN` is the only repository secret |
+| 4 | OSPS-BR-03.01 | Repository: Settings, Pages | "Enforce HTTPS" is on for the custom domain |
+| 5 | OSPS-VM-02.01 | Repository: Settings, Advanced Security, Private vulnerability reporting | **To do, not only to confirm:** turn it on. The API answered `enabled: false` |
+| 6 | OSPS-AC-04.01 (level 2) | Repository: Settings, Actions, General, Workflow permissions | "Read repository contents and packages permissions" is selected |
+
+### What level 2 would need
+
+Level 2 is written for projects with at least two maintainers. Read
+from the same source, these level 2 requirements are not met today; the
+other level 2 requirements are met, or are a setting in the checklist
+above (row 6).
+
+- **OSPS-LE-01.01**, every commit asserts the right to contribute: not
+  met. No sign-off is asked for
+  ([CONTRIBUTING, "Licensing of contributions"](../CONTRIBUTING.md#licensing-of-contributions)).
+  A Developer Certificate of Origin with a sign-off check would meet it.
+- **OSPS-BR-06.01**, every release asset is signed or listed with its
+  hash in a signed manifest: met for the images only. The binaries, the
+  SBOM files and `THIRD-PARTY-NOTICES.txt` attached to a GitHub release
+  have no signature of their own. An attestation for these files, or a
+  signed list of their SHA-256 hashes, would meet it.
+- **OSPS-VM-03.01**, a private way to report a vulnerability: not met
+  while private vulnerability reporting is off (checklist 5).

@@ -115,14 +115,26 @@ pub fn comma_list(text: &str) -> Vec<String> {
     items
 }
 
+/// The longest item a comma-separated setting may hold, in bytes.
+///
+/// The items are DIDs, DCP scopes, credential types and file paths. 4096
+/// is `PATH_MAX` on Linux, so no file path that the system can open is
+/// refused, and it is far above any DID, URL or scope in use. A longer
+/// item is most likely a mistake (a missing comma, another separator, a
+/// file's content instead of its name); without a limit it would only
+/// fail later, as a long line in a log or an error.
+pub const LIST_ITEM_MAX_BYTES: usize = 4096;
+
 /// The items of the comma-separated setting `name` ([`comma_list`]);
 /// `None` when it is not set (or empty).
 ///
 /// # Errors
-/// The setting is set but names nothing (only commas and spaces), with
-/// what is wrong, written to follow the name. One rule for every list:
-/// such a value is most likely a mistake, and whether it would mean
-/// "the default" or "nothing at all" differs from list to list.
+/// What is wrong, written to follow the name:
+/// - The setting is set but names nothing (only commas and spaces). One
+///   rule for every list: such a value is most likely a mistake, and
+///   whether it would mean "the default" or "nothing at all" differs
+///   from list to list.
+/// - An item is longer than [`LIST_ITEM_MAX_BYTES`].
 pub fn list(
     var: impl Fn(&str) -> Option<OsString>,
     name: &str,
@@ -136,7 +148,25 @@ pub fn list(
             "names nothing ({value:?}): list at least one item, or leave it unset"
         ));
     }
+    for (index, item) in items.iter().enumerate() {
+        if item.len() > LIST_ITEM_MAX_BYTES {
+            return Err(item_too_long(index, item));
+        }
+    }
     Ok(Some(items))
+}
+
+/// The error of [`list`] for an item over [`LIST_ITEM_MAX_BYTES`]. It
+/// says which item (counted from 1) and how long it is, and shows no
+/// part of it: an item this long may be a secret pasted by mistake (the
+/// content of a key file instead of its name), and this text goes to the
+/// start-up error and the log.
+fn item_too_long(index: usize, item: &str) -> String {
+    format!(
+        "has an item that is too long: item {} is {} bytes, and an item may be at most {LIST_ITEM_MAX_BYTES} bytes; separate the items with commas (the item is not shown here: it may be a secret)",
+        index + 1,
+        item.len()
+    )
 }
 
 /// Reads a whole-number setting named `name`. `value` is the
@@ -245,6 +275,71 @@ mod tests {
         assert_eq!(list(&var, "MISSING"), Ok(None));
         let refused = list(&var, "COMMAS").unwrap_err();
         assert!(refused.starts_with("names nothing"), "{refused}");
+    }
+
+    #[test]
+    fn a_list_item_may_be_as_long_as_the_limit_and_no_longer() {
+        let longest = "a".repeat(LIST_ITEM_MAX_BYTES);
+        let too_long = "b".repeat(LIST_ITEM_MAX_BYTES + 1);
+        // bytes are counted, not characters: `é` is two bytes
+        let longest_in_two_byte_characters = "é".repeat(LIST_ITEM_MAX_BYTES / 2);
+        let var = crate::testing::vars(&[
+            ("AT_LIMIT", &format!("short, {longest} ")),
+            ("AT_LIMIT_IN_BYTES", &longest_in_two_byte_characters),
+            ("OVER", &format!("short,{too_long}")),
+            ("OVER_IN_BYTES", &"é".repeat(LIST_ITEM_MAX_BYTES / 2 + 1)),
+        ]);
+        assert_eq!(
+            list(&var, "AT_LIMIT"),
+            Ok(Some(vec!["short".to_owned(), longest.clone()]))
+        );
+        assert_eq!(
+            list(&var, "AT_LIMIT_IN_BYTES"),
+            Ok(Some(vec![longest_in_two_byte_characters.clone()]))
+        );
+        assert_eq!(
+            list(&var, "OVER").unwrap_err(),
+            "has an item that is too long: item 2 is 4097 bytes, and an item may be at most 4096 bytes; separate the items with commas (the item is not shown here: it may be a secret)"
+        );
+        let refused = list(&var, "OVER_IN_BYTES").unwrap_err();
+        assert!(refused.contains("item 1 "), "{refused}");
+        assert!(refused.contains("is 4098 bytes"), "{refused}");
+    }
+
+    /// Every item is measured, not only the first ones.
+    #[test]
+    fn an_item_that_is_too_long_is_found_at_any_position() {
+        let too_long = "b".repeat(LIST_ITEM_MAX_BYTES + 1);
+        let var = crate::testing::vars(&[
+            ("THIRD", &format!("a,b,{too_long}")),
+            ("FIFTH_AND_LAST", &format!("a, b ,c,d,{too_long}")),
+            ("FOURTH_OF_SIX", &format!("a,b,c,{too_long},e,f")),
+        ]);
+        for (name, position) in [
+            ("THIRD", "item 3 is 4097 bytes"),
+            ("FIFTH_AND_LAST", "item 5 is 4097 bytes"),
+            ("FOURTH_OF_SIX", "item 4 is 4097 bytes"),
+        ] {
+            let refused = list(&var, name).unwrap_err();
+            assert!(refused.contains(position), "{name}: {refused}");
+        }
+    }
+
+    /// An item that is too long may be a secret pasted by mistake (a
+    /// key file's content instead of its name): the error gives its
+    /// position and its length, and no part of it.
+    #[test]
+    fn the_error_for_an_item_that_is_too_long_shows_nothing_of_the_item() {
+        // multi-byte characters at odd byte positions: text that a cut
+        // by bytes would split in the middle of a character
+        let secret = format!("s3cr3t-{}", "€".repeat(LIST_ITEM_MAX_BYTES));
+        let var = crate::testing::vars(&[("PASTED", &format!("did:web:a.example,{secret}"))]);
+        let refused = list(&var, "PASTED").unwrap_err();
+        assert!(refused.contains("item 2 is 12295 bytes"), "{refused}");
+        for part_of_the_item in ["s3cr3t", "s3", "€"] {
+            assert!(!refused.contains(part_of_the_item), "{refused}");
+        }
+        assert!(refused.len() < 250, "{refused}");
     }
 
     #[test]

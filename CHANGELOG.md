@@ -12,8 +12,126 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-21
+
+The release candidate for 1.0. No setting
+and no route changed. Two checks are stricter; what to do:
+[OPERATING, From 0.13 to 0.14](docs/OPERATING.md#from-013-to-014).
+
+### Added
+
+- **The EDC Issuer Service in the EDC interop test.** The test
+  (`scripts/edc-interop.sh`, new step 8) has a second issuer, the Issuer
+  Service of EDC IdentityHub v1.0.0-RC8 (`did:web:edc-issuer.gaiax.test`,
+  a fourth runtime in `interop/edc/runtimes`). It issues a plain test
+  credential, the `InteropTestCredential`, to both participants over DCP:
+  `portitor-identity` asks with `POST /v1/credential-requests`, the EDC
+  IdentityHub through its Identity API. Each provider then offers data
+  only with `InteropTestCredential.level eq "basic"`, and each consumer
+  negotiates and pulls from the other; before anyone holds the
+  credential, both are refused. At the end the Issuer Service revokes the
+  EDC participant's credential, and the Portitor connector, which reads
+  the Bitstring Status List itself, ends EDC's next negotiation. The
+  revocation by `portitor-issuer` is now step 9.
+- A test in `portitor-dcp` (`tests/edc_issuer_service.rs`) reads a
+  credential and the status list of an EDC Issuer Service, before and
+  after a revocation, from that runtime's recorded output.
+
+### Changed
+
+- Connector: a new DEBUG log line, `status list fetched and verified`
+  (with the list's URL and issuer), each time a status list credential
+  is fetched; nothing at the default level `info`.
+- EDC interop test, step 8: Portitor's negotiation without the
+  credential must end `TERMINATED` and EDC must have no new agreement;
+  the connector's log must show that it fetched the EDC Issuer Service's
+  status list; after the revocation the run needs proof of why Portitor
+  refused, or fails.
+- **Behaviour change, all three: an item of a list setting may be at
+  most 4096 bytes.** This holds for every comma-separated `PORTITOR_*`
+  setting (DIDs, DCP scopes, credential types, file paths). A service
+  with a longer item does not start; the error names the setting, the
+  item's position in the list and its length. It shows no part of the
+  item, which may be a secret pasted by mistake.
+- **Behaviour change, connector management API: the catalog must be the
+  provider's own.** `POST /v1/catalog/request` answers 502 when the
+  provider's catalog has no `participantId` (DSP 2025-1 requires it;
+  0.13 handed such a catalog on) or one that differs from the
+  `counterPartyId` of the request. The two are compared as written,
+  with one exception: in a `did:web` DID the escaped colon before a port
+  may be `%3A` or `%3a`, as for the DID resolver. There is no setting to
+  turn the check off: a provider whose DSP `participantId` is not the
+  DID given as `counterPartyId` cannot be read with this call. No new
+  route, member or status code.
+  `POST /v1/catalog/dataset/request` is unchanged.
+- Tests: the issuer's bundle tests name their scratch folders by process
+  id and a counter, so two tests, or two runs at once, never share one.
+- The code of the two catalog calls is split into smaller modules
+  (`management/catalog/`, `catalog_reader/`). No change in behaviour;
+  the OpenAPI description is the same.
+- CI: a change to prose only (`site/`, `_http/`, `.vscode/`, `*.md` in the root and under `docs/` except `STABILITY.md` and `ARCHITECTURE.md`) no longer runs the build, the tests, SonarQube Cloud, the TCKs and the dependency checks; a change to fuzzing only skips the build and the TCKs. Any other path runs everything (`scripts/ci_changes.sh`, with a self-test). The licence check and `scripts/check_docs.py` always run. Each of `CI`, `TCK` and `Dependencies` ends with a gate job (`CI gate`, `TCK gate`, `Dependencies gate`); only gate jobs are required checks (CONTRIBUTING, "Required checks").
+- CI: the rule of the three gate jobs is one script, `scripts/ci_gate.sh`, with a self-test that every gate job runs first; the self-test of `scripts/ci_changes.sh` also covers `detect`, in a temporary git repository (merge base, a new branch, renames, an empty diff, paths with spaces).
+- CI: a newer push to a pull request cancels the run in progress in `CI`, `TCK`, `EDC interop` and `Gaia-X`; a run on `main`, a scheduled and a manual run are never cancelled and never wait for another run; every job has a timeout; the built DSP TCK jar is cached under its pinned commit; ORT runs on `main` only when a manifest or its configuration changed.
+- CI: the EDC interop test also runs for changes to the root `Cargo.toml`, `.dockerignore`, `scripts/demo-bundle.sh` and `examples/bundle/`; the Gaia-X test for the root `Cargo.toml` and `.dockerignore`; pull request fuzzing for the root `Cargo.toml` and its own workflow.
+- Release: the dry run also runs when the root `Cargo.toml` changes, so the release pull request builds and tests on arm64 and writes the SBOMs before the tag.
+- **The website has an ancient Roman theme**, built on the two meanings
+  of *portitor*, the customs officer and the ferryman: a gate, a toll
+  coin and a ferry. The same drawing is the logo and the favicon
+  (`site/favicon.svg`). Headings use the font Cinzel Regular, stored in
+  the repository (`site/fonts/cinzel-regular.woff2`) under the SIL Open
+  Font License 1.1 (`LICENSES/OFL-1.1.txt`, `NOTICE`, `REUSE.toml`). The
+  font is part of the website only, not of any image or binary.
+
+### Fixed
+
+- The metric `portitor.outbox.message.given_up` no longer counts a
+  finalization event that the consumer's transfer request had already
+  settled (ADR 0007, note of 0.14; TD-44). The negotiation is
+  `FINALIZED`, so nothing was given up. The metric keeps its name; an
+  INFO log line says when a message is not counted.
+- The same metric no longer counts a message whose outcome the store
+  could not record (WARN `outgoing message not recorded`). Such a
+  message is still saved as pending and is sent again after a restart;
+  it is counted then, if it fails again.
+
+### Security
+
+- Release: the workflow refuses a signed tag whose commit is not on `main`.
+- CI: `SONAR_TOKEN` is given to the scan step only, not to the build and tests of the dependencies; checkouts no longer keep the workflow token in `.git/config` (except the tag check, which fetches).
+- CI: a CodeQL finding now fails the CodeQL job, on a pull request, on `main` and in the weekly run: `scripts/codeql-gate.sh` fails on every result that is not in `.github/codeql/accepted-findings.json` (TESTING, "CodeQL"; CONTRIBUTING, "Pull requests").
+
 ### Documentation
 
+- **Documentation simplification** (maintainer, 2026-11-20): each fact
+  has one home and the other files link to it.
+  - `docs/DEPLOYING.md` is in deployment order (issuer, identity,
+    connector), starts with a "First deployment" path and has one
+    settings table per component (TD-39).
+  - New `docs/OPERATING.md`: health and logs, traces and metrics, backup
+    and restore, key rotation, upgrade and rollback, and the upgrade
+    notes of every release. These sections left DEPLOYING; links to
+    them changed from `DEPLOYING.md#...` to `OPERATING.md#...`.
+  - The README is cut to what Portitor is, its components, how to try
+    it and where to read. Its route and settings tables are gone: the
+    OpenAPI files and DEPLOYING hold them.
+  - New `docs/READING-THE-CODE.md`: the order to read the code in, and
+    one request followed from the route to the outbox (R-01).
+  - New `docs/adr/README.md`: an index of the ADRs with their status.
+  - ARCHITECTURE describes the system as it is and has one table,
+    "Specification versions", of what Portitor is checked against
+    (TD-43). The roadmap's released sections are one table. The risks
+    file has a "Top risks" box, and closed items are one line each.
+  - TESTING: one place for the image build and the demos; a rule for
+    the four near-copies of the negotiation and transfer logic,
+    "changed one, check the other three" (TD-42); the steps of the EDC
+    Issuer Service test.
+- New in the risks file: R-46 (the EDC Issuer Service names a request
+  status address that is not found, so `portitor-identity` shows
+  `issuerStatusError`) and R-47 (its admin API may change; test only).
+- GOVERNANCE, "Continuity": what an account successor takes over, and
+  what stays tied to the maintainer's account.
+- RELEASING: the documentation review also checks OPERATING,
+  READING-THE-CODE and the ADR index.
 - Close-out of 0.13: the roadmap and the website mark 0.13 released and
   0.14 as the current release; the website quickstart clones v0.13.0.
 
@@ -50,7 +168,7 @@ versions may change behaviour and configuration.
 
 Six changes made before the interface freeze (maintainer, 2026-11-20);
 after 1.0 they could only be made in 2.0. What to do:
-[DEPLOYING, From 0.12 to 0.13](docs/DEPLOYING.md#from-012-to-013).
+[OPERATING, From 0.12 to 0.13](docs/OPERATING.md#from-012-to-013).
 
 - **Breaking, all three: `PORTITOR_ALLOW_HTTP_CALLBACKS` is now
   `PORTITOR_ALLOW_HTTP`.** It allows plain `http://` for every outgoing
@@ -244,7 +362,7 @@ after 1.0 they could only be made in 2.0. What to do:
   `scripts/two-data-spaces.sh` (a manual test, TESTING), with a shared
   identity and with one identity per data space.
 
-## [0.12.0] - 2026-11-19
+## [0.12.0] - 2026-11-20
 
 Interoperability and performance. Read "From 0.11 to 0.12" in
 `docs/DEPLOYING.md` before you upgrade: two changes need action.

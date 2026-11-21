@@ -1,0 +1,37 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/did/v1"
+  ],
+  "assertionMethod": [
+    "did:web:localhost%3A9083#key-1"
+  ],
+  "authentication": [
+    "did:web:localhost%3A9083#key-1"
+  ],
+  "capabilityInvocation": [
+    "did:web:localhost%3A9083#key-1"
+  ],
+  "id": "did:web:localhost%3A9083",
+  "service": [
+    {
+      "id": "edc-issuerservice",
+      "serviceEndpoint": "http://localhost:9082/api/issuance/v1/participants/edc-issuer",
+      "type": "IssuerService"
+    }
+  ],
+  "verificationMethod": [
+    {
+      "controller": "did:web:localhost%3A9083",
+      "id": "did:web:localhost%3A9083#key-1",
+      "publicKeyJwk": {
+        "alg": "ES256",
+        "crv": "P-256",
+        "kty": "EC",
+        "x": "aQ746V5ojI5DbPlb3Vh_pY204rOAgV7dz4ciZBLkzt8",
+        "y": "ISScwtYBkw8iM9_AL8QYcq2ZdSNSDoZOGzg51xQboiU"
+      },
+      "publicKeyMultibase": null,
+      "type": "JsonWebKey2020"
+    }
+  ]
+}

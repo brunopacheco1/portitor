@@ -26,8 +26,18 @@
 //!   of a dataset does not require one): reading it into Portitor's own
 //!   types and writing it again would drop whatever those types do not
 //!   know.
+//! - A catalog must be the catalog of the provider that was asked: its
+//!   `participantId` is the provider id of the request (the
+//!   `counterPartyId` of the management call). DSP 2025-1 requires
+//!   `participantId` of a catalog (`catalog-schema.json`, `RootCatalog`),
+//!   so a catalog without it is refused too. A dataset has no
+//!   `participantId`.
 //! - At most [`MAX_CONCURRENT_READS`] answers are read at a time, as each
 //!   may be held in memory whole.
+//!
+//! The code is in three parts: this file (the limits, the reader and the
+//! call to the provider), `request` (what is checked and built before
+//! anything is sent) and `answer` (the checks of the provider's answer).
 //!
 //! Pages: a provider MAY send its catalog in pages, named by `Link`
 //! headers ("Catalog HTTPS Binding", "Pagination"). Portitor reads the
@@ -36,17 +46,20 @@
 //! provider's `Link` header values are returned with the answer
 //! ([`ProviderAnswer::links`]), so the caller can see that there is more.
 
-use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 
-use portitor_dsp::guard::{Direction, MessageGuard};
-use portitor_dsp::{CatalogRequestMessage, CatalogRequestMessageType, Context};
-use serde::Deserialize;
+use portitor_dsp::guard::MessageGuard;
 
 use crate::auth::Prover;
-use crate::http_client::{AnswerLimits, Bytes, HttpError, RawAnswer, Sender, outbound_url_allowed};
+use crate::http_client::{AnswerLimits, Bytes, HttpError, RawAnswer, Sender};
 use crate::ports::Ports;
+
+mod answer;
+mod request;
+
+use answer::{check_catalog, check_dataset};
+use request::{catalog_request_message, check_dataset_id, check_provider, path_segment};
 
 /// The largest catalog (or dataset) answer read from a provider: 16 MiB.
 ///
@@ -100,8 +113,9 @@ pub enum ReadFailure {
     /// The provider did not give a usable answer: it refused, could not
     /// be reached, or sent more than [`MAX_CATALOG_ANSWER`]. (HTTP 502.)
     Provider(HttpError),
-    /// The provider answered 2xx, but not with what was asked for; the
-    /// text says what is wrong. (HTTP 502.)
+    /// The provider answered 2xx, but not with what was asked for (also:
+    /// with the catalog of another participant); the text says what is
+    /// wrong. (HTTP 502.)
     NotDsp(String),
 }
 
@@ -111,24 +125,6 @@ enum Wanted<'a> {
     Catalog,
     /// One dataset, by its `@id`.
     Dataset(&'a str),
-}
-
-impl Wanted<'_> {
-    /// The `@type` of the provider's answer.
-    fn answer_type(&self) -> &'static str {
-        match self {
-            Wanted::Catalog => "Catalog",
-            Wanted::Dataset(_) => "Dataset",
-        }
-    }
-
-    /// Whether the answer must say its `@type`. DSP 2025-1 requires it of
-    /// a catalog (`catalog-schema.json`: `@type` is `Catalog`) but not of
-    /// a dataset (`dataset-schema.json`, `RootDataset`, requires
-    /// `@context`, `@id`, `hasPolicy` and `distribution` only).
-    fn type_required(&self) -> bool {
-        matches!(self, Wanted::Catalog)
-    }
 }
 
 /// Reads catalogs and datasets from providers, with our token.
@@ -179,25 +175,13 @@ impl CatalogReader {
         provider_id: &str,
         dataset_id: &str,
     ) -> Result<ProviderAnswer, ReadFailure> {
-        if dataset_id.trim().is_empty() {
-            return Err(ReadFailure::BadRequest(
-                "the dataset id must not be empty".to_owned(),
-            ));
-        }
-        if matches!(dataset_id, "." | "..") {
-            // as a path segment these mean "this folder" and "the folder
-            // above" (RFC 3986, section 5.2.4): a provider or a proxy
-            // that resolves them would answer for another path
-            return Err(ReadFailure::BadRequest(
-                "the dataset id must not be \".\" or \"..\"".to_owned(),
-            ));
-        }
+        check_dataset_id(dataset_id)?;
         let wanted = Wanted::Dataset(dataset_id);
         self.read(provider_address, provider_id, &[], &wanted).await
     }
 
     /// Checks the address and the id, gets a token, sends the request
-    /// once and checks the answer's `@type`.
+    /// once and checks the answer (`check_catalog`, `check_dataset`).
     async fn read(
         &self,
         provider_address: &str,
@@ -205,26 +189,35 @@ impl CatalogReader {
         scopes: &[String],
         wanted: &Wanted<'_>,
     ) -> Result<ProviderAnswer, ReadFailure> {
-        if !outbound_url_allowed(provider_address, self.allow_http) {
-            return Err(ReadFailure::BadRequest(
-                "the provider address must be an https URL".to_owned(),
-            ));
-        }
-        if provider_address.contains(['?', '#']) {
-            // a path is added to the address: a query or fragment would
-            // swallow it
-            return Err(ReadFailure::BadRequest(
-                "the provider address must not have a query or a fragment".to_owned(),
-            ));
-        }
-        if let Err(error) = portitor_dcp::did_web_url(provider_id) {
-            return Err(ReadFailure::BadRequest(format!(
-                "the provider id must be a did:web DID: {error}"
-            )));
-        }
-        let base = provider_address.trim_end_matches('/');
+        check_provider(provider_address, provider_id, self.allow_http)?;
         // the semaphore is never closed, so this waits for a free place
         let _reading = self.reads.acquire().await;
+        let sent = self.send(provider_address, provider_id, scopes, wanted);
+        let RawAnswer { body, links } = sent.await?;
+        match wanted {
+            Wanted::Catalog => check_catalog(&body, provider_id)?,
+            Wanted::Dataset(_) => check_dataset(&body)?,
+        }
+        if !links.is_empty() {
+            tracing::warn!(
+                "the provider sent Link headers (catalog pages); only this first answer is read"
+            );
+        }
+        Ok(ProviderAnswer { body, links })
+    }
+
+    /// Sends the one request for `wanted` to the provider, with a fresh
+    /// token, and reads the answer within the limits of this module
+    /// ([`MAX_CATALOG_ANSWER`], [`CATALOG_TIMEOUT`]): a `POST` of a
+    /// `CatalogRequestMessage` for the catalog, a `GET` for a dataset.
+    async fn send(
+        &self,
+        provider_address: &str,
+        provider_id: &str,
+        scopes: &[String],
+        wanted: &Wanted<'_>,
+    ) -> Result<RawAnswer, ReadFailure> {
+        let base = provider_address.trim_end_matches('/');
         let limits = AnswerLimits {
             max_bytes: MAX_CATALOG_ANSWER,
             timeout: CATALOG_TIMEOUT,
@@ -246,14 +239,7 @@ impl CatalogReader {
                     .await
             }
         };
-        let RawAnswer { body, links } = sent.map_err(ReadFailure::Provider)?;
-        check_type(&body, wanted.answer_type(), wanted.type_required())?;
-        if !links.is_empty() {
-            tracing::warn!(
-                "the provider sent Link headers (catalog pages); only this first answer is read"
-            );
-        }
-        Ok(ProviderAnswer { body, links })
+        sent.map_err(ReadFailure::Provider)
     }
 
     /// The `Authorization` header for one request to `provider_id`.
@@ -273,143 +259,16 @@ impl CatalogReader {
     }
 }
 
-/// The `CatalogRequestMessage` to send (DSP 2025-1, "Catalog Protocol",
-/// "Catalog Request Message"): no `filter`, so the whole catalog is asked
-/// for. Checked against the dataspace's message rules first, as every
-/// outgoing DSP message is (ADR 0005).
-fn catalog_request_message(guard: &dyn MessageGuard) -> Result<serde_json::Value, ReadFailure> {
-    let message = CatalogRequestMessage {
-        context: Context::default(),
-        kind: CatalogRequestMessageType,
-        filter: None,
-    };
-    let message = match serde_json::to_value(&message) {
-        Ok(message) => message,
-        Err(error) => return Err(ReadFailure::BadRequest(error.to_string())),
-    };
-    match guard.check(Direction::Outbound, "CatalogRequestMessage", &message) {
-        Ok(()) => Ok(message),
-        Err(rejection) => Err(ReadFailure::BadRequest(rejection.to_string())),
-    }
-}
-
-/// Only the `@type` of a JSON object; every other member is skipped
-/// without being kept, so a large catalog is checked without building it
-/// in memory a second time.
-#[derive(Deserialize)]
-struct TypeOnly {
-    #[serde(rename = "@type")]
-    kind: Option<String>,
-}
-
-/// Checks that `body` is a JSON object whose `@type` is `expected`; an
-/// object without `@type` passes unless `required`.
-fn check_type(body: &[u8], expected: &str, required: bool) -> Result<(), ReadFailure> {
-    // JSON is UTF-8 (RFC 8259, section 8.1). Checked here for the whole
-    // body: the reader below passes over the members it does not keep
-    // without looking at the bytes of their texts, and the body is
-    // handed on as `application/json`.
-    if std::str::from_utf8(body).is_err() {
-        return Err(ReadFailure::NotDsp(
-            "the provider's answer is not JSON: it is not UTF-8 text".to_owned(),
-        ));
-    }
-    // serde reads a struct from a JSON array too (its fields in order),
-    // so `["Catalog"]` would pass below: only an object is read
-    let first = body.iter().find(|byte| !byte.is_ascii_whitespace());
-    if first != Some(&b'{') {
-        return Err(ReadFailure::NotDsp(
-            "the provider's answer is not a JSON object".to_owned(),
-        ));
-    }
-    let read: TypeOnly = match serde_json::from_slice(body) {
-        Ok(read) => read,
-        Err(error) => {
-            return Err(ReadFailure::NotDsp(format!(
-                "the provider's answer is not a JSON object with a text @type: {error}"
-            )));
-        }
-    };
-    match read.kind.as_deref() {
-        Some(kind) if kind == expected => Ok(()),
-        None if !required => Ok(()),
-        Some(_) | None => Err(ReadFailure::NotDsp(format!(
-            "the provider's answer is not a DSP 2025-1 {expected} (its @type is not \"{expected}\")"
-        ))),
-    }
-}
-
-/// `text` as one segment of a URL path (RFC 3986, section 3.3): letters,
-/// digits and `-._~!$&'()*+,;=:@` stay; every other byte becomes `%XX`. A
-/// dataset id is often a URN (`urn:uuid:...`), which stays readable, but
-/// it may hold a `/` or a `?`, which would change the path.
-fn path_segment(text: &str) -> String {
-    const KEPT: &[u8] = b"-._~!$&'()*+,;=:@";
-    let mut encoded = String::with_capacity(text.len());
-    for byte in text.bytes() {
-        if byte.is_ascii_alphanumeric() || KEPT.contains(&byte) {
-            encoded.push(char::from(byte));
-        } else {
-            // writing to a `String` cannot fail
-            let _ = write!(encoded, "%{byte:02X}");
-        }
-    }
-    encoded
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use portitor_dsp::guard::Rejection;
+    use portitor_dsp::guard::{Direction, Rejection};
     use portitor_runtime::BoxFuture;
     use serde_json::Value;
 
     use super::*;
 
-    #[test]
-    fn a_dataset_id_becomes_one_path_segment() {
-        assert_eq!(path_segment("urn:uuid:dataset-1"), "urn:uuid:dataset-1");
-        assert_eq!(path_segment("a/b?c#d e"), "a%2Fb%3Fc%23d%20e");
-        assert_eq!(path_segment("é%"), "%C3%A9%25");
-    }
-
-    #[test]
-    fn the_answer_must_have_the_type_asked_for() {
-        assert_eq!(
-            check_type(br#" {"@type":"Catalog","x":[1,{}]}"#, "Catalog", true),
-            Ok(())
-        );
-        for wrong in [
-            &br#"{"@type":"Dataset"}"#[..],
-            br#"{"x":1}"#,
-            b"[]",
-            br#"["Catalog"]"#,
-            br#""Catalog""#,
-            b"",
-            b"<html>",
-            br#"{"@type":"Catalog""#,
-            // not UTF-8, in a member that is not read
-            b"{\"@type\":\"Catalog\",\"x\":\"\xff\"}",
-        ] {
-            let checked = check_type(wrong, "Catalog", true);
-            assert!(matches!(checked, Err(ReadFailure::NotDsp(_))), "{wrong:?}");
-        }
-    }
-
-    /// DSP 2025-1 `dataset-schema.json` does not require `@type`.
-    #[test]
-    fn a_dataset_may_leave_its_type_out_but_not_name_another() {
-        let dataset = br#"{"@id":"urn:uuid:1","hasPolicy":[],"distribution":[]}"#;
-        assert_eq!(check_type(dataset, "Dataset", false), Ok(()));
-        assert_eq!(
-            check_type(br#"{"@type":"Dataset"}"#, "Dataset", false),
-            Ok(())
-        );
-        for wrong in [&br#"{"@type":"Catalog"}"#[..], br#"["Dataset"]"#, b"[]"] {
-            let checked = check_type(wrong, "Dataset", false);
-            assert!(matches!(checked, Err(ReadFailure::NotDsp(_))), "{wrong:?}");
-        }
-    }
+    const PROVIDER: &str = "did:web:provider.example";
 
     /// Never sends: the tests below fail before a request goes out.
     struct NeverSends;
@@ -436,7 +295,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_bad_address_or_id_is_refused_before_anything_is_sent() {
-        let provider = "did:web:provider.example";
+        let provider = PROVIDER;
         for (address, id, allow_http) in [
             ("http://provider.example/dsp", provider, false),
             ("ftp://provider.example/dsp", provider, true),

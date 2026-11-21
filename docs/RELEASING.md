@@ -9,8 +9,8 @@ SPDX-License-Identifier: Apache-2.0
 All components share one version (mono repo). Pushing a signed tag `vX.Y.Z`
 runs [`.github/workflows/release.yml`](../.github/workflows/release.yml), which:
 1. checks the tag is annotated, signed by the maintainer (keys from
-   `github.com/<owner>.gpg`), equal to `version` in `Cargo.toml`, and
-   listed in `CHANGELOG.md`;
+   `github.com/<owner>.gpg`), on a commit of `main`, equal to `version`
+   in `Cargo.toml`, and listed in `CHANGELOG.md`;
 2. tests the workspace and builds static musl binaries on native amd64 and
    arm64 runners;
 3. builds one multi-arch image per component and pushes it to
@@ -39,19 +39,36 @@ per image, and the GitHub release is created only when every image job
 succeeded. Adding a component means: a binary crate, a target in the
 `Dockerfile`, a line in `.dockerignore`, and its name in `COMPONENTS`.
 
-A pull request that changes the release workflow, the `Dockerfile` or the
-notices script runs the same build as a dry run: nothing is pushed or signed.
+A pull request that changes the release workflow, the root `Cargo.toml`,
+the `Dockerfile`, `.dockerignore` or the notices script runs the same
+build as a dry run: nothing is pushed or signed. The release pull request
+sets the version in `Cargo.toml`, so it always gets a dry run: the arm64
+build and tests, the SBOMs and the notices are checked before the tag.
 
 ## One-time setup (owner)
 
 1. **Settings → Environments → New environment** `release`. Restrict it to
-   tags matching `v*`. Optionally require yourself as a reviewer, so every
-   release waits for a click. Each image job uses the environment; one
-   **Review deployments** approval covers all images of a run.
-2. No signing secrets are needed: cosign keyless signing and attestations
+   tags matching `v*`, and under **Required reviewers** add yourself, so
+   that no image is pushed or signed before you approve the run. Each
+   image job uses the environment; one **Review deployments** approval
+   covers all images of a run. Before you approve, check on the run's page
+   that the tag is the one you pushed and that its commit is on `main`.
+2. **Settings → Rules → Rulesets → New tag ruleset**, target tags
+   matching `v*`: **Restrict creations**, **Restrict updates** and
+   **Restrict deletions**, with yourself (the repository admin role) as
+   the only one on the bypass list. Nobody else, and no token of a
+   workflow, can then create or move a release tag.
+3. These two settings are the control over who can publish a release.
+   The workflow's own checks of the tag (signed, on `main`, same version
+   as `Cargo.toml` and `CHANGELOG.md`) guard against mistakes only: on a
+   tag push GitHub takes `release.yml` from the tagged commit, so a
+   commit that removes the checks would run without them. Without the
+   required reviewer and the ruleset, anyone who can push a `v*` tag
+   could publish signed images from a commit that was never on `main`.
+4. No signing secrets are needed: cosign keyless signing and attestations
    use the workflow's OIDC token. Images are pushed with the workflow's
    `GITHUB_TOKEN`.
-3. After the first release of each image, make its package public:
+5. After the first release of each image, make its package public:
    **Packages → portitor-connector** (and, from 0.5, **portitor-identity**;
    from 0.6, **portitor-issuer**)
    **→ Package settings → Change visibility → Public**, and link it to this
@@ -72,8 +89,14 @@ pull request, or record why it stays.
   tell the truth: new components, ports, adapters, containers or outside
   systems are drawn, removed ones are gone. Edit them in draw.io.
 - [ARCHITECTURE.md](ARCHITECTURE.md), [DEPLOYING.md](DEPLOYING.md),
-  [TESTING.md](TESTING.md) and the README match what the release does
-  (settings, ports, images, flows).
+  [OPERATING.md](OPERATING.md), [TESTING.md](TESTING.md) and the README
+  match what the release does (settings, ports, images, flows, logs,
+  metrics, upgrade notes). The settings and routes have their home in
+  DEPLOYING and the OpenAPI files; the README only links to them.
+- [READING-THE-CODE.md](READING-THE-CODE.md) names only files and
+  functions that exist (`check_docs.py` does not check paths in
+  Markdown), and the [ADR index](adr/README.md) has a row for every
+  ADR, with its current status.
 - The OpenAPI files in `docs/api/`: the generated management descriptions
   are current (their tests fail otherwise); the hand-written
   `openapi.json` (DSP), `identity-openapi.json` (DID document, STS,
@@ -124,12 +147,22 @@ pull request, or record why it stays.
    set the default image tags in `examples/compose/compose.yaml` and the
    `git clone --branch` tag in `site/index.html` to `X.Y.Z` (`vX.Y.Z`),
    and merge.
-2. Tag the merge commit with your personal key and push the tag:
+2. Tag the commit that the merge put on `main` with your personal key
+   and push the tag:
    ```sh
    git switch main && git pull
    git tag -s vX.Y.Z -m "Portitor X.Y.Z"
    git push origin vX.Y.Z
    ```
+   The tag must be on a commit of `main`: the workflow refuses a tag on
+   any other commit, so a signed tag put on an unmerged branch by
+   mistake publishes nothing. Pull requests are squashed, so the commit
+   to tag is the squash commit on `main` (what `git pull` just fetched),
+   never the head of the release pull request: that commit is not on
+   `main` after a squash merge, and the check refuses it. This check is
+   a guard against mistakes; what controls who can release is in
+   "One-time setup", steps 1 to 3. A release from a maintenance branch
+   needs the rule widened in `release.yml` first (job `verify`).
 3. Watch **Actions → Release**. When it is green, the images and the GitHub
    release are published.
 4. Run the website's quickstart ("Try it" in `site/index.html`) on a

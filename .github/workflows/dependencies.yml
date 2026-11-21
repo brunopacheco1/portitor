@@ -12,19 +12,33 @@ on:
   schedule:
     - cron: '23 5 * * 1' # new advisories appear without code changes
 
-# a newer push to the same pull request replaces the run in progress; pushes to main always finish
+# Runs of one pull request share a group: a newer push replaces the run in progress.
+# Every other run (a push to main, a scheduled or a manual run) is a group of its own,
+# named by its run id, so it is never cancelled and never waits for another run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
+# How the jobs are chosen: `changes` reads the changed files
+# (scripts/ci_changes.sh). On a pull request and on a push the jobs are
+# skipped when the change is prose only (no manifest, lock file or policy
+# changed; a fuzzing change still runs them). The weekly run always runs
+# them. `gate` is the check to require, if cargo-deny and cargo-vet are to
+# block a merge (CONTRIBUTING.md, "Required checks").
 jobs:
+  changes:
+    name: Changes
+    uses: ./.github/workflows/changes.yml
+
   review:
     name: Dependency review
-    if: ${{ github.event_name == 'pull_request' }}
+    needs: changes
+    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: write # summary comment on failure
@@ -41,18 +55,28 @@ jobs:
 
   deny:
     name: Licences, advisories and sources (cargo-deny)
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: EmbarkStudios/cargo-deny-action@70f81531115945ba6eb6b941ec9d39d063438eb9 # v2.1.2
         with:
           command: check licenses bans sources advisories
 
   vet:
     name: Every crate audited or exempted (cargo-vet)
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
           tool: cargo-vet@0.10.3
@@ -62,8 +86,11 @@ jobs:
       - name: cargo vet
         run: cargo vet --locked
 
+  # a called workflow: `timeout-minutes` cannot be set here, its jobs keep their own limits
   vulnerabilities:
     name: Known vulnerabilities (OSV)
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     permissions:
       actions: read
       contents: read
@@ -74,3 +101,29 @@ jobs:
         -L Cargo.lock
       # advisory: findings go to Security > Code scanning; cargo-deny blocks on RustSec advisories
       fail-on-vuln: false
+
+  # It always runs. It fails when `review`, `deny` or `vet` failed or was
+  # cancelled, when `changes` did not succeed, and when one of them was
+  # skipped although the change needed it. It passes when they were skipped
+  # on purpose (prose only). `vulnerabilities` is advisory and not part of it.
+  gate:
+    name: Dependencies gate
+    if: ${{ always() }}
+    needs: [changes, review, deny, vet]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # the rule is in scripts/ci_gate.sh, one copy for the three gates; a
+      # broken rule fails here, and so fails this required check
+      - name: The gate's rule passes its self-test
+        run: scripts/ci_gate.sh self-test
+      - name: Every job passed, or was skipped on purpose
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          GATED_BY: code # the output of `changes` that says whether the jobs below are needed
+          # the dependency review exists on pull requests only
+          NEEDED_JOBS: ${{ github.event_name == 'pull_request' && 'deny vet review' || 'deny vet' }}
+        run: scripts/ci_gate.sh check

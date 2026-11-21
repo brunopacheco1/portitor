@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The issuer's settings, read from environment variables
-//! (`DEPLOYING.md`, section 7, "Run the issuer"). The names follow the identity
-//! component's.
+//! (`docs/DEPLOYING.md`, "Step 1: issuer", "Issuer settings"). The names follow
+//! the identity component's.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -215,6 +215,26 @@ mod tests {
             assert_eq!(error.name, *old);
             assert!(error.to_string().contains(new), "{error}");
         }
+    }
+
+    /// An item of a list setting has a length limit
+    /// (`settings::LIST_ITEM_MAX_BYTES`): a longer one stops the start,
+    /// and the error names the setting and nothing of the item.
+    #[test]
+    fn a_list_item_that_is_too_long_is_invalid_with_its_name() {
+        let too_long = format!("/run/keys/{}", "k".repeat(settings::LIST_ITEM_MAX_BYTES));
+        let value = format!("/run/keys/2025.pub.pem,{too_long}");
+        let mut vars = MINIMAL.to_vec();
+        vars.push(("PORTITOR_ISSUER_RETIRED_KEY_FILES", value.as_str()));
+        let error = read(&vars).unwrap_err();
+        assert_eq!(error.name, "PORTITOR_ISSUER_RETIRED_KEY_FILES");
+        assert!(
+            error
+                .problem
+                .starts_with("has an item that is too long: item 2 is 4106 bytes"),
+            "{error}"
+        );
+        assert!(!error.to_string().contains("kkk"), "{error}");
     }
 
     /// A list that is set names something, and a switch is `true` or

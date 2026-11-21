@@ -3,29 +3,43 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
+/* Headings: Cinzel (Roman square capitals), SIL Open Font License 1.1, see LICENSES/OFL-1.1.txt. */
+@font-face {
+  font-family: "Cinzel";
+  src: url("fonts/cinzel-regular.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
 :root {
-  --bg: #fbfcfd;
-  --surface: #ffffff;
-  --text: #17212b;
-  --muted: #4a5a69;
-  --line: #d9e1e8;
-  --accent: #0f5c8c;
-  --accent-text: #ffffff;
-  --done: #1d7a46;
-  --now: #b25e00;
+  /* travertine, ink, Pompeian red, bronze */
+  --bg: #f5f0e6;
+  --surface: #fcf9f3;
+  --text: #2b221c;
+  --muted: #5c5046;
+  --line: #d9cdb8;
+  --accent: #8f2a22;
+  --seal: #8f2a22;
+  --seal-text: #fcf6ea;
+  --bronze: #7d5416;
+  --ornament: #a97c35;
+  --done: #3b6238;
+  --now: #7d5416;
+  --display: "Cinzel", "Trajan Pro", "Optima", Georgia, "Times New Roman", serif;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0e141a;
-    --surface: #151d25;
-    --text: #e6edf3;
-    --muted: #9fb0bf;
-    --line: #2a3742;
-    --accent: #5fb0e6;
-    --accent-text: #0e141a;
-    --done: #5cc98a;
-    --now: #f0a24a;
+    --bg: #1a1513;
+    --surface: #231c19;
+    --text: #ede4d5;
+    --muted: #b9ab98;
+    --line: #40342c;
+    --accent: #ec9484;
+    --bronze: #d8a85c;
+    --ornament: #a97c35;
+    --done: #8fc487;
+    --now: #d8a85c;
   }
 }
 * { box-sizing: border-box; }
@@ -35,60 +49,121 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  border-top: 4px solid var(--seal);
+  font: 17px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
-a { color: var(--accent); }
-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; }
-.wrap { max-width: 64rem; margin: 0 auto; padding: 0 1rem; }
+a { color: var(--accent); text-underline-offset: .15em; text-decoration-thickness: 1px; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 1px; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; overflow-wrap: anywhere; }
+.wrap { max-width: 62rem; margin: 0 auto; padding: 0 1.25rem; }
 .skip { position: absolute; left: -999px; }
 .skip:focus { left: 1rem; top: 1rem; background: var(--surface); padding: .5rem; z-index: 2; }
 
-.top { border-bottom: 1px solid var(--line); background: var(--surface); }
-.top-row { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; align-items: center; justify-content: space-between; padding-top: .75rem; padding-bottom: .75rem; }
-.brand { display: flex; gap: .5rem; align-items: center; color: var(--text); text-decoration: none; font-weight: 700; font-size: 1.15rem; }
-nav ul { display: flex; flex-wrap: wrap; gap: .25rem 1rem; list-style: none; margin: 0; padding: 0; }
-nav a { color: var(--muted); text-decoration: none; }
+h1, h2, h3, .brand { font-family: var(--display); font-weight: 400; }
+h1 { font-size: clamp(1.6rem, 4vw, 2.2rem); line-height: 1.2; letter-spacing: .04em; margin: 1rem 0; }
+h2 { font-size: clamp(1.35rem, 3.4vw, 1.75rem); line-height: 1.25; letter-spacing: .1em; margin: 0 0 1.5rem; }
+h3 { font-size: 1.02rem; line-height: 1.35; letter-spacing: .08em; margin: 2.25rem 0 .5rem; }
+
+/* the meander (Greek key) band */
+.meander {
+  height: 14px;
+  background: var(--ornament);
+  -webkit-mask: var(--key) repeat-x center;
+  mask: var(--key) repeat-x center;
+  --key: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='14'%3E%3Cpath d='M0 12.5h16M12 12.5v-11H2v7.5h6.5V5' fill='none' stroke='%23000' stroke-width='1.2'/%3E%3C/svg%3E");
+}
+
+.top { background: var(--surface); }
+.top-row { display: flex; flex-wrap: wrap; gap: .5rem 2rem; align-items: center; justify-content: space-between; padding-top: .9rem; padding-bottom: .9rem; }
+.brand { display: flex; gap: .65rem; align-items: center; color: var(--text); text-decoration: none; font-size: 1.2rem; letter-spacing: .16em; }
+nav ul { display: flex; flex-wrap: wrap; gap: .25rem 1.4rem; list-style: none; margin: 0; padding: 0; }
+nav a { color: var(--muted); text-decoration: none; font-size: .95rem; }
 nav a:hover, nav a:focus { color: var(--accent); text-decoration: underline; }
 
-section { padding: 2.5rem 0; border-bottom: 1px solid var(--line); }
-.hero { padding: 3.5rem 0 3rem; }
-.eyebrow { color: var(--muted); font-size: .9rem; letter-spacing: .02em; margin: 0 0 .5rem; }
-h1 { font-size: clamp(1.8rem, 4.5vw, 2.8rem); line-height: 1.15; margin: 0 0 1rem; max-width: 22ch; }
-h2 { font-size: 1.6rem; margin: 0 0 1rem; }
-h3 { font-size: 1.1rem; margin: 1.5rem 0 .5rem; }
-.lede { font-size: 1.15rem; max-width: 46rem; }
-.note { max-width: 46rem; padding: .75rem 1rem; border-left: 4px solid var(--now); background: var(--surface); }
-.actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1.5rem; }
-.button { display: inline-block; padding: .6rem 1.1rem; border-radius: 6px; background: var(--accent); color: var(--accent-text); text-decoration: none; font-weight: 600; border: 2px solid var(--accent); }
-.button.ghost { background: transparent; color: var(--accent); }
+section { padding: 4rem 0; border-bottom: 1px solid var(--line); }
+main > section:last-child { border-bottom: 0; }
+/* sections are numbered like chapters of an inscription */
+main { counter-reset: chapter; }
+section[id] h2::before {
+  counter-increment: chapter;
+  content: counter(chapter, upper-roman);
+  /* The numeral is decoration. The second form gives it an empty
+     alternative text, so a screen reader reads "Objectives", not
+     "I Objectives". A browser that does not know this form drops the
+     line and keeps the one above. */
+  content: counter(chapter, upper-roman) / "";
+  display: block;
+  margin-bottom: .6rem;
+  color: var(--bronze);
+  font-size: 1rem;
+  letter-spacing: .2em;
+}
+section[id] h2::after { content: ""; display: block; width: 3rem; height: 1px; margin-top: 1rem; background: var(--ornament); }
 
-.cards { list-style: none; padding: 0; margin: 0; display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); }
-.cards li { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 1rem 1.25rem; }
+.hero { padding: 4.5rem 0 4rem; text-align: center; }
+.hero .wrap > * { margin-left: auto; margin-right: auto; }
+.mark { display: block; width: 11rem; height: auto; margin-bottom: 2rem; color: var(--text); }
+/* the mark: a line drawing; the logo is the same drawing, smaller, with a stroke that still shows */
+#mark { stroke-width: var(--mark-stroke, 1.5); }
+#mark .toll { stroke: var(--ornament); }
+#mark .ferry { stroke: var(--accent); }
+.brand-mark { flex: none; width: 3.4rem; height: 2.5rem; --mark-stroke: 2.6; }
+.eyebrow { color: var(--muted); font-size: .85rem; letter-spacing: .08em; margin: 0 0 1.25rem; }
+.hero h1 { font-size: clamp(1.9rem, 6.2vw, 3.5rem); line-height: 1.12; letter-spacing: .06em; margin: 0 0 1rem; }
+.motto { font: italic 1.2rem/1.4 "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif; color: var(--bronze); margin: 0 0 2.25rem; }
+.lede { font-size: 1.12rem; max-width: 44rem; }
+.notes { display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); max-width: 52rem; margin-top: 2.5rem; text-align: left; }
+.note { margin: 0; padding: 1rem 1.25rem; border: 1px solid var(--line); border-top: 2px solid var(--seal); background: var(--surface); font-size: .97rem; }
+.actions { display: flex; flex-wrap: wrap; justify-content: center; gap: .75rem; margin-top: 2.5rem; }
+.button { display: inline-block; padding: .6rem 1.3rem; background: var(--seal); color: var(--seal-text); text-decoration: none; font-weight: 600; font-size: .95rem; letter-spacing: .03em; border: 1px solid var(--seal); }
+.button.ghost { background: transparent; color: var(--accent); border-color: var(--accent); }
+.button:hover { text-decoration: underline; }
+
+.cards { list-style: none; padding: 0; margin: 0; display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); }
+.cards li { background: var(--surface); border: 1px solid var(--line); border-top: 2px solid var(--ornament); padding: 1.25rem 1.4rem 1.4rem; }
 .cards h3 { margin-top: 0; }
-.cards p { margin: 0; color: var(--muted); }
+.cards p { margin: 0; color: var(--muted); font-size: .97rem; }
 
-pre { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: .75rem 1rem; overflow-x: auto; max-width: 48rem; }
-pre code { font-size: .88rem; }
+section p { max-width: 46rem; }
+pre { background: var(--surface); border: 1px solid var(--line); border-left: 2px solid var(--ornament); padding: .85rem 1.1rem; overflow-x: auto; max-width: 48rem; }
+pre code { font-size: .86rem; overflow-wrap: normal; }
 
-.steps { padding-left: 1.4rem; max-width: 48rem; }
-.steps li { margin: .35rem 0; }
+.steps { padding-left: 1.6rem; max-width: 46rem; }
+.steps li { margin: .5rem 0; padding-left: .3rem; }
+.steps li::marker { color: var(--bronze); font-weight: 600; }
 
-.table { overflow-x: auto; }
-table { border-collapse: collapse; width: 100%; min-width: 36rem; background: var(--surface); }
-th, td { text-align: left; vertical-align: top; padding: .6rem .75rem; border: 1px solid var(--line); }
-th { font-size: .9rem; color: var(--muted); }
+.table { overflow-x: auto; margin: 1.5rem 0; }
+table { border-collapse: collapse; width: 100%; min-width: 36rem; background: var(--surface); font-size: .97rem; }
+th, td { text-align: left; vertical-align: top; padding: .7rem .9rem; border: 1px solid var(--line); }
+thead th { font-size: .85rem; font-weight: 600; letter-spacing: .08em; color: var(--muted); border-bottom: 2px solid var(--ornament); }
 td code { white-space: nowrap; }
+/* The HTTP interface page: the box scrolls, and the table inside keeps
+   its own width and has no fill. The table itself stays a table
+   (display: block on it would hide its rows and columns from some
+   screen readers). */
+.table.plain { margin: 0; }
+.table.plain > table { width: auto; min-width: 0; background: none; }
 
-.roadmap { list-style: none; padding: 0; margin: 0; max-width: 48rem; }
-.roadmap li { display: flex; gap: .75rem; padding: .4rem 0; border-bottom: 1px dashed var(--line); }
+.roadmap { list-style: none; padding: 0; margin: 2rem 0 0; max-width: 48rem; }
+.roadmap li { display: flex; gap: .9rem; padding: .55rem 0; border-bottom: 1px solid var(--line); }
 .roadmap span { font-variant-numeric: tabular-nums; font-weight: 700; min-width: 2.5rem; color: var(--muted); }
 .roadmap .done span { color: var(--done); }
 .roadmap .done::after { content: "done"; margin-left: auto; color: var(--done); font-size: .85rem; }
 .roadmap .now span { color: var(--now); }
 .roadmap .now::after { content: "in progress"; margin-left: auto; color: var(--now); font-size: .85rem; white-space: nowrap; }
 
-.checks { list-style: none; padding: 0; margin: 0 0 1rem; max-width: 40rem; }
-.checks li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .25rem 1rem; padding: .5rem 0; border-bottom: 1px solid var(--line); }
+.checks { list-style: none; padding: 0; margin: 1.5rem 0; max-width: 40rem; }
+.checks li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .25rem 1rem; padding: .6rem 0; border-bottom: 1px solid var(--line); }
 .checks b { font-weight: 600; }
 
-footer { padding: 2rem 0 3rem; color: var(--muted); font-size: .95rem; }
+footer { background: var(--surface); color: var(--muted); font-size: .93rem; }
+footer .wrap { padding-top: 2rem; padding-bottom: 3rem; }
+footer p { max-width: 46rem; margin: 0 0 .75rem; }
+
+@media (max-width: 40rem) {
+  section { padding: 3rem 0; }
+  .hero { padding: 3rem 0; }
+  .mark { width: 8.5rem; }
+  .lede { text-align: left; }
+}

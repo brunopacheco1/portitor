@@ -186,6 +186,20 @@ impl Outbox for Provider {
     fn abort(&self, out: &Outgoing) -> Result<Option<Outgoing>, Failure> {
         self.service.abort(out, "the consumer could not be reached")
     }
+
+    /// A finalization event that could not be delivered, in a negotiation
+    /// that a transfer request from the consumer settled as `FINALIZED`
+    /// (ADR 0007, amended in 0.13; TD-44).
+    fn settled_without_delivery(&self, out: &Outgoing) -> bool {
+        match self.service.finalization_settled(out) {
+            Ok(settled) => settled,
+            Err(failure) => {
+                // not known: counted as given up, as before
+                tracing::warn!(pid = %out.provider_pid, ?failure, "negotiation not read");
+                false
+            }
+        }
+    }
 }
 
 pub(crate) fn invalid(
@@ -387,6 +401,99 @@ mod tests {
             pending: None,
             version: 0,
         }
+    }
+
+    /// The finalization event of the negotiation `p`, as the provider
+    /// saves it before sending it.
+    fn finalization_event() -> Outgoing {
+        Outgoing {
+            provider_pid: "p".into(),
+            url: "https://c.example/negotiations/c/events".into(),
+            body: serde_json::json!({}),
+            transition: Transition::Finalize,
+            to: NegotiationState::Finalized,
+            status_url: "https://c.example/negotiations/c".into(),
+            counter_party: "did:web:c.example".into(),
+        }
+    }
+
+    /// The provider as the connector builds it, on the negotiation store
+    /// `store`. It never sends in these tests.
+    fn provider_on(store: AnyStore) -> Provider {
+        let mut ports = Ports::new(Arc::new(PostOnly));
+        ports.store = store;
+        let participant_id = "did:web:p.example".to_owned();
+        Provider::new(ports, DatasetCopy::default(), participant_id, false)
+    }
+
+    /// ADR 0007, amended in 0.13 (TD-44), on the real provider and an
+    /// in-memory store: the outbox is told "settled without delivery"
+    /// only for the finalization event of a negotiation that is
+    /// `FINALIZED`, which is what a transfer request from the consumer
+    /// makes of a `VERIFIED` one (`finalization_proved`). This answer
+    /// keeps the event out of `portitor.outbox.message.given_up`.
+    #[test]
+    fn the_provider_outbox_says_settled_only_for_a_finalization_a_transfer_request_proved() {
+        use portitor_dsp::negotiation::provider::finalization_proved;
+
+        let store: AnyStore = Shared(Arc::new(InMemoryNegotiations::default()));
+        let provider = provider_on(store.clone());
+        let event = finalization_event();
+        // the agreement message of the same negotiation, sent earlier
+        let mut agreement = event.clone();
+        agreement.transition = Transition::Agree;
+        agreement.to = NegotiationState::Agreed;
+
+        // an unknown negotiation
+        assert!(!provider.settled_without_delivery(&event));
+
+        // VERIFIED, the event on its way: not settled
+        let mut verified = negotiation(NegotiationState::Verified);
+        verified.pending = Some(event.clone());
+        store.insert(&verified).unwrap();
+        assert!(!provider.settled_without_delivery(&event));
+
+        // what the transfer provider writes for a transfer request
+        let mut finalized = finalization_proved(&verified).unwrap();
+        finalized.version = verified.version + 1;
+        assert!(store.replace_if(&finalized, verified.version).unwrap());
+        assert_eq!(finalized.state, NegotiationState::Finalized);
+        assert!(provider.settled_without_delivery(&event));
+        // only the finalization event is asked about
+        assert!(!provider.settled_without_delivery(&agreement));
+
+        // a negotiation the outbox ended instead is not settled
+        let mut terminated = finalized.clone();
+        terminated.state = NegotiationState::Terminated;
+        terminated.version = finalized.version + 1;
+        assert!(store.replace_if(&terminated, finalized.version).unwrap());
+        assert!(!provider.settled_without_delivery(&event));
+    }
+
+    /// A negotiation store that cannot be read.
+    struct BrokenStore;
+
+    impl NegotiationStore for BrokenStore {
+        fn get(&self, _: &str) -> Result<Option<Negotiation>, StoreError> {
+            Err(StoreError("disk I/O error".to_owned()))
+        }
+        fn insert(&self, _: &Negotiation) -> Result<(), StoreError> {
+            Err(StoreError("disk I/O error".to_owned()))
+        }
+        fn replace_if(&self, _: &Negotiation, _: u64) -> Result<bool, StoreError> {
+            Err(StoreError("disk I/O error".to_owned()))
+        }
+        fn pending(&self) -> Result<Vec<Negotiation>, StoreError> {
+            Err(StoreError("disk I/O error".to_owned()))
+        }
+    }
+
+    /// "Not known" is not "settled": when the negotiation cannot be
+    /// read, the event stays one that the outbox counts as given up.
+    #[test]
+    fn a_store_failure_is_not_read_as_settled() {
+        let provider = provider_on(Shared(Arc::new(BrokenStore)));
+        assert!(!provider.settled_without_delivery(&finalization_event()));
     }
 
     #[test]

@@ -8,7 +8,7 @@
 # MembershipCredentials come from its portitor-issuer; each participant
 # asks for its own through its identity's API. The authority also serves
 # the HealthDCAT-AP demo bundle (scripts/demo-bundle.sh), which the Portitor
-# connector pins: its datasets (config/portitor-datasets.json) are checked
+# connector follows: its datasets (config/portitor-datasets.json) are checked
 # against it and offered with HealthDCAT-AP metadata.
 #
 # Gaia-X compliance (ADRs 0021 and 0022) is part of the run: a local
@@ -24,6 +24,13 @@
 #   EDC       did:web:edc.gaiax.test  the EDC IdentityHub has no Gaia-X
 #             onboarding: scripts/edc-interop.sh does it with the
 #             participant's key and stores the result in the IdentityHub
+#
+# A second issuer (docs/TESTING.md): the EDC Issuer Service
+# (did:web:edc-issuer.gaiax.test, v1.0.0-RC8 as the other EDC runtimes)
+# issues a plain test credential, the InteropTestCredential, to both
+# participants. Each side offers one dataset only to its holders and
+# checks the other's credential, with the Issuer Service's Bitstring
+# Status List.
 #
 # Test-only: plain HTTP between the containers, a Vault in dev mode, keys
 # made for each run, no real Gaia-X trust anchor (see ../gaiax/compose.yaml).
@@ -83,6 +90,7 @@ services:
           - edc.gaiax.test
           - compliance.gaiax.test
           - notary.gaiax.test
+          - edc-issuer.gaiax.test
 
   # --- the data space's authority ------------------------------------------------
 
@@ -176,6 +184,25 @@ services:
       - 127.0.0.1:18180:8080 # signaling, and what the EDC consumer received
     depends_on: [data]
 
+  # The EDC Issuer Service, the data space's second issuer:
+  # did:web:edc-issuer.gaiax.test (its DID document is reached through the
+  # "tls" service). scripts/edc-interop.sh creates its participant context,
+  # the holders, an attestation and a credential definition. It keeps its
+  # key and the holders' access tokens in the Vault.
+  edc-issuerservice:
+    image: portitor-interop/edc-issuerservice:1.0.0-RC8
+    build:
+      context: ./runtimes
+      target: issuerservice
+    volumes:
+      - ./config/edc-issuerservice.properties:/config/runtime.properties:ro
+    ports:
+      - 127.0.0.1:18381:9081 # Identity API, for scripts/edc-interop.sh
+      - 127.0.0.1:18385:9085 # issuer admin API, for scripts/edc-interop.sh
+      - 127.0.0.1:18382:9082 # DCP issuer service: for a run by hand (KEEP=1)
+      - 127.0.0.1:18386:9086 # status lists: for a run by hand (KEEP=1)
+    depends_on: [vault, identity-api-jwks, tls]
+
   # --- the Portitor participant ----------------------------------------------------
 
   portitor-identity:
@@ -187,7 +214,9 @@ services:
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8091
       PORTITOR_MANAGEMENT_API_KEY_FILE: /config/identity-management.key
       PORTITOR_STS_CLIENT_SECRET_FILE: /config/sts-client-secret
-      PORTITOR_TRUSTED_ISSUERS: did:web:issuer%3A8070
+      # the data space's two issuers: portitor-issuer and the EDC Issuer
+      # Service. One list for every credential type (ADR 0016).
+      PORTITOR_TRUSTED_ISSUERS: did:web:issuer%3A8070,did:web:edc-issuer.gaiax.test
       PORTITOR_ALLOW_HTTP: "true"
       # Gaia-X (ADR 0021): the certificate chain of the identity key, the
       # compliance service and the participant file
@@ -223,10 +252,16 @@ services:
       PORTITOR_MANAGEMENT_API_KEY_FILE: /config/connector-management.key
       PORTITOR_STS_URL: http://portitor-identity:8090/sts/token
       PORTITOR_STS_CLIENT_SECRET_FILE: /config/sts-client-secret
-      PORTITOR_TRUSTED_ISSUERS: did:web:issuer%3A8070
+      # the data space's two issuers: portitor-issuer and the EDC Issuer
+      # Service. One list for every credential type (ADR 0016).
+      PORTITOR_TRUSTED_ISSUERS: did:web:issuer%3A8070,did:web:edc-issuer.gaiax.test
       # status lists fetched on every check, so the revocation step sees a
       # revocation at once (docs/DEPLOYING.md)
       PORTITOR_STATUS_LIST_CACHE_SECONDS: "0"
+      # the DCP checks also log at DEBUG: scripts/edc-interop.sh (step 8e)
+      # looks for "status list fetched and verified", the proof that the
+      # connector read the EDC Issuer Service's status list
+      RUST_LOG: info,portitor_connector::auth::dcp=debug
       # the same scope as the EDC control plane's (config/edc-controlplane.properties)
       PORTITOR_DCP_SCOPES: org.eclipse.dspace.dcp.vc.type:MembershipCredential:read
       # ADR 0022: the compliance service it trusts, and the credential type
@@ -234,7 +269,9 @@ services:
       # org.eclipse.dspace.dcp.vc.type:ParticipantComplianceCredential:read,
       # the one config/edc-controlplane.properties maps to the same operand.
       PORTITOR_GAIAX_COMPLIANCE_ISSUERS: did:web:compliance.gaiax.test
-      PORTITOR_POLICY_CREDENTIALS: ParticipantComplianceCredential
+      # InteropTestCredential: the EDC Issuer Service's test credential,
+      # which the third offer constrains (InteropTestCredential.level)
+      PORTITOR_POLICY_CREDENTIALS: ParticipantComplianceCredential,InteropTestCredential
       SSL_CERT_DIR: /ca
       # the data space's HealthDCAT-AP bundle, from the issuer
       # the newest version (latest.json), looked for every hour

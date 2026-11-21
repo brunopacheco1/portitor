@@ -5,8 +5,9 @@
 //! Helpers for tests (this crate's own, and with the cargo feature
 //! `test-support`, which only the binaries' `[dev-dependencies]` switch
 //! on, theirs; never in a release build):
-//! traces collected in memory on the test's thread, and a server that
-//! records the `traceparent` header of each request it gets.
+//! traces collected in memory on the test's thread, a server that
+//! records the `traceparent` header of each request it gets, and the
+//! messages an outbox counted as given up on the test's thread.
 //!
 //! Use them in a `#[tokio::test]` on the default runtime, which runs
 //! every task on the test's own thread, where the tracing set up here
@@ -117,6 +118,44 @@ pub fn trace_on_this_thread() -> Traced {
         _provider: provider,
         _guard: tracing::subscriber::set_default(subscriber),
     }
+}
+
+/// Every message counted as given up
+/// (`portitor.outbox.message.given_up`) in this test process, with the
+/// thread that counted it. A thread's id is never used again in a
+/// process, and each test runs on a thread of its own, so a test finds
+/// its own counts by its thread's id.
+static GIVEN_UP: Mutex<Vec<(std::thread::ThreadId, super::metrics::Outbox)>> =
+    Mutex::new(Vec::new());
+
+/// Notes that `outbox` counted a message as given up on this thread.
+/// Called by [`super::metrics::outbox_given_up`] in test builds.
+pub(super) fn note_given_up(outbox: super::metrics::Outbox) {
+    let counted = (std::thread::current().id(), outbox);
+    GIVEN_UP
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(counted);
+}
+
+/// The outboxes that counted a message as given up on this thread so
+/// far, one entry per message, in order. In a `#[tokio::test]` on the
+/// default runtime the outbox's background tasks run on the test's
+/// thread, so these are the test's own counts and no other test's.
+#[must_use]
+pub fn given_up_on_this_thread() -> Vec<super::metrics::Outbox> {
+    let this_thread = std::thread::current().id();
+    let mut on_this_thread = Vec::new();
+    for (thread, outbox) in GIVEN_UP
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+    {
+        if *thread == this_thread {
+            on_this_thread.push(*outbox);
+        }
+    }
+    on_this_thread
 }
 
 /// The `traceparent` header of each request a [`traceparent_recorder`]

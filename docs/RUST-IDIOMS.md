@@ -1015,11 +1015,13 @@ context loader). `.into()` turns a `String` into such a boxed error
   that serde wrote again (with other spaces or field order).
 - `serde::de::IgnoredAny`: takes any JSON value and keeps nothing of it.
   A field of that type is accepted and not read (`_context` in
-  `CatalogRequest`, `portitor-connector/src/management.rs`: the `_` in
+  `CatalogRequest`, `portitor-connector/src/management/catalog/request.rs`: the `_` in
   front says the field is never used). A type with only the fields
   that matter skips all the others the same way, without building them
-  in memory: `TypeOnly` in `portitor-connector/src/catalog_reader.rs`
-  reads the `@type` of a catalog of many megabytes.
+  in memory: `CatalogHead` in
+  `portitor-connector/src/catalog_reader/answer.rs` reads the `@type`
+  and the `participantId` of a catalog of many megabytes, and
+  `DatasetHead` there the `@type` of a dataset.
 - `#[must_use]`: the caller should use the return value.
   `#[must_use = "..."]` adds the reason to the compiler's warning:
   `Telemetry` says to call `shutdown()`, and `CallerTrace::join` that the

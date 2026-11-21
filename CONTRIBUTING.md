@@ -39,7 +39,8 @@ manual tests: [docs/TESTING.md](docs/TESTING.md).
 ## Code style
 
 The build enforces the style, so a pull request that breaks it fails:
-- **rustfmt** with default settings.
+- **rustfmt** with default settings, which follow the
+  [Rust Style Guide](https://doc.rust-lang.org/style-guide/).
 - **Clippy** with `pedantic` lints; warnings are errors. `unsafe` is
   forbidden and `unwrap()` is denied outside tests (`Cargo.toml`,
   `[workspace.lints]`). Allow a lint only where it cannot be fixed, as
@@ -61,8 +62,12 @@ The build enforces the style, so a pull request that breaks it fails:
 ## Pull requests
 
 1. Fork the repository and create a branch from `main`.
-2. Keep the change focused, and add or update tests. Protocol behaviour
-   cites the spec section it implements.
+2. Keep the change focused. **Test policy:** a change that adds
+   functionality must add tests for it to the automated test suite
+   (`cargo test`; the TCK or interop tests where a protocol is
+   involved), and a bug fix must add a test that fails without the fix.
+   A pull request without them is not merged. Protocol behaviour cites
+   the spec section it implements.
 3. New files need an SPDX header (copy an existing one), or are listed in
    `REUSE.toml`. CI runs [`reuse lint`](https://reuse.software).
 4. New dependencies must have a licence on the allowlist in `deny.toml`
@@ -71,9 +76,57 @@ The build enforces the style, so a pull request that breaks it fails:
    cargo-vet (below).
 5. Describe what changed and why, and add a line to `CHANGELOG.md` under
    *Unreleased*.
-6. Commits must be signed, and `main` only changes through pull requests
+6. A CodeQL finding fails the `CodeQL` job
+   ([TESTING](docs/TESTING.md#codeql)): fix it. A false positive goes,
+   with its reason, into `.github/codeql/accepted-findings.json` in the
+   same pull request, and a maintainer dismisses the alert on GitHub
+   with the same reason.
+7. Commits must be signed, and `main` only changes through pull requests
    that pass the required checks, are up to date with `main`, and are
    approved by a code owner (`.github/CODEOWNERS`).
+
+## Required checks
+
+The ruleset on `main` requires three checks, by these names:
+
+| Check | Workflow | It passes when |
+|---|---|---|
+| `CI gate` | `CI` (`ci.yml`) | `REUSE compliance` and `Documentation matches the code` passed, and `Lint, test and build` and `SonarQube Cloud` passed or were not needed |
+| `TCK gate` | `TCK` (`tck.yml`) | the four TCK jobs passed or were not needed |
+| `Dependencies gate` | `Dependencies` (`dependencies.yml`) | the dependency review, cargo-deny and cargo-vet passed or were not needed |
+
+"Not needed" is decided by `scripts/ci_changes.sh` from the changed
+files:
+
+- A change to prose only skips the build, the tests, the TCKs and the
+  dependency checks. Prose is `site/`, `_http/`, `.vscode/`, the `*.md`
+  files in the repository root, and the `*.md` files under `docs/`
+  except `docs/STABILITY.md` and `docs/ARCHITECTURE.md`, which tests and
+  `scripts/check_docs.py` read.
+- A change to `fuzz/` or `.clusterfuzzlite/` only skips the build, the
+  tests and the TCKs, not the dependency checks.
+- Any other path runs everything. So do the weekly and the manual runs.
+
+The licence check (`reuse lint`) and `scripts/check_docs.py` always run.
+The script tests its own rule in every run
+(`scripts/ci_changes.sh self-test`: the path lists, and the reading of
+the changed files in a temporary git repository). Before you add a path
+to the prose list, check that no test, script or workflow reads it, and
+add a case to the self-test.
+
+What a gate job decides is in `scripts/ci_gate.sh`, one script for the
+three gates, which also tests its own rule in every run
+(`scripts/ci_gate.sh self-test`). When a workflow gets a new job that
+the gate must wait for, add it to the gate job's `needs` and to its
+`NEEDED_JOBS` (or `ALWAYS_JOBS`).
+
+Only a gate job can be a required check. A job that is skipped on
+purpose reports "skipped", and its name alone cannot tell that from
+"passed after a failure upstream"; the gate job can. A workflow with a
+path filter (`EDC interop`, `Gaia-X`, `ORT`, `Fuzzing (PR)`, `Website`,
+the `Release` dry run) must never be required: on a pull request that
+does not match the filter it reports nothing, and the pull request
+would wait for ever. CodeQL runs on every pull request.
 
 ## Dependency audits (cargo-vet)
 

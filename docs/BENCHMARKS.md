@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Benchmarks
 
-What Portitor does under the load a data space puts on it, measured
+What Portitor does under the load a dataspace puts on it, measured
 for release 0.12. Architecture principle 4 asks for these numbers every
 release; until 0.11 they were in
 [ADR 0002](adr/0002-technology-stack.md), section 7.
@@ -316,3 +316,20 @@ Limits of these results:
   consumer's history; a real provider has many partners.
 - The disk type is not known. Negotiations wait for the disk on every
   write, so their times depend on it most.
+
+## Cost of traces (0.9)
+
+Measured for the 0.9 release, which added traces and metrics
+(ADR 0023), and not repeated since. One 4-core machine, 50 clients,
+`scripts/measure.sh`, mean of three runs. Runs vary by up to 15%, so
+these differences are close to the noise.
+
+| Connector | DSP requests per second |
+|---|---|
+| 0.8.0 | 2,074 |
+| 0.9, export off | 1,909 |
+| 0.9, every request traced | 1,820 |
+| 0.9, one trace in ten kept | 1,701 |
+
+Sampling did not raise throughput: the spans are made in the process
+either way. How to set it: [OPERATING](OPERATING.md#traces-and-metrics).

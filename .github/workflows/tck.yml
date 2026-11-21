@@ -18,12 +18,20 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Runs of one pull request share a group: a newer push replaces the run in progress.
+# Every other run (a push to main, a scheduled or a manual run) is a group of its own,
+# named by its run id, so it is never cancelled and never waits for another run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
 env:
   RUST_TOOLCHAIN: "1.97.0"
   DSP_TCK_REF: v1.0.2
+  # the commit of that tag; the built jar is cached under it (job `tck`)
   DSP_TCK_COMMIT: ee22d21a2dae9ea387695fd96fc3cab405809a05
   # the released DCP TCK 1.2.1 jar (git tag v1.2.1 is 58a14449d5b8), checked by
   # its SHA-256 (and cached under it); building it from source needs a Java 17
@@ -31,19 +39,44 @@ env:
   DCP_TCK_JAR: https://repo1.maven.org/maven2/org/eclipse/dataspacetck/dcp/dcp-tck/1.2.1/dcp-tck-1.2.1-all.jar
   DCP_TCK_SHA256: 2b21af2213c0e89ac1c10d716e59cca58ca24c9e2f38094329500ca299828bd4
 
+# How the jobs are chosen: `changes` reads the changed files
+# (scripts/ci_changes.sh). The four TCK jobs are skipped when the change is
+# prose or fuzzing only; a manual run always runs them. `gate` is the one
+# check to require (CONTRIBUTING.md, "Required checks").
 jobs:
+  changes:
+    name: Changes
+    uses: ./.github/workflows/changes.yml
+
   tck:
     name: DSP TCK (metadata, catalog)
+    needs: changes
+    if: ${{ needs.changes.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The jar built from the pinned commit is kept between runs, keyed on
+      # that commit: a new commit is a new key, so the jar is never stale.
+      # On a hit, the TCK checkout, the Gradle cache and the build are skipped.
+      - name: Cache TCK
+        id: dsp-tck-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/dsp-tck-runtime.jar
+          key: dsp-tck-${{ env.DSP_TCK_COMMIT }}
+      - if: steps.dsp-tck-cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: eclipse-dataspacetck/dsp-tck
           ref: ${{ env.DSP_TCK_COMMIT }}
           path: dsp-tck
           persist-credentials: false
-      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+      - name: Java, with the Gradle cache (to build the TCK)
+        if: steps.dsp-tck-cache.outputs.cache-hit != 'true'
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: "21"
@@ -53,14 +86,23 @@ jobs:
             dsp-tck/**/*.gradle*
             dsp-tck/**/gradle-wrapper.properties
             dsp-tck/gradle/*.versions.toml
+      - name: Java (to run the cached TCK)
+        if: steps.dsp-tck-cache.outputs.cache-hit == 'true'
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: "21"
       - name: Install Rust
         run: |
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
           rustup default "$RUST_TOOLCHAIN"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build TCK
+        if: steps.dsp-tck-cache.outputs.cache-hit != 'true'
         working-directory: dsp-tck
-        run: ./gradlew -q shadowJar
+        run: |
+          ./gradlew -q shadowJar
+          cp dsp/dsp-tck/build/libs/dsp-tck-runtime.jar "$RUNNER_TEMP/dsp-tck-runtime.jar"
       - name: Start Portitor
         env:
           PORTITOR_BIND: 127.0.0.1:8080
@@ -76,7 +118,7 @@ jobs:
           for _ in $(seq 50); do curl -sf http://127.0.0.1:8080/health && break; sleep 0.2; done
       - name: Run TCK
         run: |
-          java -jar dsp-tck/dsp/dsp-tck/build/libs/dsp-tck-runtime.jar -config tck/dsp-tck.properties | tee tck.log
+          java -jar "$RUNNER_TEMP/dsp-tck-runtime.jar" -config tck/dsp-tck.properties | tee tck.log
       - name: Check required results
         run: python3 scripts/tck_check.py tck.log
       - if: always()
@@ -95,9 +137,14 @@ jobs:
   # nothing in these tests needs the `tck` feature.
   dcp-tck:
     name: DCP TCK (credential service)
+    needs: changes
+    if: ${{ needs.changes.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
@@ -175,9 +222,14 @@ jobs:
   # build is used.
   dcp-verifier-tck:
     name: DCP TCK (verifier)
+    needs: changes
+    if: ${{ needs.changes.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
@@ -248,9 +300,14 @@ jobs:
   # scripts/dcp-issuer-tck.sh registers its DID as a participant first.
   dcp-issuer-tck:
     name: DCP TCK (issuer)
+    needs: changes
+    if: ${{ needs.changes.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
@@ -292,3 +349,28 @@ jobs:
             bundle-run/dcp-issuer-tck.log
             bundle-run/issuer.log
           retention-days: 14
+
+  # The one check of this workflow to require. It always runs. It fails
+  # when a job above failed or was cancelled, when `changes` did not
+  # succeed, and when a TCK job was skipped although the change needed it.
+  # It passes when the TCK jobs were skipped on purpose (prose or fuzzing only).
+  gate:
+    name: TCK gate
+    if: ${{ always() }}
+    needs: [changes, tck, dcp-tck, dcp-verifier-tck, dcp-issuer-tck]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # the rule is in scripts/ci_gate.sh, one copy for the three gates; a
+      # broken rule fails here, and so fails this required check
+      - name: The gate's rule passes its self-test
+        run: scripts/ci_gate.sh self-test
+      - name: Every job passed, or was skipped on purpose
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          GATED_BY: build # the output of `changes` that says whether the jobs below are needed
+          NEEDED_JOBS: tck dcp-tck dcp-verifier-tck dcp-issuer-tck
+        run: scripts/ci_gate.sh check

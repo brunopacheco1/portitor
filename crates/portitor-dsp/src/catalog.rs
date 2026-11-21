@@ -45,7 +45,7 @@ pub const DSPACE_NAMESPACE: &str = "https://w3id.org/dspace/2025/1/";
 /// Reads a `CatalogRequestMessage` in compacted form (what DSP 2025-1
 /// sends), or in the one expanded form the DCP TCK v1.2.1 sends to start
 /// its verifier tests: `@type` is the full IRI and the filter, if present,
-/// is empty (README, "Testing the verifier"; the TCK's own trigger
+/// is empty (`docs/TESTING.md`, "The verifier tests"; the TCK's own trigger
 /// message). Both mean the same JSON-LD message. Any other expanded
 /// content is refused, as Portitor does not process JSON-LD.
 ///

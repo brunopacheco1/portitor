@@ -777,6 +777,59 @@ fn a_late_acknowledgement_or_failure_of_a_settled_finalization_changes_nothing()
     assert!(p.pending().unwrap().is_empty(), "nothing is sent again");
 }
 
+/// The outbox asks whether a finalization event it could not deliver
+/// was settled without it (by a transfer request): then the event is
+/// not counted as given up.
+#[test]
+fn a_finalization_event_is_settled_only_once_the_negotiation_is_finalized() {
+    let store = Store::default();
+    let p = service(&store, AgreeToCatalogOffers);
+
+    // the agreement on its way is not a finalization event
+    let (ack, agreement) = p
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap();
+    let pid = ack.provider_pid;
+    let agreement = agreement.unwrap();
+    assert!(!p.finalization_settled(&agreement).unwrap());
+    p.delivered(&agreement).unwrap();
+
+    // VERIFIED, the event on its way: not settled
+    let (_, finalization) = p
+        .verify(&pid, &verification(&pid), "did:web:consumer")
+        .unwrap();
+    let finalization = finalization.unwrap();
+    assert!(!p.finalization_settled(&finalization).unwrap());
+
+    // what the transfer provider writes for a transfer request
+    let verified = store.0.borrow()[&pid].clone();
+    let mut settled = finalization_proved(&verified).unwrap();
+    settled.version = verified.version + 1;
+    assert!((&store).replace_if(&settled, verified.version).unwrap());
+    assert!(p.finalization_settled(&finalization).unwrap());
+    // the earlier agreement message stays "not settled": only a
+    // finalization event is asked about
+    assert!(!p.finalization_settled(&agreement).unwrap());
+
+    // an unknown negotiation
+    let mut unknown = finalization.clone();
+    unknown.provider_pid = "urn:uuid:unknown".to_owned();
+    assert!(!p.finalization_settled(&unknown).unwrap());
+}
+
+/// An event the outbox gave up ends the negotiation: it is not settled.
+#[test]
+fn a_finalization_event_that_was_given_up_is_not_settled() {
+    let store = Store::default();
+    let p = service(&store, AgreeToCatalogOffers);
+    let (pid, finalization) = verified_with_finalization_on_its_way(&p);
+    let ending = p.abort(&finalization, "unreachable").unwrap().unwrap();
+    assert!(!p.finalization_settled(&finalization).unwrap());
+    p.delivered(&ending).unwrap();
+    assert_eq!(store.0.borrow()[&pid].state, NegotiationState::Terminated);
+    assert!(!p.finalization_settled(&finalization).unwrap());
+}
+
 /// The acknowledgement and the transfer request arrive at the same
 /// moment: the acknowledgement is written first, the transfer provider's
 /// write then loses the version check and writes nothing.

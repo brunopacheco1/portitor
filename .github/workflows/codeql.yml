@@ -10,9 +10,11 @@ on:
   schedule:
     - cron: '17 3 * * 1'
 
-# a newer push to the same pull request replaces the run in progress; pushes to main always finish
+# Runs of one pull request share a group: a newer push replaces the run in progress.
+# Every other run (a push to main, a scheduled or a manual run) is a group of its own,
+# named by its run id, so it is never cancelled and never waits for another run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -22,6 +24,8 @@ jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-24.04
+    # the Rust analysis takes about 5 minutes
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: read
@@ -33,10 +37,23 @@ jobs:
         language: [rust, actions]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           languages: ${{ matrix.language }}
           build-mode: none
       - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        id: analyze
         with:
           category: /language:${{ matrix.language }}
+      # The analysis succeeds whenever it ran, with or without findings,
+      # and GitHub's own "Code scanning results" check looks only at new
+      # alerts of a pull request. This step fails the job on any finding
+      # that is not in .github/codeql/accepted-findings.json: on a pull
+      # request, on main and in the weekly run (docs/TESTING.md, "CodeQL").
+      - name: Fail on findings
+        env:
+          LANGUAGE: ${{ matrix.language }}
+          SARIF_FOLDER: ${{ steps.analyze.outputs.sarif-output }}
+        run: scripts/codeql-gate.sh "$LANGUAGE" "$SARIF_FOLDER"

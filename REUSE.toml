@@ -32,6 +32,8 @@ path = [
     "_http/**",
     # VS Code configuration (JSON with comments)
     ".vscode/*.json",
+    # CodeQL findings accepted as false positives (JSON has no comments)
+    ".github/codeql/*.json",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "Portitor contributors"
@@ -165,3 +167,12 @@ path = "supply-chain/imports.lock"
 precedence = "override"
 SPDX-FileCopyrightText = ["google/supply-chain contributors", "bytecodealliance/wasmtime contributors", "mozilla/supply-chain contributors", "zcash/rust-ecosystem contributors", "divviup/libprio-rs contributors"]
 SPDX-License-Identifier = "Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND MPL-2.0"
+
+# Website heading font: Cinzel Regular 2.000, from https://github.com/NDISCOVER/Cinzel
+# (fonts/ttf/Cinzel-Regular.ttf, commit dd598495b0fb2ad84270d5cc75d642d2f1e8eabf), repacked as
+# WOFF2 with no other change; the font's name is kept ("Cinzel" is not a reserved font name)
+[[annotations]]
+path = "site/fonts/cinzel-regular.woff2"
+precedence = "override"
+SPDX-FileCopyrightText = "2020 The Cinzel Project Authors (https://github.com/NDISCOVER/Cinzel)"
+SPDX-License-Identifier = "OFL-1.1"

@@ -6,16 +6,17 @@
 # The EDC interop test (interop/edc/compose.yaml, docs/TESTING.md): a
 # Portitor participant and an EDC v1.0.0-RC8 participant, both members of
 # a data space whose authority runs portitor-issuer, with a local Gaia-X
-# compliance service (ADRs 0021 and 0022). Exits non-zero at the first
-# failed check, then removes everything.
+# compliance service (ADRs 0021 and 0022) and a second issuer, the EDC
+# Issuer Service (v1.0.0-RC8). Exits non-zero at the first failed check,
+# then removes everything.
 #
 #  1. The keys and secrets (interop/edc/run/), a test CA and its
 #     certificates (scripts/gaiax-lib.sh), each participant's Gaia-X files,
 #     the key set of the tokens for the IdentityHub's Identity API, and the
 #     HealthDCAT-AP demo bundle (scripts/demo-bundle.sh, with the issuer
-#     image), which the issuer serves and the Portitor connector pins.
-#  2. Docker Compose up; the EDC IdentityHub gets a participant with the
-#     key made in step 1, the EDC control plane an asset and an offer.
+#     image), which the issuer serves and the Portitor connector follows.
+#  2. Compose up; the EDC IdentityHub gets a participant with the key
+#     made in step 1, the EDC control plane an asset and an offer.
 #  3. The issuer registers both participants. Each identity asks the
 #     issuer for its MembershipCredential through its own API (DCP 6.4),
 #     and the issuer delivers it to its Storage API (DCP 6.5): the EDC
@@ -42,8 +43,34 @@
 #        IdentityHub has no Gaia-X onboarding) and stores it in the
 #        IdentityHub (Identity API). It negotiates the same offer again:
 #        FINALIZED; PULL transfer, fetch.
-#  8. Revocation: once the issuer revokes a participant's credential
-#     (POST /v1/credentials/{id}/revoke), the other refuses it (both ways).
+#  8. A second issuer, the EDC Issuer Service (did:web:edc-issuer.gaiax.test):
+#     a. It gets its participant context (Identity API), and through its
+#        admin API both participants as holders, an attestation and the
+#        definition of a plain test credential, the InteropTestCredential
+#        with one claim (level). Its issuer metadata lists it.
+#     b. Each provider offers data only with InteropTestCredential.level
+#        eq "basic": Portitor's third dataset, and a second offer of the
+#        EDC provider. Each catalog, as the other side read it, has the
+#        constraint.
+#     c. Before anyone holds the credential, each consumer negotiates
+#        the other's offer: both negotiations end TERMINATED, and EDC has
+#        no new agreement.
+#     d. Portitor's identity asks the EDC Issuer Service for the
+#        credential (POST /v1/credential-requests) and stores what it
+#        delivers; the EDC IdentityHub does the same (Identity API).
+#     e. EDC negotiates Portitor's offer: FINALIZED, PULL transfer, fetch.
+#        Portitor checked a credential an EDC issuer signed, with its
+#        Bitstring Status List: its log shows that it fetched the list.
+#     f. Portitor negotiates EDC's offer: FINALIZED, PULL transfer, fetch.
+#        EDC checked the credential Portitor's identity presented.
+#     g. The EDC Issuer Service revokes the EDC participant's credential
+#        (admin API). EDC negotiates Portitor's offer again: TERMINATED,
+#        and either Portitor's log says it found the credential revoked,
+#        or the IdentityHub's record of the credential shows that it saw
+#        the revocation first.
+#  9. Revocation by portitor-issuer: once it revokes a participant's
+#     MembershipCredential (POST /v1/credentials/{id}/revoke), the other
+#     refuses it (both ways).
 #
 # Test-only: no real Gaia-X trust anchor, the compliance service in test
 # mode (see interop/gaiax/compose.yaml). It needs Internet access: the
@@ -101,6 +128,22 @@ EDC_KEY_ALIAS=edc-participant-key
 # where the EDC participant's Gaia-X credentials have their ids (served
 # by the "tls" service from run/edc/www)
 EDC_GAIAX_BASE=https://$EDC_HOST/credentials/gaiax
+# the second issuer, the EDC Issuer Service, and its test credential: one
+# claim, taken from what the issuer knows about the holder
+EDC_ISSUER_HOST=edc-issuer.gaiax.test
+EDC_ISSUER_DID=did:web:$EDC_ISSUER_HOST
+EDC_ISSUER_CONTEXT=edc-issuer
+EDC_ISSUER_KEY_ID="$EDC_ISSUER_DID#key-1"
+EDC_ISSUER_KEY_ALIAS=edc-issuer-key
+TEST_CREDENTIAL_TYPE=InteropTestCredential
+TEST_CREDENTIAL_ID=interop-test-credential
+TEST_ATTESTATION_ID=interop-holder
+TEST_LEVEL=basic
+# the left operand both providers constrain (ADR 0019, and EDC's
+# convention), and the dataset Portitor offers with it
+# (config/portitor-datasets.json)
+TEST_OPERAND=$TEST_CREDENTIAL_TYPE.level
+TEST_DATASET=https://portitor.example/datasets/portitor-interop-issuer
 # COMPLIANCE_DID, NOTARY_DID, GAIAX_CONTEXT and TERMS_AND_CONDITIONS, and the
 # functions for the test CA, the test notary, a participant's Gaia-X files
 # and a Portitor identity's onboarding: shared with scripts/gaiax-e2e.sh
@@ -122,6 +165,10 @@ EDC_IDENTITY_API=http://127.0.0.1:18281/api/identity/v1
 EDC_MANAGEMENT=http://127.0.0.1:18181/api/management
 EDC_MANAGEMENT_KEY=edc-interop-test-key # config/edc-controlplane.properties
 EDC_DATAPLANE=http://127.0.0.1:18180/api
+EDC_ISSUER_IDENTITY_API=http://127.0.0.1:18381/api/identity/v1
+EDC_ISSUER_ADMIN=http://127.0.0.1:18385/api/issuer/v1/participants/$EDC_ISSUER_CONTEXT
+# the DCP issuer service of the EDC Issuer Service, as its DID document names it
+EDC_ISSUER_SERVICE_INSIDE=http://edc-issuerservice:9082/api/issuance/v1/participants/$EDC_ISSUER_CONTEXT
 # and how they reach each other
 EDC_DSP_INSIDE=http://edc-controlplane:8082/api/dsp/2025-1
 PORTITOR_DSP_INSIDE=http://portitor-connector:8080/$DSP
@@ -181,7 +228,7 @@ identity_api_key_set() { # writes the key and its JWKS
     >"$RUN/identity-api/jwks.json"
 }
 
-identity_api_token() { # scope: a five-minute token for the Identity API
+identity_api_token() { # scope: a five-minute token for an EDC API (identity-api:admin, issuer-admin-api:admin)
   local scope=$1 now header claims input signature
   now=$(date +%s)
   header=$(jq -nc --arg kid "$IDENTITY_API_KID" '{alg: "RS256", typ: "JWT", kid: $kid}')
@@ -217,7 +264,7 @@ trap cleanup EXIT
 
 step "Write the keys, the secrets and the Identity API's key set"
 rm -rf "$RUN"
-mkdir -p "$RUN/issuer" "$RUN/edc/www/.well-known" "$RUN/edc/www/credentials/gaiax"
+mkdir -p "$RUN/issuer" "$RUN/edc/www/.well-known" "$RUN/edc/www/credentials/gaiax" "$RUN/edc-issuer"
 identity_api_key_set
 new_ec_key "$RUN/issuer/issuer-key.pem"
 openssl rand -hex 32 >"$RUN/issuer/management.key"
@@ -226,10 +273,13 @@ participant portitor # run/portitor/: the identity key, the API keys, the STS se
 # Gaia-X onboarding (step 7c) signs with it, and its DID document must
 # name the key's certificate chain (x5u, ADR 0021)
 new_ec_key "$RUN/edc/identity-key.pem"
+# The EDC Issuer Service's key too: the key it would make itself is an
+# Ed25519 key, and Portitor verifies ES256 and PS256 only
+new_ec_key "$RUN/edc-issuer/identity-key.pem"
 
 step "Gaia-X: a test CA, its certificates, the test notary and the participants' files"
 # the TLS certificate covers every public name (config/tls.conf)
-gaiax_test_ca "portitor.gaiax.test,$EDC_HOST,compliance.gaiax.test,notary.gaiax.test"
+gaiax_test_ca "portitor.gaiax.test,$EDC_HOST,compliance.gaiax.test,notary.gaiax.test,$EDC_ISSUER_HOST"
 gaiax_test_notary
 gaiax_participant portitor portitor.gaiax.test "Portitor Test Provider S.A." LU12345678
 gaiax_participant edc "$EDC_HOST" "EDC Test Consumer S.A." LU87654321
@@ -262,18 +312,23 @@ wait_for "$CONNECTOR/health" "Portitor connector"
 wait_up http://127.0.0.1:18281/ "EDC IdentityHub"
 wait_up http://127.0.0.1:18181/ "EDC control plane"
 wait_up "$EDC_DATAPLANE/" "EDC data plane"
+wait_up http://127.0.0.1:18381/ "EDC Issuer Service"
 
 fetch() { # url [curl flags]: a request from inside the network, trusting the test CA
   "${COMPOSE[@]}" run --rm -q fetch -sS --fail-with-body "$@"
 }
 
-edc_identity() { # method path [body]: the IdentityHub's Identity API, as admin
-  local method=$1 path=$2 body=${3-}
+edc_api() { # base scope method path [body]: an EDC API that takes this test's tokens
+  local base=$1 scope=$2 method=$3 path=$4 body=${5-}
   local token args
-  token=$(identity_api_token identity-api:admin)
-  args=(-sS --fail-with-body -X "$method" "$EDC_IDENTITY_API$path" -H "authorization: Bearer $token")
-  if [[ $# -gt 2 ]]; then args+=(-H "$CONTENT_TYPE_JSON" -d "$body"); fi
+  token=$(identity_api_token "$scope")
+  args=(-sS --fail-with-body -X "$method" "$base$path" -H "authorization: Bearer $token")
+  if [[ $# -gt 4 ]]; then args+=(-H "$CONTENT_TYPE_JSON" -d "$body"); fi
   curl "${args[@]}"
+}
+
+edc_identity() { # method path [body]: the IdentityHub's Identity API, as admin
+  edc_api "$EDC_IDENTITY_API" identity-api:admin "$@"
 }
 
 edc_management() { # method path [body]: the control plane's management API
@@ -283,14 +338,31 @@ edc_management() { # method path [body]: the control plane's management API
   curl "${args[@]}"
 }
 
-wait_identity_api() { # until the Identity API answers 2xx, at most 120 seconds
-  # wait_up only shows that the IdentityHub's web server answers; until the
+wait_identity_api() { # [api-function what]: until an Identity API answers 2xx, at most 120 seconds
+  # wait_up only shows that the runtime's web server answers; until the
   # Identity API is registered, a request to it gets 405
+  local api=${1:-edc_identity} what=${2:-EDC IdentityHub}
   local deadline=$((SECONDS + 120))
-  until edc_identity GET /participants >/dev/null 2>&1; do
-    ((SECONDS < deadline)) || fail "the EDC IdentityHub's Identity API did not answer within 120 s"
+  until "$api" GET /participants >/dev/null 2>&1; do
+    ((SECONDS < deadline)) || fail "the $what's Identity API did not answer within 120 s"
     sleep 1
   done
+}
+
+vault_store() { # alias content what: writes a secret to EDC's Vault, tried for 60 seconds
+  # EDC's HashiCorp Vault in dev mode: secrets are at /v1/secret/data/<alias>,
+  # as {"data": {"content": ...}} (HashicorpVaultClient)
+  local alias=$1 content=$2 what=$3
+  for _ in $(seq 1 60); do
+    if fetch -X POST "http://vault:8200/v1/secret/data/$alias" \
+      -H 'X-Vault-Token: root' -H "$CONTENT_TYPE_JSON" \
+      -d "$(jq -nc --arg content "$content" '{data: {content: $content}}')" \
+      >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  fail "store $what in the Vault"
 }
 
 step "EDC IdentityHub: wait for its Identity API"
@@ -300,23 +372,10 @@ step "EDC IdentityHub: the participant $EDC_DID, with the key made for this run"
 # "Keys already exist" (IdentityHub, KeyDescriptor): the private key is in
 # the Vault under its alias before the participant is created, as a JWK,
 # the form in which the IdentityHub stores a key it makes itself; the
-# public key is given as a JWK. The Vault is EDC's HashiCorp Vault in dev
-# mode: secrets are at /v1/secret/data/<alias>, as {"data": {"content": ...}}
-# (HashicorpVaultClient).
+# public key is given as a JWK (vault_store).
 EDC_PRIVATE_JWK=$(python3 scripts/gaiax_test_onboarding.py private-jwk \
   "$RUN/edc/identity-key.pem" "$EDC_KEY_ID") || fail "the EDC participant's private JWK"
-stored=
-for _ in $(seq 1 60); do
-  if fetch -X POST "http://vault:8200/v1/secret/data/$EDC_KEY_ALIAS" \
-    -H 'X-Vault-Token: root' -H "$CONTENT_TYPE_JSON" \
-    -d "$(jq -nc --arg content "$EDC_PRIVATE_JWK" '{data: {content: $content}}')" \
-    >/dev/null 2>&1; then
-    stored=yes
-    break
-  fi
-  sleep 1
-done
-[[ -n $stored ]] || fail "store the EDC participant's key in the Vault"
+vault_store "$EDC_KEY_ALIAS" "$EDC_PRIVATE_JWK" "the EDC participant's key"
 # the public JWK carries alg ES256 and x5u, the URL of the key's
 # certificate chain: a Gaia-X compliance service needs both in the
 # signer's DID document (ADR 0021)
@@ -496,28 +555,37 @@ until_state() { # api path states (regex): prints the record once in one of them
   fail "$path still $state"
 }
 
+portitor_negotiation_request() { # offer: the body that asks Portitor to negotiate that EDC offer
+  local offer=$1
+  jq -nc --arg addr "$EDC_DSP_INSIDE" --arg id "$EDC_DID" --argjson offer "$offer" \
+    '{counterPartyAddress: $addr, counterPartyId: $id, datasetId: "edc-interop", offer: $offer}'
+}
+
+portitor_pull() { # agreement: Portitor pulls the data; checks it equals what EDC published
+  local agreement=$1 pid transfer endpoint token
+  pid=$(portitor POST /v1/transfers "$(jq -nc --arg a "$agreement" \
+    '{agreementId: $a, format: "HttpData-PULL"}')" | jq -r '.consumerPid') ||
+    fail "request the transfer"
+  transfer=$(until_state portitor "/v1/transfers/$pid" 'STARTED|TERMINATED')
+  [[ $(jq -r "$STATE_PATH" <<<"$transfer") == STARTED ]] || fail "expected STARTED: $transfer"
+  endpoint=$(jq -r '.dataAddress.endpoint' <<<"$transfer")
+  token=$(jq -r '.dataAddress.endpointProperties[] | select(.name == "authorization") | .value' \
+    <<<"$transfer")
+  "${COMPOSE[@]}" run --rm -q fetch -sf "$endpoint" -H "authorization: Bearer $token" \
+    >"$RUN/fetched-from-edc" || fail "fetch $endpoint"
+  cmp -s "$RUN/fetched-from-edc" "$DIR/data/edc-provider.csv" || fail "the data from EDC differs"
+  echo "received $(wc -c <"$RUN/fetched-from-edc") bytes, as published"
+}
+
 step "Portitor negotiates the EDC offer"
-PID=$(portitor POST /v1/negotiations "$(jq -nc --arg addr "$EDC_DSP_INSIDE" \
-  --arg id "$EDC_DID" --argjson offer "$EDC_OFFER" \
-  '{counterPartyAddress: $addr, counterPartyId: $id, datasetId: "edc-interop", offer: $offer}')" |
+PID=$(portitor POST /v1/negotiations "$(portitor_negotiation_request "$EDC_OFFER")" |
   jq -r '.consumerPid') || fail "start the negotiation"
 VIEW=$(until_state portitor "/v1/negotiations/$PID" 'FINALIZED|TERMINATED')
 [[ $(jq -r "$STATE_PATH" <<<"$VIEW") == FINALIZED ]] || fail "expected FINALIZED: $VIEW"
 AGREEMENT=$(jq -r '.agreement["@id"]' <<<"$VIEW")
 
 step "Portitor pulls the data from the EDC data plane"
-TPID=$(portitor POST /v1/transfers "$(jq -nc --arg a "$AGREEMENT" \
-  '{agreementId: $a, format: "HttpData-PULL"}')" | jq -r '.consumerPid') ||
-  fail "request the transfer"
-TRANSFER=$(until_state portitor "/v1/transfers/$TPID" 'STARTED|TERMINATED')
-[[ $(jq -r "$STATE_PATH" <<<"$TRANSFER") == STARTED ]] || fail "expected STARTED: $TRANSFER"
-ENDPOINT=$(jq -r '.dataAddress.endpoint' <<<"$TRANSFER")
-TOKEN=$(jq -r '.dataAddress.endpointProperties[] | select(.name == "authorization") | .value' \
-  <<<"$TRANSFER")
-"${COMPOSE[@]}" run --rm -q fetch -sf "$ENDPOINT" -H "authorization: Bearer $TOKEN" \
-  >"$RUN/fetched-from-edc" || fail "fetch $ENDPOINT"
-cmp -s "$RUN/fetched-from-edc" "$DIR/data/edc-provider.csv" || fail "the data from EDC differs"
-echo "received $(wc -c <"$RUN/fetched-from-edc") bytes, as published"
+portitor_pull "$AGREEMENT"
 
 # --- 6. EDC consumer, Portitor provider --------------------------------------
 
@@ -628,7 +696,7 @@ VIEW=$(edc_negotiate "$GAIAX_DATASET" "$GAIAX_OFFER")
 [[ $(jq -r "$STATE_PATH" <<<"$VIEW") == TERMINATED ]] || fail "expected TERMINATED: $VIEW"
 # EDC is a member, so Portitor took the request and then ended the
 # negotiation with a ContractNegotiationTerminationMessage: the policy
-# does not hold. EDC notes an HTTP error as "code=<status>" (step 8); there
+# does not hold. EDC notes an HTTP error as "code=<status>" (step 9); there
 # is none here.
 if jq -r '.errorDetail // empty' <<<"$VIEW" | grep -q 'code='; then
   fail "refused with an HTTP error, not with a termination message: $VIEW"
@@ -687,7 +755,379 @@ step "Gaia-X: EDC pulls the data for compliant participants from the Portitor pr
 # Portitor asks for the credentials again at the transfer request (ADR 0019)
 edc_pull "$GAIAX_AGREEMENT" "$DIR/data/portitor-provider-gaiax.csv"
 
-# --- 8. revocation --------------------------------------------------------------
+# --- 8. a second issuer: the EDC Issuer Service -------------------------------
+
+edc_issuer_identity() { # method path [body]: the Issuer Service's Identity API, as admin
+  edc_api "$EDC_ISSUER_IDENTITY_API" identity-api:admin "$@"
+}
+
+edc_issuer_admin() { # method path [body]: the Issuer Service's admin API, for its participant context
+  # the same tokens with another scope: each API takes only its own
+  # (IdentityHub, ApiScopeFilter)
+  edc_api "$EDC_ISSUER_ADMIN" issuer-admin-api:admin "$@"
+}
+
+edc_finalized_negotiations() { # prints how many of EDC's negotiations, on either side, are FINALIZED
+  local all
+  all=$(edc_management POST /v4/contractnegotiations/request \
+    "$(jq -nc --argjson c "$CONTEXT" '{"@context": $c, "@type": "QuerySpec"}')") ||
+    fail "query EDC's negotiations: $all"
+  jq -e 'type == "array"' <<<"$all" >/dev/null || fail "EDC's negotiations are not a list: $all"
+  jq '[.[] | select(.state == "FINALIZED")] | length' <<<"$all"
+}
+
+# How many lines of the Portitor connector's log have every one of the
+# given texts. The log is read from the container engine, which may hand
+# on a line a moment after the connector wrote it: a caller that expects
+# a line asks again for a few seconds (log_lines_appear).
+portitor_log_lines() { # text...: prints the number of lines
+  "${COMPOSE[@]}" logs --no-color portitor-connector >"$RUN/portitor-connector.log" 2>&1 ||
+    fail "read the Portitor connector's log"
+  local text
+  local matched=$RUN/portitor-connector.matched
+  cp "$RUN/portitor-connector.log" "$matched"
+  for text in "$@"; do
+    # grep -F: the texts are URLs and DIDs, not patterns; no line left is exit 1
+    grep -F -- "$text" "$matched" >"$matched.next" || true
+    mv "$matched.next" "$matched"
+  done
+  wc -l <"$matched" | tr -d ' '
+}
+
+log_lines_appear() { # more-than text...: whether more than that many lines have the texts, within 10 seconds
+  local more_than=$1
+  shift
+  for _ in $(seq 1 20); do
+    if (($(portitor_log_lines "$@") > more_than)); then return 0; fi
+    sleep 0.5
+  done
+  return 1
+}
+
+step "EDC Issuer Service: its participant context $EDC_ISSUER_DID, with the key made for this run"
+wait_identity_api edc_issuer_identity "EDC Issuer Service"
+# as for the EDC participant (step 2): the private key is in the Vault
+# before the participant context is created. The Issuer Service signs
+# credentials and status lists with it, and its ID tokens.
+EDC_ISSUER_PRIVATE_JWK=$(python3 scripts/gaiax_test_onboarding.py private-jwk \
+  "$RUN/edc-issuer/identity-key.pem" "$EDC_ISSUER_KEY_ID") || fail "the EDC Issuer Service's private JWK"
+vault_store "$EDC_ISSUER_KEY_ALIAS" "$EDC_ISSUER_PRIVATE_JWK" "the EDC Issuer Service's key"
+# the public JWK, with alg ES256: the private one without "d" and "kid"
+# (an issuer needs no certificate chain, x5u)
+EDC_ISSUER_PUBLIC_JWK=$(jq -c '{kty, crv, x, y, alg: "ES256"}' <<<"$EDC_ISSUER_PRIVATE_JWK")
+# its DID document names the DCP issuer service (type IssuerService, DCP
+# 6.2): holders send their credential requests to {that URL}/credentials
+edc_issuer_identity POST /participants "$(jq -nc --arg did "$EDC_ISSUER_DID" \
+  --arg ctx "$EDC_ISSUER_CONTEXT" --arg kid "$EDC_ISSUER_KEY_ID" --arg alias "$EDC_ISSUER_KEY_ALIAS" \
+  --argjson jwk "$EDC_ISSUER_PUBLIC_JWK" --arg service "$EDC_ISSUER_SERVICE_INSIDE" '{
+  participantContextId: $ctx, did: $did, active: true, roles: [],
+  keys: [{keyId: $kid, privateKeyAlias: $alias, publicKeyJwk: $jwk}],
+  serviceEndpoints: [{type: "IssuerService", id: "edc-issuerservice", serviceEndpoint: $service}]}')" \
+  >/dev/null || fail "create the EDC Issuer Service's participant context"
+# the DID resolves under its public name, over HTTPS (as Portitor reads
+# it) and over HTTP (as the EDC runtimes do: edc.iam.did.web.use.https=false)
+for scheme in https http; do
+  EDC_ISSUER_DOCUMENT=$(fetch "$scheme://$EDC_ISSUER_HOST/.well-known/did.json") ||
+    fail "$EDC_ISSUER_DID does not resolve over $scheme"
+  jq -e --arg did "$EDC_ISSUER_DID" --arg kid "$EDC_ISSUER_KEY_ID" --arg service "$EDC_ISSUER_SERVICE_INSIDE" '
+    .id == $did
+    and any(.verificationMethod[]; .id == $kid and .publicKeyJwk.alg == "ES256")
+    and (.assertionMethod | index($kid) != null)
+    and any(.service[]; .type == "IssuerService" and .serviceEndpoint == $service)' \
+    <<<"$EDC_ISSUER_DOCUMENT" >/dev/null ||
+    fail "the DID document is not $EDC_ISSUER_DID with the key $EDC_ISSUER_KEY_ID as assertionMethod and the IssuerService $EDC_ISSUER_SERVICE_INSIDE: $EDC_ISSUER_DOCUMENT"
+done
+
+step "EDC Issuer Service: both participants as holders, an attestation, the $TEST_CREDENTIAL_TYPE definition (admin API)"
+# The attestation "holder" gives a credential definition what the issuer
+# knows about the holder: its properties. The definition maps the property
+# "level" to the claim credentialSubject.level, and needs it.
+edc_issuer_admin POST /attestations "$(jq -nc --arg id "$TEST_ATTESTATION_ID" \
+  '{id: $id, attestationType: "holder", configuration: {}}')" >/dev/null ||
+  fail "create the attestation definition"
+for did in "$PORTITOR_DID" "$EDC_DID"; do
+  edc_issuer_admin POST /holders "$(jq -nc --arg did "$did" --arg level "$TEST_LEVEL" \
+    '{holderId: $did, did: $did, name: $did, properties: {level: $level}}')" >/dev/null ||
+    fail "register the holder $did"
+done
+# Valid for a year (in seconds). Not for a short time: an EDC IdentityHub
+# asks for a new credential every minute once the one it holds has less
+# than seven days left (edc.iam.credential.renewal.graceperiod), and the
+# revocation below would be answered with a fresh credential. The format
+# is the Issuer Service's DCP profile, vc20-bssl/jwt
+# (config/edc-issuerservice.properties). jsonSchema is a required member;
+# "{}" accepts every subject.
+edc_issuer_admin POST /credentialdefinitions "$(jq -nc --arg id "$TEST_CREDENTIAL_ID" \
+  --arg type "$TEST_CREDENTIAL_TYPE" --arg attestation "$TEST_ATTESTATION_ID" '{
+  id: $id, credentialType: $type, jsonSchema: "{}", validity: 31536000,
+  attestations: [$attestation], rules: [],
+  mappings: [{input: "level", output: "credentialSubject.level", required: true}]}')" >/dev/null ||
+  fail "create the credential definition"
+# its issuer metadata (DCP 6.7) lists the credential; no token is needed
+METADATA=$(fetch "$EDC_ISSUER_SERVICE_INSIDE/metadata") || fail "the Issuer Service's metadata: $METADATA"
+jq -e --arg issuer "$EDC_ISSUER_DID" --arg id "$TEST_CREDENTIAL_ID" --arg type "$TEST_CREDENTIAL_TYPE" '
+  .type == "IssuerMetadata" and .issuer == $issuer
+  and any(.credentialsSupported[]; .id == $id and .credentialType == $type and .profile == "vc20-bssl/jwt")' \
+  <<<"$METADATA" >/dev/null ||
+  fail "the issuer metadata does not list $TEST_CREDENTIAL_ID ($TEST_CREDENTIAL_TYPE, vc20-bssl/jwt) from $EDC_ISSUER_DID: $METADATA"
+echo "the EDC Issuer Service offers: $(jq -c '.credentialsSupported' <<<"$METADATA")"
+
+step "$TEST_CREDENTIAL_TYPE: each provider's offer for its holders"
+# Portitor's third dataset, as EDC read it in step 6
+TEST_ENTRY=$(catalog_entry "$TEST_DATASET")
+TEST_OFFER=$(first_offer "$TEST_ENTRY")
+echo "Portitor offers: $TEST_OFFER"
+jq -e --arg operand "$TEST_OPERAND" --arg level "$TEST_LEVEL" \
+  '[.. | strings] | index($operand) != null and index($level) != null' <<<"$TEST_OFFER" >/dev/null ||
+  fail "the offer EDC read has no $TEST_OPERAND constraint: $TEST_OFFER"
+# The EDC provider's second offer of its asset, with the same constraint.
+# EDC stores a policy only if its left operand is bound to a function:
+# runtimes/controlplane, CredentialClaimPolicyExtension.
+edc_management POST /v4/policydefinitions "$(jq -nc --argjson c "$CONTEXT" \
+  --arg operand "$TEST_OPERAND" --arg level "$TEST_LEVEL" '{
+  "@context": $c, "@type": "PolicyDefinition", "@id": "interop-test-credential",
+  policy: {"@type": "Set", permission: [{action: "use",
+    constraint: [{leftOperand: $operand, operator: "eq", rightOperand: $level}]}]}}')" >/dev/null ||
+  fail "create the EDC policy with the $TEST_OPERAND constraint"
+edc_management POST /v4/contractdefinitions "$(jq -nc --argjson c "$CONTEXT" '{
+  "@context": $c, "@type": "ContractDefinition", "@id": "edc-interop-offer-credential",
+  accessPolicyId: "use", contractPolicyId: "interop-test-credential", assetsSelector: []}')" >/dev/null ||
+  fail "create the EDC contract definition for holders of the credential"
+# as Portitor reads it: the catalog now has two offers for the asset
+STATUS=$(edc_catalog_for_portitor)
+[[ $STATUS == 200 ]] || fail "the catalog call answered $STATUS: $(cat "$RUN/catalog.json")"
+EDC_TEST_OFFER=$(jq -c --arg operand "$TEST_OPERAND" '[[.dataset] | flatten | .[]
+  | select(.["@id"] == "edc-interop") | [.hasPolicy] | flatten | .[]
+  | select([.. | strings] | index($operand) != null)] | .[0]' "$RUN/catalog.json")
+[[ -n $EDC_TEST_OFFER && $EDC_TEST_OFFER != null ]] ||
+  fail "no edc-interop offer with a $TEST_OPERAND constraint (the left operand must arrive as that text): $(cat "$RUN/catalog.json")"
+echo "EDC offers: $EDC_TEST_OFFER"
+
+step "$TEST_CREDENTIAL_TYPE: nobody holds one yet, so each provider refuses the other"
+VIEW=$(edc_negotiate "$TEST_DATASET" "$TEST_OFFER")
+[[ $(jq -r "$STATE_PATH" <<<"$VIEW") == TERMINATED ]] || fail "expected TERMINATED: $VIEW"
+echo "EDC's negotiation ended TERMINATED: Portitor refused"
+# The other way. EDC asks Portitor's identity for the credential
+# (config/edc-controlplane.properties, edc.iam.dcp.scopes.interoptest) and
+# gets none, so it refuses the request. How EDC refuses is its choice (an
+# HTTP error or a termination message), so no reason is asked for. But
+# the negotiation must end, and end refused: both ways of refusing leave
+# Portitor's negotiation TERMINATED. One that is still open after the
+# wait of until_state (60 seconds), or that cannot be read, fails with
+# its state printed: nothing was refused then.
+FINALIZED_BEFORE=$(edc_finalized_negotiations)
+PID=$(portitor POST /v1/negotiations "$(portitor_negotiation_request "$EDC_TEST_OFFER")" |
+  jq -r '.consumerPid') || fail "start the negotiation"
+VIEW=$(until_state portitor "/v1/negotiations/$PID" 'FINALIZED|TERMINATED')
+[[ $(jq -r "$STATE_PATH" <<<"$VIEW") == TERMINATED ]] ||
+  fail "EDC agreed with a participant that holds no $TEST_CREDENTIAL_TYPE: $VIEW"
+# and EDC's own view: it has no agreement more than before. Nothing else
+# negotiates at this moment, so the number is exact. (Step 8f checks that
+# this number does rise when EDC agrees, so the comparison is not empty.)
+FINALIZED_AFTER=$(edc_finalized_negotiations)
+[[ $FINALIZED_AFTER == "$FINALIZED_BEFORE" ]] ||
+  fail "EDC has $FINALIZED_AFTER FINALIZED negotiations, $FINALIZED_BEFORE before Portitor asked without a $TEST_CREDENTIAL_TYPE"
+echo "Portitor's negotiation ended TERMINATED, and EDC has no new agreement: EDC refused"
+
+step "Portitor identity: asks the EDC Issuer Service for the $TEST_CREDENTIAL_TYPE (management API)"
+# the same call as in step 3, with the other issuer: the identity reads the
+# issuer's DID document and metadata, sends the DCP CredentialRequestMessage
+# to its IssuerService, and takes the delivery at its Storage API
+PORTITOR_TEST_PID=$(identity_management POST /v1/credential-requests "$(jq -nc \
+  --arg issuer "$EDC_ISSUER_DID" --arg id "$TEST_CREDENTIAL_ID" '{issuerDid: $issuer, credentialIds: [$id]}')" |
+  jq -r '.holderPid') || fail "Portitor's credential request to the EDC Issuer Service"
+portitor_test_request() { identity_management GET "/v1/credential-requests/$PORTITOR_TEST_PID"; }
+until_issued "Portitor credential request $PORTITOR_TEST_PID" portitor_test_request
+identity_management GET /v1/credentials |
+  jq -e --arg type "$TEST_CREDENTIAL_TYPE" --arg issuer "$EDC_ISSUER_DID" \
+    '[.[] | select(.types | index($type)) | select(.issuer == $issuer and .profile == "vc20-bssl/jwt")] | length == 1' \
+    >/dev/null || fail "the identity does not hold one $TEST_CREDENTIAL_TYPE from $EDC_ISSUER_DID: $(identity_management GET /v1/credentials)"
+echo "Portitor's identity holds a $TEST_CREDENTIAL_TYPE from $EDC_ISSUER_DID"
+# Known gap in EDC v1.0.0-RC8 (docs/TESTING.md): the Location of its answer
+# to the request leaves out the path of its issuance API
+# (web.http.issuance.path), so the request status (DCP 6.8) is not found
+# there. The credential arrives all the same: the issuer delivers it.
+# Reported here, not a failed check.
+ISSUER_STATUS_ERROR=$(portitor_test_request | jq -r '.issuerStatusError // empty')
+if [[ -n $ISSUER_STATUS_ERROR ]]; then
+  # only the known shape is the known gap: the address EDC gave has no
+  # issuance path. An error for an address that has it would be ours.
+  ISSUER_STATUS_URL=$(portitor_test_request | jq -r '.statusUrl // empty')
+  [[ $ISSUER_STATUS_URL != *"/api/issuance/"* ]] ||
+    fail "the request status at $ISSUER_STATUS_URL has the issuance path and still cannot be read: $ISSUER_STATUS_ERROR"
+  echo "known gap (EDC): the request status at $ISSUER_STATUS_URL cannot be read: $ISSUER_STATUS_ERROR"
+else
+  echo "the EDC Issuer Service reports the request as $(portitor_test_request | jq -c '.issuerStatus')"
+fi
+
+step "EDC IdentityHub: asks the EDC Issuer Service for the $TEST_CREDENTIAL_TYPE (Identity API, credentials/request)"
+LOCATION=$(curl -sS --fail-with-body -X POST -D - -o /dev/null \
+  "$EDC_IDENTITY_API/participants/$EDC_CONTEXT/credentials/request" \
+  -H "authorization: Bearer $(identity_api_token identity-api:admin)" -H "$CONTENT_TYPE_JSON" \
+  -d "$(jq -nc --arg issuer "$EDC_ISSUER_DID" --arg id "$TEST_CREDENTIAL_ID" --arg type "$TEST_CREDENTIAL_TYPE" \
+    '{issuerDid: $issuer, credentials: [{id: $id, type: $type, format: "vc20-bssl/jwt"}]}')" |
+  tr -d '\r' | awk 'tolower($1) == "location:" {print $2}') || fail "the EDC credential request"
+EDC_TEST_PID=${LOCATION##*/}
+[[ -n $EDC_TEST_PID ]] || fail "the IdentityHub gave no request id"
+edc_test_request() { edc_identity GET "/participants/$EDC_CONTEXT/credentials/request/$EDC_TEST_PID"; }
+until_issued "EDC credential request $EDC_TEST_PID" edc_test_request
+edc_identity GET "/participants/$EDC_CONTEXT/credentials?type=$TEST_CREDENTIAL_TYPE" |
+  jq -e --arg issuer "$EDC_ISSUER_DID" 'length == 1 and .[0].issuerId == $issuer' >/dev/null ||
+  fail "the IdentityHub does not hold one $TEST_CREDENTIAL_TYPE from $EDC_ISSUER_DID"
+echo "the IdentityHub holds a $TEST_CREDENTIAL_TYPE from $EDC_ISSUER_DID"
+# The IdentityHub's own state of that credential (a number, the "state"
+# of its record), kept now, while the credential is good, to compare
+# after the revocation in step 8g.
+edc_held_state() { # prints the state of the one InteropTestCredential the IdentityHub holds
+  local held
+  held=$(edc_identity GET "/participants/$EDC_CONTEXT/credentials?type=$TEST_CREDENTIAL_TYPE") ||
+    fail "read the IdentityHub's $TEST_CREDENTIAL_TYPE: $held"
+  jq -c '[.[].state]' <<<"$held"
+}
+EDC_HELD_BEFORE=$(edc_held_state)
+
+# What the Issuer Service issued, from its admin API: the credential it
+# keeps for a holder, as {id, status list URL, index}. The id is the
+# admin API's, the one its revoke call takes.
+edc_issued() { # holder DID
+  local holder=$1 issued
+  issued=$(edc_issuer_admin POST /credentials/query '{}') || fail "query the Issuer Service's credentials: $issued"
+  jq -ce --arg type "$TEST_CREDENTIAL_TYPE" --arg holder "$holder" '[.[]
+    | select(.credential.type | index($type))
+    | select(any(.credential.credentialSubject[]; .id == $holder))] | .[0]
+    | {id, list: .credential.credentialStatus[0].statusListCredential,
+       index: .credential.credentialStatus[0].statusListIndex}
+    | select(.id != null and .list != null and .index != null)' <<<"$issued" ||
+    fail "the Issuer Service keeps no $TEST_CREDENTIAL_TYPE with a status list entry for $holder: $issued"
+}
+
+# The bit of one credential in the Issuer Service's status list, read as a
+# verifier reads it (Bitstring Status List v1.0: a VC-JWT whose
+# credentialSubject.encodedList is multibase base64url, "u", of the
+# gzip-compressed bits; the first bit is the leftmost). EDC answers
+# 415 unless Accept is application/vc+jwt, application/json or */*.
+status_list_bit() { # url index: prints 0 or 1
+  local url=$1 index=$2 list
+  list=$(fetch "$url" -H 'accept: application/vc+jwt') || fail "fetch the status list $url: $list"
+  python3 -c '
+import base64, gzip, json, sys
+
+def decode(text):
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+subject = json.loads(decode(sys.argv[1].split(".")[1]))["credentialSubject"]
+if isinstance(subject, list):
+    subject = subject[0]
+assert subject["encodedList"].startswith("u"), "encodedList is not multibase base64url"
+bits = gzip.decompress(decode(subject["encodedList"][1:]))
+index = int(sys.argv[2])
+print(bits[index // 8] >> (7 - index % 8) & 1)' "$list" "$index" || fail "read the status list $url: $list"
+}
+
+EDC_ISSUED=$(edc_issued "$EDC_DID")
+EDC_STATUS_LIST=$(jq -r '.list' <<<"$EDC_ISSUED")
+EDC_STATUS_INDEX=$(jq -r '.index' <<<"$EDC_ISSUED")
+[[ $(status_list_bit "$EDC_STATUS_LIST" "$EDC_STATUS_INDEX") == 0 ]] ||
+  fail "the EDC participant's new credential is already revoked in $EDC_STATUS_LIST"
+echo "its status: bit $EDC_STATUS_INDEX of $EDC_STATUS_LIST, not set"
+
+step "$TEST_CREDENTIAL_TYPE: EDC, with the credential, negotiates Portitor's offer: Portitor agrees"
+# Portitor asks the IdentityHub for the credential, verifies the EDC
+# Issuer Service's signature (a trusted issuer: PORTITOR_TRUSTED_ISSUERS in
+# compose.yaml), reads its status list, and compares the claim
+STATUS_LIST_FETCHED="status list fetched and verified" # the connector's DEBUG line (auth/dcp.rs; RUST_LOG in compose.yaml)
+FETCHES_BEFORE=$(portitor_log_lines "$STATUS_LIST_FETCHED" "$EDC_STATUS_LIST")
+VIEW=$(edc_negotiate "$TEST_DATASET" "$TEST_OFFER")
+[[ $(jq -r "$STATE_PATH" <<<"$VIEW") == FINALIZED ]] || fail "expected FINALIZED: $VIEW"
+TEST_AGREEMENT=$(jq -r '.contractAgreementId' <<<"$VIEW")
+# FINALIZED alone would also be reached by a connector that skipped the
+# status check: its log must show that it fetched this status list, from
+# this issuer, during the negotiation
+log_lines_appear "$FETCHES_BEFORE" "$STATUS_LIST_FETCHED" "$EDC_STATUS_LIST" "$EDC_ISSUER_DID" ||
+  fail "Portitor agreed, but its log has no new \"$STATUS_LIST_FETCHED\" for $EDC_STATUS_LIST from $EDC_ISSUER_DID (see $RUN/portitor-connector.log; the line is at DEBUG, RUST_LOG in $DIR/compose.yaml)"
+echo "Portitor's log: it fetched and verified the status list $EDC_STATUS_LIST"
+
+step "$TEST_CREDENTIAL_TYPE: EDC pulls the data for its holders from the Portitor provider"
+edc_pull "$TEST_AGREEMENT" "$DIR/data/portitor-provider-issuer.csv"
+
+step "$TEST_CREDENTIAL_TYPE: Portitor, with the credential, negotiates EDC's offer: EDC agrees"
+# Portitor reads the constraint in the offer, puts the scope for the
+# credential in its access token (PORTITOR_POLICY_CREDENTIALS), and its
+# identity presents the credential to EDC, which trusts the issuer
+# (edc.iam.trustedissuer.edcissuer.id) and checks the claim
+FINALIZED_BEFORE=$(edc_finalized_negotiations)
+PID=$(portitor POST /v1/negotiations "$(portitor_negotiation_request "$EDC_TEST_OFFER")" |
+  jq -r '.consumerPid') || fail "start the negotiation"
+VIEW=$(until_state portitor "/v1/negotiations/$PID" 'FINALIZED|TERMINATED')
+[[ $(jq -r "$STATE_PATH" <<<"$VIEW") == FINALIZED ]] || fail "expected FINALIZED: $VIEW"
+jq -e --arg operand "$TEST_OPERAND" '.agreement | [.. | strings] | index($operand) != null' <<<"$VIEW" >/dev/null ||
+  fail "the agreement is not for the offer with the $TEST_OPERAND constraint: $VIEW"
+# EDC's own count sees this agreement: the count that did not move when
+# EDC refused (step 8c) is one that moves when EDC agrees. EDC notes its
+# side as FINALIZED a moment after Portitor has the event's answer, so
+# this is asked for up to 30 seconds.
+FINALIZED_AFTER=$FINALIZED_BEFORE
+for _ in $(seq 1 60); do
+  FINALIZED_AFTER=$(edc_finalized_negotiations)
+  [[ $FINALIZED_AFTER == "$FINALIZED_BEFORE" ]] || break
+  sleep 0.5
+done
+[[ $FINALIZED_AFTER == $((FINALIZED_BEFORE + 1)) ]] ||
+  fail "EDC agreed, but it has $FINALIZED_AFTER FINALIZED negotiations after $FINALIZED_BEFORE before (expected one more): the check of step 8c does not see EDC's agreements"
+
+step "$TEST_CREDENTIAL_TYPE: Portitor pulls the data for its holders from the EDC data plane"
+# EDC checks the policy again at the transfer request
+portitor_pull "$(jq -r '.agreement["@id"]' <<<"$VIEW")"
+
+step "The EDC Issuer Service revokes the EDC participant's $TEST_CREDENTIAL_TYPE: Portitor refuses EDC"
+REFUSALS_BEFORE=$(portitor_log_lines "credential refused" "$TEST_CREDENTIAL_TYPE" "revoked")
+edc_issuer_admin POST "/credentials/$(jq -r '.id | @uri' <<<"$EDC_ISSUED")/revoke" >/dev/null ||
+  fail "revoke the EDC participant's $TEST_CREDENTIAL_TYPE"
+[[ $(status_list_bit "$EDC_STATUS_LIST" "$EDC_STATUS_INDEX") == 1 ]] ||
+  fail "after the revocation, bit $EDC_STATUS_INDEX of $EDC_STATUS_LIST is not set"
+echo "revoked: bit $EDC_STATUS_INDEX of $EDC_STATUS_LIST is set"
+# Portitor reads the status list at every check
+# (PORTITOR_STATUS_LIST_CACHE_SECONDS=0 in compose.yaml)
+VIEW=$(edc_negotiate "$TEST_DATASET" "$TEST_OFFER")
+[[ $(jq -r "$STATE_PATH" <<<"$VIEW") == TERMINATED ]] || fail "expected TERMINATED: $VIEW"
+# EDC is still a member, so Portitor took the request and then ended the
+# negotiation with a termination message, as before anyone held the
+# credential.
+if jq -r '.errorDetail // empty' <<<"$VIEW" | grep -q 'code='; then
+  fail "refused with an HTTP error, not with a termination message: $VIEW"
+fi
+# TERMINATED alone does not say why: the negotiation of step 8c ended the
+# same way. One of two things must be shown.
+# 1. Portitor found the revocation: the IdentityHub still presented the
+#    credential (it keeps status lists for 15 minutes and read this one
+#    in step 8e), Portitor read the status list itself and logged
+#    "credential refused" with the type and "revoked". This is what a
+#    run normally shows.
+# 2. The IdentityHub saw the revocation first and presented no such
+#    credential, so Portitor's own check had nothing to refuse. This is
+#    the IdentityHub's timing, not ours, so it is accepted, but only
+#    with proof: the IdentityHub's record of the credential is no longer
+#    what it was while the credential was good (EDC_HELD_BEFORE). It is
+#    printed as a warning, because Portitor's status list check was not
+#    exercised by this run.
+# Neither: the run fails. Portitor refused for a reason this step does
+# not know.
+EDC_HELD_NOW=$(edc_held_state)
+if log_lines_appear "$REFUSALS_BEFORE" "credential refused" "$TEST_CREDENTIAL_TYPE" "revoked"; then
+  echo "the negotiation ended TERMINATED: Portitor read the status list and found the credential revoked"
+elif [[ $EDC_HELD_NOW != "$EDC_HELD_BEFORE" ]]; then
+  WARNING="the IdentityHub saw the revocation first (its record of the credential went from $EDC_HELD_BEFORE to $EDC_HELD_NOW) and presented no $TEST_CREDENTIAL_TYPE: Portitor's own status list check was not exercised by this run"
+  if [[ -n ${GITHUB_ACTIONS:-} ]]; then echo "::warning::EDC interop, step 8g: $WARNING"; fi
+  echo "the negotiation ended TERMINATED: $WARNING"
+else
+  fail "the negotiation ended TERMINATED, but nothing shows why: Portitor's log has no \"credential refused\" with $TEST_CREDENTIAL_TYPE and \"revoked\" (see $RUN/portitor-connector.log), and the IdentityHub's record of the credential is unchanged ($EDC_HELD_NOW)"
+fi
+# Portitor's own credential from the same issuer is not revoked
+PORTITOR_ISSUED=$(edc_issued "$PORTITOR_DID")
+[[ $(status_list_bit "$(jq -r '.list' <<<"$PORTITOR_ISSUED")" "$(jq -r '.index' <<<"$PORTITOR_ISSUED")") == 0 ]] ||
+  fail "Portitor's $TEST_CREDENTIAL_TYPE is revoked too"
+
+# --- 9. revocation by portitor-issuer -----------------------------------------
 
 step "The issuer revokes Portitor's credential: EDC refuses Portitor"
 revoke() { # holder DID: the issuer revokes its credentials
@@ -717,7 +1157,7 @@ VIEW=$(edc_negotiate "$PORTITOR_DATASET" "$PORTITOR_OFFER")
 jq -r '.errorDetail' <<<"$VIEW" | grep -q 'code=404' || fail "not refused with 404: $VIEW"
 echo "the negotiation ended TERMINATED: Portitor answered 404"
 
-step "Done: credentials issued and checked both ways, data transferred both ways, Gaia-X compliance required and met, revocation honoured"
+step "Done: credentials issued and checked both ways, data transferred both ways, Gaia-X compliance required and met, a credential of the EDC Issuer Service required and met both ways, revocation honoured"
 if [[ ${KEEP:-} == 1 ]]; then
   echo "KEEP=1: the data space keeps running; see docs/TESTING.md, \"The EDC interop run by hand\"."
   echo "Remove it with: ${COMPOSE[*]} down --volumes && rm -rf $RUN"

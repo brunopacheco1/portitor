@@ -940,6 +940,35 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// An item of a list setting has a length limit
+    /// (`settings::LIST_ITEM_MAX_BYTES`); the error names the setting.
+    #[test]
+    fn a_list_item_that_is_too_long_stops_the_start_and_names_the_setting() {
+        let (dir, secret) = secret_file("long-list-item");
+        let too_long = format!("did:web:{}", "a".repeat(settings::LIST_ITEM_MAX_BYTES));
+        let trusted = format!("did:web:a,{too_long}");
+        let all = vars(&[
+            ("PORTITOR_STS_URL", "https://identity.example/sts/token"),
+            ("PORTITOR_STS_CLIENT_SECRET_FILE", secret.as_str()),
+            ("PORTITOR_TRUSTED_ISSUERS", trusted.as_str()),
+        ]);
+        let error = AuthSettings::from_vars("did:web:me.example", false, all).unwrap_err();
+        assert!(
+            error.starts_with("PORTITOR_TRUSTED_ISSUERS has an item that is too long: item 2 "),
+            "{error}"
+        );
+        // no part of the item: it may be a secret pasted by mistake
+        assert!(!error.contains("aaa"), "{error}");
+        let entry = format!("{}=org.example:x:read", "T".repeat(5000));
+        let policy = vars(&[("PORTITOR_POLICY_CREDENTIALS", entry.as_str())]);
+        let error = policy_credentials(policy).unwrap_err();
+        assert!(
+            error.starts_with("PORTITOR_POLICY_CREDENTIALS has an item that is too long"),
+            "{error}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// The rule of every setting: an empty value means "not set".
     #[test]
     fn an_empty_value_is_not_set() {
