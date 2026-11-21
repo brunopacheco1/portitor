@@ -12,6 +12,11 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Documentation
+
+- Close-out of 0.14: the roadmap and the website mark 0.14 released and
+  1.0 as the current release.
+
 ## [0.14.0] - 2026-11-21
 
 The release candidate for 1.0. No setting
