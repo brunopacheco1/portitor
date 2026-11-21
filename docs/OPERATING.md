@@ -425,6 +425,109 @@ Messages the connector was sending when it stopped are saved and sent
 again at start (ADR 0007), so an upgrade does not leave negotiations
 waiting. A partner may receive such a message twice; that is handled.
 
+### From 0.9 to 1.0 in one step
+
+For an operator who runs 0.9 and goes straight to 1.0. This is the
+short list of what to do; the notes of each release below give the
+details and the log lines. 1.0 is the 0.14 release candidate with no
+new features ([ROADMAP, 1.0](ROADMAP.md#10-stable)), so 1.0 adds nothing
+to this list unless its [CHANGELOG](../CHANGELOG.md) entry says so.
+0.10 has no step.
+
+**Database.** Back up the connector's database (`/data/portitor.db*`):
+0.12 migrates it to schema version 11, and 0.9 cannot open it
+afterwards. The identity's and the issuer's databases do not change
+between 0.9 and 1.0.
+
+**Before you start the new images, change the configuration.** A
+service that finds an old or wrong value does not start, and its log
+names the setting.
+
+1. Rename three settings
+   ([table](#from-012-to-013), point 1): `PORTITOR_ALLOW_HTTP_CALLBACKS`
+   to `PORTITOR_ALLOW_HTTP` (all three),
+   `PORTITOR_IDENTITY_CERTIFICATE_CHAIN` to
+   `PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE` (identity) and
+   `PORTITOR_ISSUER_CREDENTIALS_FILE` to
+   `PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE` (issuer).
+2. Connector: set `PORTITOR_PARTICIPANT_ID` (a `did:web` DID) and
+   `PORTITOR_PUBLIC_URL` (an `http://` or `https://` URL without a query
+   or fragment). Both are required and checked at start
+   ([0.13](#from-012-to-013), points 3 and 7).
+3. Issuer: add `credentialSchema` to every entry of the
+   [credential definitions file](DEPLOYING.md#credential-definitions-file)
+   ([0.12](#from-011-to-012), point 1).
+4. All three, the form of a value
+   ([0.13](#from-012-to-013), points 4, 8 and 9;
+   [0.14](#from-013-to-014), point 1): an empty value means "not set"
+   (check the table of what changed for a setting that is set but
+   empty); a switch is `true` or `false`; a list setting that is set
+   must name something; an item of a list is at most 4096 bytes.
+5. Connector, datasets file: policies are read strictly. A field the
+   connector does not know, a `duty` inside a permission, `assigner` or
+   `assignee` in an offer, or a JSON key given twice keeps the dataset
+   out of the catalog; the harvest job names it
+   ([0.12](#from-011-to-012), point 2;
+   [Policies](DEPLOYING.md#policies)). Check your datasets before the
+   upgrade.
+
+**Change your management API clients.**
+
+6. `POST /v1/negotiations` takes `counterPartyAddress` and
+   `counterPartyId` in place of `providerAddress` and `providerId`, and
+   the negotiation and transfer answers return them under the new names
+   ([0.13](#from-012-to-013), point 2).
+7. An empty `datasetId` (connector) or `holderPid` (identity) answers
+   400; leave `holderPid` out for a new id ([0.13](#from-012-to-013),
+   point 13).
+8. `POST /v1/catalog/request` answers 502 when the provider's catalog
+   has no `participantId` or one that differs from `counterPartyId`
+   ([0.14](#from-013-to-014), point 2).
+
+**Check your alerts and monitoring.**
+
+9. A DSP caller that cannot be authenticated gets 404, not 401, on the
+   negotiation and transfer routes; the catalog still answers 401
+   ([0.12](#from-011-to-012), point 3).
+10. The connector's DCP check answers 503, not 401, when a server it
+    needs (a DID document, a Credential Service, a status list, the STS)
+    did not answer, or answered 408, 429 or 5xx, or took longer than
+    20 s. A partner's outbox then tries again. 0.11, CHANGELOG.
+11. A panic no longer stops the process: watch
+    `portitor.http.request.panicked` and `portitor.task.panicked`
+    ([0.12](#from-011-to-012), point 5). The metric
+    `portitor.outbox.message.given_up` counts fewer messages
+    ([0.14](#from-013-to-014)).
+
+**To know, nothing to do.**
+
+- Status lists are cached by the connector (0.11): a revoked credential
+  can be accepted for up to `PORTITOR_STATUS_LIST_CACHE_SECONDS`
+  (default 300) after the revocation. 0.9 fetched the list at every
+  check; set `0` to keep that
+  ([Status list cache](DEPLOYING.md#status-list-cache)).
+- Request size limits (0.11): `PORTITOR_MAX_REQUEST_BYTES` and
+  `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` default to 2 MiB, as before.
+  The small DSP messages, `POST /sts/token` and the issuer's credential
+  request route have a fixed limit of 64 KiB. A larger body gets 413.
+- The connector's outbox stops trying a DSP message at once when the
+  answer is a refusal (400, 404, 409, ...); it tries again only when no
+  answer came or the answer was 408, 429 or 5xx (0.11, ADR 0007).
+- New optional settings with defaults that keep the 0.9 behaviour:
+  `PORTITOR_DID_CACHE_SECONDS` (0.12) and the retired key files of
+  [Rotating a key](#rotating-a-key) (0.11).
+- A credential is refused when the key that signed it belongs to
+  another DID in its issuer's DID document
+  ([0.12](#from-011-to-012), point 4).
+- The connector's management port answers 503 to a request that takes
+  longer than 60 s (0.13, CHANGELOG).
+- The release binaries are about 13% larger (0.12).
+
+**Rollback to 0.9.** Restore the connector's database from the backup,
+put back the three old setting names and the old field names in your
+clients, and remove `credentialSchema` from the definitions file: a 0.9
+issuer refuses a field it does not know.
+
 ### Upgrades from 0.4 to 0.9, in short
 
 What you still have to do, or to know, when an upgrade crosses one of
