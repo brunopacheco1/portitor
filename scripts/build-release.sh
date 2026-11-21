@@ -25,7 +25,7 @@
 # the same runner image as the release (ubuntu-24.04).
 set -euo pipefail
 
-if [ "$#" -ne 2 ]; then
+if [[ "$#" -ne 2 ]]; then
   echo "usage: $0 TARGET ARCH (for example x86_64-unknown-linux-musl amd64)" >&2
   exit 2
 fi
