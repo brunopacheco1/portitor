@@ -16,6 +16,9 @@ versions may change behaviour and configuration.
 
 - Close-out of 0.14: the roadmap and the website mark 0.14 released and
   1.0 as the current release.
+- CONTRIBUTING and ROADMAP describe the ruleset on `main` as it is set:
+  five required checks (the three gates and the two CodeQL jobs) and one
+  approval. The six accepted CodeQL findings are dismissed on GitHub.
 
 ## [0.14.0] - 2026-11-21
 

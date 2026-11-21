@@ -82,18 +82,21 @@ The build enforces the style, so a pull request that breaks it fails:
    same pull request, and a maintainer dismisses the alert on GitHub
    with the same reason.
 7. Commits must be signed, and `main` only changes through pull requests
-   that pass the required checks, are up to date with `main`, and are
-   approved by a code owner (`.github/CODEOWNERS`).
+   that pass the required checks, are up to date with `main`, and have
+   one approval. `.github/CODEOWNERS` names who is asked to review; the
+   ruleset does not require the approval to be a code owner's.
 
 ## Required checks
 
-The ruleset on `main` requires three checks, by these names:
+The ruleset on `main` requires five checks, by these names:
 
 | Check | Workflow | It passes when |
 |---|---|---|
 | `CI gate` | `CI` (`ci.yml`) | `REUSE compliance` and `Documentation matches the code` passed, and `Lint, test and build` and `SonarQube Cloud` passed or were not needed |
 | `TCK gate` | `TCK` (`tck.yml`) | the four TCK jobs passed or were not needed |
 | `Dependencies gate` | `Dependencies` (`dependencies.yml`) | the dependency review, cargo-deny and cargo-vet passed or were not needed |
+| `Analyze (rust)` | `CodeQL` (`codeql.yml`) | the analysis ran and has no finding outside the accepted list |
+| `Analyze (actions)` | `CodeQL` (`codeql.yml`) | the same, for the workflow files |
 
 "Not needed" is decided by `scripts/ci_changes.sh` from the changed
 files:
@@ -120,13 +123,15 @@ three gates, which also tests its own rule in every run
 the gate must wait for, add it to the gate job's `needs` and to its
 `NEEDED_JOBS` (or `ALWAYS_JOBS`).
 
-Only a gate job can be a required check. A job that is skipped on
+Of a workflow that skips jobs, only the gate job can be a required
+check. A job that is skipped on
 purpose reports "skipped", and its name alone cannot tell that from
 "passed after a failure upstream"; the gate job can. A workflow with a
 path filter (`EDC interop`, `Gaia-X`, `ORT`, `Fuzzing (PR)`, `Website`,
 the `Release` dry run) must never be required: on a pull request that
 does not match the filter it reports nothing, and the pull request
-would wait for ever. CodeQL runs on every pull request.
+would wait for ever. CodeQL runs on every pull request and skips
+nothing, so its two jobs are required by their own names.
 
 ## Dependency audits (cargo-vet)
 
