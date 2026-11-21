@@ -216,10 +216,25 @@ jobs:
       MODE: ${{ needs.plan.outputs.mode }}
       REF: ${{ needs.plan.outputs.ref }}
     steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      # one directory per copy (digests/digests-<copy>/): download-artifact puts the files of a
+      # pattern that matches one artifact (release mode: digests-rebuild) straight into `path`,
+      # so each copy is downloaded by name, into its own directory
+      - name: Digests of each copy
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: ${{ needs.plan.outputs.mode == 'release' }}
         with:
-          pattern: digests-*
-          path: digests
+          name: digests-rebuild
+          path: digests/digests-rebuild
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: ${{ needs.plan.outputs.mode != 'release' }}
+        with:
+          name: digests-a
+          path: digests/digests-a
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: ${{ needs.plan.outputs.mode != 'release' }}
+        with:
+          name: digests-b
+          path: digests/digests-b
       - name: What was published (release only)
         if: ${{ needs.plan.outputs.mode == 'release' }}
         env:
@@ -242,6 +257,14 @@ jobs:
       - name: Compare
         run: |
           if [ "$MODE" = release ]; then left=published; right=digests-rebuild; else left=digests-a; right=digests-b; fi
+          # a missing list is an error of this workflow, not a different build: say so
+          for f in binaries.txt images.txt; do
+            for side in "$left" "$right"; do
+              if [ ! -s "digests/$side/$f" ]; then
+                echo "::error::digests/$side/$f is missing or empty: nothing to compare"; exit 1
+              fi
+            done
+          done
           status=0
           {
             echo "### Reproducible build: $left and $right ($REF)"
