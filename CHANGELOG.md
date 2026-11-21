@@ -64,6 +64,11 @@ versions may change behaviour and configuration.
   approval. The six accepted CodeQL findings are dismissed on GitHub.
 - SECURITY-ASSURANCE: private vulnerability reporting is on, so OpenSSF
   Baseline OSPS-VM-02.01 is met.
+- RISKS_AND_TECHNICAL_DEBTS, R-25: the name check is done. A preliminary
+  search (TMview, WIPO Global Brand Database, domains, package
+  registries) found no trademark conflict in Nice classes 9 or 42. Other
+  uses of the name are listed; the maintainer accepted the risk, so R-25
+  no longer blocks 1.0. ROADMAP and ADR 0008 say so.
 
 ## [0.14.0] - 2026-11-21
 

@@ -28,22 +28,21 @@ Status values:
 > **Top risks for 1.0** (chosen from the items that are not closed, by
 > what they can cost at or after 1.0)
 >
-> 1. [R-25](#r-25) The name is not checked for trademarks and domains.
->    It blocks 1.0, and a rename after 1.0 is expensive.
-> 2. [R-02](#r-02) One maintainer, who finds Rust hard to read
+> 1. [R-02](#r-02) One maintainer, who finds Rust hard to read
 >    ([R-01](#r-01)): every change, security fixes included, has one
 >    reviewer.
-> 3. [R-12](#r-12) Gaia-X was never tested with a real trust anchor.
+> 2. [R-12](#r-12) Gaia-X was never tested with a real trust anchor.
 >    Every Gaia-X claim rests on a local service in test mode.
-> 4. [R-17](#r-17) Server-side request forgery: internal addresses are
+> 3. [R-17](#r-17) Server-side request forgery: internal addresses are
 >    not blocked on URLs a partner chooses, and no release is named for
 >    the fix.
-> 5. [R-09](#r-09) EDC is tested at a release candidate. Interoperability
+> 4. [R-09](#r-09) EDC is tested at a release candidate. Interoperability
 >    with EDC 1.0.0, the first reference counterpart, is not proven.
+> 5. [TD-05](#td-05) Private keys are PEM files.
 >
-> Next in line: [TD-05](#td-05) (private keys are PEM files),
-> [TD-31](#td-31) (no audit trail of data pulls) and [R-24](#r-24)
-> (Simpl-Open is untested).
+> Next in line: [TD-31](#td-31) (no audit trail of data pulls),
+> [R-24](#r-24) (Simpl-Open is untested) and [R-25](#r-25) (other
+> projects and a company use the name Portitor).
 
 ## How to keep this file up to date
 
@@ -89,7 +88,7 @@ of work with no release yet.
 | [R-22](#r-22) | Bundle: unsigned `latest.json`; a revoked bundle key not seen while offline | Security | Mitigated | Later (TD-16) |
 | [R-23](#r-23) | A wrong host clock gives wrong policy and token decisions | Security | Mitigated | none |
 | [R-24](#r-24) | Simpl-Open: parked, facts not verified, and it changes fast | Interoperability, upstream | Accepted | Later |
-| [R-25](#r-25) | Name not checked for trademarks and domains | Delivery, legal | Open | 0.14 (blocks 1.0) |
+| [R-25](#r-25) | The name Portitor is not exclusive: other projects and a company use it | Delivery, legal | Accepted | none |
 | [R-27](#r-27) | CI downloads from Maven Central and GitHub | Delivery | Mitigated | none |
 | [R-29](#r-29) | DCP costs about 2 ms per request and 8 times fewer requests under load | Performance | Open | with TD-07 |
 | [R-36](#r-36) | The OpenTelemetry Rust crates are 0.x and change their API often | Dependency, upstream | Mitigated | none |
@@ -485,14 +484,27 @@ are closed.
   again first.
 
 <a id="r-25"></a>
-### R-25 Name not checked for trademarks and domains
+### R-25 The name Portitor is not exclusive
 
-- **What.** `portitor` was free on crates.io (2026-11-12); domain names
-  and a formal trademark search (EUIPO, WIPO, BOIP) are not done
+- **What.** A preliminary search on 2026-11-21 (public databases only,
+  not legal advice) found no live trademark for "Portitor" or a close
+  spelling in Nice classes 9 or 42. It searched TMview (EUIPO, BOIP,
+  WIPO, USPTO and the EU national offices) and the WIPO Global Brand
+  Database, exact and fuzzy. The only live "PORTITOR" registration is a
+  Portuguese logo with no Nice class, held by a retail company. The name
+  is used without a trademark by a Dutch health-data conversion company
+  (portitor.nl), by an open-source e-commerce project started in March
+  2026 (portitor.org, portitor.io), and by small GitHub projects.
+  portitor.com is taken. `portitor` is free on crates.io, npm and PyPI
   ([ADR 0008](adr/0008-project-name.md)).
-- **Why it matters.** A rename after 1.0 is expensive.
-- **Current state: Open.**
-- **Next.** ROADMAP 0.14; it blocks 1.0 (maintainer, 2026-11-15).
+- **Why it matters.** Someone can still register the name in classes 9
+  or 42, and a rename after 1.0 is expensive. Search results and the
+  .com, .org and .io domains belong to others.
+- **Current state: Accepted** (maintainer, 2026-11-21). The legal risk is
+  low; the risk of confusion is medium. No trademark is filed and no
+  domain is bought.
+- **Next.** Search again before a trademark filing or a commercial
+  launch.
 
 <a id="r-27"></a>
 ### R-27 CI downloads from Maven Central and GitHub

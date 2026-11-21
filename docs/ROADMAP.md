@@ -165,13 +165,14 @@ Decisions about the plan itself that no ADR or changelog entry holds.
   the maintainer ([RELEASING](RELEASING.md#releasing-a-version), step
   4). It gets no CI job of its own: `CI` already runs the Compose demo
   (`scripts/demo-compose.sh`) that the quickstart uses.
-- Before 1.0: the formal trademark and domain check of the name
-  ([R-25](RISKS_AND_TECHNICAL_DEBTS.md#r-25)), which blocks 1.0. A
-  second maintainer ([R-02](RISKS_AND_TECHNICAL_DEBTS.md#r-02)) does not
+- Before 1.0: the trademark and domain check of the name
+  ([R-25](RISKS_AND_TECHNICAL_DEBTS.md#r-25)). Done on 2026-11-21: no
+  trademark conflict was found, and the maintainer accepted the
+  remaining risk. A second maintainer ([R-02](RISKS_AND_TECHNICAL_DEBTS.md#r-02)) does not
   block 1.0.
 - Exit: Scorecard at least 8/10; the quickstart runs on a clean machine;
   the EDC interop run with step 8 passes in CI; no open CodeQL alert;
-  TD-39 and TD-43 addressed; R-25 done before 1.0.
+  TD-39 and TD-43 addressed; R-25 done before 1.0 (done, accepted).
 - Main risk: a fact lost while cutting; each removed paragraph names
   where its facts still live.
 
