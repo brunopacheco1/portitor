@@ -32,6 +32,7 @@ so visitors' browsers never contact third-party services.
       <nav aria-label="Main">
         <ul>
           <li><a href="#what">What it does</a></li>
+          <li><a href="#stable">Stable in 1.0</a></li>
           <li><a href="#try">Try it</a></li>
           <li><a href="#components">Components</a></li>
           <li><a href="#roadmap">Roadmap</a></li>
@@ -115,6 +116,27 @@ so visitors' browsers never contact third-party services.
           <li><strong>Issue credentials</strong>, such as dataspace membership, when you run the dataspace.</li>
           <li><strong>Meet Gaia-X rules</strong>: hold and present Gaia-X compliance credentials.</li>
         </ol>
+      </div>
+    </section>
+
+    <section id="stable">
+      <div class="wrap">
+        <h2>What 1.0 keeps stable</h2>
+        <p>From 1.0 on, Portitor follows <a href="https://semver.org/">Semantic Versioning</a>: a 1.x release may add to what is listed here, and only 2.0 may remove or rename it. The full list of routes, settings and files is in <a href="https://github.com/brunopacheco1/portitor/blob/main/docs/STABILITY.md">STABILITY</a>, and tests compare that list with the code.</p>
+        <div class="table">
+          <table>
+            <thead><tr><th scope="col">What</th><th scope="col">Promise in 1.x</th></tr></thead>
+            <tbody>
+              <tr><td>HTTP routes</td><td>Each public and management route keeps its method, its path and what its <a href="api/">OpenAPI description</a> says. New routes and optional fields may come, so a client must ignore fields it does not know.</td></tr>
+              <tr><td>Environment variables</td><td>Each listed setting (the <code>PORTITOR_*</code> ones and four <code>OTEL_*</code> ones) keeps its name and meaning: a configuration that works in 1.0 works in 1.x.</td></tr>
+              <tr><td>Files you write</td><td>The datasets file, the credential definitions, the bundle, the Gaia-X participant file, keys, certificates and secrets keep working in their formats.</td></tr>
+              <tr><td>Database</td><td>A 1.x release migrates an older database at start, forward only: to go back, restore the backup taken before the upgrade.</td></tr>
+              <tr><td>Command line</td><td>No arguments runs the service, <code>health</code> asks its readiness check, and <code>portitor-issuer bundle build</code> keeps its options.</td></tr>
+              <tr><td>Protocols</td><td>DSP 2025-1 and DCP v1.0.1 on the public ports, at the same paths.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Not promised: metric, span and log names (each change is in the <a href="https://github.com/brunopacheco1/portitor/blob/main/CHANGELOG.md">CHANGELOG</a>), the Rust crates, error texts, development aids, and limits that are not a setting. The management API key and the data plane token are opaque: do not parse them. A management route may answer 403 in 1.x, once access can be scoped. What 1.0 does not do is in <a href="https://github.com/brunopacheco1/portitor/blob/main/docs/STABILITY.md#what-10-does-not-do">STABILITY</a>; how to upgrade from 0.9 is in <a href="https://github.com/brunopacheco1/portitor/blob/main/docs/OPERATING.md#from-09-to-10-in-one-step">OPERATING</a>.</p>
       </div>
     </section>
 

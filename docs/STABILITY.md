@@ -6,8 +6,8 @@ SPDX-License-Identifier: Apache-2.0
 
 # What 1.0 keeps stable
 
-Release 0.13 freezes the interface of Portitor. 1.0 is the 0.13 release
-candidate. From 1.0 on, Portitor follows
+Release 0.13 freezes the interface of Portitor. 1.0 is the 0.14 release
+candidate ([ROADMAP](ROADMAP.md#10-stable)). From 1.0 on, Portitor follows
 [Semantic Versioning](https://semver.org/): a 1.x release may add to what
 is listed here, and only 2.0 may remove or rename it.
 

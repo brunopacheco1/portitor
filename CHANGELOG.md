@@ -39,6 +39,16 @@ versions may change behaviour and configuration.
 
 ### Documentation
 
+- OPERATING, "From 0.9 to 1.0 in one step": one upgrade note for an
+  operator who goes from 0.9 straight to 1.0, with what to change in the
+  configuration, the management API clients and the monitoring, and how
+  to roll back. It links to the note of each release. It adds two
+  changes the release notes left out: a JSON key given twice in the
+  datasets file (0.12) and the 60 s limit on the management port (0.13).
+- The website has a section "What 1.0 keeps stable", a summary of
+  STABILITY with links to it.
+- STABILITY: 1.0 is the 0.14 release candidate, not the 0.13 one, as the
+  roadmap says.
 - ROADMAP: the next twelve months, to the end of 2027. Releases 1.6 to
   1.9 add the functions an EHDS dataspace participant may need (dataset
   descriptions with the minimum metadata of Art. 77(4), permits, data
