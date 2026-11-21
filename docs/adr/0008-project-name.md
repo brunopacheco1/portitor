@@ -47,6 +47,9 @@ exchange against agreed policies, and its data plane carries the data.
 Checked on 2026-11-12: `portitor` was free on crates.io and only six small,
 unrelated GitHub repositories used the name. Not yet checked: domain names
 and a formal trademark search (EUIPO, WIPO, BOIP); to do before 1.0.
+Done on 2026-11-21 as a preliminary search, not legal advice: no trademark
+conflict in Nice classes 9 or 42; other uses of the name are listed in
+[R-25](../RISKS_AND_TECHNICAL_DEBTS.md#r-25).
 
 ## Consequences
 
