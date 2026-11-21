@@ -86,6 +86,34 @@ The build enforces the style, so a pull request that breaks it fails:
    one approval. `.github/CODEOWNERS` names who is asked to review; the
    ruleset does not require the approval to be a code owner's.
 
+## Code review
+
+Every pull request is reviewed before it merges: by the required checks
+below, and by a person who approves it. The reviewer checks, and asks for
+changes until each holds:
+
+1. **One purpose.** The change does what its description says, and
+   nothing else; the description says why.
+2. **Specifications.** Protocol behaviour follows the cited section of
+   DSP, DCP or Data Plane Signaling; a format is taken from a
+   specification, EDC or Simpl-Open, never invented; a decision that
+   changes the architecture has an ADR.
+3. **Tests.** The test policy above holds: new behaviour has tests, a bug
+   fix has a test that failed before; protocol changes pass the TCKs.
+4. **Security.** Input from outside the process is size-limited and
+   parsed into types; no secret reaches a log, an error or the
+   repository; a new dependency is justified, licensed on the allowlist
+   and audited (cargo-vet).
+5. **Readable code.** It follows the code style above, so a maintainer
+   who reads Rust now and then can follow it.
+6. **Docs.** The C4 diagrams, OpenAPI files, docs and `CHANGELOG.md`
+   match the change.
+7. **Checks.** The required checks and the SonarQube Cloud quality gate
+   pass; a CodeQL false positive is on the accepted list with its reason.
+
+A change that fails one of these is not merged; the reviewer says which
+and why in the review.
+
 ## Required checks
 
 The ruleset on `main` requires five checks, by these names:

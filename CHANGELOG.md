@@ -39,6 +39,8 @@ versions may change behaviour and configuration.
 
 ### Documentation
 
+- CONTRIBUTING has a "Code review" section: what a reviewer checks
+  before a pull request merges.
 - Close-out of 0.14: the roadmap and the website mark 0.14 released and
   1.0 as the current release.
 - CONTRIBUTING and ROADMAP describe the ruleset on `main` as it is set:
