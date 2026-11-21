@@ -35,6 +35,7 @@ and debts each release raised or closed are in
 | 0.11 | 2026-11-17 | v0.11.0 | Security hardening: a fuzz target per parser, request size limits, status list cache, retired keys for rotation, outbox retry rules, threat model review, ADR 0024 proposed | [0.11.0](../CHANGELOG.md#0110---2026-11-17) |
 | 0.12 | 2026-11-20 | v0.12.0 | Interoperability and performance: strict policy reading, DSP and DCP fixes checked against EDC, benchmarks published, a panic fails one request, ADR 0025 proposed | [0.12.0](../CHANGELOG.md#0120---2026-11-20) |
 | 0.13 | 2026-11-20 | v0.13.0 | API and configuration freeze ([STABILITY](STABILITY.md)); management call that reads a catalog; EDC test on 1.0.0-RC8 with Gaia-X; ADRs 0024, 0025 and 0026 accepted | [0.13.0](../CHANGELOG.md#0130---2026-11-20) |
+| 0.14 | 2026-11-21 | v0.14.0 | Release candidate for 1.0: shorter documentation with [OPERATING](OPERATING.md); Roman website; EDC Issuer Service in the EDC test; CI scope and gates; CodeQL gate; OpenSSF Baseline level 1 self-assessment | [0.14.0](../CHANGELOG.md#0140---2026-11-21) |
 
 Older documents cite sections of this file that the table replaced, for
 example "ROADMAP 0.11, Decisions on the 0.11 plan". Their full text is in
@@ -86,7 +87,7 @@ Decisions about the plan itself that no ADR or changelog entry holds.
   computed". They wait until the maintainer renames the branch in
   SonarQube Cloud. The website already asks for `branch=main`.
 
-## 0.14 Documentation and assurance (release candidate for 1.0)
+## 0.14 Documentation and assurance (release candidate for 1.0; released 2026-11-21 as v0.14.0)
 
 - Documentation simplification (maintainer, 2026-11-20): each fact has
   one home and the other files link to it. The README loses its route
