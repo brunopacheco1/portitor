@@ -19,6 +19,8 @@ versions may change behaviour and configuration.
 - CONTRIBUTING and ROADMAP describe the ruleset on `main` as it is set:
   five required checks (the three gates and the two CodeQL jobs) and one
   approval. The six accepted CodeQL findings are dismissed on GitHub.
+- SECURITY-ASSURANCE: private vulnerability reporting is on, so OpenSSF
+  Baseline OSPS-VM-02.01 is met.
 
 ## [0.14.0] - 2026-11-21
 

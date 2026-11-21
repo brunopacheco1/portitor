@@ -466,10 +466,11 @@ not be read; the maintainer confirms it in the
 [settings checklist](#settings-to-confirm) below. *Not met* and *Not
 applicable* mean what they say.
 
-**Result.** 24 requirements apply (one more is retired): 18 met, 4 met,
-to confirm, 1 not met (OSPS-VM-02.01), 1 not applicable.
-Level 1 is reached when private vulnerability reporting is on and the
-four settings are confirmed.
+**Result.** 24 requirements apply (one more is retired): 19 met, 4 met,
+to confirm, 1 not applicable.
+Level 1 is reached when the four settings are confirmed. Private
+vulnerability reporting, the one requirement that was not met when this
+was written, was turned on on 2026-11-21.
 
 | Control | Requirement (paraphrase) | Status | Evidence |
 |---|---|---|---|
@@ -497,7 +498,7 @@ four settings are confirmed.
 | OSPS-QA-04.01 | A project with several repositories lists its codebases | Not applicable | One repository ([AGENTS, "Repository layout"](../AGENTS.md#repository-layout)) |
 | OSPS-QA-05.01 | No generated executable in version control | Met | Checked on 2026-11-20: the files Git marks executable are shell and Python scripts. Scorecard's Binary-Artifacts check runs weekly ([`scorecard.yml`](../.github/workflows/scorecard.yml)) |
 | OSPS-QA-05.02 | No binary in version control that cannot be reviewed | Met | Checked on 2026-11-20: two binary files, neither executable. A font for the website (`site/fonts/cinzel-regular.woff2`, source and licence in [NOTICE](../NOTICE)) and a test-only RSA key in DER (`crates/portitor-dcp/tests/fixtures/test-only-rsa-2048.der`) |
-| OSPS-VM-02.01 | The documentation names security contacts | **Not met** | [SECURITY, "Reporting a vulnerability"](../SECURITY.md#reporting-a-vulnerability) names one contact: a private report through GitHub. As read, private vulnerability reporting is off for the repository, so that contact does not work. Turning it on meets the control. Checklist 5 |
+| OSPS-VM-02.01 | The documentation names security contacts | Met | [SECURITY, "Reporting a vulnerability"](../SECURITY.md#reporting-a-vulnerability) names one contact: a private report through GitHub. Private vulnerability reporting is on for the repository (the API answered `enabled: true` on 2026-11-21; it was off the day before) |
 
 ### Settings to confirm
 
@@ -512,7 +513,7 @@ GitHub and writes the date here.
 | 2 | OSPS-AC-02.01 | Repository: Settings, Collaborators | No collaborator, or only people named in GOVERNANCE |
 | 3 | OSPS-BR-01.03 | Repository: Settings, Actions, General (approval for fork pull request workflows); Settings, Environments, `release`; Settings, Secrets and variables, Actions | Workflows of outside contributors wait for approval; `release` deploys only from tags `v*`; `SONAR_TOKEN` is the only repository secret |
 | 4 | OSPS-BR-03.01 | Repository: Settings, Pages | "Enforce HTTPS" is on for the custom domain |
-| 5 | OSPS-VM-02.01 | Repository: Settings, Advanced Security, Private vulnerability reporting | **To do, not only to confirm:** turn it on. The API answered `enabled: false` |
+| 5 | OSPS-VM-02.01 | Repository: Settings, Advanced Security, Private vulnerability reporting | Done on 2026-11-21: the API answers `enabled: true` |
 | 6 | OSPS-AC-04.01 (level 2) | Repository: Settings, Actions, General, Workflow permissions | "Read repository contents and packages permissions" is selected |
 
 ### What level 2 would need
@@ -531,5 +532,3 @@ above (row 6).
   SBOM files and `THIRD-PARTY-NOTICES.txt` attached to a GitHub release
   have no signature of their own. An attestation for these files, or a
   signed list of their SHA-256 hashes, would meet it.
-- **OSPS-VM-03.01**, a private way to report a vulnerability: not met
-  while private vulnerability reporting is off (checklist 5).
