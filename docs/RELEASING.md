@@ -170,6 +170,35 @@ pull request, or record why it stays.
    pulls the new images. Time it, and fix the website if a command or
    the time it gives is wrong.
 
+The tag comes last: the check of the tag reads `Cargo.toml` and
+`CHANGELOG.md` at the tagged commit, so a tag pushed before the release
+pull request (step 1) is merged fails at once, with
+`Cargo.toml has version ..., the tag says ...`. Nothing is built or
+published then. Delete the tag (on GitHub and in your clone), merge the
+release pull request, and tag its squash commit:
+
+```sh
+git push origin :refs/tags/vX.Y.Z   # the tag ruleset lets the admin delete it
+git tag -d vX.Y.Z
+```
+
+### Release candidates
+
+A release candidate is a version with a pre-release part, such as
+`1.0.0-rc.1` (tag `v1.0.0-rc.1`). It follows the same steps, with three
+differences:
+
+- The GitHub release is marked as a pre-release, so it never becomes the
+  "latest" release (the workflow does it when the version has a `-`).
+- `examples/compose/compose.yaml` takes the candidate's image tags, so a
+  clone of the candidate's tag runs its images, but the website's
+  `git clone --branch` tag stays on the last stable release: the
+  quickstart is for users. Run the quickstart of step 4 with the
+  candidate's clone instead (`git clone --branch vX.Y.Z-rc.N`).
+- The final release (`X.Y.Z`) gets its own release pull request: the
+  candidate's CHANGELOG section stays, and the new section says what
+  changed since the candidate (or that nothing did).
+
 ## Checking a release
 
 Check every image of the release the same way:

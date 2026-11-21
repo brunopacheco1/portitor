@@ -403,5 +403,9 @@ jobs:
           for c in $COMPONENTS; do
             files+=("sbom/$c-$VERSION.cdx.json" "image/$c-$VERSION.intoto.jsonl")
           done
+          # a version with a pre-release part (1.0.0-rc.1) is a GitHub pre-release: it never
+          # becomes the "latest" release, so the last stable release stays the one shown first
+          prerelease=()
+          if [[ "$VERSION" == *-* ]]; then prerelease=(--prerelease); fi
           gh release create "${GITHUB_REF_NAME}" --verify-tag --title "Portitor ${VERSION}" \
-            --notes-file notes.md "${files[@]}"
+            "${prerelease[@]}" --notes-file notes.md "${files[@]}"

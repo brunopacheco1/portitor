@@ -12,6 +12,12 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+## [1.0.0-rc.1] - 2026-11-22
+
+The first release candidate of 1.0. No setting and no route changed
+since 0.14.0. It is a pre-release: the GitHub release is marked as one,
+and 1.0.0 follows when the candidate shows no mistake.
+
 ### Security
 
 - EDC interop test (test-only): Jackson 2 at 2.22.3 and the Gradle Shadow
@@ -22,6 +28,12 @@ versions may change behaviour and configuration.
 
 ### Build
 
+- A tag with a pre-release part (`v1.0.0-rc.1`) makes a GitHub release
+  marked as a pre-release, so it does not become the latest release.
+  RELEASING says how to cut a release candidate, and what to do when a
+  tag was pushed before its release pull request was merged.
+- The website's "latest release" value names the newest stable tag, never
+  a release candidate.
 - Reproducible release builds. The release binaries are built by
   `scripts/build-release.sh` (fixed paths in the binaries,
   `SOURCE_DATE_EPOCH`), the images by a pinned BuildKit with

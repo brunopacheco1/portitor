@@ -59,7 +59,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }} # reads the runs of reproducible.yml
         run: |
-          tag=$(git tag --list 'v*' --sort=-version:refname | head -n 1)
+          # the newest stable tag: a release candidate (v1.0.0-rc.1) is a GitHub pre-release, not
+          # the latest release, and git's version sort would put it after v1.0.0
+          tag=$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
           status="${tag:+latest release ${tag}}"
           status="${status:-no release yet}"
           scorecard="not available"
