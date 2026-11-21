@@ -20,6 +20,23 @@ versions may change behaviour and configuration.
   (jackson-core and jackson-databind 2.19.2 and 2.22.1, Shadow 9.5.1). The
   OSV scan in the Dependencies workflow now reads that file too.
 
+### Build
+
+- Reproducible release builds. The release binaries are built by
+  `scripts/build-release.sh` (fixed paths in the binaries,
+  `SOURCE_DATE_EPOCH`), the images by a pinned BuildKit with
+  `rewrite-timestamp=true`. A new workflow, `Reproducible build`,
+  rebuilds each release tag and compares the binaries and image digests
+  with what was published, and builds `main` twice to compare. README
+  badge and website value (docs/RELEASING.md, "Reproducible builds").
+- The six release binaries get a signed build provenance (Sigstore,
+  stored by GitHub), like the images; `gh attestation verify` checks it
+  (docs/RELEASING.md, "Checking a release").
+- README badges for the SonarQube Cloud quality gate and coverage; the
+  website's "Trust and quality" list adds the coverage and the
+  reproducible-build result. The SonarQube Cloud project's main branch
+  is now `main`.
+
 ### Documentation
 
 - Close-out of 0.14: the roadmap and the website mark 0.14 released and

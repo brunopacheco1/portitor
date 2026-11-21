@@ -1,0 +1,265 @@
+# SPDX-FileCopyrightText: Portitor contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Reproducible build
+# Checks that the release binaries and images are reproducible: the same sources give the
+# same bytes (docs/RELEASING.md, "Reproducible builds").
+# - After each release, and by hand for a tag: rebuilds the tag and compares every binary
+#   with the GitHub release and every image digest with GHCR.
+# - On main (weekly, and when the build changes) and on pull requests that change the
+#   build: builds the commit twice, on separate runners, and compares the two.
+# A self-check on GitHub's runners, not an independent rebuilder: none rebuilds Rust
+# binaries or container images published this way (checked 2026-11-21).
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to rebuild and compare (vX.Y.Z)
+        required: true
+  schedule:
+    - cron: '17 2 * * 1' # Mondays, 02:17 UTC: done before the website's weekly build
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/reproducible.yml'
+      - '.github/workflows/release.yml'
+      - 'scripts/build-release.sh'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  pull_request:
+    paths:
+      - '.github/workflows/reproducible.yml'
+      - '.github/workflows/release.yml'
+      - 'scripts/build-release.sh'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+permissions:
+  contents: read
+
+concurrency:
+  # runs of one pull request share a group; every other run has its own
+  group: reproducible-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  RUST_TOOLCHAIN: "1.97.0" # as in release.yml
+  CARGO_TERM_COLOR: always
+  COMPONENTS: portitor-connector portitor-identity portitor-issuer
+  # as in release.yml
+  BUILDKIT: moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+
+jobs:
+  plan:
+    name: What to check
+    # after a release: only when the release run succeeded, for a tag
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      ref: ${{ steps.plan.outputs.ref }}
+      copies: ${{ steps.plan.outputs.copies }}
+    steps:
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          RUN_TAG: ${{ github.event.workflow_run.head_branch }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          case "$EVENT" in
+            workflow_run) tag=$RUN_TAG ;;
+            workflow_dispatch) tag=$INPUT_TAG ;;
+            *) tag= ;;
+          esac
+          if [ -n "$tag" ]; then
+            if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::$tag is not a release tag vMAJOR.MINOR.PATCH"; exit 1
+            fi
+            { echo "mode=release"; echo "ref=refs/tags/$tag"; echo 'copies=["rebuild"]'; } >> "$GITHUB_OUTPUT"
+          else
+            { echo "mode=twice"; echo "ref=$GITHUB_SHA"; echo 'copies=["a","b"]'; } >> "$GITHUB_OUTPUT"
+          fi
+
+  binaries:
+    name: Binaries, ${{ matrix.arch }} (${{ matrix.copy }})
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        copy: ${{ fromJSON(needs.plan.outputs.copies) }}
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal -t "${{ matrix.target }}"
+          rustup default "$RUST_TOOLCHAIN"
+          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+      # no cache: a build from scratch, as in the release
+      - name: Build static binaries
+        run: scripts/build-release.sh "${{ matrix.target }}" "${{ matrix.arch }}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ matrix.copy }}-${{ matrix.arch }}
+          path: dist/${{ matrix.arch }}/
+          retention-days: 7
+
+  images:
+    name: Images (${{ matrix.copy }})
+    needs: [plan, binaries]
+    strategy:
+      fail-fast: false
+      matrix:
+        copy: ${{ fromJSON(needs.plan.outputs.copies) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      # a registry on this runner: the images are pushed here as the release pushes them to
+      # GHCR, so the digest is computed the same way
+      registry:
+        image: docker.io/library/registry:3.0.0@sha256:6c5666b861f3505b116bb9aa9b25175e71210414bd010d92035ff64018f9457e
+        ports:
+          - 5000:5000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: dist-${{ matrix.copy }}-*
+          path: dist
+      - name: Arrange binaries by architecture
+        run: |
+          for a in amd64 arm64; do mv "dist/dist-${{ matrix.copy }}-$a" "dist/$a"; done
+          chmod +x dist/*/*
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: |
+            image=${{ env.BUILDKIT }}
+            network=host
+      - name: Version, commit and time
+        id: meta
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          {
+            echo "version=$version"
+            echo "revision=$(git rev-parse HEAD)"
+            echo "time=$(git log -1 --format=%cI)"
+            echo "epoch=$(git log -1 --format=%ct)"
+          } >> "$GITHUB_OUTPUT"
+      # the inputs of release.yml's "Build and push" step, one component after the other
+      - name: Build and push to the local registry
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          REVISION: ${{ steps.meta.outputs.revision }}
+          CREATED: ${{ steps.meta.outputs.time }}
+          SOURCE_DATE_EPOCH: ${{ steps.meta.outputs.epoch }}
+          SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          mkdir digests
+          for c in $COMPONENTS; do
+            description=$(sed -n "/^FROM base AS ${c}\$/,/^ENTRYPOINT/s/.*image\.description=\"\(.*\)\"\$/\1/p" Dockerfile)
+            docker buildx build . --target "$c" --platform linux/amd64,linux/arm64 \
+              --output "type=image,name=localhost:5000/$c:$VERSION,push=true,rewrite-timestamp=true" \
+              --provenance=false --sbom=false \
+              --build-arg "VERSION=$VERSION" --build-arg "REVISION=$REVISION" --build-arg "CREATED=$CREATED" \
+              --annotation "index:org.opencontainers.image.title=$c" \
+              --annotation "index:org.opencontainers.image.description=$description" \
+              --annotation "index:org.opencontainers.image.licenses=Apache-2.0" \
+              --annotation "index:org.opencontainers.image.source=$SOURCE_URL" \
+              --annotation "index:org.opencontainers.image.version=$VERSION" \
+              --annotation "index:org.opencontainers.image.revision=$REVISION" \
+              --annotation "index:org.opencontainers.image.created=$CREATED"
+            digest="sha256:$(docker buildx imagetools inspect --raw "localhost:5000/$c:$VERSION" | sha256sum | cut -d' ' -f1)"
+            echo "$c $digest" | tee -a digests/images.txt
+          done
+          (cd dist && sha256sum */portitor-*) | tee digests/binaries.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digests-${{ matrix.copy }}
+          path: digests/
+          retention-days: 30
+
+  compare:
+    name: Same bytes
+    needs: [plan, images]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read # the release assets
+      packages: read # the image manifests on GHCR
+    env:
+      MODE: ${{ needs.plan.outputs.mode }}
+      REF: ${{ needs.plan.outputs.ref }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digests-*
+          path: digests
+      - name: What was published (release only)
+        if: ${{ needs.plan.outputs.mode == 'release' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=${REF#refs/tags/}
+          version=${tag#v}
+          mkdir -p digests/published release
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir release --pattern 'portitor-*-linux-*'
+          for a in amd64 arm64; do
+            for c in $COMPONENTS; do
+              echo "$(sha256sum < "release/$c-$version-linux-$a" | cut -d' ' -f1)  $a/$c"
+            done
+          done > digests/published/binaries.txt
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          for c in $COMPONENTS; do
+            image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/$c:$version"
+            echo "$c sha256:$(docker buildx imagetools inspect --raw "$image" | sha256sum | cut -d' ' -f1)"
+          done > digests/published/images.txt
+      - name: Compare
+        run: |
+          if [ "$MODE" = release ]; then left=published; right=digests-rebuild; else left=digests-a; right=digests-b; fi
+          status=0
+          {
+            echo "### Reproducible build: $left and $right ($REF)"
+            echo
+            for f in binaries.txt images.txt; do
+              if diff <(sort "digests/$left/$f") <(sort "digests/$right/$f") > /dev/null; then
+                echo "- $f: identical"
+              else
+                echo "- $f: **different**"; status=1
+              fi
+              echo
+              echo '```'
+              paste -d' ' <(sort "digests/$left/$f") <(sort "digests/$right/$f")
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::The rebuild did not give the same bytes; see the summary and the digests-* artifacts"
+          fi
+          exit "$status"

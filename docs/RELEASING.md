@@ -190,8 +190,67 @@ done
 
 - The digests printed by `cosign verify` must match the ones in the
   release notes.
+- The release tag is signed with the maintainer's key; GitHub publishes
+  the public key:
+
+  ```sh
+  curl -fsSL https://github.com/brunopacheco1.gpg | gpg --import
+  git verify-tag vX.Y.Z
+  ```
+- Binaries attached to the release (from the first release after
+  0.14.0): each has a signed build provenance, checked with
+  `gh attestation verify portitor-connector-X.Y.Z-linux-amd64 --repo brunopacheco1/portitor`
+  (the same for the other five). Their SHA-256 is also printed in the
+  release run's log by `scripts/build-release.sh`.
 - SBOMs: attached to the GitHub release (one per component) and to each
   image as an attestation.
+
+## Reproducible builds
+
+A release can be rebuilt from its tag, and the rebuild gives the same
+bytes: the same binaries as the GitHub release, and the same image
+digests as on GHCR.
+
+How the build is kept reproducible:
+
+- the binaries are built by one script, `scripts/build-release.sh`, in
+  the release and in every rebuild. It pins the Rust version (through
+  `RUST_TOOLCHAIN` in the workflows) and every crate (`--locked`), maps
+  the checkout and Cargo folders to fixed names in the binaries
+  (`--remap-path-prefix` for Rust, `-ffile-prefix-map` for the C code of
+  ring and SQLite), and sets `SOURCE_DATE_EPOCH` to the commit time;
+- the images are built by a pinned BuildKit, with `SOURCE_DATE_EPOCH`
+  set to the commit time and `rewrite-timestamp=true`, so the image
+  config, the history and every file in the layers carry the commit
+  time, not the time of the build;
+- the C compiler comes from the runner image (`ubuntu-24.04`, package
+  `musl-tools`), so a rebuild runs on the same runner image.
+
+The check, `.github/workflows/reproducible.yml` (badge "Reproducible
+build" in the README):
+
+- after every release, it rebuilds the tag on fresh runners and
+  compares each binary with the GitHub release and each image digest
+  with GHCR; it can be started by hand for a tag (`workflow_dispatch`,
+  input `tag`);
+- on `main` (weekly, and when the build files change) and on pull
+  requests that change the build, it builds the same commit twice, on
+  separate runners, and compares the two.
+
+The job summary lists each SHA-256 and digest side by side; the run
+fails on any difference, and keeps both sets of digests as artifacts.
+
+This is a check on GitHub's runners by this project, not by an
+independent rebuilder: on 2026-11-21 no public rebuilder was found for
+Rust binaries or container images published on GitHub and GHCR
+(Reproducible Central covers Maven Central only, rebuilderd covers Linux
+distribution packages, OSS Rebuild covers popular npm, PyPI and
+crates.io packages). Anyone can repeat the rebuild: check out the tag on
+an `ubuntu-24.04` machine with Rust `RUST_TOOLCHAIN` and `musl-tools`,
+run `scripts/build-release.sh x86_64-unknown-linux-musl amd64`, and
+compare `sha256sum dist/amd64/*` with the files of the release. Releases
+up to 0.14.0 were built before this script and do not rebuild to the
+same bytes.
 
 If the release fails after the tag is pushed, fix the cause, delete the tag
 (locally and with `git push origin :refs/tags/vX.Y.Z`), and tag again,

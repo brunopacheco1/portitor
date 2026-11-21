@@ -32,6 +32,7 @@ All commands run from the repository root. Deploying for real is in
 | The same in Docker Compose | `scripts/demo-compose.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
 | The container scripts with Podman instead of Docker | `CONTAINER_ENGINE=podman` and the script, see [below](#docker-or-podman) | no: by hand, last run noted there |
 | Images build and start | `docker build --target portitor-connector` / `--target portitor-identity` / `--target portitor-issuer`; the connector and the issuer refuse to start without their settings, the identity serves its DID document | every PR that changes more than prose (`CI`) |
+| Reproducible build: same binaries and image digests | see [RELEASING](RELEASING.md#reproducible-builds) | after each release (rebuild of the tag, compared with the release), weekly and when the build files change on `main`, and PRs that change the build files (built twice, compared) (`Reproducible build`) |
 | Static analysis | CodeQL (see [below](#codeql)), OpenSSF Scorecard, ORT | CodeQL: every PR, every push to `main` and weekly; a finding that is not on the accepted list fails the job (`CodeQL`). Scorecard: on `main`; ORT: when a manifest changes |
 
 "Prose" is the short list of paths that no job reads; which jobs a
@@ -170,10 +171,10 @@ docker build --target portitor-issuer -t portitor-issuer:ci .
 On an arm64 machine (an Apple Silicon Mac), see "What Podman needs"
 above for a build that needs nothing but the container engine.
 
-The build is repeatable: with the pinned toolchain and `--locked`, two
-release builds of the same commit in the same path give the same
-binaries, bit for bit (checked on 2026-11-20 for 0.14.0, native Linux
-x86-64 target; the musl targets of the images were not checked).
+The release build is reproducible: `scripts/build-release.sh` gives the
+same binaries, bit for bit, from any checkout path, and the workflow
+`Reproducible build` checks it, images included (see
+[RELEASING](RELEASING.md#reproducible-builds)).
 
 ## Unit and integration tests
 
