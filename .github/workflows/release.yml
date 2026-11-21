@@ -18,6 +18,7 @@ on:
       - 'Dockerfile'
       - '.dockerignore'
       - 'scripts/third_party_notices.py'
+      - 'scripts/build-release.sh'
 
 permissions:
   contents: read
@@ -118,13 +119,9 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
       - name: Test
         run: cargo test --workspace --locked
-      - name: Build static binaries
-        run: |
-          for c in $COMPONENTS; do
-            cargo build --release --locked --target "${{ matrix.target }}" -p "$c"
-            mkdir -p "dist/${{ matrix.arch }}"
-            cp "target/${{ matrix.target }}/release/$c" "dist/${{ matrix.arch }}/"
-          done
+      - name: Build static binaries (reproducible)
+        # the same script as the rebuild check (reproducible.yml); it prints the SHA-256 of each binary
+        run: scripts/build-release.sh "${{ matrix.target }}" "${{ matrix.arch }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-${{ matrix.arch }}
@@ -191,13 +188,24 @@ jobs:
           for a in amd64 arm64; do mv "dist/dist-$a" "dist/$a"; done
           chmod +x dist/*/*
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          # a pinned BuildKit, so a rebuild writes the same layers (reproducible.yml uses the same)
+          driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+      - name: Commit time
+        id: meta
+        run: echo "epoch=$(git log -1 --format=%ct)" >> "$GITHUB_OUTPUT"
       - name: Build ${{ matrix.component }} (amd64, arm64)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          SOURCE_DATE_EPOCH: ${{ steps.meta.outputs.epoch }}
         with:
           context: .
           target: ${{ matrix.component }}
           platforms: linux/amd64,linux/arm64
-          push: false
+          # the release's image output, without the push
+          outputs: type=image,name=dry-run/${{ matrix.component }}:${{ env.VERSION }},push=false,rewrite-timestamp=true
+          provenance: false
+          sbom: false
           build-args: |
             VERSION=${{ env.VERSION }}
             REVISION=${{ github.sha }}
@@ -244,6 +252,9 @@ jobs:
           name: sbom
           path: sbom
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          # a pinned BuildKit, so a rebuild writes the same layers (reproducible.yml uses the same)
+          driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
@@ -255,6 +266,8 @@ jobs:
         run: |
           # the tagged commit's time, so rebuilds match
           echo "time=$(git log -1 --format=%cI)" >> "$GITHUB_OUTPUT"
+          # the same time for BuildKit: image config, history and the time of every file in the layers
+          echo "epoch=$(git log -1 --format=%ct)" >> "$GITHUB_OUTPUT"
           # the description label of this component's target in the Dockerfile, so it is written once
           description=$(sed -n "/^FROM base AS ${COMPONENT}\$/,/^ENTRYPOINT/s/.*image\.description=\"\(.*\)\"\$/\1/p" Dockerfile)
           if [ -z "$description" ]; then
@@ -264,13 +277,18 @@ jobs:
       - name: Build and push ${{ matrix.component }} (amd64, arm64)
         id: image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          SOURCE_DATE_EPOCH: ${{ steps.meta.outputs.epoch }}
         with:
           context: .
           target: ${{ matrix.component }}
           platforms: linux/amd64,linux/arm64
-          push: true
+          # rewrite-timestamp: every file in the layers gets SOURCE_DATE_EPOCH, so the digest
+          # does not depend on when the binaries were downloaded (docs/RELEASING.md,
+          # "Reproducible builds"; the rebuild check uses the same inputs)
+          outputs: type=image,name=${{ env.IMAGE }}:${{ env.VERSION }},push=true,rewrite-timestamp=true
           provenance: false # provenance is attested below, signed by GitHub
-          tags: ${{ env.IMAGE }}:${{ env.VERSION }}
+          sbom: false
           # the OCI labels live in the Dockerfile; these fill in the per-release values
           build-args: |
             VERSION=${{ env.VERSION }}
@@ -332,6 +350,8 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write # create the GitHub release
+      id-token: write # keyless signing of the binaries' provenance
+      attestations: write # store the binaries' provenance
     env:
       VERSION: ${{ needs.verify.outputs.version }}
     steps:
@@ -352,6 +372,12 @@ jobs:
           pattern: image-*
           path: image
           merge-multiple: true
+      # signs the six binaries: a Sigstore-signed SLSA provenance per binary, stored by GitHub
+      # (check with `gh attestation verify`, docs/RELEASING.md, "Checking a release")
+      - name: Binaries' provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/dist-*/portitor-*
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}

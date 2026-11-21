@@ -23,7 +23,8 @@ on:
       - 'scripts/openapi_site.py'
       - '.github/workflows/pages.yml'
   workflow_run:
-    workflows: [Release]
+    # after a release, and after the rebuild check (its result is shown, pass or fail)
+    workflows: [Release, Reproducible build]
     types: [completed]
   schedule:
     - cron: '17 4 * * 1'
@@ -39,9 +40,15 @@ concurrency:
 jobs:
   build:
     name: Build the site
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success' ||
+      (github.event.workflow_run.name == 'Reproducible build' && github.event.workflow_run.conclusion == 'failure')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: read # the release tags
+      actions: read # the runs of reproducible.yml
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -49,6 +56,8 @@ jobs:
           persist-credentials: false
       - name: Read the latest release and the check values
         # a lookup that fails or is unknown shows "not available", never a guess
+        env:
+          GH_TOKEN: ${{ github.token }} # reads the runs of reproducible.yml
         run: |
           tag=$(git tag --list 'v*' --sort=-version:refname | head -n 1)
           status="${tag:+latest release ${tag}}"
@@ -58,12 +67,26 @@ jobs:
             score=$(jq -r '.score // empty' <<< "$card")
             [[ "$score" =~ ^[0-9]+(\.[0-9]+)?$ ]] && scorecard="${score} / 10"
           fi
-          # branch=main: SonarQube Cloud still calls its main branch "master", so without it the API answers NONE
           gate="not available"
           if result=$(curl -fsS --max-time 20 "https://sonarcloud.io/api/qualitygates/project_status?projectKey=brunopacheco1_portitor&branch=main"); then
             case "$(jq -r '.projectStatus.status // empty' <<< "$result")" in
               OK) gate=passed ;;
               ERROR) gate=failing ;;
+              *) ;;
+            esac
+          fi
+          coverage="not available"
+          if result=$(curl -fsS --max-time 20 "https://sonarcloud.io/api/measures/component?component=brunopacheco1_portitor&branch=main&metricKeys=coverage"); then
+            value=$(jq -r '.component.measures[]? | select(.metric == "coverage") | .value' <<< "$result")
+            [[ "$value" =~ ^[0-9]+(\.[0-9]+)?$ ]] && coverage="${value} %"
+          fi
+          # the newest finished run of the rebuild check on main (reproducible.yml)
+          reproducible="not available"
+          if runs=$(curl -fsS --max-time 20 -H "Authorization: Bearer ${GH_TOKEN}" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/reproducible.yml/runs?branch=main&status=completed&per_page=1"); then
+            case "$(jq -r '.workflow_runs[0].conclusion // empty' <<< "$runs")" in
+              success) reproducible="same bytes" ;;
+              failure) reproducible=failing ;;
               *) ;;
             esac
           fi
@@ -85,11 +108,13 @@ jobs:
           fi
           built=$(date -u +%Y-%m-%d)
           # only plain characters reach the page
-          clean() { tr -cd 'A-Za-z0-9 ./_-' <<< "$1"; }
+          clean() { tr -cd 'A-Za-z0-9 ./_%-' <<< "$1"; }
           {
             echo "STATUS=$(clean "$status")"
             echo "SCORECARD=$(clean "$scorecard")"
             echo "GATE=$(clean "$gate")"
+            echo "COVERAGE=$(clean "$coverage")"
+            echo "REPRODUCIBLE=$(clean "$reproducible")"
             echo "REUSE=$(clean "$reuse")"
             echo "BESTPRACTICES=$(clean "$bestpractices")"
             echo "BUILT=$(clean "$built")"
@@ -103,6 +128,7 @@ jobs:
             docs/api/identity-management-openapi.json docs/api/issuer-openapi.json \
             docs/api/issuer-management-openapi.json _site/api/
           sed -i -e "s|@STATUS@|${STATUS}|g" -e "s|@SCORECARD@|${SCORECARD}|g" -e "s|@GATE@|${GATE}|g" \
+            -e "s|@COVERAGE@|${COVERAGE}|g" -e "s|@REPRODUCIBLE@|${REPRODUCIBLE}|g" \
             -e "s|@REUSE@|${REUSE}|g" -e "s|@BESTPRACTICES@|${BESTPRACTICES}|g" \
             -e "s|@BUILT@|${BUILT}|g" _site/index.html
           if grep -n '@[A-Z]*@' _site/index.html; then

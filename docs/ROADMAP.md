@@ -53,9 +53,9 @@ Decisions about the plan itself that no ADR or changelog entry holds.
   document that names "0.9 hardening" or "0.10" for key rotation or the
   Baseline self-assessment was written before these moves.
 - **Repository settings** (0.1, set by the owner in GitHub). A ruleset
-  on `main`: changes only through pull requests; one approval (not
-  tied to a code owner or to the latest push; stale approvals are not
-  dismissed; as read from the ruleset on 2026-11-21); the
+  on `main`: changes only through pull requests; one approval, of the latest
+  push, dismissed when new commits are pushed, not tied to a code owner
+  (as read from the ruleset on 2026-11-21); the
   branch up to date before merge; signed commits; required status
   checks, by name `CI gate`, `TCK gate`, `Dependencies gate`,
   `Analyze (rust)` and `Analyze (actions)` (from 0.14; [CONTRIBUTING](../CONTRIBUTING.md#required-checks)); no force
@@ -184,6 +184,13 @@ minor release is one pull request. Each feature gets an ADR before code,
 and each format is taken from a specification, EDC or Simpl-Open, never
 invented. Each 1.x release ships when its exit criteria pass, not on a
 date.
+
+Together, 1.0 to 1.9 are what the project intends to do in the next
+twelve months, to the end of 2027 (maintainer, 2026-11-21): 1.0 to 1.5
+below, then the EHDS participant functions and the Simpl-Open tests of
+"2027" (1.6 to 1.9). What it does not intend to do in that time is in
+"2027", "What Portitor does not plan to do in this year", in "Later" and
+in [STABILITY, "What 1.0 does not do"](STABILITY.md#what-10-does-not-do).
 
 The health dataspace demo (see below) grows one step per release, from
 1.1 to 1.3. It is a manual test, run with Compose and a runbook, not a
@@ -372,12 +379,124 @@ permit (Art. 67, 68); pseudonymised data is processed only in an SPE,
 and only non-personal data can be downloaded (Art. 73); most of it
 applies from March 2029.
 
+## 2027: EHDS participant functions and Simpl-Open tests (proposal, 2026-11-21)
+
+The maintainer asked for the roadmap to cover what a participant of an
+EHDS-interoperable dataspace may need, with tests against Simpl-Open,
+as about one year of work (maintainer, 2026-11-21). This section is that
+year: the releases after 1.5, to the end of 2027. Like the 1.x plan, each
+release ships when its exit criteria pass, not on a date, and each
+feature starts with research and an ADR.
+
+### What the sources say (read 2026-11-21)
+
+| Fact | Source |
+| --- | --- |
+| For secondary use, a data user applies to the HDAB, which issues a data permit (Art. 67, 68) or answers a data request with anonymised statistics (Art. 69). Pseudonymised data is processed only in a secure processing environment (Art. 73). Most of it applies from March 2029. | Regulation (EU) 2025/327, checked 2026-11-15 |
+| The HDAB keeps a national dataset catalogue (Art. 77). Article 77(4) leads to an implementing act on the minimum metadata of a dataset description. Its staff working document, sent to the Council on 6 November 2026, names HealthDCAT-AP. | [Council ST 15505/26](https://data.consilium.europa.eu/doc/document/ST-15505-2026-INIT/en/pdf) (SWD(2026) 342) |
+| Datasets can carry a data quality and utility label (Art. 78); people can opt out of secondary use (Art. 71). | Regulation (EU) 2025/327 |
+| HealthData@EU, the cross-border infrastructure, connects national contact points through dispatchers and eDelivery access points: "Messaging is based on ebMS3 ... and its payload-agnostic AS4 Conformance Profile", with Domibus as reference. Metadata is HealthDCAT-AP. It does not name DSP, DCP, connectors or Simpl. | [TEHDAS2 D7.3](https://tehdas.eu/wp-content/uploads/2026/05/d7.3-technical-specification-for-health-data-access-bodies-on-the-implementation-of-the-common-it-infrastructure.pdf), sections 4.1, 5.1, 6 ([ADR 0025](adr/0025-users-and-roles.md)) |
+| The HealthData@EU central platform is open source (EUPL-1.2) since release 3 (March 2025). Its Health Data Dispatcher replaced the "EHDS2 Pilot connector" and talks AS4 only. | [EC Digital Building Blocks, 2025-03-27](https://ec.europa.eu/digital-building-blocks/sites/pages/viewpage.action?pageId=887383631), [code.europa.eu/healthdataeu](https://code.europa.eu/healthdataeu/healthdataeu-eu-dataset-catalogue) |
+| Simpl-Open: Gdynia (4.0) released July 2026; Hamburg (4.1, target October 2026) and Innsbruck (5.0, target Q4 2026) planned. The development status page names no DSP version, sandbox or conformance kit. Its connector is built on EDC, behind a Tier 2 gateway with mutual TLS and an "ephemeral proof". | [Development status](https://simpl-programme.ec.europa.eu/documentation/development-status), [ADR 0017](adr/0017-simpl-open.md) |
+
+Not verified yet: D7.3 beyond its first third (an end-to-end test
+framework and an ITB conformance use case are mentioned in its annexes)
+and the date of the EHDS implementing acts. Each ADR below reads them
+first.
+
+So two worlds meet in a health dataspace: participants sharing data
+peer to peer (DSP and DCP, where Portitor sits) and the HDAB and
+HealthData@EU (AS4, applications and permits). Portitor's place is the
+first, with clean hand-overs to the second.
+
+### 1.6 Data holder: describe datasets the EHDS way
+
+- Dataset descriptions that meet the minimum metadata of the Art. 77(4)
+  implementing act, in HealthDCAT-AP, checked with its SHACL shapes
+  (ADR 0005 already checks HealthDCAT-AP release 8). The holder sends
+  the same description to the HDAB's catalogue; how it is sent depends
+  on the HDAB, so the ADR first asks which national catalogues take
+  DCAT-AP harvest.
+- The data quality and utility label (Art. 78) in the description, in
+  the place HealthDCAT-AP gives it (to check), never a field of our own.
+- Exit: a description of the demo's dataset passes the HealthDCAT-AP
+  shapes and the EU ITB validator, and lists each minimum element.
+- Main risk: the implementing act is adopted after this release; the
+  ADR then follows the draft and says so.
+
+### 1.7 Simpl-Open tests
+
+Replaces the "Simpl-Open" item of "Later": no shared sandbox exists, so
+the test runs a Simpl-Open agent locally from its public code (Helm on a
+local cluster, as its installation guide does).
+
+- Step 1, the protocol: Portitor and the Simpl-Open data provider and
+  consumer agents exchange catalog, negotiation and transfer, both
+  directions, with the Tier 2 gateway left out in the lab. It answers
+  which DSP version Simpl-Open speaks, which the programme does not
+  publish.
+- Step 2, the way in: Portitor joins through the Tier 2 gateway, with
+  the login adapter of [ADR 0017](adr/0017-simpl-open.md) (x509 client
+  certificate from the governance authority, ephemeral proof). ADR 0017
+  is accepted or changed first.
+- Step 3, users: the user-to-system test of 1.5 run again against the
+  newest Simpl-Open release.
+- A CI job only if the Simpl-Open stack fits a runner; otherwise a
+  runbook, like the demo.
+- Exit: steps 1 and 2 pass, or each failure is written down with its
+  cause and reported upstream; STABILITY says what was tested, with
+  which Simpl-Open release.
+- Main risk: the Hamburg or Innsbruck code is not public or does not
+  install outside the programme's own cloud. Then the test waits, and
+  the step that failed is written down.
+
+### 1.8 Data user and HDAB: permits, requests and the SPE
+
+Builds on 1.2 (data permit as credential) and 1.3 (Cooper and Marley).
+
+- Data permit life cycle: validity, change and withdrawal of a permit
+  (Art. 68) end the agreements and transfers that rely on it, through
+  the status list Portitor already checks.
+- Data request (Art. 69): Cooper answers with anonymised statistics only;
+  the policy says so and the transfer refuses anything else.
+- Hand-over to a secure processing environment (Art. 73): Portitor
+  pushes the data into an SPE the operator runs, and only the output
+  leaves it. Portitor builds no SPE.
+- Opt-out (Art. 71): the ADR finds out how Member States publish opt-out
+  and whether the holder or the HDAB applies it, before any code.
+- Exit: the demo's four questions run again with permits that change and
+  end; the opt-out ADR is accepted or rejected.
+- Main risk: national rules on opt-out differ; there may be nothing
+  common to build.
+
+### 1.9 Hand-over to HealthData@EU
+
+Research first; code only if the ADR finds a hand-over worth building.
+
+- How a Portitor participant meets HealthData@EU: does the HDAB need
+  anything from it beyond the HealthDCAT-AP descriptions of 1.6? Read
+  D7.3 in full, the central platform's code and its test framework.
+- Options to weigh: none (the HDAB does it all), the HDAB harvesting
+  Portitor's DSP catalog, or Portitor talking to an AS4 access point.
+  AS4 is not planned: a second protocol stack is a large step and needs
+  the maintainer's yes.
+- Exit: the ADR, accepted or rejected; the ITB conformance tests, if
+  public, run against what 1.6 publishes.
+- Main risk: HealthData@EU and the dataspace protocols stay apart, so a
+  bridge serves no one yet.
+
+### What Portitor does not plan to do in this year
+
+- Run an HDAB, a national contact point or an application portal for
+  data users.
+- Build a secure processing environment.
+- Speak AS4 or run a Domibus access point, unless the 1.9 ADR is
+  accepted.
+- Define its own metadata, label or permit format: each comes from the
+  EHDS acts, HealthDCAT-AP, DCP, EDC or Simpl-Open.
+
 ## Later (not planned for a release yet)
 
-- Join a Simpl-Open dataspace behind the participant's Simpl Tier 2
-  gateway, with a small login adapter ([ADR 0017](adr/0017-simpl-open.md)).
-  Parked until the maintainer sets up a Simpl-Open sandbox to test
-  against (maintainer, 2026-11-13).
 - Revise agreements when the scope of the data changes, for example a
   data subject objects to a use, or the consumer asks to change the
   scope of the first agreement (maintainer, 2026-11-14). Until then an

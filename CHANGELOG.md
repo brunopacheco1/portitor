@@ -12,8 +12,41 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Security
+
+- EDC interop test (test-only): Jackson 2 at 2.22.3 and the Gradle Shadow
+  plugin at 9.6.1, which close the 17 advisories that the OpenSSF
+  Scorecard found in `interop/edc/runtimes/gradle/verification-metadata.xml`
+  (jackson-core and jackson-databind 2.19.2 and 2.22.1, Shadow 9.5.1). The
+  OSV scan in the Dependencies workflow now reads that file too.
+
+### Build
+
+- Reproducible release builds. The release binaries are built by
+  `scripts/build-release.sh` (fixed paths in the binaries,
+  `SOURCE_DATE_EPOCH`), the images by a pinned BuildKit with
+  `rewrite-timestamp=true`. A new workflow, `Reproducible build`,
+  rebuilds each release tag and compares the binaries and image digests
+  with what was published, and builds `main` twice to compare. README
+  badge and website value (docs/RELEASING.md, "Reproducible builds").
+- The six release binaries get a signed build provenance (Sigstore,
+  stored by GitHub), like the images; `gh attestation verify` checks it
+  (docs/RELEASING.md, "Checking a release").
+- README badges for the SonarQube Cloud quality gate and coverage; the
+  website's "Trust and quality" list adds the coverage and the
+  reproducible-build result. The SonarQube Cloud project's main branch
+  is now `main`.
+
 ### Documentation
 
+- ROADMAP: the next twelve months, to the end of 2027. Releases 1.6 to
+  1.9 add the functions an EHDS dataspace participant may need (dataset
+  descriptions with the minimum metadata of Art. 77(4), permits, data
+  requests, hand-over to a secure processing environment, opt-out
+  research, the hand-over to HealthData@EU) and tests against
+  Simpl-Open, plus what Portitor does not plan to do.
+- CONTRIBUTING has a "Code review" section: what a reviewer checks
+  before a pull request merges.
 - Close-out of 0.14: the roadmap and the website mark 0.14 released and
   1.0 as the current release.
 - CONTRIBUTING and ROADMAP describe the ruleset on `main` as it is set:

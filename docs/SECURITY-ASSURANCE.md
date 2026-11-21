@@ -77,6 +77,9 @@ dataspace participants over HTTPS.
   failure messages name a check and a reason, never a secret.
 - **Authentic releases:** from 0.1.0, images are signed with cosign
   (keyless) and carry an SBOM and SLSA build provenance as attestations.
+  From the first release after 0.14.0 the build is reproducible: a
+  rebuild of the tag gives the same binaries and image digests, and a
+  workflow checks it after each release ([RELEASING, "Reproducible builds"](RELEASING.md#reproducible-builds)).
 
 **Users cannot expect (out of scope in 0.x):**
 - Production readiness: Portitor is a prototype until 1.0.
@@ -112,7 +115,7 @@ dataspace participants over HTTPS.
 | Service availability | Crafted or oversized messages crash or exhaust a service | Typed parsing with no `unsafe`; a request size limit per port (`PORTITOR_MAX_REQUEST_BYTES`, `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES`, 2 MiB by default) and a fixed 64 KiB limit on routes whose messages are small by specification, HTTP 413 above them ([R-18](RISKS_AND_TECHNICAL_DEBTS.md#r-18)); fuzzing of every parser of input from outside the process (ClusterFuzzLite; list in [Parsers and fuzz targets](#parsers-and-fuzz-targets)); a nesting limit in SHACL validation |
 | Operational data (health answers, traces, metrics) | A caller reads health answers, or a receiver reads traces and metrics, and learns secrets, partners or process ids; a partner links our internal calls through trace context | Health checks only on the management port, which stays on the operator's network; failure messages without secrets; export off by default and only to the receiver the operator names; attribute allow-list (no tokens, keys, headers, bodies or id-bearing paths); client metrics name only hosts inside the participant (no untrusted cardinality); `traceparent` neither sent to nor taken from other participants, and taken on `/sts/token` only after the client is authenticated (ADR 0023) |
 | Evidence of who did what | A partner denies an agreement or a data pull; an operator's action cannot be traced to a person | State changes of negotiations and transfers logged with their process ids; agreements kept with the counter-party's DID; the issuer logs registrations and revocations. No audit trail of data pulls or management calls, and one key per management API: findings F-02 and F-03 of the [0.11 review](#threat-model-review-011-2026-11-17) ([TD-31](RISKS_AND_TECHNICAL_DEBTS.md#td-31), [TD-04](RISKS_AND_TECHNICAL_DEBTS.md#td-04)) |
-| Users' supply chain | A tampered release or dependency | Pinned CI actions; signed commits; Dependabot, dependency review, OSV, cargo-deny (RustSec advisories, licence allowlist, crate sources), cargo-vet (every crate version audited or exempted) and ORT; signed images with SBOM and provenance attestations |
+| Users' supply chain | A tampered release or dependency | Pinned CI actions; signed commits; Dependabot, dependency review, OSV, cargo-deny (RustSec advisories, licence allowlist, crate sources), cargo-vet (every crate version audited or exempted) and ORT; signed images with SBOM and provenance attestations; reproducible builds, rebuilt and compared |
 
 ## Trust boundaries
 
@@ -384,7 +387,8 @@ one connection.
   a pull request and on `main` ([TESTING](TESTING.md#codeql)).
 - **Supply chain:** pinned workflow actions, least-privilege workflow
   tokens, REUSE compliance; OpenSSF Scorecard; cargo-vet, so a new or
-  bumped crate needs a recorded audit or exemption before it merges.
+  bumped crate needs a recorded audit or exemption before it merges;
+  reproducible release builds, rebuilt and compared after each release.
 - **Fuzzing:** every parser below has a fuzz target. ClusterFuzzLite
   builds every target in `fuzz/fuzz_targets` on each pull request and
   each week (`docs/TESTING.md`, "Fuzzing").
