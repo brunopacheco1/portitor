@@ -8,7 +8,7 @@
 plugins {
     java
     // builds the one-file runnable jar, as the EDC launchers do
-    id("com.gradleup.shadow") version "9.5.1" apply false
+    id("com.gradleup.shadow") version "9.6.1" apply false
 }
 
 subprojects {
@@ -20,6 +20,13 @@ subprojects {
         toolchain {
             languageVersion.set(JavaLanguageVersion.of(21))
         }
+    }
+
+    // Jackson 2 at a version without the known advisories (osv.dev, 2026-11-21):
+    // EDC RC8 and its Swagger modules ask for 2.19.2 and 2.22.1, and the newest
+    // version asked for wins, so this only raises the version, never lowers it.
+    dependencies {
+        "implementation"(platform("com.fasterxml.jackson:jackson-bom:2.22.3"))
     }
 
     extensions.configure<JavaApplication> {

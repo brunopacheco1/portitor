@@ -12,6 +12,14 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Security
+
+- EDC interop test (test-only): Jackson 2 at 2.22.3 and the Gradle Shadow
+  plugin at 9.6.1, which close the 17 advisories that the OpenSSF
+  Scorecard found in `interop/edc/runtimes/gradle/verification-metadata.xml`
+  (jackson-core and jackson-databind 2.19.2 and 2.22.1, Shadow 9.5.1). The
+  OSV scan in the Dependencies workflow now reads that file too.
+
 ### Documentation
 
 - Close-out of 0.14: the roadmap and the website mark 0.14 released and

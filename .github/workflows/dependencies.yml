@@ -97,8 +97,11 @@ jobs:
       security-events: write
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@32d3cd482bdadfb38b186c0ad1b031902d55d932 # v2.7.1
     with:
+      # the Rust lock file, and the Java libraries of the EDC interop test (test-only, but
+      # the OpenSSF Scorecard counts them too)
       scan-args: |-
         -L Cargo.lock
+        -L interop/edc/runtimes/gradle/verification-metadata.xml
       # advisory: findings go to Security > Code scanning; cargo-deny blocks on RustSec advisories
       fail-on-vuln: false
 
