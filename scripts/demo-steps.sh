@@ -136,10 +136,33 @@ step "Read the provider's catalog through the consumer's management API"
 # the consumer's connector gets a token from its STS, as before every DSP
 # request it sends; the provider checks it, then asks the consumer's
 # credential service for its MembershipCredential
-CATALOG=$(api POST /v1/catalog/request "$(jq -nc --arg addr "$PROVIDER/$DSP" \
+# The first DSP request between two containers: with Podman 4.9 and
+# aardvark-dns 1.4 (Ubuntu 24.04) a name lookup is sometimes lost while
+# the containers' DNS server reloads after the last start, and the
+# consumer answers 502 (docs/TESTING.md, "Docker or Podman"). A 502 is
+# asked again, at most three times in all; any other answer fails at once.
+first_catalog() { # body: prints the catalog
+  local body=$1 attempt answer status
+  for attempt in 1 2 3; do
+    answer=$(curl -s -w '\n%{http_code}' -X POST "$MANAGEMENT/v1/catalog/request" \
+      -H "authorization: Bearer $(cat "$KEY_FILE")" \
+      -H 'content-type: application/json' -d "$body") ||
+      fail "catalog request: the consumer's management API did not answer"
+    status=${answer##*$'\n'}
+    answer=${answer%$'\n'*}
+    if [[ $status == 200 ]]; then
+      echo "$answer"
+      return 0
+    fi
+    [[ $status == 502 && $attempt -lt 3 ]] || fail "catalog request: the consumer answered $status: $answer"
+    printf 'the consumer answered 502 (%s), asking again in 2 s\n' \
+      "$(jq -r '.detail // empty' <<<"$answer" 2>/dev/null)" >&2
+    sleep 2
+  done
+}
+CATALOG=$(first_catalog "$(jq -nc --arg addr "$PROVIDER/$DSP" \
   --arg id "$PROVIDER_ID" --arg protocol "$PROTOCOL" \
-  '{counterPartyAddress: $addr, counterPartyId: $id, protocol: $protocol}')") ||
-  fail "catalog request"
+  '{counterPartyAddress: $addr, counterPartyId: $id, protocol: $protocol}')")
 [[ $(jq -r '.participantId' <<<"$CATALOG") == "$PROVIDER_ID" ]] || fail "another provider: $CATALOG"
 jq -c '{"@context": .["@context"], dataset: [.dataset[] | {"@id", "dct:conformsTo"}]}' <<<"$CATALOG"
 
