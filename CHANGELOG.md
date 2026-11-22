@@ -22,6 +22,14 @@ versions may change behaviour and configuration.
   copy is now downloaded by name, and a missing digest list is reported
   as such.
 
+### Documentation
+
+- `docs/TESTING.md`: what rootless Podman needs on Linux (Ubuntu and
+  Pop!\_OS 24.04: netavark, aardvark-dns, the API socket, the
+  `docker-compose` binary), the first passing Linux run of
+  `scripts/demo-compose.sh`, and its known failure with Podman 4.9.3
+  (about one run in ten; run again).
+
 ## [1.0.0-rc.1] - 2026-11-22
 
 The first release candidate of 1.0. No setting and no route changed

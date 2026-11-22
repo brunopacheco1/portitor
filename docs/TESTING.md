@@ -72,6 +72,7 @@ CI runs everything with Docker. The Podman runs are done by hand:
 
 | Script | Podman run that passed |
 |---|---|
+| `scripts/demo-compose.sh` | 2026-11-22, tag `v1.0.0-rc.1` (release images): rootless Podman 4.9.3 (netavark 1.4.0, aardvark-dns 1.4.0), Docker Compose 5.7.2, Pop!\_OS 24.04 LTS on amd64; about 7 seconds; 36 of 40 runs passed (the other 4: see below) |
 | `scripts/demo-compose.sh` | 2026-11-20, commit `d857330` (0.13.0 before the tag): Podman 6.1.4 with machine 5.8.5 (libkrun, rootless, 6 CPUs, 8 GiB), Docker Compose 5.6.1, macOS 26.7.3 on Apple Silicon, bash 5.3, OpenSSL 3.5; 7 seconds, with the three `:ci` images as arguments |
 | `scripts/gaiax-e2e.sh` | the same day and machine; 44 seconds |
 | `scripts/edc-interop.sh` | the same day and machine; 12 minutes, most of it the Gradle builds of EDC |
@@ -86,6 +87,26 @@ CI runs everything with Docker. The Podman runs are done by hand:
   The scripts refuse `podman-compose`: its `run` has no `--quiet`
   (podman-compose 1.6.0), and it has not been tried with these Compose
   files.
+- **On Linux, rootless Podman with its API socket and container DNS.**
+  Ubuntu 24.04 and Pop!\_OS 24.04 ship Podman 4.9.3, which has
+  `podman compose` (added in 4.7.0). netavark and aardvark-dns, which
+  give the containers their names in DNS, are not dependencies of the
+  `podman` package there, so name them:
+  `sudo apt install podman netavark aardvark-dns slirp4netns uidmap`.
+  `podman compose` points Docker Compose at the API socket, so start it:
+  `systemctl --user enable --now podman.socket`. Install the
+  `docker-compose` binary from the
+  [Docker Compose releases](https://github.com/docker/compose/releases)
+  into `/usr/local/bin` (the Docker Engine is not needed).
+  **Known failure with Podman 4.9.3:** about one run in ten fails at the
+  first catalog request (502 from the consumer; the provider logs
+  `DSP request not checked: a service the check needs is unavailable`,
+  `client error (Connect)`): for about 20 seconds after the containers
+  start, the provider cannot reach the consumer's identity component by
+  its name. Run the script again. Each try gives up after 5 seconds, the
+  DNS timeout, so the name lookup (aardvark-dns 1.4.0) is the likely
+  cause; we have not proven it. Asking again for 15 seconds did not help.
+  Ubuntu 26.04 ships Podman 5.7.0 with aardvark-dns 1.16.0; not tried yet.
 - **On macOS, a Podman machine** that runs (`podman machine start`), with
   the repository under your home folder: the machine mounts `/Users`,
   `/private` and `/var/folders`
