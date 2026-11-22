@@ -72,7 +72,7 @@ CI runs everything with Docker. The Podman runs are done by hand:
 
 | Script | Podman run that passed |
 |---|---|
-| `scripts/demo-compose.sh` | 2026-11-22, tag `v1.0.0-rc.1` (release images): rootless Podman 4.9.3 (netavark and aardvark-dns 1.4.0), Docker Compose 5.7.2, Pop!\_OS 24.04 LTS on amd64; 7 of 10 runs passed before the retry of the first catalog request (below) |
+| `scripts/demo-compose.sh` | 2026-11-22, tag `v1.0.0-rc.1` (release images): rootless Podman 4.9.3 (netavark 1.4.0, aardvark-dns 1.4.0), Docker Compose 5.7.2, Pop!\_OS 24.04 LTS on amd64; about 7 seconds; 36 of 40 runs passed (the other 4: see below) |
 | `scripts/demo-compose.sh` | 2026-11-20, commit `d857330` (0.13.0 before the tag): Podman 6.1.4 with machine 5.8.5 (libkrun, rootless, 6 CPUs, 8 GiB), Docker Compose 5.6.1, macOS 26.7.3 on Apple Silicon, bash 5.3, OpenSSL 3.5; 7 seconds, with the three `:ci` images as arguments |
 | `scripts/gaiax-e2e.sh` | the same day and machine; 44 seconds |
 | `scripts/edc-interop.sh` | the same day and machine; 12 minutes, most of it the Gradle builds of EDC |
@@ -97,13 +97,16 @@ CI runs everything with Docker. The Podman runs are done by hand:
   `systemctl --user enable --now podman.socket`. Install the
   `docker-compose` binary from the
   [Docker Compose releases](https://github.com/docker/compose/releases)
-  into `/usr/local/bin` (the Docker Engine is not needed). With
-  aardvark-dns 1.4 a name lookup is sometimes lost just after the
-  containers start (the DNS server reloads each time a container joins
-  the network; 1.11.0 changed that reload,
-  [release notes](https://github.com/containers/aardvark-dns/blob/main/RELEASE_NOTES.md)),
-  and the first catalog request fails with 502. `scripts/demo-steps.sh`
-  asks for that catalog up to three times.
+  into `/usr/local/bin` (the Docker Engine is not needed).
+  **Known failure with Podman 4.9.3:** about one run in ten fails at the
+  first catalog request (502 from the consumer; the provider logs
+  `DSP request not checked: a service the check needs is unavailable`,
+  `client error (Connect)`): for about 20 seconds after the containers
+  start, the provider cannot reach the consumer's identity component by
+  its name. Run the script again. Each try gives up after 5 seconds, the
+  DNS timeout, so the name lookup (aardvark-dns 1.4.0) is the likely
+  cause; we have not proven it. Asking again for 15 seconds did not help.
+  Ubuntu 26.04 ships Podman 5.7.0 with aardvark-dns 1.16.0; not tried yet.
 - **On macOS, a Podman machine** that runs (`podman machine start`), with
   the repository under your home folder: the machine mounts `/Users`,
   `/private` and `/var/folders`

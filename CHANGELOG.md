@@ -14,12 +14,6 @@ versions may change behaviour and configuration.
 
 ### Fixed
 
-- Demo: the first catalog request of `scripts/demo-steps.sh` is asked
-  again on 502, at most three times in all. With rootless Podman 4.9.3
-  and aardvark-dns 1.4 (Ubuntu and Pop!\_OS 24.04) a container name
-  lookup was sometimes lost just after start, and about one run in four
-  of `scripts/demo-compose.sh` failed there. `docs/TESTING.md` lists what
-  Podman needs on Linux and the run that passed.
 - Reproducible build, release mode: the comparison read the rebuild's
   digests from the wrong directory (a download pattern that matches one
   artifact puts its files straight into the target directory), so the
@@ -27,6 +21,14 @@ versions may change behaviour and configuration.
   although the rebuild logs show the same digests as the release. Each
   copy is now downloaded by name, and a missing digest list is reported
   as such.
+
+### Documentation
+
+- `docs/TESTING.md`: what rootless Podman needs on Linux (Ubuntu and
+  Pop!\_OS 24.04: netavark, aardvark-dns, the API socket, the
+  `docker-compose` binary), the first passing Linux run of
+  `scripts/demo-compose.sh`, and its known failure with Podman 4.9.3
+  (about one run in ten; run again).
 
 ## [1.0.0-rc.1] - 2026-11-22
 
