@@ -12,6 +12,16 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Fixed
+
+- Reproducible build, release mode: the comparison read the rebuild's
+  digests from the wrong directory (a download pattern that matches one
+  artifact puts its files straight into the target directory), so the
+  first rebuild of a release (`v1.0.0-rc.1`) failed with "different"
+  although the rebuild logs show the same digests as the release. Each
+  copy is now downloaded by name, and a missing digest list is reported
+  as such.
+
 ## [1.0.0-rc.1] - 2026-11-22
 
 The first release candidate of 1.0. No setting and no route changed
