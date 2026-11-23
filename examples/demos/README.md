@@ -54,3 +54,10 @@ the holder refuses it: an agreement belongs to the party that
 negotiates it. It needs a delegation the holder can check, which no
 specification we know defines, so it starts as research
 ([roadmap](../../docs/ROADMAP.md#13-data-user-and-hdab-the-hdab-and-schuman-clinical-research)).
+
+## More planned scenarios
+
+A mixed data space (one participant on Eclipse EDC), a holder that
+withdraws its dataset, a cross-border data user, a holder without its
+own connector, and opt-out. The [roadmap](../../docs/ROADMAP.md#more-health-scenarios-maintainer-2026-11-23)
+lists what each one shows and which release it needs.

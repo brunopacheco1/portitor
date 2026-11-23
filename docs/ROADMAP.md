@@ -407,6 +407,22 @@ permit (Art. 67, 68); pseudonymised data is processed only in an SPE,
 and only non-personal data can be downloaded (Art. 73); most of it
 applies from March 2029.
 
+#### More health scenarios (maintainer, 2026-11-23)
+
+Each one becomes a folder in `examples/demos/`. Before the next ones are
+built, the ways to set up the relationship between data user, HDAB and
+data holder are compared, with pros and cons (maintainer, 2026-11-23).
+
+| Scenario | What it shows | Runs on |
+| --- | --- | --- |
+| The HDAB as permit authority | The HDAB only issues the data permit; the holder checks it at negotiation and sends the data where the permit says | 1.1 and 1.2, plus a destination check no release has yet |
+| The HDAB on a data user's behalf | The HDAB negotiates with the holder for a data user | research first: a delegation the holder can check (1.3) |
+| A mixed data space | One participant runs Eclipse EDC instead of Portitor, in the health story | 1.0 |
+| The holder withdraws its dataset | New negotiations fail, existing agreements keep their data (ADR 0020) | 1.0 |
+| Cross-border | A data user in another Member State, with its own authority, issuer and bundle; how HealthData@EU links national nodes is read first | partly 1.0 (several trusted issuers) |
+| A holder without its own connector | A small holder puts its data with the HDAB, which publishes it; the legal side is read first | 1.0 |
+| Opt-out | A person's opt-out of secondary use (EHDS Art. 71) changes the data before it leaves | 1.8, research first |
+
 ## 2027: EHDS participant functions and Simpl-Open tests (proposal, 2026-11-21)
 
 The maintainer asked for the roadmap to cover what a participant of an
