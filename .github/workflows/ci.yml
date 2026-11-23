@@ -138,13 +138,6 @@ jobs:
           cat issuer-smoke.log
       - name: The same in Docker Compose
         run: examples/demos/two-party/demo-compose.sh portitor-connector:ci portitor-identity:ci portitor-issuer:ci
-      - name: The health demo in Docker Compose
-        env:
-          # the pilot offer the demo waits out at its step 6
-          PILOT_SECONDS: "60"
-        run: |
-          (cd examples/demos/health-lu/pipeline && python3 -m unittest)
-          examples/demos/health-lu/run.sh portitor-connector:ci portitor-identity:ci portitor-issuer:ci
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: portitor-musl

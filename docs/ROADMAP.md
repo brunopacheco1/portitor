@@ -423,6 +423,23 @@ data holder are compared, with pros and cons (maintainer, 2026-11-23).
 | A holder without its own connector | A small holder puts its data with the HDAB, which publishes it; the legal side is read first | 1.0 |
 | Opt-out | A person's opt-out of secondary use (EHDS Art. 71) changes the data before it leaves | 1.8, research first |
 
+#### Ways to link data user, HDAB and holder (maintainer, 2026-11-23)
+
+Six ways, compared with pros and cons in a
+[design note](https://claude.ai/artifact/W9SXQmmRXXDsibZhz38c36). They are
+explored one at a time, in this order; each ends with a short note of
+what worked and what did not, and a demo or an ADR where it earns one
+(maintainer, 2026-11-23).
+
+| Order | Way | Who the holder checks, where the data goes | Status |
+| --- | --- | --- | --- |
+| 1 | A. The HDAB as intermediary | the HDAB; data to the HDAB, results to the user | done: step 0, `examples/demos/health-lu` |
+| 2 | F. Permit-gated peer to peer | the user's credential; data to the user (non-personal data only, EHDS Art. 73(2)) | runs on 1.0 |
+| 3 | C. Permit credential, data to the SPE | the user's permit; data into the SPE the permit names | needs 1.1, 1.2 and a destination check |
+| 4 | E. The trusted holder runs the SPE (EHDS Art. 72) | the user's permit; data stays, results leave | needs 1.2; the SPE is outside Portitor |
+| 5 | B. Chained agreements | the HDAB; its offers held inside its agreement | 1.3, research and ADR (R-39) |
+| 6 | D. The HDAB on the user's behalf | a delegation and the user's permit | research and ADR; refused today (ADR 0013) |
+
 ## 2027: EHDS participant functions and Simpl-Open tests (proposal, 2026-11-21)
 
 The maintainer asked for the roadmap to cover what a participant of an

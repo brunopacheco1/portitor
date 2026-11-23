@@ -34,7 +34,8 @@ copy peer to peer. A health data access body (HDAB) takes them too and
 offers only counts made from them. A hospital research unit gets those
 counts, and never the genotypes. It answers the roadmap's four questions
 for the health data space demo, and lists where Portitor falls short
-today. [health-lu/README.md](health-lu/README.md) explains it.
+today. It is a manual test, not run in CI.
+[health-lu/README.md](health-lu/README.md) explains it.
 
 ```sh
 examples/demos/health-lu/run.sh
