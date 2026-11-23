@@ -21,7 +21,7 @@
 #                      signed bundle, and latest.json, which names it as
 #                      the newest version
 #
-# Settings (environment), with the defaults of scripts/demo.sh's issuer:
+# Settings (environment), with the defaults of examples/demos/two-party/demo.sh's issuer:
 #   AUTHORITY      the authority's DID         did:web:127.0.0.1%3A18060
 #   VERSION        the bundle version          r8-demo-1
 # A version folder that exists already is never written again.

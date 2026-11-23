@@ -68,7 +68,7 @@ backups, key changes and upgrades.
   (every 30 s, 5 s timeout, 3 retries; every 2 s during a 60 s start
   period). `docker ps` shows `healthy` or `unhealthy`; Docker Compose can
   start a service once another is healthy (`depends_on: condition:
-  service_healthy`, as in `examples/compose/compose.yaml`). The check
+  service_healthy`, as in `examples/demos/two-party/compose.yaml`). The check
   every 2 s during the start period (`--start-interval`) needs Docker
   Engine 25 or later (Docker Desktop 4.27 or later). Podman runs the
   images too, but may not read their `HEALTHCHECK`: see

@@ -30,6 +30,22 @@ versions may change behaviour and configuration.
   `scripts/demo-compose.sh`, and its known failure with Podman 4.9.3
   (about one run in ten; run again).
 
+### Added
+
+- A health data demo, `examples/demos/health-lu/`: a Luxembourg-style
+  health data space with an authority and four participants (a biobank,
+  a research lab, an HDAB and a hospital research unit), synthetic
+  genotypes made with msprime, an HDAB pipeline that pulls and counts
+  only during a data user's transfer, and refusals. It gives the first
+  answers to the roadmap's four questions on v1.0.0-rc.1. CI runs it.
+
+### Changed
+
+- All demos are in `examples/demos/`, one folder per scenario, with an
+  index. The two-party demo moved there: `scripts/demo.sh`,
+  `scripts/demo-compose.sh` and `scripts/demo-steps.sh` are now in
+  `examples/demos/two-party/`, with `examples/compose/`'s files.
+
 ## [1.0.0-rc.1] - 2026-11-22
 
 The first release candidate of 1.0. No setting and no route changed

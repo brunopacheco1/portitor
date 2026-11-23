@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # The demo's checks, against a provider and a consumer that already run.
-# scripts/demo.sh runs them on this machine; scripts/demo-compose.sh runs
+# examples/demos/two-party/demo.sh runs them on this machine; examples/demos/two-party/demo-compose.sh runs
 # them in Docker Compose. Exits non-zero at the first failed check.
 #
 # The provider uses the data space's HealthDCAT-AP bundle (scripts/demo-bundle.sh)
@@ -56,7 +56,7 @@
 
 set -euo pipefail
 # shellcheck source=scripts/require-bash.sh
-source "$(dirname "$0")/require-bash.sh"
+source "$(dirname "$0")/../../../scripts/require-bash.sh"
 
 : "${PROVIDER:?}" "${MANAGEMENT:?}" "${KEY_FILE:?}" "${DATA:?}"
 : "${PROVIDER_MANAGEMENT:?}" "${PROVIDER_KEY_FILE:?}"

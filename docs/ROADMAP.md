@@ -164,7 +164,7 @@ Decisions about the plan itself that no ADR or changelog entry holds.
   1.0 does and does not do. The clean-machine run is one timed run by
   the maintainer ([RELEASING](RELEASING.md#releasing-a-version), step
   4). It gets no CI job of its own: `CI` already runs the Compose demo
-  (`scripts/demo-compose.sh`) that the quickstart uses.
+  (`examples/demos/two-party/demo-compose.sh`) that the quickstart uses.
 - Before 1.0: the trademark and domain check of the name
   ([R-25](RISKS_AND_TECHNICAL_DEBTS.md#r-25)). Done on 2026-11-21: no
   trademark conflict was found, and the maintainer accepted the
@@ -220,9 +220,9 @@ CI job (maintainer, 2026-11-15).
 - An audit log line for each data pull: flow, agreement, consumer DID
   and bytes sent. It needs no user identity
   ([ADR 0025](adr/0025-users-and-roles.md), maintainer, 2026-11-20).
-- Demo step 1: the authority (issuer), Alice and Bob. Bob negotiates with
-  Alice, peer to peer, and Alice pushes the data to RustFS in Bob's
-  network.
+- Demo step 1: the authority (issuer), Lux Biobank and Lux Biomedicine
+  Lab. The lab negotiates with Lux Biobank, peer to peer, and Lux Biobank
+  pushes the data to RustFS in the lab's network.
 - Exit: a push transfer lands in RustFS; pull still passes the DSP TCK,
   the DCP TCK and the EDC interop test.
 - Main risk: no S3 data address shared by EDC and Simpl-Open.
@@ -240,24 +240,34 @@ CI job (maintainer, 2026-11-15).
 - As consumer, accept a provider's offer with credential constraints
   ([TD-11](RISKS_AND_TECHNICAL_DEBTS.md#td-11)); the catalog hides offers
   the caller cannot meet ([TD-13](RISKS_AND_TECHNICAL_DEBTS.md#td-13)).
-- Demo step 2: Bob's agreement with Alice needs a matching purpose; a
-  wrong purpose is refused.
+- Demo step 2: the lab's agreement with Lux Biobank needs a matching
+  purpose; a wrong purpose is refused.
+- A second health scenario, the HDAB as permit authority (maintainer,
+  2026-11-23): the HDAB only issues the data permit; Lux Biobank checks
+  it at negotiation and sends the data where the permit says. It needs
+  the permit credential (above) and push (1.1), and one more piece no
+  release has yet: a check that the transfer's destination matches a
+  claim in the permit. No specification for that is known; research
+  first. A folder in `examples/demos/` once it runs.
 - Exit: purpose and permit tested granted and refused; the TCKs and the
   EDC interop test stay green.
 - Main risk: DPV purposes may not map one to one to the purposes of the
   EHDS (Article 53).
 
-### 1.3 Data user and HDAB: Cooper and Marley
+### 1.3 Data user and HDAB: the HDAB and Schuman Clinical Research
 
-- Cooper plays the health data access body (HDAB) towards Marley, the
-  data user; Bob and Alice stay a peer to peer agreement (maintainer,
-  2026-11-15). Marley needs a data permit, issued by Cooper as the HDAB
-  (EHDS Art. 68), so Cooper runs his own issuer next to the authority's.
-- No secure processing environment is built: Cooper runs a fixed
-  pipeline on Alice's data that produces counts, and pushes that output
-  to RustFS in Marley's infrastructure (maintainer, 2026-11-15).
-- Agreements that depend on an upstream agreement: Cooper's offer to
-  Marley cannot be wider than Cooper's agreement with Alice (purpose,
+- The HDAB plays the health data access body towards Schuman Clinical
+  Research, the data user; the lab and Lux Biobank stay a peer to peer
+  agreement (maintainer, 2026-11-15). Schuman Clinical Research needs a
+  data permit, issued by the HDAB (EHDS Art. 68), so the HDAB runs its
+  own issuer next to the authority's.
+- No secure processing environment is built: the HDAB runs a fixed
+  pipeline on Lux Biobank's data that produces counts, and pushes that
+  output to RustFS in Schuman Clinical Research's infrastructure
+  (maintainer, 2026-11-15).
+- Agreements that depend on an upstream agreement: the HDAB's offer to
+  Schuman Clinical Research cannot be wider than the HDAB's agreement
+  with Lux Biobank (purpose,
   users, duration). No specification defines this; research and ADR
   first ([R-39](RISKS_AND_TECHNICAL_DEBTS.md#r-39)).
 - Demo step 3: the four questions (below) answered by running the demo,
@@ -352,27 +362,35 @@ rejects. It runs beside the releases.
 
 Four participants and an authority (maintainer, 2026-11-15), modelled on
 a health data access body (HDAB) and the ICUdata4EU ICU dataspace. The
-authority governs the dataspace and runs the issuer; it plays the
-national contact point for secondary use (EHDS Art. 75, which the
-coordinator HDAB of Art. 55(1) may also be). Alice, a data
-provider, holds patient records. Bob, a data user, asks Alice directly,
-peer to peer (the EHDS does not exclude it); Alice pushes the data to
-object storage (RustFS) in Bob's own infrastructure. Cooper plays the
-HDAB towards Marley, another data user: Cooper issues Marley's data
-permit, runs a fixed pipeline on Alice's data that produces counts, and
-pushes that output to RustFS in Marley's infrastructure. No secure processing
-environment (SPE) is built; the pipeline stands in for one (maintainer,
-2026-11-15). The demo must answer, by running it:
+names are made up, each modelled on a Luxembourg institution
+(maintainer, 2026-11-23). The authority, Digital Lux Trust, governs the
+dataspace: it runs the issuer and publishes the bundle, the minimal
+trust and semantics, and grants no data access; it is not the HDAB
+(maintainer, 2026-11-23). Lux Biobank, a data holder, holds genotypes.
+Lux Biomedicine Lab, a data user, asks Lux Biobank directly, peer to
+peer (the EHDS does not exclude it); Lux Biobank pushes the data to
+object storage (RustFS) in the lab's own infrastructure. The HDAB plays
+the access body towards Schuman Clinical Research, another data user:
+the HDAB issues its data permit, runs a fixed pipeline on Lux Biobank's
+data that produces counts, and pushes that output to RustFS in Schuman
+Clinical Research's infrastructure. No secure processing environment
+(SPE) is built; the pipeline stands in for one (maintainer, 2026-11-15).
+The demo must answer, by running it:
 
-- can the same data be reached through several channels (Alice's offer
-  and Cooper's)?
-- does Cooper negotiate with Alice for every new cohort query, or does
-  one agreement cover them?
-- does Cooper negotiate with Alice for every new access through his
-  pipeline, or for every new data user?
-- do Alice's and Cooper's policies differ, and can Cooper's be less
-  strict because his environment is safer? What can never be wider than
-  what Alice allowed Cooper (purpose, users, duration)?
+- can the same data be reached through several channels (Lux Biobank's
+  offer and the HDAB's)?
+- does the HDAB negotiate with Lux Biobank for every new cohort query,
+  or does one agreement cover them?
+- does the HDAB negotiate with Lux Biobank for every new access through
+  its pipeline, or for every new data user?
+- do Lux Biobank's and the HDAB's policies differ, and can the HDAB's be
+  less strict because its environment is safer? What can never be wider
+  than what Lux Biobank allowed the HDAB (purpose, users, duration)?
+
+Step 0 runs on v1.0.0-rc.1 as it is, with pull transfers and synthetic
+genotypes, and gives the first answers:
+[examples/demos/health-lu](../examples/demos/health-lu/README.md)
+(maintainer, 2026-11-23). Steps 1 to 3 update it as 1.1 to 1.3 land.
 
 Checked against the EHDS (Regulation (EU) 2025/327, 2026-11-15): for
 secondary use a data user applies to the HDAB, which issues a data
@@ -473,12 +491,12 @@ the maintainer's answers to [ADR 0017](adr/0017-simpl-open.md#maintainers-answer
 
 ### 1.8 Data user and HDAB: permits, requests and the SPE
 
-Builds on 1.2 (data permit as credential) and 1.3 (Cooper and Marley).
+Builds on 1.2 (data permit as credential) and 1.3 (the HDAB and Schuman Clinical Research).
 
 - Data permit life cycle: validity, change and withdrawal of a permit
   (Art. 68) end the agreements and transfers that rely on it, through
   the status list Portitor already checks.
-- Data request (Art. 69): Cooper answers with anonymised statistics only;
+- Data request (Art. 69): the HDAB answers with anonymised statistics only;
   the policy says so and the transfer refuses anything else.
 - Hand-over to a secure processing environment (Art. 73): Portitor
   pushes the data into an SPE the operator runs, and only the output

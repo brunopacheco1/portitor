@@ -1,0 +1,157 @@
+[
+  {
+    "@id": "https://hdab.health-lu.example/datasets/variant-carriers",
+    "@type": "Dataset",
+    "portitor:source": "http://pipeline:8000/counts",
+    "dct:identifier": "variant-carriers",
+    "dct:title": {
+      "@value": "Carriers of each variant per population",
+      "@language": "en"
+    },
+    "dct:description": {
+      "@value": "For each variant of Lux Biobank's genotypes, how many people of each population carry it, as CSV. Counts from 1 to 4 are shown as <5; a variant below 5 in every population is left out. Computed by the HDAB when a transfer starts; the genotypes never leave the HDAB.",
+      "@language": "en"
+    },
+    "dct:accessRights": {
+      "@id": "http://publications.europa.eu/resource/authority/access-right/RESTRICTED",
+      "@type": "dct:RightsStatement"
+    },
+    "http://data.europa.eu/r5r/applicableLegislation": {
+      "@id": "http://data.europa.eu/eli/reg/2025/327/oj",
+      "@type": "http://data.europa.eu/eli/ontology#LegalResource"
+    },
+    "dcat:theme": {
+      "@id": "http://publications.europa.eu/resource/authority/data-theme/HEAL"
+    },
+    "http://healthdataportal.eu/ns/health#healthCategory": {
+      "@id": "https://hdeu-dcat.data.health.europa.eu/resource/authority/healthcategories/HGPD"
+    },
+    "http://healthdataportal.eu/ns/health#hasStructuredData": true,
+    "http://healthdataportal.eu/ns/health#minTypicalAge": {
+      "@value": "18",
+      "@type": "xsd:nonNegativeInteger"
+    },
+    "http://healthdataportal.eu/ns/health#hdab": {
+      "@id": "https://hdab.health-lu.example/",
+      "@type": "http://xmlns.com/foaf/0.1/Agent",
+      "http://xmlns.com/foaf/0.1/name": "HDAB",
+      "http://data.europa.eu/m8g/contactPoint": {
+        "@id": "https://hdab.health-lu.example/contact",
+        "@type": "http://data.europa.eu/m8g/ContactPoint",
+        "http://data.europa.eu/m8g/email": "access@hdab.health-lu.example"
+      }
+    },
+    "dct:publisher": {
+      "@id": "https://hdab.health-lu.example/",
+      "@type": "http://xmlns.com/foaf/0.1/Agent",
+      "http://xmlns.com/foaf/0.1/name": "HDAB",
+      "dct:type": {
+        "@id": "https://hdeu-dcat.data.health.europa.eu/resource/authority/publisher-type/national-authority"
+      },
+      "http://data.europa.eu/m8g/contactPoint": {
+        "@id": "https://hdab.health-lu.example/contact",
+        "@type": "http://data.europa.eu/m8g/ContactPoint",
+        "http://data.europa.eu/m8g/contactPage": {
+          "@id": "https://hdab.health-lu.example/contact"
+        }
+      }
+    },
+    "hasPolicy": [
+      {
+        "@id": "variant-carriers:offer:data-users",
+        "@type": "Offer",
+        "permission": [
+          {
+            "action": "use",
+            "constraint": [
+              {
+                "leftOperand": "MembershipCredential.role",
+                "operator": "eq",
+                "rightOperand": "data-user"
+              },
+              {
+                "leftOperand": "dateTime",
+                "operator": "lteq",
+                "rightOperand": "2027-12-31"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "distribution": [
+      {
+        "@id": "https://hdab.health-lu.example/datasets/variant-carriers/distribution",
+        "@type": "Distribution",
+        "format": "HttpData-PULL",
+        "http://data.europa.eu/r5r/applicableLegislation": {
+          "@id": "http://data.europa.eu/eli/reg/2025/327/oj"
+        },
+        "dcat:accessURL": {
+          "@id": "https://hdab.health-lu.example/datasets/variant-carriers"
+        }
+      }
+    ],
+    "http://healthdataportal.eu/ns/health#hasVariables": {
+      "@id": "https://hdab.health-lu.example/datasets/variant-carriers/variables",
+      "@type": "http://www.w3.org/ns/csvw#TableGroup",
+      "dct:title": "Carriers of each variant per population",
+      "http://www.w3.org/ns/csvw#table": {
+        "@id": "https://hdab.health-lu.example/datasets/variant-carriers/variables/table",
+        "@type": "http://www.w3.org/ns/csvw#Table",
+        "dct:title": "Counts (CSV)",
+        "http://www.w3.org/ns/csvw#column": [
+          {
+            "@type": "http://www.w3.org/ns/csvw#Column",
+            "http://www.w3.org/ns/csvw#name": "chrom",
+            "http://www.w3.org/ns/csvw#title": "Chromosome",
+            "dct:description": "The sequence of the variant",
+            "http://www.w3.org/ns/csvw#datatype": "string"
+          },
+          {
+            "@type": "http://www.w3.org/ns/csvw#Column",
+            "http://www.w3.org/ns/csvw#name": "pos",
+            "http://www.w3.org/ns/csvw#title": "Position",
+            "dct:description": "Position of the variant, from 1",
+            "http://www.w3.org/ns/csvw#datatype": "integer"
+          },
+          {
+            "@type": "http://www.w3.org/ns/csvw#Column",
+            "http://www.w3.org/ns/csvw#name": "ref",
+            "http://www.w3.org/ns/csvw#title": "Reference allele",
+            "dct:description": "The base on the reference sequence",
+            "http://www.w3.org/ns/csvw#datatype": "string"
+          },
+          {
+            "@type": "http://www.w3.org/ns/csvw#Column",
+            "http://www.w3.org/ns/csvw#name": "alt",
+            "http://www.w3.org/ns/csvw#title": "Alternative allele",
+            "dct:description": "The base of the variant",
+            "http://www.w3.org/ns/csvw#datatype": "string"
+          },
+          {
+            "@type": "http://www.w3.org/ns/csvw#Column",
+            "http://www.w3.org/ns/csvw#name": "YRI_carriers",
+            "http://www.w3.org/ns/csvw#title": "Carriers, YRI",
+            "dct:description": "People of the simulated population YRI (Yoruba in Ibadan, Nigeria) with one or two alternative alleles: 0, <5 (1 to 4, suppressed) or the count",
+            "http://www.w3.org/ns/csvw#datatype": "string"
+          },
+          {
+            "@type": "http://www.w3.org/ns/csvw#Column",
+            "http://www.w3.org/ns/csvw#name": "CEU_carriers",
+            "http://www.w3.org/ns/csvw#title": "Carriers, CEU",
+            "dct:description": "People of the simulated population CEU (Utah residents with Northern and Western European ancestry) with one or two alternative alleles: 0, <5 (1 to 4, suppressed) or the count",
+            "http://www.w3.org/ns/csvw#datatype": "string"
+          },
+          {
+            "@type": "http://www.w3.org/ns/csvw#Column",
+            "http://www.w3.org/ns/csvw#name": "CHB_carriers",
+            "http://www.w3.org/ns/csvw#title": "Carriers, CHB",
+            "dct:description": "People of the simulated population CHB (Han Chinese in Beijing, China) with one or two alternative alleles: 0, <5 (1 to 4, suppressed) or the count",
+            "http://www.w3.org/ns/csvw#datatype": "string"
+          }
+        ]
+      }
+    }
+  }
+]

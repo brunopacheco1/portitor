@@ -28,8 +28,9 @@ All commands run from the repository root. Deploying for real is in
 | Interoperability with EDC v1.0.0-RC8, with Gaia-X compliance | `scripts/edc-interop.sh`, see [below](#edc-interop-test) | PRs that touch `crates/`, `Cargo.toml`, `Cargo.lock`, the `Dockerfile`, `.dockerignore`, `interop/edc/`, `interop/gaiax/compose.yaml`, `examples/bundle/`, the scripts it uses or its workflow, and nightly (`EDC interop`) |
 | Gaia-X compliance between Portitor participants, against a local Gaia-X compliance service in test mode | `scripts/gaiax-e2e.sh`, see [below](#gaia-x-end-to-end-test) | PRs that touch `crates/`, `Cargo.toml`, `Cargo.lock`, the `Dockerfile`, `.dockerignore`, `examples/issuer-credentials.json`, `interop/gaiax/`, the scripts or the workflow, and nightly (`Gaia-X`) |
 | Fuzzing | see [below](#fuzzing) | PRs that touch `crates/`, `fuzz/`, `.clusterfuzzlite/`, `Cargo.toml` or `Cargo.lock` (short), weekly (long) |
-| Two participants authenticate with DCP, agree a contract and transfer a file | `scripts/demo.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
-| The same in Docker Compose | `scripts/demo-compose.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
+| Two participants authenticate with DCP, agree a contract and transfer a file | `examples/demos/two-party/demo.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
+| The same in Docker Compose | `examples/demos/two-party/demo-compose.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
+| The health demo: five parties, a chained transfer through an HDAB, refusals | `examples/demos/health-lu/run.sh`, see [its README](../examples/demos/health-lu/README.md) | every PR that changes more than prose (`CI`), with a 60-second pilot offer |
 | The container scripts with Podman instead of Docker | `CONTAINER_ENGINE=podman` and the script, see [below](#docker-or-podman) | no: by hand, last run noted there |
 | Images build and start | `docker build --target portitor-connector` / `--target portitor-identity` / `--target portitor-issuer`; the connector and the issuer refuse to start without their settings, the identity serves its DID document | every PR that changes more than prose (`CI`) |
 | Reproducible build: same binaries and image digests | see [RELEASING](RELEASING.md#reproducible-builds) | after each release (rebuild of the tag, compared with the release), weekly and when the build files change on `main`, and PRs that change the build files (built twice, compared) (`Reproducible build`) |
@@ -52,7 +53,7 @@ check` and `cargo vet --locked`.
 
 ## Docker or Podman
 
-The scripts that start containers (`scripts/demo-compose.sh`,
+The scripts that start containers (`examples/demos/two-party/demo-compose.sh`,
 `scripts/edc-interop.sh`, `scripts/gaiax-e2e.sh`) run with Docker or with
 Podman. `scripts/container-engine.sh` chooses, and only that file:
 
@@ -72,8 +73,8 @@ CI runs everything with Docker. The Podman runs are done by hand:
 
 | Script | Podman run that passed |
 |---|---|
-| `scripts/demo-compose.sh` | 2026-11-22, tag `v1.0.0-rc.1` (release images): rootless Podman 4.9.3 (netavark 1.4.0, aardvark-dns 1.4.0), Docker Compose 5.7.2, Pop!\_OS 24.04 LTS on amd64; about 7 seconds; 36 of 40 runs passed (the other 4: see below) |
-| `scripts/demo-compose.sh` | 2026-11-20, commit `d857330` (0.13.0 before the tag): Podman 6.1.4 with machine 5.8.5 (libkrun, rootless, 6 CPUs, 8 GiB), Docker Compose 5.6.1, macOS 26.7.3 on Apple Silicon, bash 5.3, OpenSSL 3.5; 7 seconds, with the three `:ci` images as arguments |
+| `examples/demos/two-party/demo-compose.sh` | 2026-11-22, tag `v1.0.0-rc.1` (release images): rootless Podman 4.9.3 (netavark 1.4.0, aardvark-dns 1.4.0), Docker Compose 5.7.2, Pop!\_OS 24.04 LTS on amd64; about 7 seconds; 36 of 40 runs passed (the other 4: see below) |
+| `examples/demos/two-party/demo-compose.sh` | 2026-11-20, commit `d857330` (0.13.0 before the tag): Podman 6.1.4 with machine 5.8.5 (libkrun, rootless, 6 CPUs, 8 GiB), Docker Compose 5.6.1, macOS 26.7.3 on Apple Silicon, bash 5.3, OpenSSL 3.5; 7 seconds, with the three `:ci` images as arguments |
 | `scripts/gaiax-e2e.sh` | the same day and machine; 44 seconds |
 | `scripts/edc-interop.sh` | the same day and machine; 12 minutes, most of it the Gradle builds of EDC |
 
@@ -161,7 +162,7 @@ CI runs everything with Docker. The Podman runs are done by hand:
 | Difference | Handled by |
 |---|---|
 | Podman needs the registry in an image name unless short names are configured ([containers-registries.conf(5)](https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md), "Short-Name Aliasing"). | Every pulled image is written in full (`docker.io/library/nginx:...`) in the Compose files and Dockerfiles. Images built here (`portitor-connector:ci`) are found locally. |
-| `podman build` writes images in OCI format, and Podman reads a health check only from an image in Docker format ([libimage `inspect.go`](https://github.com/containers/common/blob/main/libimage/inspect.go); `--format` in podman-build(1)). The same holds for a pulled image with an OCI manifest. | No script relies on an image's `HEALTHCHECK`: `examples/compose/compose.yaml` has its own `healthcheck:` for the services others wait for. To keep the image's check, build with `podman build --format docker`; for `podman run`, pass `--health-cmd '["/portitor-connector", "health"]'`. |
+| `podman build` writes images in OCI format, and Podman reads a health check only from an image in Docker format ([libimage `inspect.go`](https://github.com/containers/common/blob/main/libimage/inspect.go); `--format` in podman-build(1)). The same holds for a pulled image with an OCI manifest. | No script relies on an image's `HEALTHCHECK`: `examples/demos/two-party/compose.yaml` has its own `healthcheck:` for the services others wait for. To keep the image's check, build with `podman build --format docker`; for `podman run`, pass `--health-cmd '["/portitor-connector", "health"]'`. |
 | Docker's name server inside a container is `127.0.0.11`; Podman's (aardvark-dns) listens on the network's gateway. | The `tls` web server of the two interop tests takes its `resolver` from the container's `/etc/resolv.conf` (the nginx image's `NGINX_ENTRYPOINT_LOCAL_RESOLVERS`). |
 | Rootless Podman (the default, also in a Podman machine): root in the container is the user who runs Podman; any other user id cannot write into that user's folders. | The demo bundle is built in a container as `0:0` with rootless Podman and as your user otherwise (`engine_bind_mount_user` in `scripts/container-engine.sh`). The scripts make the files they mount readable by all (`chmod a+rX`), as before: the images run as user 65532. |
 | `podman compose` prints a line about its provider on each call. | The scripts set `PODMAN_COMPOSE_WARNING_LOGS=false`. |
@@ -1233,7 +1234,7 @@ context. Build and sign it with a new demo bundle key:
 ```sh
 scripts/demo-bundle.sh target/demo-bundle
 # AUTHORITY and VERSION change the defaults, which match
-# the issuer of scripts/demo.sh (did:web:127.0.0.1%3A18060)
+# the issuer of examples/demos/two-party/demo.sh (did:web:127.0.0.1%3A18060)
 ```
 
 It writes `target/demo-bundle/bundles/<version>/` for
@@ -1321,12 +1322,12 @@ provider sends the `FINALIZED` event. `GET
 
 ### Two connectors
 
-`scripts/demo.sh` runs a small dataspace on this machine, with DCP,
+`examples/demos/two-party/demo.sh` runs a small dataspace on this machine, with DCP,
 and checks the result. It needs `curl`, `jq`, `openssl` and Python 3.
 
 ```sh
-scripts/demo.sh                      # builds the debug binaries
-scripts/demo.sh <portitor-connector> [<portitor-identity> [<portitor-issuer>]]
+examples/demos/two-party/demo.sh                      # builds the debug binaries
+examples/demos/two-party/demo.sh <portitor-connector> [<portitor-identity> [<portitor-issuer>]]
 ```
 
 What it sets up:
@@ -1357,7 +1358,7 @@ What it sets up:
   sees a revocation at once. The EDC interop test and the DCP TCK run
   set `0` too.
 
-What it checks, in this order (`scripts/demo-steps.sh`):
+What it checks, in this order (`examples/demos/two-party/demo-steps.sh`):
 
 1. A catalog request without a token is refused (401).
 2. One made through the consumer's management API
@@ -1386,23 +1387,23 @@ What it checks, in this order (`scripts/demo-steps.sh`):
    new transfer request under the same agreement is `TERMINATED`.
 
 **The same in Docker Compose.**
-`scripts/demo-compose.sh [connector image [identity image [issuer image]]]`
+`examples/demos/two-party/demo-compose.sh [connector image [identity image [issuer image]]]`
 runs the same checks against the services in
-`examples/compose/compose.yaml`: the issuer, a provider and a consumer
+`examples/demos/two-party/compose.yaml`: the issuer, a provider and a consumer
 (each a connector with its identity), and a small web server that holds
 the provider's data. It uses the released images or the ones you name.
 The [quickstart](https://bruno.pacheco.lu/portitor/#try) on the website
 walks through it.
 
-- It writes the keys and secrets into `examples/compose/run/` first,
+- It writes the keys and secrets into `examples/demos/two-party/run/` first,
   and builds the demo bundle with the issuer image into
-  `examples/compose/run/issuer/bundle/`.
+  `examples/demos/two-party/run/issuer/bundle/`.
 - It stops everything at the end. `KEEP=1` leaves everything running:
   the consumer's management API is on `127.0.0.1:18091` (key in
-  `examples/compose/run/consumer/management.key`), the provider's, with
+  `examples/demos/two-party/run/consumer/management.key`), the provider's, with
   the harvest jobs, on `127.0.0.1:18081` (key in
-  `examples/compose/run/provider/management.key`), the issuer's on
-  `127.0.0.1:18071` (key in `examples/compose/run/issuer/management.key`).
+  `examples/demos/two-party/run/provider/management.key`), the issuer's on
+  `127.0.0.1:18071` (key in `examples/demos/two-party/run/issuer/management.key`).
 - Running it again after `KEEP=1` works: the script first removes the
   containers and volumes of the last run
   (`docker compose down --volumes --remove-orphans`), then `run/`.
@@ -1411,7 +1412,7 @@ walks through it.
   which needs the image's `health` subcommand.
 - To try your own changes, [build the images](#building-the-images-locally)
   and name them:
-  `scripts/demo-compose.sh portitor-connector:ci portitor-identity:ci portitor-issuer:ci`.
+  `examples/demos/two-party/demo-compose.sh portitor-connector:ci portitor-identity:ci portitor-issuer:ci`.
 
 CI runs both scripts on every pull request, with the binaries and
 images it has just built.
@@ -1421,8 +1422,8 @@ consumer's management API. The provider is
 `http://provider:8080/dsp/2025-1`, `did:web:provider-identity%3A8090`:
 
 ```sh
-KEEP=1 scripts/demo-compose.sh
-docker compose -f examples/compose/compose.yaml down --volumes   # when done
+KEEP=1 examples/demos/two-party/demo-compose.sh
+docker compose -f examples/demos/two-party/compose.yaml down --volumes   # when done
 ```
 
 Start a negotiation from the consumer's management API (the requests
@@ -1455,18 +1456,18 @@ over plain HTTP, without a reverse proxy, a bundle or Gaia-X.
 
 ### Observability stack (by hand)
 
-`examples/compose/observability.yaml` adds an OpenTelemetry Collector,
+`examples/demos/two-party/observability.yaml` adds an OpenTelemetry Collector,
 Jaeger and Prometheus to the Compose demo
 ([ADR 0023](adr/0023-observability.md), section 6). It sets
 `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318` on the issuer,
 both identities and both connectors; the collector
-(`examples/compose/otel-collector.yaml`) sends the traces to Jaeger and
+(`examples/demos/two-party/otel-collector.yaml`) sends the traces to Jaeger and
 the metrics to Prometheus's OTLP endpoint. It is started by hand; CI
 does not run it. Stop a demo that is still running first, with the
 `docker compose ... down --volumes` command above.
 
 ```sh
-EXTRA_COMPOSE=examples/compose/observability.yaml KEEP=1 scripts/demo-compose.sh
+EXTRA_COMPOSE=examples/demos/two-party/observability.yaml KEEP=1 examples/demos/two-party/demo-compose.sh
 ```
 
 The components send metrics every 60 s by default
@@ -1494,7 +1495,7 @@ histogram_quantile(0.95, sum by (le, job, instance) (rate(http_server_request_du
 Stop and remove everything, volumes included:
 
 ```sh
-docker compose -f examples/compose/compose.yaml -f examples/compose/observability.yaml down --volumes
+docker compose -f examples/demos/two-party/compose.yaml -f examples/demos/two-party/observability.yaml down --volumes
 ```
 
 ## Debugging in VS Code
@@ -1508,7 +1509,7 @@ when VS Code asks. Then open Run and Debug, pick a configuration and press F5.
 
 Every connector needs its identity component, a credential and a
 trusted issuer (DCP, ADR 0016). The task **portitor: identities**
-(`scripts/dev-identities.sh`) provides them, as `scripts/demo.sh` does:
+(`scripts/dev-identities.sh`) provides them, as `examples/demos/two-party/demo.sh` does:
 it starts a `portitor-issuer` on `127.0.0.1:9100` (management
 `127.0.0.1:9104`, key in `target/vscode-dcp/issuer/management.key`) and
 two `portitor-identity` processes, each with a `MembershipCredential` it
@@ -1596,7 +1597,7 @@ Fuzz targets need a nightly toolchain and are not in `launch.json`.
 against the targets in ADR 0002, and what DCP costs per DSP request
 (ADR 0016). It starts a provider (connector and identity) and a
 consumer identity, with credentials from a `portitor-issuer`, as
-`scripts/demo.sh` does; it reports the issuer's binary size and memory
+`examples/demos/two-party/demo.sh` does; it reports the issuer's binary size and memory
 too.
 The load tool is the `dsp-load` example of the connector: it sends
 catalog requests from 50 clients, each with a fresh token from the

@@ -16,6 +16,12 @@ path = [
     "examples/*.json",
     # made-up demo data (CSV has no comments)
     "examples/data/*",
+    # the health demo: its HealthDCAT-AP datasets (JSON) and its
+    # synthetic genotypes (VCF, written by data/generate.py)
+    "examples/demos/health-lu/datasets/*.json",
+    "examples/demos/health-lu/data/genotypes.vcf",
+    # its diagrams: draw.io rewrites the whole .drawio.svg file on save
+    "examples/demos/health-lu/diagrams/*.drawio.svg",
     "tck/*.json",
     # the EDC interop test's datasets (JSON) and made-up data (CSV)
     "interop/edc/config/*.json",

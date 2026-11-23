@@ -582,9 +582,11 @@ are closed.
 <a id="r-39"></a>
 ### R-39 No specification defines agreements that depend on an upstream agreement
 
-- **What.** In the health dataspace demo, Cooper's offer to Marley
-  rests on Cooper's agreement with Alice and must not be wider than it.
-  DSP and ODRL have no link between two agreements.
+- **What.** In the health dataspace demo, the HDAB's offer to Schuman
+  Clinical Research rests on the HDAB's agreement with Lux Biobank and
+  must not be wider than it. DSP and ODRL have no link between two
+  agreements. Step 0 of the demo keeps the HDAB's end date inside its
+  agreement by hand ([examples/demos/health-lu](../examples/demos/health-lu/README.md)).
 - **Why it matters.** Portitor's design may differ from what EDC or
   Simpl-Open choose later.
 - **Current state: Open.**
