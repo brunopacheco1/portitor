@@ -46,3 +46,11 @@ The HDAB only issues data permits. The data holder checks the permit
 when it negotiates and sends the data where the permit says. It needs
 the data permit and push transfers, so it waits for 1.1 and 1.2
 ([roadmap](../../docs/ROADMAP.md#12-purpose-and-data-permit-in-policies)).
+
+## Planned: the HDAB negotiates on a data user's behalf
+
+The HDAB asks the data holder for an agreement for a data user. Today
+the holder refuses it: an agreement belongs to the party that
+negotiates it. It needs a delegation the holder can check, which no
+specification we know defines, so it starts as research
+([roadmap](../../docs/ROADMAP.md#13-data-user-and-hdab-the-hdab-and-schuman-clinical-research)).

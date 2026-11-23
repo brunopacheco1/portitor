@@ -270,6 +270,15 @@ CI job (maintainer, 2026-11-15).
   with Lux Biobank (purpose,
   users, duration). No specification defines this; research and ADR
   first ([R-39](RISKS_AND_TECHNICAL_DEBTS.md#r-39)).
+- A third health scenario, the HDAB negotiating on a data user's behalf
+  (maintainer, 2026-11-23): the HDAB asks Lux Biobank for an agreement
+  whose assignee is Schuman Clinical Research. Today Lux Biobank refuses
+  it (the offer's assignee must be the caller, ADR 0013), and an
+  agreement the HDAB makes for itself is checked against the HDAB's
+  credentials and transferable only to the HDAB. It needs a way for the
+  data user to delegate to the HDAB that the holder can verify; DSP and
+  DCP define none that we know of. Research and an ADR first, like
+  [R-39](RISKS_AND_TECHNICAL_DEBTS.md#r-39).
 - Demo step 3: the four questions (below) answered by running the demo,
   each with its evidence, and a note of where Portitor fell short.
 - Exit: the four answers written in the docs.
