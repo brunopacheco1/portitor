@@ -20,6 +20,8 @@
 //!   ([`UpstreamSources`]), in any state, so transfers under agreements
 //!   already made keep working after the dataset is withdrawn.
 //!   The consumer's request headers are not passed on.
+//! - Each served request writes one audit line, `data transfer done`,
+//!   with the bytes sent and how it ended ([`crate::audit`]).
 
 #[cfg(test)]
 use std::collections::BTreeMap;
@@ -43,8 +45,9 @@ use portitor_dps::port::{DataPlane, SignalError};
 use portitor_dps::state::DataFlowState;
 use portitor_dsp::transfer::{DataAddress, DataAddressType, EndpointProperty};
 
+use crate::audit::{AuditedBody, Outcome, Parties, transfer_done};
 use crate::http_client::{HttpsClient, bearer_token_in, https_client};
-use crate::ports::AnyFlowStore;
+use crate::ports::{AnyFlowStore, AnyTransferStore};
 use crate::system::{new_uuid, now_secs};
 use portitor_runtime::telemetry::http::{ClientCall, Peer};
 use tracing::Instrument as _;
@@ -163,6 +166,9 @@ pub struct HttpDataPlane {
     public_url: String,
     token_seconds: u64,
     client: HttpsClient,
+    /// The provider's transfers, to name the agreement and the consumer
+    /// in the audit line; without them the two fields are empty.
+    transfers: Option<AnyTransferStore>,
 }
 
 impl std::fmt::Debug for HttpDataPlane {
@@ -206,7 +212,38 @@ impl HttpDataPlane {
             public_url: public_url.trim_end_matches('/').to_owned(),
             token_seconds,
             client,
+            transfers: None,
         })
+    }
+
+    /// The same data plane, reading the agreement and the consumer of
+    /// each flow from `transfers` (the flow id is the transfer's provider
+    /// process id) for the audit line.
+    #[must_use]
+    pub fn with_transfers(mut self, transfers: AnyTransferStore) -> Self {
+        self.transfers = Some(transfers);
+        self
+    }
+
+    /// The agreement and the consumer of flow `id`, for the audit line:
+    /// one read of the transfer store per request. Empty when they cannot
+    /// be read; the data is served anyway.
+    pub fn parties(&self, id: &str) -> Parties {
+        use portitor_dsp::transfer::provider::TransferStore as _;
+        let Some(transfers) = &self.transfers else {
+            return Parties::default();
+        };
+        match transfers.get(id) {
+            Ok(Some(transfer)) => Parties {
+                agreement: transfer.agreement_id,
+                counter_party: transfer.counter_party,
+            },
+            Ok(None) => Parties::default(),
+            Err(error) => {
+                tracing::warn!(flow = %id, error = %error.0, "audit: transfer store failed");
+                Parties::default()
+            }
+        }
     }
 
     #[allow(clippy::needless_pass_by_value)] // used as map_err(Self::store_failed)
@@ -409,7 +446,9 @@ fn unauthorized() -> Response {
 }
 
 /// `GET /data/{flowId}`: checks the token, then streams the upstream
-/// answer (status 2xx only; its `Content-Type` is kept).
+/// answer (status 2xx only; its `Content-Type` is kept). Once the answer
+/// has ended, was cut or failed, one audit line says so; a request that
+/// is refused (401) writes none.
 pub(crate) async fn serve(
     State(plane): State<Arc<HttpDataPlane>>,
     Path(id): Path<String>,
@@ -423,11 +462,15 @@ pub(crate) async fn serve(
         Err(Denied::Unauthorized) => return unauthorized(),
         Err(Denied::Store) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
+    let parties = plane.parties(&id);
     match fetch(&plane.client, &source).await {
-        Ok(response) => response,
+        // the bytes are counted as they go to the consumer
+        Ok(response) => response.map(|body| Body::new(AuditedBody::new(body, &id, parties))),
         Err(error) => {
             // the upstream URL is private: log it, do not show it
             tracing::warn!(flow = %id, %error, "upstream fetch failed");
+            let (agreement, consumer) = (&parties.agreement, &parties.counter_party);
+            transfer_done(&id, agreement, consumer, 0, Outcome::Failed);
             StatusCode::BAD_GATEWAY.into_response()
         }
     }

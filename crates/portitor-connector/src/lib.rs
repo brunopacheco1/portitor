@@ -19,6 +19,8 @@
 //!   the management API.
 //! - [`data_plane`], [`data_flows`]: the built-in HTTP pull data plane and
 //!   the Data Plane Signaling link to it (ADR 0013).
+//! - [`audit`]: the audit line of each data transfer (`data transfer
+//!   done`, ADR 0027).
 //! - [`harvest`]: datasets come from a source (the datasets file) into a
 //!   read copy, checked entry by entry; every run is a stored job
 //!   (ADR 0020).
@@ -57,6 +59,7 @@ use portitor_runtime::request_size::small_message;
 use portitor_runtime::settings::{self, RemovedSetting};
 use serde::Serialize;
 
+pub mod audit;
 pub mod auth;
 pub mod catalog_reader;
 pub mod consumer;
@@ -840,7 +843,9 @@ fn start_data_plane(
         &config.public_url,
         config.data_token_seconds,
     ) {
-        Ok(plane) => plane,
+        // the transfers name the agreement and the consumer for the
+        // audit line of each pull
+        Ok(plane) => plane.with_transfers(ports.transfers.store.clone()),
         Err(e) => {
             tracing::error!(error = %e, "no data plane: transfers will be refused");
             return None;

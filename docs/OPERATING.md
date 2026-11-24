@@ -124,6 +124,8 @@ export on, `telemetry: exporting` (INFO).
 | `a request handler panicked; answered 500` (ERROR) | The request on `route` got HTTP 500; the other requests went on | Report it; if it repeats for one partner, its message triggers the bug |
 | `a background task panicked; it starts again` / `...; its message is sent again` / `...; its work is left as saved` (ERROR) | The task `task` stopped at a bug. A task that runs all the time starts again after a pause (`restart_in_seconds`): 5 seconds, twice as long after each further panic in a row, at most 5 minutes. A DSP message whose sending panicked (`outbox_delivery`) is sent again after the same pauses (`again_in_seconds`). A credential decision stays saved and is tried again on the issuer's next outbox round (at most a minute); the other requests and deliveries go on | Report it. A line that repeats for the same `pid` or `issuer_pid` is a message or request that meets the bug every time: it stays as it is until a fixed version runs |
 | `portitor-connector stopped` (ERROR) | The process could not start or stopped with an error; the message says why | Fix the cause; the container restarts |
+| `data transfer done` (INFO, target `portitor::audit`) | One per data response served at `/data/{flowId}` (since 1.1), when it ended: the audit line below | Ship and keep it as your audit trail |
+| `upstream fetch failed` (WARN) | The data source of a pull did not answer, or answered other than 2xx; the consumer got HTTP 502 and `error` says why. The audit line says `failed` | Check the dataset's `portitor:source` and that the source is up |
 | `harvesting datasets` (INFO, at start) | The datasets file and the interval in use | Nothing |
 | `no datasets file (PORTITOR_DATASETS_FILE): the catalog is empty` (INFO) | No datasets file is set | Set it, if you offer datasets |
 | `harvest run` (INFO) | One per run: `job`, `trigger`, `outcome` and the counts | Nothing |
@@ -299,6 +301,32 @@ state changed`, with `portitor.dsp.process`, `portitor.dsp.role`,
 `portitor.dsp.provider_pid`, `portitor.dsp.consumer_pid`,
 `portitor.dsp.previous_state` (none for a new process) and
 `portitor.dsp.state`.
+
+**Audit line of each data transfer** (since 1.1,
+[ADR 0027](adr/0027-push-transfers-and-object-storage.md) section 6,
+[TD-31](RISKS_AND_TECHNICAL_DEBTS.md#td-31) first half). Each response
+of the provider's data plane (`GET /data/{flowId}`) writes, once it has
+ended, one line at INFO with the message `data transfer done` and the
+target `portitor::audit`, with these fields:
+
+| Field | Value |
+|---|---|
+| `flow` | The data flow id: the provider's process id of the transfer (`portitor.dsp.provider_pid` in the state change lines) |
+| `agreement` | The agreement id |
+| `counterParty` | The consumer's DID |
+| `bytes` | The bytes of data actually sent to the consumer |
+| `outcome` | `complete` (all of it sent), `cut` (stopped before the end: the consumer closed the connection, or access was taken away while the data was flowing) or `failed` (the data source failed before or during the answer; `bytes` is then what was sent before) |
+
+For example:
+
+```json
+{"timestamp":"2026-11-24T10:00:00.000000Z","level":"INFO","fields":{"message":"data transfer done","flow":"urn:uuid:6f0c...","agreement":"urn:uuid:a1b2...","counterParty":"did:web:consumer.example","bytes":18,"outcome":"complete"},"target":"portitor::audit"}
+```
+
+A refused request (HTTP 401) writes no audit line. The line never holds
+the token or the data source's URL. Portitor keeps no audit store: keep
+these lines as long as your rules require (ADR 0025, "Audit"). With
+`RUST_LOG` set, keep `portitor::audit=info` in it.
 
 **Metrics.** Names follow OpenTelemetry's
 [naming rules](https://opentelemetry.io/docs/specs/semconv/general/naming/);
