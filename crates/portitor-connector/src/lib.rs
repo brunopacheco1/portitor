@@ -57,6 +57,7 @@ use portitor_runtime::request_size::small_message;
 use portitor_runtime::settings::{self, RemovedSetting};
 use serde::Serialize;
 
+pub mod audit;
 pub mod auth;
 pub mod catalog_reader;
 pub mod consumer;
@@ -71,6 +72,7 @@ pub mod management;
 pub mod negotiation;
 mod outbox;
 pub mod ports;
+pub mod running_flows;
 // the signed schema and vocabulary bundle (ADR 0005): where it comes
 // from and its read copy are in `portitor-bundle` (its settings are read
 // by `portitor_bundle::source::BundleConfig`, not by `Config`); here, the
