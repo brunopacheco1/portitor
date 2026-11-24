@@ -142,7 +142,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app = limits.on_public_port(app);
     let app = with_limits(app, REQUEST_TIMEOUT, MAX_CONCURRENT_REQUESTS);
     // push transfers received (ADR 0027): outside both limits, as a
-    // dataset may be large and slow; the token is checked first
+    // dataset may be large and slow; the token is checked first, and the
+    // route has limits of its own (`receiving.rs`)
     let app = app.merge(negotiator.receiving_routes());
     serve((listener, app), Some((management_listener, management_app))).await?;
     Ok(())

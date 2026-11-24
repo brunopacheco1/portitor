@@ -443,14 +443,26 @@ impl HttpDataPlane {
     /// pull transfer again, because only the token's hash is kept (ADR
     /// 0014).
     ///
+    /// A flow that started before 1.1 gets no new token: it has no
+    /// membership kept, so it is served without a membership check, and
+    /// only until its first token expires (ADR 0027, section 7). The
+    /// consumer asks for a new transfer instead.
+    ///
     /// # Errors
     ///
-    /// Unknown or ended flow, or the store failed.
+    /// Unknown or ended flow, a flow of 1.0, or the store failed.
     pub fn new_address(&self, id: &str) -> Result<DataAddress, SignalError> {
         let flow = self.flow(id)?;
         if flow.push_address.is_some() {
             return Err(SignalError::Invalid(format!(
                 "data flow {id} is a push; it has no token of ours"
+            )));
+        }
+        let kept = self.flows.memberships(id).map_err(Self::store_failed)?;
+        if kept == StoredMembership::StartedBefore1_1 {
+            return Err(SignalError::Invalid(format!(
+                "data flow {id} started before 1.1 and has no membership to check; \
+                 it is not started again: ask for a new transfer"
             )));
         }
         if !matches!(
@@ -642,6 +654,13 @@ impl HttpDataPlane {
                 Err(Outcome::Cut)
             }
         }
+    }
+
+    /// Whether flow `id` is still STARTED. A push that was cut while its
+    /// flow is still STARTED was not cut by a suspension or a termination
+    /// (they change the state first, then cut): see `crate::push`.
+    pub(crate) fn is_started(&self, id: &str) -> bool {
+        matches!(self.flows.get(id), Ok(Some(flow)) if flow.state == DataFlowState::Started)
     }
 
     /// The membership checks of a running push of flow `id`, as for a
@@ -957,6 +976,23 @@ mod tests {
         p.completed("f1").unwrap();
         assert!(p.new_address("f1").is_err(), "an ended flow gets no token");
         assert!(p.new_address("unknown").is_err());
+    }
+
+    /// A flow of 1.0 is served without a membership check only until its
+    /// token expires (ADR 0027, section 7): it gets no new token, which
+    /// would keep it unchecked for good.
+    #[test]
+    fn a_flow_from_before_1_1_gets_no_new_token() {
+        let flows = crate::test_stores::InMemoryFlows::default();
+        let sources = BTreeMap::from([("d1".to_owned(), "http://upstream.example/d1".to_owned())]);
+        let store = crate::ports::Shared(Arc::new(flows.clone()) as _);
+        let p =
+            HttpDataPlane::new(store, Arc::new(sources), "https://provider.example/", 60).unwrap();
+        p.start(&start("d1", HTTP_PULL)).unwrap();
+        flows.started_before_1_1("f1");
+        p.suspend("f1", &reason()).unwrap();
+        let refused = p.new_address("f1").unwrap_err();
+        assert!(refused.to_string().contains("before 1.1"), "{refused}");
     }
 
     #[test]

@@ -144,24 +144,35 @@ impl TransferProvider {
 
     /// [`Self::begin_push`], but with `consumer` (its state URL and its
     /// id) the push first waits until the consumer has applied our start
-    /// ([`until_consumer_started`]).
+    /// ([`until_consumer_started`]), or until the flow is cut. A push that
+    /// cannot begin ends the transfer: otherwise it would stay `STARTED`
+    /// with nothing sending its data.
     fn begin_push_once_started(&self, provider_pid: &str, consumer: Option<(String, String)>) {
         let (Some(plane), Some(me)) = (&self.plane, self.me.upgrade()) else {
             return;
         };
         match plane.push_job(provider_pid) {
-            Ok(Some(job)) => {
+            Ok(Some(mut job)) => {
                 let plane = Arc::clone(plane);
                 tokio::spawn(async move {
                     if let Some((status_url, audience)) = consumer {
-                        until_consumer_started(&me.link, &status_url, &audience).await;
+                        // a cut while waiting: the push sees it and stops
+                        tokio::select! {
+                            () = until_consumer_started(&me.link, &status_url, &audience) => {}
+                            () = job.cut.cut() => {}
+                        }
                     }
                     run_push(me, plane, job).await;
                 });
             }
             Ok(None) => {}
             Err(error) => {
-                tracing::warn!(flow = %provider_pid, %error, "push: cannot start");
+                tracing::warn!(flow = %provider_pid, %error, "push: cannot start; the transfer is terminated");
+                let pid = provider_pid.to_owned();
+                tokio::spawn(async move {
+                    me.push_finished(&pid, Some("the push could not start"))
+                        .await;
+                });
             }
         }
     }
@@ -507,7 +518,8 @@ async fn until_consumer_started(link: &Link, status_url: &str, audience: &str) {
 
 /// Sends `job` (a push of `provider`'s), writes the audit line, then
 /// completes or terminates the transfer. A push that suspend or terminate
-/// cut leaves the transfer as they made it.
+/// cut leaves the transfer as they made it; any other cut is a failure
+/// ([`crate::push::send`]).
 async fn run_push(provider: Arc<TransferProvider>, plane: Arc<HttpDataPlane>, job: PushJob) {
     let pid = job.flow_id.clone();
     let transfer = provider.service.transfer(&pid).ok();

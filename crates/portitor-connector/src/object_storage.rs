@@ -7,7 +7,10 @@
 //! and for the data a consumer receives by push.
 //!
 //! - Settings: the standard AWS SDK environment variables and
-//!   `PORTITOR_PUSH_BUCKET` ([`Settings::from_vars`]).
+//!   `PORTITOR_PUSH_BUCKET` ([`Settings::from_vars`]). They are checked
+//!   only when `PORTITOR_PUSH_BUCKET` is set: other `AWS_*` variables in
+//!   the environment do not stop a connector that does not use object
+//!   storage, as in 1.0.
 //! - Requests are signed with AWS Signature Version 4 ([`sigv4`]) and use
 //!   path-style addresses, `{endpoint}/{bucket}/{key}`, which `RustFS`,
 //!   `MinIO` and AWS S3 accept.
@@ -66,6 +69,9 @@ pub struct Settings {
     pub access_key_id: String,
     /// `AWS_SECRET_ACCESS_KEY`. Never logged.
     pub secret_access_key: String,
+    /// `AWS_SESSION_TOKEN`, for temporary keys; sent and signed as
+    /// `x-amz-security-token`. Never logged.
+    pub session_token: Option<String>,
     /// Where pushed data lands (`PORTITOR_PUSH_BUCKET`). Without it the
     /// connector does not receive push transfers.
     pub push_bucket: Option<String>,
@@ -94,23 +100,42 @@ impl Settings {
     }
 
     /// Reads `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` (both, or
-    /// neither: then there is no object storage, `None`), `AWS_REGION`
-    /// (default [`DEFAULT_REGION`]), `AWS_ENDPOINT_URL_S3` (default AWS
-    /// S3 of the region) and `PORTITOR_PUSH_BUCKET`, looked up by `var`.
-    /// The keys follow the AWS SDK rule (the value itself), not
-    /// Portitor's `_FILE` rule.
+    /// neither: then there is no object storage, `None`),
+    /// `AWS_SESSION_TOKEN` (optional), `AWS_REGION` (default
+    /// [`DEFAULT_REGION`]), `AWS_ENDPOINT_URL_S3` (default AWS S3 of the
+    /// region) and `PORTITOR_PUSH_BUCKET`, looked up by `var`. The keys
+    /// follow the AWS SDK rule (the value itself), not Portitor's `_FILE`
+    /// rule.
+    ///
+    /// Without `PORTITOR_PUSH_BUCKET`, settings that cannot be used are
+    /// not an error: the connector then has no object storage (logged at
+    /// INFO), as a 1.0 connector with other `AWS_*` variables set had
+    /// none. Its `s3://` sources, if any, are then refused per transfer.
     ///
     /// # Errors
     ///
-    /// Only one of the two keys is set, `PORTITOR_PUSH_BUCKET` is set
-    /// without the keys, or `AWS_ENDPOINT_URL_S3` is not an `http(s)` URL
-    /// without a query.
+    /// With `PORTITOR_PUSH_BUCKET` set: the keys are not both set, or
+    /// `AWS_ENDPOINT_URL_S3` is not an `http(s)` URL without a query.
     pub fn from_vars(
         var: impl Fn(&str) -> Option<std::ffi::OsString>,
     ) -> Result<Option<Self>, String> {
+        let push_bucket = settings::text(&var, "PORTITOR_PUSH_BUCKET");
+        match Self::read(&var, push_bucket.clone()) {
+            Err(reason) if push_bucket.is_none() => {
+                tracing::info!(%reason, "no object storage: its AWS_* settings cannot be used");
+                Ok(None)
+            }
+            read => read,
+        }
+    }
+
+    /// [`Settings::from_vars`], with every problem an error.
+    fn read(
+        var: impl Fn(&str) -> Option<std::ffi::OsString>,
+        push_bucket: Option<String>,
+    ) -> Result<Option<Self>, String> {
         let key_id = settings::text(&var, "AWS_ACCESS_KEY_ID");
         let secret = settings::text(&var, "AWS_SECRET_ACCESS_KEY");
-        let push_bucket = settings::text(&var, "PORTITOR_PUSH_BUCKET");
         let (access_key_id, secret_access_key) = match (key_id, secret) {
             (Some(id), Some(secret)) => (id, secret),
             (None, None) if push_bucket.is_some() => {
@@ -143,6 +168,7 @@ impl Settings {
             region,
             access_key_id,
             secret_access_key,
+            session_token: settings::text(&var, "AWS_SESSION_TOKEN"),
             push_bucket,
         }))
     }
@@ -307,6 +333,10 @@ impl ObjectStorage {
         if let Some(content_type) = content_type {
             headers.push(("content-type", content_type));
         }
+        if let Some(token) = &self.settings.session_token {
+            // temporary keys: the token is sent and signed (SigV4)
+            headers.push(("x-amz-security-token", token));
+        }
         let scope = sigv4::Scope {
             amz_date: &amz_date,
             region: &self.settings.region,
@@ -428,8 +458,9 @@ impl ObjectStorage {
     /// one `PutObject`; a larger one with a multipart upload
     /// (`CreateMultipartUpload`, one `UploadPart` per [`PART_BYTES`],
     /// `CompleteMultipartUpload`), which is aborted
-    /// (`AbortMultipartUpload`) when anything fails. The object then does
-    /// not change. An existing object is replaced.
+    /// (`AbortMultipartUpload`) when anything fails, and also when the
+    /// upload is dropped before it ends (in the background then). The
+    /// object then does not change. An existing object is replaced.
     ///
     /// # Errors
     ///
@@ -449,9 +480,18 @@ impl ObjectStorage {
             return Ok(bytes);
         }
         let upload_id = self.create_multipart(bucket, key, content_type).await?;
+        let mut unfinished = Unfinished {
+            storage: self.clone(),
+            bucket: bucket.to_owned(),
+            key: key.to_owned(),
+            upload_id: upload_id.clone(),
+            ended: false,
+        };
         let uploaded = self
             .upload_parts(bucket, key, &upload_id, first, &mut reader)
             .await;
+        // completed, or aborted just below: nothing for the guard to do
+        unfinished.ended = true;
         match uploaded {
             Ok(bytes) => Ok(bytes),
             Err(error) => {
@@ -579,6 +619,40 @@ impl ObjectStorage {
     }
 }
 
+/// A multipart upload that has begun. When it is dropped before `ended`
+/// is set (the upload's future was dropped half-way: its request was cut
+/// or timed out), it aborts the upload in the background, so the store
+/// does not keep the parts.
+struct Unfinished {
+    storage: ObjectStorage,
+    bucket: String,
+    key: String,
+    upload_id: String,
+    ended: bool,
+}
+
+impl Drop for Unfinished {
+    fn drop(&mut self) {
+        if self.ended {
+            return;
+        }
+        // no runtime: the process is stopping, and the store's lifecycle
+        // rule (DEPLOYING) removes the parts later
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let storage = self.storage.clone();
+        let bucket = std::mem::take(&mut self.bucket);
+        let key = std::mem::take(&mut self.key);
+        let upload_id = std::mem::take(&mut self.upload_id);
+        runtime.spawn(async move {
+            if let Err(error) = storage.abort_multipart(&bucket, &key, &upload_id).await {
+                tracing::warn!(%error, "object storage: a dropped upload could not be aborted");
+            }
+        });
+    }
+}
+
 /// Reads a small answer body as text, up to [`MAX_ANSWER_BYTES`].
 async fn read_text(body: Incoming) -> Result<String, StorageError> {
     let collected = Limited::new(body, MAX_ANSWER_BYTES)
@@ -652,7 +726,8 @@ mod tests {
     #[test]
     fn settings_need_both_keys_or_none() {
         assert!(Settings::from_vars(vars(&[])).unwrap().is_none());
-        assert!(Settings::from_vars(vars(&[("AWS_ACCESS_KEY_ID", "a")])).is_err());
+        let half = [("AWS_ACCESS_KEY_ID", "a"), ("PORTITOR_PUSH_BUCKET", "b")];
+        assert!(Settings::from_vars(vars(&half)).is_err());
         assert!(
             Settings::from_vars(vars(&[("PORTITOR_PUSH_BUCKET", "b")])).is_err(),
             "a push bucket needs keys"
@@ -686,8 +761,62 @@ mod tests {
                 ("AWS_ACCESS_KEY_ID", "a"),
                 ("AWS_SECRET_ACCESS_KEY", "s"),
                 ("AWS_ENDPOINT_URL_S3", "ftp://x"),
+                ("PORTITOR_PUSH_BUCKET", "b"),
             ]))
             .is_err()
+        );
+    }
+
+    /// A 1.0 configuration may hold `AWS_*` variables for another tool:
+    /// without a push bucket they are not checked, and the connector
+    /// starts without object storage, as 1.0 did.
+    #[test]
+    fn without_a_push_bucket_unusable_settings_are_ignored() {
+        for unusable in [
+            vec![("AWS_ACCESS_KEY_ID", "a")],
+            vec![("AWS_SECRET_ACCESS_KEY", "s")],
+            vec![
+                ("AWS_ACCESS_KEY_ID", "a"),
+                ("AWS_SECRET_ACCESS_KEY", "s"),
+                ("AWS_ENDPOINT_URL_S3", "ftp://x"),
+            ],
+        ] {
+            assert_eq!(
+                Settings::from_vars(vars(&unusable))
+                    .unwrap()
+                    .map(|s| s.endpoint),
+                None,
+                "{unusable:?}"
+            );
+        }
+    }
+
+    /// `AWS_SESSION_TOKEN` is read, sent as `x-amz-security-token` and
+    /// signed; it is never shown.
+    #[test]
+    fn a_session_token_is_sent_and_signed() {
+        let settings = Settings::from_vars(vars(&[
+            ("AWS_ACCESS_KEY_ID", "a"),
+            ("AWS_SECRET_ACCESS_KEY", "s"),
+            ("AWS_SESSION_TOKEN", "the-token"),
+            ("AWS_ENDPOINT_URL_S3", "http://rustfs:9000"),
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(settings.session_token.as_deref(), Some("the-token"));
+        assert!(!format!("{settings:?}").contains("the-token"));
+        let storage = ObjectStorage::new(settings).unwrap();
+        let request = storage
+            .signed(&Method::GET, "/b/k", &[], None, Bytes::new())
+            .unwrap();
+        let headers = request.headers();
+        assert_eq!(headers["x-amz-security-token"], "the-token");
+        let authorization = headers[header::AUTHORIZATION].to_str().unwrap();
+        assert!(
+            authorization.contains(
+                "SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token,"
+            ),
+            "{authorization}"
         );
     }
 

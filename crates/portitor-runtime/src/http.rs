@@ -299,7 +299,7 @@ impl HttpSender {
 /// The ring provider supports no safe TLS version (does not happen with
 /// the rustls versions in `Cargo.lock`).
 pub fn https_client(allow_http: bool) -> Result<(HttpsClient, bool), String> {
-    let (connector, has_ca_certificates) = https_connector(allow_http)?;
+    let (connector, has_ca_certificates) = https_connector(allow_http, None)?;
     let client = Client::builder(TokioExecutor::new()).build(connector);
     Ok((client, has_ca_certificates))
 }
@@ -310,22 +310,28 @@ pub fn https_client(allow_http: bool) -> Result<(HttpsClient, bool), String> {
 pub type StreamingHttpsClient =
     Client<hyper_rustls::HttpsConnector<HttpConnector>, axum::body::Body>;
 
+/// How long [`https_streaming_client`] waits for a connection to open.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Like [`https_client`], for requests whose body is streamed as it is
 /// read rather than held whole: the connector's push of a dataset to a
-/// consumer (ADR 0027).
+/// consumer (ADR 0027). A connection must open within
+/// [`CONNECT_TIMEOUT`]; the caller limits the rest.
 ///
 /// # Errors
 ///
 /// As [`https_client`].
 pub fn https_streaming_client(allow_http: bool) -> Result<StreamingHttpsClient, String> {
-    let (connector, _) = https_connector(allow_http)?;
+    let (connector, _) = https_connector(allow_http, Some(CONNECT_TIMEOUT))?;
     Ok(Client::builder(TokioExecutor::new()).build(connector))
 }
 
 /// The TLS connector of both clients, and whether the system's CA
-/// certificates were found.
+/// certificates were found. `connect_timeout`: how long a connection may
+/// take to open; `None` waits as long as the system does.
 fn https_connector(
     allow_http: bool,
+    connect_timeout: Option<Duration>,
 ) -> Result<(hyper_rustls::HttpsConnector<HttpConnector>, bool), String> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let (https, has_ca_certificates) = match hyper_rustls::HttpsConnectorBuilder::new()
@@ -345,10 +351,14 @@ fn https_connector(
             )
         }
     };
+    // what `build()` makes, with the time limit
+    let mut http = HttpConnector::new();
+    http.enforce_http(false);
+    http.set_connect_timeout(connect_timeout);
     let connector = if allow_http {
-        https.https_or_http().enable_http1().build()
+        https.https_or_http().enable_http1().wrap_connector(http)
     } else {
-        https.https_only().enable_http1().build()
+        https.https_only().enable_http1().wrap_connector(http)
     };
     Ok((connector, has_ca_certificates))
 }
