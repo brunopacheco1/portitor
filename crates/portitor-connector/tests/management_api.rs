@@ -11,11 +11,11 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
+use portitor_connector::Config;
 use portitor_connector::http_client::Sender;
 use portitor_connector::management::{
     ApiKey, DEFAULT_MANAGEMENT_BIND, ManagementConfig, openapi_json, router,
 };
-use portitor_connector::{Config, Ports};
 use portitor_runtime::BoxFuture;
 use portitor_runtime::testing::management_calls::{
     Call, statuses_other_than, with_a_wrong_body, with_odd_paths_and_queries, without_the_key,
@@ -56,7 +56,7 @@ fn app() -> Router {
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     };
-    let ports = authenticating(Ports::new(Arc::new(Provider)), CONSUMER);
+    let ports = authenticating(common::ports(Arc::new(Provider)), CONSUMER);
     let (_, negotiator) = portitor_connector::build(&config, ports).unwrap();
     router(negotiator, ApiKey::new(KEY).unwrap())
 }
@@ -370,7 +370,7 @@ fn harvesting_app() -> Router {
     // three starts on one store: three jobs, the newest with a rejection
     let mut negotiator = None;
     for entries in [vec![], vec![good.clone()], vec![good, broken]] {
-        let mut ports = authenticating(Ports::new(Arc::new(Provider)), CONSUMER);
+        let mut ports = authenticating(common::ports(Arc::new(Provider)), CONSUMER);
         ports.use_sqlite(&store);
         ports.harvest.source = Some(Arc::new(portitor_connector::harvest::FixedSource::new(
             entries,
@@ -427,7 +427,7 @@ async fn a_harvest_job_shows_at_most_the_first_errors() {
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     };
     let not_objects = vec![json!(1); 1_001];
-    let mut ports = authenticating(Ports::new(Arc::new(Provider)), CONSUMER);
+    let mut ports = authenticating(common::ports(Arc::new(Provider)), CONSUMER);
     ports.harvest.source = Some(Arc::new(portitor_connector::harvest::FixedSource::new(
         not_objects,
     )));

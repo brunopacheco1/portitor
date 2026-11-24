@@ -99,10 +99,7 @@ fn provider_config(datasets_file: Option<&str>) -> portitor_connector::Config {
 }
 
 fn ports() -> portitor_connector::Ports {
-    authenticating(
-        portitor_connector::Ports::new(std::sync::Arc::new(NoSender)),
-        PROVIDER,
-    )
+    authenticating(common::ports(std::sync::Arc::new(NoSender)), PROVIDER)
 }
 
 fn app() -> axum::Router {

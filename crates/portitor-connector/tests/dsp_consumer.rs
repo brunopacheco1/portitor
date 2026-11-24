@@ -17,7 +17,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use portitor_connector::http_client::Sender;
 use portitor_connector::ports::{Retry, Shared};
-use portitor_connector::{Config, Negotiator, Ports};
+use portitor_connector::{Config, Negotiator};
 use portitor_dsp::Offer;
 use portitor_runtime::BoxFuture;
 use serde_json::{Value, json};
@@ -209,7 +209,7 @@ struct Connector {
 fn connector() -> Connector {
     let provider = Arc::new(FakeProvider::default());
     let (mut ports, audiences) = recording(
-        Ports::new(Arc::clone(&provider) as Arc<dyn Sender>),
+        common::ports(Arc::clone(&provider) as Arc<dyn Sender>),
         CONSUMER,
     );
     ports.retry = Retry {
@@ -526,7 +526,7 @@ async fn pending_messages_are_sent_after_a_restart() {
 
     let provider = Arc::new(FakeProvider::default());
     let mut ports = authenticating(
-        Ports::new(Arc::clone(&provider) as Arc<dyn Sender>),
+        common::ports(Arc::clone(&provider) as Arc<dyn Sender>),
         CONSUMER,
     );
     let store = Arc::new(SqliteNegotiations::open(&path).unwrap());
@@ -842,7 +842,7 @@ async fn other_participants_cannot_use_the_transfer_callback() {
     use portitor_dsp::transfer::consumer::{ConsumerTransfer, ConsumerTransferStore as _};
     let provider = Arc::new(FakeProvider::default());
     let ports = authenticating(
-        Ports::new(Arc::clone(&provider) as Arc<dyn Sender>),
+        common::ports(Arc::clone(&provider) as Arc<dyn Sender>),
         CONSUMER,
     );
     let transfer = ConsumerTransfer {

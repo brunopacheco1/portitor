@@ -21,8 +21,9 @@
 //!   already made keep working after the dataset is withdrawn.
 //!   The consumer's request headers are not passed on.
 
+#[cfg(test)]
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
@@ -135,66 +136,6 @@ pub trait FlowStore {
         token_hash: &str,
         expires_at: u64,
     ) -> Result<bool, FlowStoreError>;
-}
-
-/// Adapter: flows kept in memory (lost on restart; tests).
-#[derive(Debug, Clone, Default)]
-pub struct InMemoryFlows(Arc<Mutex<BTreeMap<String, Flow>>>);
-
-impl InMemoryFlows {
-    fn map(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Flow>> {
-        // every write is a single insert, so a panic cannot leave half a flow
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
-impl FlowStore for InMemoryFlows {
-    fn get(&self, id: &str) -> Result<Option<Flow>, FlowStoreError> {
-        Ok(self.map().get(id).cloned())
-    }
-
-    fn insert(&self, flow: &Flow) -> Result<bool, FlowStoreError> {
-        let mut map = self.map();
-        if map.contains_key(&flow.id) {
-            return Ok(false);
-        }
-        map.insert(flow.id.clone(), flow.clone());
-        Ok(true)
-    }
-
-    fn set_state(
-        &self,
-        id: &str,
-        from: DataFlowState,
-        to: DataFlowState,
-    ) -> Result<bool, FlowStoreError> {
-        let mut map = self.map();
-        match map.get_mut(id) {
-            Some(flow) if flow.state == from => {
-                flow.state = to;
-                Ok(true)
-            }
-            _ => Ok(false),
-        }
-    }
-
-    fn set_token(
-        &self,
-        id: &str,
-        state: DataFlowState,
-        token_hash: &str,
-        expires_at: u64,
-    ) -> Result<bool, FlowStoreError> {
-        let mut map = self.map();
-        match map.get_mut(id) {
-            Some(flow) if flow.state == state => {
-                token_hash.clone_into(&mut flow.token_hash);
-                flow.expires_at = expires_at;
-                Ok(true)
-            }
-            _ => Ok(false),
-        }
-    }
 }
 
 /// SHA-256 of `token`, hex. Comparing two such hashes with `==` is safe:
@@ -540,7 +481,8 @@ mod tests {
 
     fn plane() -> HttpDataPlane {
         let sources = BTreeMap::from([("d1".to_owned(), "http://upstream.example/d1".to_owned())]);
-        let flows = crate::ports::Shared(Arc::new(InMemoryFlows::default()) as _);
+        let flows =
+            crate::ports::Shared(Arc::new(crate::test_stores::InMemoryFlows::default()) as _);
         HttpDataPlane::new(flows, Arc::new(sources), "https://provider.example/", 60).unwrap()
     }
 

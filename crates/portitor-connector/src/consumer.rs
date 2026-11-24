@@ -4,24 +4,21 @@
 
 //! Adapters for the consumer side of contract negotiation: the callback
 //! endpoints a provider calls (DSP 2025-1, "Contract Negotiation HTTPS
-//! Binding", consumer callback paths), an in-memory store, and the loop that
-//! sends the consumer's messages.
+//! Binding", consumer callback paths) and the loop that sends the
+//! consumer's messages.
 //!
 //! The callback endpoints live under `{DSP_PATH}/callback`, so they never
 //! clash with the provider endpoints of the same connector. Their base URL
 //! is the `callbackAddress` the consumer sends with its requests.
 
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::response::{IntoResponse, Response};
 use portitor_dsp::Offer;
-use portitor_dsp::negotiation::consumer::{
-    ConsumerNegotiation, ConsumerService, ConsumerStore, Outgoing,
-};
-use portitor_dsp::negotiation::provider::{Failure, StoreError};
+use portitor_dsp::negotiation::consumer::{ConsumerNegotiation, ConsumerService, Outgoing};
+use portitor_dsp::negotiation::provider::Failure;
 use portitor_dsp::negotiation::{
     ContractAgreementMessage, ContractNegotiation, ContractNegotiationError,
     ContractNegotiationEventMessage, ContractNegotiationTerminationMessage, ContractOfferMessage,
@@ -39,78 +36,6 @@ use crate::negotiation::{bad_request, failed};
 use crate::outbox::{self, Link, Message, Outbox};
 use crate::ports::{AnyConsumerDecider, AnyConsumerStore, Ports};
 use crate::system::SystemEnvironment;
-
-/// Adapter: consumer negotiations kept in memory (lost on restart).
-#[derive(Debug, Clone, Default)]
-pub struct InMemoryConsumerNegotiations(Arc<Mutex<BTreeMap<String, ConsumerNegotiation>>>);
-
-impl InMemoryConsumerNegotiations {
-    pub(crate) fn map(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, ConsumerNegotiation>> {
-        // every write is a single insert, so a panic cannot leave half an entry
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
-impl ConsumerStore for InMemoryConsumerNegotiations {
-    fn get(&self, consumer_pid: &str) -> Result<Option<ConsumerNegotiation>, StoreError> {
-        Ok(self.map().get(consumer_pid).cloned())
-    }
-
-    fn insert(&self, negotiation: &ConsumerNegotiation) -> Result<(), StoreError> {
-        let mut map = self.map();
-        if map.contains_key(&negotiation.consumer_pid) {
-            return Err(StoreError(format!("{} exists", negotiation.consumer_pid)));
-        }
-        map.insert(negotiation.consumer_pid.clone(), negotiation.clone());
-        Ok(())
-    }
-
-    fn replace_if(
-        &self,
-        negotiation: &ConsumerNegotiation,
-        expected: u64,
-    ) -> Result<bool, StoreError> {
-        let mut map = self.map();
-        match map.get(&negotiation.consumer_pid) {
-            Some(old) if old.version == expected => {
-                map.insert(negotiation.consumer_pid.clone(), negotiation.clone());
-                Ok(true)
-            }
-            _ => Ok(false),
-        }
-    }
-
-    fn list(
-        &self,
-        after: Option<&str>,
-        limit: usize,
-    ) -> Result<Vec<ConsumerNegotiation>, StoreError> {
-        Ok(page(&self.map(), after, limit))
-    }
-
-    fn pending(&self) -> Result<Vec<ConsumerNegotiation>, StoreError> {
-        Ok(self
-            .map()
-            .values()
-            .filter(|negotiation| negotiation.pending.is_some())
-            .cloned()
-            .collect())
-    }
-}
-
-/// Up to `limit` values of `map` whose keys sort after `after`, in key
-/// order: one page for the in-memory stores.
-pub(crate) fn page<V: Clone>(
-    map: &BTreeMap<String, V>,
-    after: Option<&str>,
-    limit: usize,
-) -> Vec<V> {
-    let range = match after {
-        Some(a) => map.range::<str, _>((std::ops::Bound::Excluded(a), std::ops::Bound::Unbounded)),
-        None => map.range::<str, _>(..),
-    };
-    range.take(limit).map(|(_, v)| v.clone()).collect()
-}
 
 /// The acknowledgement for the provider and, possibly, our next message.
 type Answer = (ContractNegotiation, Option<Outgoing>);
@@ -390,54 +315,4 @@ pub(crate) async fn terminate(
             Err(e) => return bad_request(*e),
         };
     consumer.answer(consumer.service.terminate(&cpid, &msg))
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use super::*;
-    use portitor_dsp::negotiation::NegotiationState;
-
-    fn negotiation(state: NegotiationState) -> ConsumerNegotiation {
-        ConsumerNegotiation {
-            consumer_pid: "c".into(),
-            provider_pid: None,
-            state,
-            provider_address: "https://p.example/dsp".into(),
-            provider_id: "did:web:p.example".into(),
-            offer: serde_json::from_value(
-                serde_json::json!({"@id": "o", "@type": "Offer", "target": "d"}),
-            )
-            .unwrap(),
-            agreement: None,
-            pending: None,
-            version: 0,
-        }
-    }
-
-    #[test]
-    fn in_memory_store_compares_before_replacing() {
-        let store: AnyConsumerStore =
-            crate::ports::Shared(Arc::new(InMemoryConsumerNegotiations::default()));
-        let n = negotiation(NegotiationState::Requested);
-        assert!(store.get("c").unwrap().is_none());
-        store.insert(&n).unwrap();
-        assert!(store.insert(&n).is_err());
-        let mut offered = negotiation(NegotiationState::Offered);
-        offered.version = 1;
-        assert!(!store.replace_if(&offered, 1).unwrap());
-        assert!(store.replace_if(&offered, 0).unwrap());
-        assert!(!store.replace_if(&offered, 0).unwrap());
-        assert!(store.pending().unwrap().is_empty());
-        let mut other = offered;
-        other.consumer_pid = "d".into();
-        assert!(!store.replace_if(&other, 1).unwrap());
-        store.insert(&other).unwrap();
-        let all = store.list(None, 10).unwrap();
-        assert_eq!(all.len(), 2);
-        assert_eq!(store.list(Some("c"), 10).unwrap()[0].consumer_pid, "d");
-        assert!(store.list(Some("d"), 10).unwrap().is_empty());
-        assert_eq!(store.list(None, 1).unwrap().len(), 1);
-        assert_eq!(format!("{store:?}"), "Shared");
-    }
 }

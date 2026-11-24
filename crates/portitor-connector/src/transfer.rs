@@ -3,23 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Adapters for the provider side of the transfer process: the HTTPS
-//! binding (DSP 2025-1, "Transfer Process HTTPS Binding"), in-memory
-//! transfers and agreements, and the sending of the provider's messages
+//! binding (DSP 2025-1, "Transfer Process HTTPS Binding"), the data plane
+//! until one is configured, and the sending of the provider's messages
 //! (ADR 0013).
 
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use portitor_dsp::negotiation::Agreement;
-use portitor_dsp::negotiation::provider::{Negotiation, NegotiationStore};
 use portitor_dsp::policy::{CallerCredentials, credential_scopes};
 use portitor_dsp::transfer::provider::{
-    Agreements, DataFlows, Failure, Handled, Outgoing, StoreError, Transfer, TransferService,
-    TransferStore,
+    DataFlows, Failure, Handled, Outgoing, Transfer, TransferService,
 };
 use portitor_dsp::transfer::{
     DataAddress, TransferCompletionMessage, TransferError, TransferProcess, TransferRequestMessage,
@@ -33,111 +29,9 @@ use serde_json::Value;
 use crate::auth::{AnyVerifier, Caller, credentials_for};
 use crate::harvest::DatasetCopy;
 use crate::http_client::outbound_url_allowed;
-use crate::negotiation::InMemoryNegotiations;
 use crate::outbox::{self, Link, Message, Outbox};
 use crate::ports::{AnyAgreements, AnyDataFlows, AnyTransferDecider, AnyTransferStore};
-use crate::store::finalized_agreement;
 use crate::system::SystemEnvironment;
-
-/// Adapter: transfers kept in memory (lost on restart). The `SQLite`
-/// adapter replaces it for real use.
-#[derive(Debug, Clone, Default)]
-pub struct InMemoryTransfers(Arc<Mutex<BTreeMap<String, Transfer>>>);
-
-impl InMemoryTransfers {
-    fn map(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Transfer>> {
-        // every write is a single insert, so a panic cannot leave half a
-        // transfer behind
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
-/// The transfer in `map` that the consumer `counter_party` asked for with
-/// its process id `consumer_pid`, if any.
-fn same_request<'a>(
-    map: &'a BTreeMap<String, Transfer>,
-    counter_party: &str,
-    consumer_pid: &str,
-) -> Option<&'a Transfer> {
-    map.values().find(|transfer| {
-        transfer.counter_party == counter_party && transfer.consumer_pid == consumer_pid
-    })
-}
-
-impl TransferStore for InMemoryTransfers {
-    fn get(&self, provider_pid: &str) -> Result<Option<Transfer>, StoreError> {
-        Ok(self.map().get(provider_pid).cloned())
-    }
-
-    fn requested(
-        &self,
-        counter_party: &str,
-        consumer_pid: &str,
-    ) -> Result<Option<Transfer>, StoreError> {
-        Ok(same_request(&self.map(), counter_party, consumer_pid).cloned())
-    }
-
-    fn insert(&self, transfer: &Transfer) -> Result<bool, StoreError> {
-        // one lock for the lookup and the insert, so two copies of a
-        // request cannot both be added
-        let mut map = self.map();
-        if map.contains_key(&transfer.provider_pid) {
-            return Err(StoreError(format!("{} exists", transfer.provider_pid)));
-        }
-        if same_request(&map, &transfer.counter_party, &transfer.consumer_pid).is_some() {
-            return Ok(false);
-        }
-        map.insert(transfer.provider_pid.clone(), transfer.clone());
-        Ok(true)
-    }
-
-    fn replace_if(&self, transfer: &Transfer, expected: u64) -> Result<bool, StoreError> {
-        let mut map = self.map();
-        let current = map.get(&transfer.provider_pid).map(|old| old.version);
-        if current != Some(expected) {
-            return Ok(false);
-        }
-        map.insert(transfer.provider_pid.clone(), transfer.clone());
-        Ok(true)
-    }
-
-    fn pending(&self) -> Result<Vec<Transfer>, StoreError> {
-        let map = self.map();
-        Ok(map
-            .values()
-            .filter(|transfer| transfer.pending.is_some())
-            .cloned()
-            .collect())
-    }
-}
-
-impl Agreements for InMemoryNegotiations {
-    fn finalized(&self, agreement_id: &str) -> Result<Option<Agreement>, StoreError> {
-        let map = self.map();
-        Ok(map
-            .values()
-            .find_map(|negotiation| finalized_agreement(negotiation, agreement_id)))
-    }
-
-    fn negotiation_of(&self, agreement_id: &str) -> Result<Option<Negotiation>, StoreError> {
-        let map = self.map();
-        let made_it = |negotiation: &&Negotiation| {
-            negotiation
-                .agreement
-                .as_ref()
-                .is_some_and(|agreement| agreement.id == agreement_id)
-        };
-        Ok(map.values().find(made_it).cloned())
-    }
-
-    fn replace_negotiation_if(
-        &self,
-        negotiation: &Negotiation,
-        expected: u64,
-    ) -> Result<bool, StoreError> {
-        NegotiationStore::replace_if(self, negotiation, expected)
-    }
-}
 
 /// The data plane until one is configured (0.4 PR 4): it supports no
 /// format, so every transfer request is refused with a clear reason.

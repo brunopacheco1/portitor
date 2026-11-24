@@ -22,7 +22,7 @@ use axum::http::{Request, StatusCode, header};
 use portitor_connector::harvest::{DatasetSource, Snapshot, SourceError};
 use portitor_connector::http_client::Sender;
 use portitor_connector::ports::Retry;
-use portitor_connector::{Config, Negotiator, Ports};
+use portitor_connector::{Config, Negotiator};
 use portitor_dsp::negotiation::NegotiationState;
 use portitor_dsp::transfer::TransferState;
 use portitor_dsp::transfer::consumer::{ConsumerTransfer, ConsumerTransferDecision};
@@ -115,7 +115,7 @@ async fn connectors_where_the_provider_sends_through(
         "portitor:source": upstream().await
     })]);
     let sender = Arc::clone(network) as Arc<dyn Sender>;
-    let mut provider_ports = authenticating(Ports::new(provider_sender), PROVIDER_DID);
+    let mut provider_ports = authenticating(common::ports(provider_sender), PROVIDER_DID);
     // a second try at once, so that a test with a lost answer is quick
     provider_ports.retry = Retry {
         attempts: 2,
@@ -125,7 +125,7 @@ async fn connectors_where_the_provider_sends_through(
     let (provider_app, provider_negotiator) =
         portitor_connector::build(&provider, provider_ports).unwrap();
     let consumer = config(CONSUMER_DID, CONSUMER);
-    let consumer_ports = authenticating(Ports::new(sender), CONSUMER_DID);
+    let consumer_ports = authenticating(common::ports(sender), CONSUMER_DID);
     let (consumer_app, negotiator) = portitor_connector::build(&consumer, consumer_ports).unwrap();
     network.join(PROVIDER, provider_app.clone());
     network.join(CONSUMER, consumer_app);

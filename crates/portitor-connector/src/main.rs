@@ -61,8 +61,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     #[cfg(feature = "tck")]
     let sender = portitor_connector::tck::LateStart(sender);
-    let mut ports = portitor_connector::Ports::new(Arc::new(sender));
-    ports.use_sqlite(&store);
+    let mut ports = portitor_connector::Ports::new(Arc::new(sender), &store);
     let settings = AuthSettings::from_env(&config.participant_id, config.allow_http)?;
     if let Some(settings) = &settings
         && let Some(warning) = settings.policy_types_warning(&config.credential_types)

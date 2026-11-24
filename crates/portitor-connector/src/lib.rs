@@ -10,7 +10,7 @@
 //!   which puts the HTTP routes together.
 //! - [`ports`]: which adapter sits behind each port, chosen at start.
 //! - [`negotiation`], [`consumer`]: contract negotiation as provider and
-//!   as consumer (HTTP handlers and in-memory stores).
+//!   as consumer (HTTP handlers and the sending of their messages).
 //! - [`transfer`], [`consumer_transfer`]: the transfer process, the same
 //!   way.
 //! - `outbox`: sending saved DSP messages, retries and proof of delivery
@@ -83,6 +83,8 @@ pub mod store;
 pub mod system;
 #[cfg(feature = "tck")]
 pub mod tck;
+#[cfg(test)]
+mod test_stores;
 pub mod transfer;
 
 pub use http_client::HttpSender;

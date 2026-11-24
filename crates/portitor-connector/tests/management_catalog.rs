@@ -19,11 +19,11 @@ use axum::body::{Body, to_bytes};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::response::{IntoResponse as _, Response};
+use portitor_connector::Config;
 use portitor_connector::auth::Prover;
 use portitor_connector::catalog_reader::MAX_CATALOG_ANSWER;
 use portitor_connector::http_client::Sender;
 use portitor_connector::management::{ApiKey, DSP_HTTP_2025_1, openapi_json, router};
-use portitor_connector::{Config, Ports};
 use portitor_runtime::BoxFuture;
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
@@ -113,11 +113,11 @@ fn config(participant_id: &str, public_url: &str, datasets_file: Option<&str>) -
 /// tokens the consumer made.
 fn consumer_and_portitor_provider() -> (Router, common::Audiences) {
     let network = Arc::new(Network::default());
-    let provider_ports = authenticating(Ports::new(Arc::clone(&network) as _), PROVIDER_DID);
+    let provider_ports = authenticating(common::ports(Arc::clone(&network) as _), PROVIDER_DID);
     let provider_config = config(PROVIDER_DID, "https://provider.example", Some(TCK_DATASETS));
     let provider = portitor_connector::router(&provider_config, provider_ports).unwrap();
     network.join("https://provider.example", provider);
-    let (consumer_ports, audiences) = recording(Ports::new(network as _), CONSUMER);
+    let (consumer_ports, audiences) = recording(common::ports(network as _), CONSUMER);
     let consumer_config = config(CONSUMER, "https://consumer.example", None);
     let (_, negotiator) = portitor_connector::build(&consumer_config, consumer_ports).unwrap();
     (router(negotiator, ApiKey::new(KEY).unwrap()), audiences)
@@ -502,7 +502,7 @@ async fn played_provider() -> (String, Seen) {
 /// HTTP client. `allow_http` is `PORTITOR_ALLOW_HTTP`.
 fn consumer_over_http(allow_http: bool) -> Router {
     let sender = portitor_connector::dsp_sender(allow_http).unwrap();
-    let ports = authenticating(Ports::new(Arc::new(sender)), CONSUMER);
+    let ports = authenticating(common::ports(Arc::new(sender)), CONSUMER);
     let mut config = config(CONSUMER, "https://consumer.example", None);
     config.allow_http = allow_http;
     let (_, negotiator) = portitor_connector::build(&config, ports).unwrap();
@@ -690,12 +690,12 @@ impl Prover for RecordingProver {
 /// Portitor provider on the fake network.
 fn consumer_with_prover(has_tokens: bool) -> (Router, Asked) {
     let network = Arc::new(Network::default());
-    let provider_ports = authenticating(Ports::new(Arc::clone(&network) as _), PROVIDER_DID);
+    let provider_ports = authenticating(common::ports(Arc::clone(&network) as _), PROVIDER_DID);
     let provider_config = config(PROVIDER_DID, "https://provider.example", Some(TCK_DATASETS));
     let provider = portitor_connector::router(&provider_config, provider_ports).unwrap();
     network.join("https://provider.example", provider);
     let asked = Asked::default();
-    let mut ports = authenticating(Ports::new(network as _), CONSUMER);
+    let mut ports = authenticating(common::ports(network as _), CONSUMER);
     ports.prover = Arc::new(RecordingProver {
         asked: Arc::clone(&asked),
         has_tokens,
@@ -763,7 +763,7 @@ impl Sender for PostOnly {
 
 #[tokio::test]
 async fn a_sender_that_cannot_read_large_answers_says_so() {
-    let ports = authenticating(Ports::new(Arc::new(PostOnly)), CONSUMER);
+    let ports = authenticating(common::ports(Arc::new(PostOnly)), CONSUMER);
     let consumer_config = config(CONSUMER, "https://consumer.example", None);
     let (_, negotiator) = portitor_connector::build(&consumer_config, ports).unwrap();
     let app = router(negotiator, ApiKey::new(KEY).unwrap());

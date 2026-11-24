@@ -164,7 +164,10 @@ fn ports(sender: &Arc<FakeSender>, flows: &Arc<FakeFlows>) -> Ports {
 
 /// Like [`ports`], and the audience of each token the provider sends.
 fn recorded_ports(sender: &Arc<FakeSender>, flows: &Arc<FakeFlows>) -> (Ports, Audiences) {
-    let (mut p, audiences) = recording(Ports::new(Arc::clone(sender) as Arc<dyn Sender>), PROVIDER);
+    let (mut p, audiences) = recording(
+        common::ports(Arc::clone(sender) as Arc<dyn Sender>),
+        PROVIDER,
+    );
     p.retry = Retry {
         attempts: 2,
         first_delay: Duration::from_millis(1),
@@ -822,7 +825,10 @@ async fn an_unreachable_consumer_ends_the_transfer_and_its_data_flow() {
 #[tokio::test]
 async fn without_a_data_plane_every_request_is_refused() {
     let sender = Arc::new(FakeSender::default());
-    let mut p = authenticating(Ports::new(Arc::clone(&sender) as Arc<dyn Sender>), PROVIDER);
+    let mut p = authenticating(
+        common::ports(Arc::clone(&sender) as Arc<dyn Sender>),
+        PROVIDER,
+    );
     p.transfers.agreements = Shared(Arc::new(OneAgreement));
     p.flow_store = None;
     let app = portitor_connector::router(&config(), p).unwrap();
@@ -1292,7 +1298,10 @@ fn built_in(sender: &Arc<FakeSender>, source: Option<&str>) -> Router {
             fields.insert("portitor:source".to_owned(), json!(url));
         }
     }
-    let mut p = authenticating(Ports::new(Arc::clone(sender) as Arc<dyn Sender>), PROVIDER);
+    let mut p = authenticating(
+        common::ports(Arc::clone(sender) as Arc<dyn Sender>),
+        PROVIDER,
+    );
     p.transfers.agreements = Shared(Arc::new(OneAgreement));
     p.harvest.source = Some(Arc::new(FixedSource::new(entries)));
     portitor_connector::router(&config(), p).unwrap()

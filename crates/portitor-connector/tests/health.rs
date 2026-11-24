@@ -16,7 +16,7 @@ use axum::http::{Request, StatusCode, header};
 use portitor_connector::health::{Dependencies, readiness_checks};
 use portitor_connector::management::{ApiKey, router};
 use portitor_connector::store::SqliteNegotiations;
-use portitor_connector::{Config, HttpSender, Negotiator, Ports};
+use portitor_connector::{Config, HttpSender, Negotiator};
 use portitor_runtime::health::management_app;
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
@@ -50,7 +50,7 @@ fn negotiator(db_file: &std::path::Path) -> Negotiator {
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     };
     let store = Arc::new(SqliteNegotiations::open(db_file).unwrap());
-    let mut ports = Ports::new(Arc::new(HttpSender::new(false).unwrap()));
+    let mut ports = common::ports(Arc::new(HttpSender::new(false).unwrap()));
     ports.use_sqlite(&store);
     let ports = authenticating(ports, CONSUMER);
     portitor_connector::build(&config, ports).unwrap().1

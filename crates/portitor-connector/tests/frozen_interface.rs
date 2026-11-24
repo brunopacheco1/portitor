@@ -66,7 +66,7 @@ fn config() -> Config {
 }
 
 fn ports() -> Ports {
-    authenticating(Ports::new(Arc::new(NoSender)), PROVIDER)
+    authenticating(common::ports(Arc::new(NoSender)), PROVIDER)
 }
 
 /// `request` as sent by the tests' consumer (the test verifier takes

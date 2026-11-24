@@ -323,7 +323,7 @@ The service is *generic*. `S` is "some type that implements
 
 `dyn NegotiationStore` is "a value of some type that implements
 `NegotiationStore`, decided while the program runs". The connector picks
-its adapters at start (in memory for tests, SQLite for real use), so it
+its adapters at start (SQLite for real use, a fake in a test), so it
 keeps each one as `Shared<dyn Port + Send + Sync>`. `Shared` wraps an
 `Arc` pointer. See `ports.rs`, which explains why the wrapper exists and
 holds all the `Any...` names.

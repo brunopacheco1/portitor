@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! How the connector is wired: which adapter sits behind each port
-//! (ADR 0004). [`Ports`] holds them all; [`Ports::new`] picks in-memory
-//! adapters and [`Ports::use_sqlite`] swaps the stores for the `SQLite`
-//! file. The wrapper [`Shared`] and the `Any...` names below are what
+//! (ADR 0004). [`Ports`] holds them all; [`Ports::new`] keeps every
+//! store in one `SQLite` database and [`Ports::use_sqlite`] swaps it for
+//! another. The wrapper [`Shared`] and the `Any...` names below are what
 //! make "pick an adapter at start" possible.
 
 use std::sync::Arc;
@@ -31,13 +31,11 @@ use portitor_dsp::transfer::provider::{
 use portitor_dsp::transfer::{DataAddress, TransferState};
 
 use crate::auth::{CallerVerifier, NoTokens, Prover, RefuseAll};
-use crate::consumer::InMemoryConsumerNegotiations;
-use crate::consumer_transfer::InMemoryConsumerTransfers;
-use crate::data_plane::{Flow, FlowStore, FlowStoreError, InMemoryFlows};
+use crate::data_plane::{Flow, FlowStore, FlowStoreError};
 use crate::http_client::Sender;
-use crate::negotiation::InMemoryNegotiations;
 use crate::state_events::{self, Role};
-use crate::transfer::{InMemoryTransfers, NoDataFlows};
+use crate::store::SqliteNegotiations;
+use crate::transfer::NoDataFlows;
 
 /// How often and how fast to retry a message the consumer did not take.
 #[derive(Debug, Clone, Copy)]
@@ -108,32 +106,44 @@ impl std::fmt::Debug for Ports {
 }
 
 impl Ports {
-    /// In-memory stores (tests and development; the harvested datasets
-    /// too), no caller let in and no
-    /// tokens to send (set `verifier` and `prover`), no extra message rules,
-    /// and the default deciders: as provider, agree to any offer from the
-    /// catalog; as consumer, accept offers and verify agreements. With the
-    /// `tck` feature the deciders follow the DSP TCK scripts instead.
+    /// Every store in `store`, the `SQLite` database (see
+    /// [`Ports::use_sqlite`]; tests pass an in-memory one,
+    /// [`SqliteNegotiations::in_memory`]), no data plane, no caller let in
+    /// and no tokens to send (set `verifier` and `prover`), no extra
+    /// message rules, and the default deciders: as provider, agree to any
+    /// offer from the catalog and start every accepted transfer request;
+    /// as consumer, accept offers and verify agreements, and act on a
+    /// transfer only when asked. With the `tck` feature the deciders follow
+    /// the DSP TCK scripts instead.
     #[must_use]
-    pub fn new(sender: Arc<dyn Sender>) -> Self {
-        // one store for negotiations and the agreements transfers need
-        let negotiations = InMemoryNegotiations::default();
-        // likewise for the consumer side
-        let consumer_negotiations = InMemoryConsumerNegotiations::default();
+    pub fn new(sender: Arc<dyn Sender>, store: &Arc<SqliteNegotiations>) -> Self {
         Self {
-            store: Shared(Arc::new(negotiations.clone())),
-            transfers: TransferPorts::in_memory(negotiations),
-            flow_store: Some(Shared(Arc::new(InMemoryFlows::default()))),
+            store: Shared(Arc::clone(store) as _),
+            transfers: TransferPorts {
+                store: Shared(Arc::clone(store) as _),
+                agreements: Shared(Arc::clone(store) as _),
+                flows: Shared(Arc::new(NoDataFlows)),
+                decider: default_transfer_decider(),
+            },
+            flow_store: Some(Shared(Arc::clone(store) as _)),
             decider: default_decider(),
             sender,
             verifier: Arc::new(RefuseAll),
             prover: Arc::new(NoTokens),
             guard: Arc::new(AllowAll),
             retry: Retry::default(),
-            consumer_transfers: ConsumerTransferPorts::in_memory(consumer_negotiations.clone()),
-            consumer_store: Shared(Arc::new(consumer_negotiations)),
+            consumer_transfers: ConsumerTransferPorts {
+                store: Shared(Arc::clone(store) as _),
+                decider: default_consumer_transfer_decider(),
+                held: Shared(Arc::clone(store) as _),
+            },
+            consumer_store: Shared(Arc::clone(store) as _),
             consumer_decider: default_consumer_decider(),
-            harvest: crate::harvest::HarvestPorts::default(),
+            harvest: crate::harvest::HarvestPorts {
+                store: Shared(Arc::clone(store) as _),
+                source: None,
+                extra_check: None,
+            },
             credential_types: CredentialTypes::default(),
         }
     }
@@ -143,7 +153,7 @@ impl Ports {
     /// Keeps negotiations and transfers (as provider and as consumer), the
     /// agreements transfers are checked against, and the harvested
     /// datasets in one `SQLite` file.
-    pub fn use_sqlite(&mut self, store: &Arc<crate::store::SqliteNegotiations>) {
+    pub fn use_sqlite(&mut self, store: &Arc<SqliteNegotiations>) {
         // `Arc::clone(store) as _` makes a new pointer to the same store and
         // lets the compiler turn it into the `Arc<dyn Port>` each field needs
         // (`_`: "the type this field expects").
@@ -186,21 +196,6 @@ pub struct TransferPorts {
     pub decider: AnyTransferDecider,
 }
 
-impl TransferPorts {
-    /// Transfers in memory, agreements from `negotiations`, no data plane,
-    /// and the default policy: start every accepted request. With the
-    /// `tck` feature the policy follows the DSP TCK scripts instead.
-    #[must_use]
-    pub fn in_memory(negotiations: InMemoryNegotiations) -> Self {
-        Self {
-            store: Shared(Arc::new(InMemoryTransfers::default())),
-            agreements: Shared(Arc::new(negotiations)),
-            flows: Shared(Arc::new(NoDataFlows)),
-            decider: default_transfer_decider(),
-        }
-    }
-}
-
 /// The adapters behind transfers as consumer (part of [`Ports`]).
 #[derive(Clone, Debug)]
 pub struct ConsumerTransferPorts {
@@ -210,20 +205,6 @@ pub struct ConsumerTransferPorts {
     pub decider: AnyConsumerTransferDecider,
     /// The agreements a transfer may be requested under.
     pub held: AnyHeldAgreements,
-}
-
-impl ConsumerTransferPorts {
-    /// Transfers in memory, agreements from `negotiations`, and the default
-    /// policy: act only when asked through the management API. With the
-    /// `tck` feature the policy follows the DSP TCK scripts instead.
-    #[must_use]
-    pub fn in_memory(negotiations: InMemoryConsumerNegotiations) -> Self {
-        Self {
-            store: Shared(Arc::new(InMemoryConsumerTransfers::default())),
-            decider: default_consumer_transfer_decider(),
-            held: Shared(Arc::new(negotiations)),
-        }
-    }
 }
 
 #[cfg(feature = "tck")]
@@ -274,7 +255,7 @@ fn default_consumer_transfer_decider() -> AnyConsumerTransferDecider {
 ///
 /// The domain services are generic: `ProviderService<S, ...>` works with
 /// any `S` that implements `NegotiationStore`. The connector picks the
-/// adapter when it starts (in memory for tests, `SQLite` for real use), so
+/// adapter when it starts (a test may pass its own fake), so
 /// it needs one type that can hold either. `Shared<dyn NegotiationStore +
 /// Send + Sync>` is that type: an `Arc` (a shared pointer, cheap to clone)
 /// to "some value that implements `NegotiationStore`". Each port below

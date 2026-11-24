@@ -290,7 +290,7 @@ mod tests {
     }
 
     fn reader(allow_http: bool) -> CatalogReader {
-        CatalogReader::new(&Ports::new(Arc::new(NeverSends)), allow_http)
+        CatalogReader::new(&Ports::in_memory(Arc::new(NeverSends)), allow_http)
     }
 
     #[tokio::test]
@@ -337,7 +337,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_dataspace_rules_can_refuse_the_request() {
-        let mut ports = Ports::new(Arc::new(NeverSends));
+        let mut ports = Ports::in_memory(Arc::new(NeverSends));
         ports.guard = Arc::new(RefusesAll);
         let read = CatalogReader::new(&ports, false)
             .catalog(

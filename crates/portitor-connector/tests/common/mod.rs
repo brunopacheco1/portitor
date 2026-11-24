@@ -15,11 +15,17 @@ use axum::http::request::Builder;
 use portitor_connector::Ports;
 use portitor_connector::auth::{Caller, CallerVerifier, Prover, VerifyError};
 use portitor_connector::http_client::Sender;
+use portitor_connector::store::SqliteNegotiations;
 use portitor_dsp::policy::HeldCredential;
 use portitor_runtime::BoxFuture;
 use serde_json::Value;
 
 pub mod network;
+
+/// The connector's ports, with every store in a new in-memory database.
+pub fn ports(sender: Arc<dyn Sender>) -> Ports {
+    Ports::new(sender, &Arc::new(SqliteNegotiations::in_memory().unwrap()))
+}
 
 /// The consumer's DID in the tests.
 pub const CONSUMER: &str = "did:web:consumer.example";

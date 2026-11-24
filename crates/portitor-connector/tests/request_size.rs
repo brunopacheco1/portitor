@@ -13,8 +13,8 @@ use std::sync::Arc;
 use axum::Router;
 use axum::http::request::Builder;
 use axum::http::{Request, header};
+use portitor_connector::Config;
 use portitor_connector::management::{ApiKey, router as management_router};
-use portitor_connector::{Config, Ports};
 use portitor_runtime::request_size::testing::assert_size_limit;
 use portitor_runtime::request_size::{
     MANAGEMENT_SETTING, PUBLIC_SETTING, RequestLimits, SMALL_MESSAGE_MAX_BYTES,
@@ -47,7 +47,7 @@ fn ports() -> (Router, Router) {
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     };
-    let ports = authenticating(Ports::new(Arc::new(NoSender)), PROVIDER);
+    let ports = authenticating(common::ports(Arc::new(NoSender)), PROVIDER);
     let (public, negotiator) = portitor_connector::build(&config, ports).unwrap();
     let management = management_router(negotiator, ApiKey::new(KEY).unwrap());
     let limits = RequestLimits::from_vars(vars(&[
