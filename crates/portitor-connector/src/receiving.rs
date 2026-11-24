@@ -508,7 +508,7 @@ mod tests {
         assert_eq!(first.into_data().unwrap(), "some");
         let waited = tokio::time::timeout(Duration::from_secs(5), body.frame())
             .await
-            .expect("the idle time ends it");
+            .unwrap();
         assert!(waited.unwrap().is_err());
     }
 }

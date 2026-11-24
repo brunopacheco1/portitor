@@ -320,7 +320,7 @@ mod tests {
             post(&plane, "f1", &source, &address, counted, idle),
         )
         .await
-        .expect("the time limit ends the push");
+        .unwrap();
         let reason = sent.unwrap_err();
         assert!(reason.contains("no answer"), "{reason}");
     }
