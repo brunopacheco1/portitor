@@ -10,6 +10,16 @@ How the scenario changed, newest first. Each entry names the Portitor
 version it ran on. The repository's [CHANGELOG](../../CHANGELOG.md) has
 the release notes these come from.
 
+## 2026-11-24, for 1.1.0
+
+- Two steps at the end (ADR 0027): the provider ends the members'
+  transfer through its new management route
+  (`POST /v1/provided-transfers/{providerPid}/termination`) and the
+  token is refused at once; then the issuer revokes the consumer's
+  `MembershipCredential`, its next request for data is refused (401)
+  and the provider ends that transfer. `run-local.sh` passed on
+  2026-11-24 with debug binaries built from the 1.1 branch.
+
 ## 2026-11-24, for 1.0.0
 
 - `compose.yaml` takes the 1.0.0 release images by default. The

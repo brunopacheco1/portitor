@@ -40,6 +40,15 @@
 #    FINALIZED, a transfer STARTED. Once the issuer revokes that
 #    credential, a new transfer request under the same agreement is
 #    refused: TERMINATED.
+# 9. The provider ends a transfer on its own (ADR 0027, its management
+#    API: POST /v1/provided-transfers/{providerPid}/termination): the
+#    transfer of step 7 is TERMINATED on both sides and its token is
+#    refused at once (401).
+# 10. Membership checked again on every data request (ADR 0027): a new
+#    transfer under the hospital-admissions agreement, its data fetched;
+#    the issuer revokes the consumer's MembershipCredential, and the next
+#    request for the data is refused (401, the status list cache is 0);
+#    the provider ends the transfer: TERMINATED.
 #
 # Environment:
 #   PROVIDER    the provider's base URL, as the consumer reaches it
@@ -276,6 +285,7 @@ step "Transfer the restricted dataset under the members' agreement $MEMBERS_AGRE
 TRANSFER=$(transfer "$MEMBERS_AGREEMENT")
 [[ $(state_of "$TRANSFER") == STARTED ]] || fail "expected STARTED: $TRANSFER"
 fetch "$TRANSFER" "$DATA/cancer-registry-extract.csv"
+MEMBERS_TRANSFER=$TRANSFER
 
 issuer_api() { # method path: the issuer's management API
   curl -sS --fail-with-body -X "$1" "$ISSUER_MANAGEMENT$2" \
@@ -305,4 +315,61 @@ TRANSFER=$(transfer "$PROCESSING_AGREEMENT")
 jq '{state}' <<<"$TRANSFER"
 [[ $(state_of "$TRANSFER") == TERMINATED ]] || fail "expected TERMINATED: $TRANSFER"
 
-step "Done: the consumer authenticated with DCP, the catalog checked against the data space's HealthDCAT-AP bundle, a contract agreed, changed terms refused, credential claims checked, data transferred, the transfer completed, and a revoked credential refused"
+provider_call() { # method path: the provider's management API, printing the status
+  curl -s -o "${TMPDIR:-/tmp}/provider-answer" -w '%{http_code}' -X "$1" "$PROVIDER_MANAGEMENT$2" \
+    -H "authorization: Bearer $(cat "$PROVIDER_KEY_FILE")"
+}
+
+provided_transfer() { # consumer pid: the provider's view of that transfer
+  local cpid=$1
+  provider_api "/v1/provided-transfers" |
+    jq -c --arg c "$cpid" '.transfers[] | select(.consumerPid == $c)'
+}
+
+data_status() { # transfer view: the status of one more request for its data
+  local view=$1 endpoint token
+  endpoint=$(jq -r '.dataAddress.endpoint' <<<"$view")
+  token=$(jq -r '.dataAddress.endpointProperties[] | select(.name == "authorization") | .value' \
+    <<<"$view")
+  curl -s -o /dev/null -w '%{http_code}' "$endpoint" -H "authorization: Bearer $token"
+}
+
+step "The provider ends the members' transfer on its own: access ends at once"
+MEMBERS_PID=$(jq -r '.consumerPid' <<<"$MEMBERS_TRANSFER")
+PROVIDED=$(provided_transfer "$MEMBERS_PID")
+[[ -n $PROVIDED ]] || fail "the provider does not list transfer $MEMBERS_PID"
+jq '{providerPid, consumerPid, state, counterPartyId}' <<<"$PROVIDED"
+PROVIDER_PID=$(jq -r '.providerPid' <<<"$PROVIDED")
+STATUS=$(provider_call POST "/v1/provided-transfers/$(jq -rn --arg p "$PROVIDER_PID" '$p | @uri')/termination")
+[[ $STATUS == 202 ]] || fail "the termination answered $STATUS: $(cat "${TMPDIR:-/tmp}/provider-answer")"
+STATUS=$(data_status "$MEMBERS_TRANSFER")
+[[ $STATUS == 401 ]] || fail "after the provider's termination the data plane answered $STATUS, not 401"
+echo "the data plane refuses the token: $STATUS"
+ENDED=$(until_state "/v1/transfers/$MEMBERS_PID" 'TERMINATED')
+echo "the consumer's transfer is $(state_of "$ENDED")"
+
+step "The issuer revokes the consumer's MembershipCredential: its next request for data is refused"
+TRANSFER=$(transfer "$AGREEMENT")
+[[ $(state_of "$TRANSFER") == STARTED ]] || fail "expected STARTED: $TRANSFER"
+fetch "$TRANSFER" "$DATA/hospital-admissions.csv" >/dev/null
+echo "data fetched while a member"
+MEMBERSHIP=$(issuer_api GET "/v1/credentials?holder=$(jq -rn --arg d "$CONSUMER_ID" '$d | @uri')" |
+  jq -r '.[] | select(.credentialType == "MembershipCredential") | .id') ||
+  fail "list the consumer's credentials at the issuer"
+[[ -n $MEMBERSHIP ]] || fail "the issuer has no MembershipCredential for $CONSUMER_ID"
+issuer_api POST "/v1/credentials/$(jq -rn --arg c "$MEMBERSHIP" '$c | @uri')/revoke" >/dev/null ||
+  fail "revoke $MEMBERSHIP"
+echo "revoked $MEMBERSHIP"
+STATUS=$(data_status "$TRANSFER")
+[[ $STATUS == 401 ]] || fail "after the revocation the data plane answered $STATUS, not 401"
+echo "the data plane refuses the next request: $STATUS"
+REVOKED_PID=$(jq -r '.consumerPid' <<<"$TRANSFER")
+for _ in $(seq 1 100); do
+  [[ $(provided_transfer "$REVOKED_PID" | jq -r '.state') == TERMINATED ]] && break
+  sleep 0.2
+done
+[[ $(provided_transfer "$REVOKED_PID" | jq -r '.state') == TERMINATED ]] ||
+  fail "the provider did not end the transfer: $(provided_transfer "$REVOKED_PID")"
+echo "the provider ended the transfer: TERMINATED"
+
+step "Done: the consumer authenticated with DCP, the catalog checked against the data space's HealthDCAT-AP bundle, a contract agreed, changed terms refused, credential claims checked, data transferred, the transfer completed, a revoked credential refused, a transfer ended by the provider, and a revoked membership refused at the data plane"
