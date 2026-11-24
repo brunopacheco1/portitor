@@ -70,6 +70,7 @@ pub mod http_client;
 mod inbound;
 pub mod management;
 pub mod negotiation;
+pub mod object_storage;
 mod outbox;
 pub mod ports;
 pub mod running_flows;

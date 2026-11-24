@@ -117,6 +117,7 @@ impl RunningFlows {
 
     /// Tells every guard of flow `flow_id` to stop. Returns how many were
     /// running. A flow with nothing running is not an error (0).
+    #[allow(clippy::must_use_candidate)] // callers may ignore the count
     pub fn cancel(&self, flow_id: &str) -> usize {
         let Some(entry) = self.lock().entries.remove(flow_id) else {
             return 0;
@@ -178,7 +179,7 @@ impl std::fmt::Debug for FlowGuard {
         f.debug_struct("FlowGuard")
             .field("flow_id", &self.flow_id)
             .field("cancelled", &self.is_cancelled())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

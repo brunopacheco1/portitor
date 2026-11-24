@@ -262,11 +262,14 @@ fn is_module_start(line: &str) -> bool {
     line.starts_with("mod ") && line.trim_end().ends_with('{')
 }
 
-/// Whether `text` looks like one of our environment variables.
+/// Whether `text` looks like one of our environment variables: ours
+/// (`PORTITOR_`), OpenTelemetry's (`OTEL_`), or the AWS SDK names the
+/// connector reads for object storage (`AWS_`, ADR 0027).
 fn is_setting_name(text: &str) -> bool {
     let rest = text
         .strip_prefix("PORTITOR_")
-        .or_else(|| text.strip_prefix("OTEL_"));
+        .or_else(|| text.strip_prefix("OTEL_"))
+        .or_else(|| text.strip_prefix("AWS_"));
     match rest {
         Some(rest) => {
             !rest.is_empty()

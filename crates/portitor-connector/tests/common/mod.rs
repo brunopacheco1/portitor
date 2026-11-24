@@ -20,6 +20,7 @@ use portitor_dsp::policy::HeldCredential;
 use portitor_runtime::BoxFuture;
 use serde_json::Value;
 
+pub mod fake_s3;
 pub mod network;
 
 /// The connector's ports, with every store in a new in-memory database.
