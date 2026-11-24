@@ -14,6 +14,34 @@ versions may change behaviour and configuration.
 
 ### Added
 
+- Push transfers (`HttpData-PUSH`, ADR 0027, TD-10). As provider: a
+  dataset offers push with a distribution in that format; the transfer
+  request must carry an `http-push` data address
+  (`https://w3id.org/dspace-sig/profile/http-push`, an `https://`
+  endpoint unless `PORTITOR_ALLOW_HTTP`, `authType` `bearer`), else 400.
+  Once started, the data plane sends the dataset as one `POST` with the
+  consumer's bearer token and the source's `Content-Type`; 2xx completes
+  the transfer, anything else terminates it with the status code as the
+  reason. Suspend and terminate cut a running push; a start again sends
+  it again from the beginning and may carry a new address.
+- As consumer: `POST /v1/transfers` takes `"format": "HttpData-PUSH"`
+  when object storage and `PORTITOR_PUSH_BUCKET` are set (else 400). The
+  connector gives `{PORTITOR_PUBLIC_URL}/push/{consumerPid}` with a
+  random bearer token (only its SHA-256 is kept). New open routes
+  `POST /push/{consumerPid}` and `PUT /push/{consumerPid}` stream the
+  data into the push bucket as the object `{consumerPid}` (multipart
+  upload); every refusal is the same 401. The transfer view gains
+  `objectKey`.
+- Pull from the provider's object storage: `portitor:source` may be
+  `s3://{bucket}/{key}`, read with a signed `GET` (AWS Signature Version
+  4, path-style), with the same 401 and 502 answers as an HTTP source.
+- Object storage settings, the AWS SDK names: `AWS_ENDPOINT_URL_S3`,
+  `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and
+  `PORTITOR_PUSH_BUCKET`
+  ([DEPLOYING, Object storage and push transfers](docs/DEPLOYING.md#object-storage-and-push-transfers)).
+- The audit line `data transfer done` is also written for each push sent
+  and each push received.
+
 - Management API: `POST /v1/transfers/{consumerPid}/suspension` and
   `POST /v1/transfers/{consumerPid}/start` suspend a transfer as
   consumer and start it again, with the rules of `/completion` and
@@ -51,6 +79,10 @@ versions may change behaviour and configuration.
 
 ### Upgrade notes
 
+- Database migration 13 (forward only) adds the columns
+  `transfer.data_address` and `data_flow.push_address` (the consumer's
+  push address, emptied when the transfer ends) and the table
+  `push_receipt` (our push tokens' hashes and object keys).
 - Database migration 12 (forward only) adds the table `flow_membership`.
   Transfers that started before the upgrade have no membership kept:
   they are served as in 1.0 until their token expires

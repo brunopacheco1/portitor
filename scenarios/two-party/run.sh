@@ -39,11 +39,15 @@ cd "$(dirname "$0")/../.."
 if [[ $# -gt 0 ]]; then export PORTITOR_IMAGE=$1; fi
 if [[ $# -gt 1 ]]; then export PORTITOR_IDENTITY_IMAGE=$2; fi
 if [[ $# -gt 2 ]]; then export PORTITOR_ISSUER_IMAGE=$3; fi
+# S3=1: object storage too (RustFS, the push and s3:// source steps; ADR
+# 0027). Needs connector images from 1.1 on.
+S3=${S3:-0}
 # ENGINE_COMPOSE: `docker compose` or `podman compose`
 # shellcheck source=scripts/container-engine.sh
 source scripts/container-engine.sh
 COMPOSE=("${ENGINE_COMPOSE[@]}" -f scenarios/two-party/compose.yaml)
 if [[ -n ${EXTRA_COMPOSE:-} ]]; then COMPOSE+=(-f "$EXTRA_COMPOSE"); fi
+if [[ $S3 == 1 ]]; then COMPOSE+=(--profile s3); fi
 RUN=scenarios/two-party/run
 
 # who is who (compose.yaml)
@@ -87,6 +91,18 @@ for participant in provider consumer; do
 done
 openssl rand -hex 32 >"$RUN/consumer/management.key"
 openssl rand -hex 32 >"$RUN/provider/management.key"
+# the provider's datasets; with S3=1 one of them from its bucket, and
+# one that also offers push
+if [[ $S3 == 1 ]]; then
+  jq -f scenarios/two-party/s3-datasets.jq examples/healthdcat-datasets.json >"$RUN/datasets.json"
+  # the object store's keys, for this run only; compose.yaml passes them
+  # on as the connectors' AWS_* settings
+  DEMO_S3_ACCESS_KEY=demo-$(openssl rand -hex 8)
+  DEMO_S3_SECRET_KEY=$(openssl rand -hex 32)
+  export DEMO_S3_ACCESS_KEY DEMO_S3_SECRET_KEY DEMO_PUSH_BUCKET=consumer-push
+else
+  cp examples/healthdcat-datasets.json "$RUN/datasets.json"
+fi
 
 cleanup() {
   status=$?
@@ -174,6 +190,11 @@ request_credentials consumer 18093 membership-vc20 data-processor-vc20
 "${COMPOSE[@]}" logs --no-color --no-log-prefix -f provider >"$RUN/provider.log" 2>&1 &
 LOG_FOLLOWER=$!
 
+if [[ $S3 == 1 ]]; then
+  export S3_ENDPOINT=http://127.0.0.1:18100 S3_ACCESS_KEY=$DEMO_S3_ACCESS_KEY \
+    CONSUMER_PUBLIC=http://127.0.0.1:18090 \
+    S3_SECRET_KEY=$DEMO_S3_SECRET_KEY
+fi
 PROVIDER=http://provider:8080 HERE=http://127.0.0.1:18080 \
   PROVIDER_MANAGEMENT=http://127.0.0.1:18081 PROVIDER_KEY_FILE="$RUN/provider/management.key" \
   MANAGEMENT=http://127.0.0.1:18091 KEY_FILE="$RUN/consumer/management.key" \

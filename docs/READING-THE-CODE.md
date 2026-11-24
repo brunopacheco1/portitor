@@ -190,6 +190,16 @@ From there the steps are the same: state machine, store, outbox.
   `data_plane/download.rs` (the body that can be cut, and the check
   while a download runs) and `auth/dcp/membership.rs` (the check itself,
   without the consumer).
+- Push and object storage (ADR 0027, 1.1): `object_storage.rs` (the S3
+  client; `object_storage/sigv4.rs` signs, `object_storage/xml.rs` reads
+  the few XML answers), `push.rs` (the provider's push sender, started
+  by `begin_push` in `transfer.rs`), `receiving.rs` (the consumer's
+  receiving route and push tokens; its store in
+  `store/push_receipts.rs`) and `data_plane/setup.rs` (how `build`
+  starts the data plane). In the domain:
+  `portitor-dsp/src/transfer/provider/push.rs` (the end of a push) and
+  `provider/messages.rs` (the provider's messages).
+- `audit.rs`: the audit line of each pull, push sent and push received.
 - The DCP check of step 2 in full:
   `portitor-connector/src/auth/dcp.rs`.
 - Datasets and the bundle: `portitor-connector/src/harvest.rs` and

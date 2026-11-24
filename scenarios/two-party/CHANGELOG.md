@@ -32,6 +32,15 @@ the release notes these come from.
   `MembershipCredential`, its next request for data is refused (401)
   and the provider ends that transfer. `run-local.sh` passed on
   2026-11-24 with debug binaries built from the 1.1 branch.
+- Object storage (ADR 0027), off by default: `S3=1` for `run.sh` (the
+  compose profile `s3`, a `rustfs/rustfs:1.0.6` service) or
+  `RUSTFS=<binary>` for `run-local.sh`. The members' dataset then comes
+  from the provider's bucket, and a push transfer of
+  `hospital-admissions` lands in the consumer's bucket, checked with
+  its audit line and a refused request without the token. The provider
+  reads its datasets from `run/datasets.json`, which `run.sh` writes.
+  `run-local.sh` passed with these steps on 2026-11-24 against a small
+  S3 stand-in, not RustFS itself; `S3=1 run.sh` was not run.
 
 ## 2026-11-24, for 1.0.0
 

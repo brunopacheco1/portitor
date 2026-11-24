@@ -33,12 +33,16 @@ In:
   transfer, its suspension and start again (1.1), its completion, and a
   refusal after revocation.
 - The provider's audit line for each pull (`data transfer done`, 1.1).
+- With object storage turned on (1.1, ADR 0027): a source in the
+  provider's RustFS bucket (`s3://`), and a push transfer into the
+  consumer's bucket.
 
 Out, on purpose:
 
 - More than one provider or consumer, and chained transfers: see the
   health scenarios ([index](../README.md)).
-- Push transfers (1.1) and purpose or data permits (1.2).
+- Purpose or data permits (1.2).
+- Push to an endpoint other than a Portitor consumer's receiving route.
 - Gaia-X compliance and other connectors: the Gaia-X and EDC interop
   tests cover them ([TESTING](../../docs/TESTING.md)).
 
@@ -53,6 +57,7 @@ Out, on purpose:
 | The built-in data plane (HTTP pull) | Serves the file with a token, refused while the transfer is suspended and once it is complete, and writes an audit line for each pull. |
 | Status lists | The provider sees the revoked `DataProcessorCredential`, and later the revoked `MembershipCredential`, at once (`PORTITOR_STATUS_LIST_CACHE_SECONDS=0`). |
 | The provider's management API for its transfers | Lists the transfers it runs as provider and ends one; access ends at once. |
+| RustFS (`rustfs/rustfs:1.0.6`), with object storage on | One S3 store for both participants: the provider reads a source from bucket `provider-data`, the consumer stores pushed data in bucket `consumer-push`. |
 
 ## Run it
 
@@ -68,6 +73,23 @@ pull request, with the binaries and images it has just built.
 [TESTING, "Two connectors"](../../docs/TESTING.md#two-connectors) says
 what each script sets up, how to use your own images, keep the
 containers running (`KEEP=1`) and add the observability stack.
+
+The object storage steps are off by default, because the 1.0.0 images
+that `compose.yaml` names do not have them. Turn them on with connector
+images from 1.1 on:
+
+```sh
+S3=1 scenarios/two-party/run.sh <images>         # starts the compose profile s3 (RustFS)
+RUSTFS=/path/to/rustfs scenarios/two-party/run-local.sh   # a rustfs 1.0.6 binary
+```
+
+Each run makes the store's keys for itself and passes them to both
+connectors as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, with
+`AWS_ENDPOINT_URL_S3`; the consumer also gets
+`PORTITOR_PUSH_BUCKET=consumer-push`. [s3-datasets.jq](s3-datasets.jq)
+changes the demo datasets: `cancer-registry-extract` comes from
+`s3://provider-data/cancer-registry-extract.csv`, and
+`hospital-admissions` also offers `HttpData-PUSH`.
 
 ## The steps
 
@@ -119,6 +141,19 @@ containers running (`KEEP=1`) and add the observability stack.
    the data is refused (401), and the provider ends the transfer
    (`TERMINATED`). The provider sees the revocation at once, because its
    status list cache is 0.
+
+With object storage on, `steps.sh` also:
+
+- creates the buckets `provider-data` and `consumer-push` and uploads
+  the provider's source, before step 1; the members' transfer of step 5
+  then fetches its data from the provider's bucket;
+- before step 7, requests a push transfer (`HttpData-PUSH`) under the
+  first agreement. The provider sends the file to the consumer's
+  receiving route (`/push/{consumerPid}`), which stores it in
+  `consumer-push`. The transfer must be `COMPLETED` with `objectKey`
+  and no data address, the object must equal the file, and the
+  provider's log must hold a `complete` audit line with its size. A
+  request to the receiving route without the token is refused (401).
 
 ## Findings
 

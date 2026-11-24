@@ -38,12 +38,20 @@
 #    the two fetches, complete, with the bytes of the file. Complete the
 #    transfer: COMPLETED, the token is gone and refused.
 # 7. A transfer under the members' agreement of cancer-registry-extract:
-#    STARTED, and its data fetched.
+#    STARTED, and its data fetched (with object storage: from the
+#    provider's bucket, s3://provider-data/..., ADR 0027).
 # 8. A second credential type (ADR 0019): the hospital-admissions offer
 #    for EU processors checks the consumer's DataProcessorCredential:
 #    FINALIZED, a transfer STARTED. Once the issuer revokes that
 #    credential, a new transfer request under the same agreement is
 #    refused: TERMINATED.
+# 9a. With object storage only (S3_ENDPOINT set): a push transfer
+#    (HttpData-PUSH, ADR 0027) under the hospital-admissions agreement.
+#    The provider sends the file to the consumer's receiving route, which
+#    stores it in the consumer's bucket: COMPLETED, with objectKey, and the
+#    object equals the file. The provider's log has a complete audit line
+#    for it. The receiving route refuses a request without the token
+#    (401).
 # 9. The provider ends a transfer on its own (ADR 0027, its management
 #    API: POST /v1/provided-transfers/{providerPid}/termination): the
 #    transfer of step 7 is TERMINATED on both sides and its token is
@@ -68,6 +76,12 @@
 #   ISSUER_KEY_FILE    the file holding the issuer's management API key
 #   PROVIDER_LOG       a file that receives the provider connector's log
 #                      (JSON lines, as it writes them)
+#   S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY  optional: the participants'
+#                      object storage (RustFS) as this script reaches it,
+#                      and its keys; with them, the object storage steps
+#                      run (buckets provider-data and consumer-push)
+#   CONSUMER_PUBLIC    optional: the consumer's public base URL, as this
+#                      script reaches it (its receiving route)
 
 set -euo pipefail
 # shellcheck source=scripts/require-bash.sh
@@ -134,6 +148,29 @@ until_state() { # path, states (regex): prints the record once in one of them
 
 wait_for "$HERE/health"
 wait_for "$MANAGEMENT/health"
+
+s3() { # method path [curl flags]: a request to the object storage, signed (SigV4)
+  local method=$1 path=$2
+  shift 2
+  curl -s -X "$method" "$S3_ENDPOINT$path" --aws-sigv4 "aws:amz:us-east-1:s3" \
+    --user "$S3_ACCESS_KEY:$S3_SECRET_KEY" "$@"
+}
+
+if [[ -n ${S3_ENDPOINT:-} ]]; then
+  step "Object storage: the buckets, and the provider's source in its bucket"
+  for _ in $(seq 1 100); do
+    [[ $(curl -s -o /dev/null -w '%{http_code}' "$S3_ENDPOINT/") != 000 ]] && break
+    sleep 0.2
+  done
+  for bucket in provider-data consumer-push; do
+    STATUS=$(s3 PUT "/$bucket" -o /dev/null -w '%{http_code}')
+    [[ $STATUS == 200 || $STATUS == 409 ]] || fail "create bucket $bucket: HTTP $STATUS"
+  done
+  STATUS=$(s3 PUT /provider-data/cancer-registry-extract.csv -o /dev/null -w '%{http_code}' \
+    -H 'content-type: text/csv' --data-binary "@$DATA/cancer-registry-extract.csv")
+  [[ $STATUS == 200 ]] || fail "upload the provider's source: HTTP $STATUS"
+  echo "s3://provider-data/cancer-registry-extract.csv uploaded"
+fi
 
 catalog_request() { # [curl flags]: the provider's catalog, asked directly
   curl -s -X POST "$HERE/$DSP/catalog/request" "$@" \
@@ -377,6 +414,41 @@ data_status() { # transfer view: the status of one more request for its data
     <<<"$view")
   curl -s -o /dev/null -w '%{http_code}' "$endpoint" -H "authorization: Bearer $token"
 }
+
+if [[ -n ${S3_ENDPOINT:-} ]]; then
+  step "Push: the provider sends hospital-admissions into the consumer's bucket"
+  PUSH_PID=$(api POST /v1/transfers "$(jq -nc --arg a "$AGREEMENT" \
+    '{agreementId: $a, format: "HttpData-PUSH"}')" | jq -r '.consumerPid') ||
+    fail "request a push transfer"
+  PUSHED=$(until_state "/v1/transfers/$PUSH_PID" 'COMPLETED|TERMINATED')
+  jq '{consumerPid, state, format, objectKey}' <<<"$PUSHED"
+  [[ $(state_of "$PUSHED") == COMPLETED ]] || fail "expected COMPLETED: $PUSHED"
+  [[ $(jq -r '.objectKey' <<<"$PUSHED") == "$PUSH_PID" ]] || fail "no objectKey: $PUSHED"
+  [[ $(jq -r '.dataAddress' <<<"$PUSHED") == null ]] || fail "a push shows a data address"
+  s3 GET "/consumer-push/$(jq -rn --arg k "$PUSH_PID" '$k | @uri')" -f \
+    -o "${TMPDIR:-/tmp}/pushed" || fail "read the pushed object"
+  cmp -s "${TMPDIR:-/tmp}/pushed" "$DATA/hospital-admissions.csv" ||
+    fail "the pushed object differs from hospital-admissions.csv"
+  echo "the consumer's bucket holds consumer-push/$PUSH_PID, equal to the file"
+  PUSH_FLOW=$(jq -r '.providerPid' <<<"$PUSHED")
+  PUSH_LINE=""
+  for _ in $(seq 1 50); do
+    PUSH_LINE=$(grep -F '"data transfer done"' "$PROVIDER_LOG" | sed 's/^[^{]*//' |
+      jq -c --arg flow "$PUSH_FLOW" 'select(.fields.flow == $flow) | .fields' || true)
+    [[ -n $PUSH_LINE ]] && break
+    sleep 0.2
+  done
+  echo "$PUSH_LINE"
+  BYTES=$(wc -c <"$DATA/hospital-admissions.csv" | tr -d ' ')
+  jq -e --argjson bytes "$BYTES" '.outcome == "complete" and .bytes == $bytes' \
+    <<<"$PUSH_LINE" >/dev/null || fail "no complete audit line of $BYTES bytes for the push"
+  if [[ -n ${CONSUMER_PUBLIC:-} ]]; then
+    STATUS=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CONSUMER_PUBLIC/push/$PUSH_PID" \
+      --data-binary 'not the provider')
+    [[ $STATUS == 401 ]] || fail "the receiving route answered $STATUS without a token, not 401"
+    echo "the receiving route refuses a request without the token: $STATUS"
+  fi
+fi
 
 step "The provider ends the members' transfer on its own: access ends at once"
 MEMBERS_PID=$(jq -r '.consumerPid' <<<"$MEMBERS_TRANSFER")
