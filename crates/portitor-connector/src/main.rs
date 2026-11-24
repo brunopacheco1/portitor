@@ -2,7 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! Portitor binary.
+//! The `portitor-connector` binary: reads the settings, puts the adapters
+//! together ([`portitor_connector::build`]), sends again the messages left
+//! from the last run, and serves the public port and the management port.
+//! `portitor-connector health` asks a running connector's readiness check
+//! instead.
 
 use std::ffi::OsString;
 use std::process::ExitCode;

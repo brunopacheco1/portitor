@@ -13,7 +13,7 @@
 //!   the caller presented when it started a transfer, checked again
 //!   without the caller: its issuer is still trusted, it has not expired,
 //!   and none of its status bits is set. The data plane runs it on every
-//!   `/data` request and while a download runs
+//!   `/data` request, while a download runs, and around a push
 //!   ([`CallerVerifier::check_membership`](super::CallerVerifier::check_membership)).
 //!   The signature and the holder binding are not checked again: they
 //!   cannot change.

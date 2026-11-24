@@ -9,6 +9,10 @@
 //!
 //! The callback endpoints live under `{DSP_PATH}/callback/transfers`, next
 //! to the negotiation callbacks.
+//!
+//! A push transfer (1.1, ADR 0027) asks the provider to send the data to
+//! us: its request carries our own data address and token, made by
+//! [`crate::receiving`], whose route then stores the data.
 
 use std::sync::Arc;
 

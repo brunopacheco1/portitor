@@ -17,8 +17,12 @@
 //!   (ADR 0007).
 //! - [`catalog_reader`]: reading a provider's catalog as consumer, for
 //!   the management API.
-//! - [`data_plane`], [`data_flows`]: the built-in HTTP pull data plane and
-//!   the Data Plane Signaling link to it (ADR 0013).
+//! - [`data_plane`], [`data_flows`]: the built-in HTTP data plane (pull,
+//!   and the consumer's address for push) and the Data Plane Signaling
+//!   link to it (ADR 0013).
+//! - [`push`], [`receiving`], [`object_storage`]: push transfers (ADR
+//!   0027): the provider's sender, the consumer's receiving route, and
+//!   the S3 client both use.
 //! - [`audit`]: the audit line of each data transfer (`data transfer
 //!   done`, ADR 0027).
 //! - [`running_flows`], [`flow_membership`]: what stops a running

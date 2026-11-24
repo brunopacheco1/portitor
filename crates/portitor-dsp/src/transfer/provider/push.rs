@@ -24,9 +24,9 @@ where
     /// The data plane finished sending the data of push transfer
     /// `provider_pid` (ADR 0027, section 1): `failure` is `None` when the
     /// consumer's endpoint answered 2xx, else the reason (a status code,
-    /// never the URL or the token). Ends the data flow and the transfer: completed
-    /// on success, terminated with the reason otherwise. Returns the
-    /// completion or termination to send.
+    /// never the URL or the token). Ends the data flow and the transfer:
+    /// completed on success, terminated with the reason otherwise. Returns
+    /// the completion or termination to send.
     ///
     /// Changes nothing when the transfer is no longer `STARTED` (it was
     /// suspended or ended meanwhile) or a message of ours is still on its

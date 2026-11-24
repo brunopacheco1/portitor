@@ -232,10 +232,10 @@ fn routes(
     receipts: AnyPushReceipts,
     storage: Option<Arc<ObjectStorage>>,
 ) -> Router {
-    let Some((storage, bucket)) = storage.and_then(|s| {
-        let bucket = s.push_bucket()?.to_owned();
-        Some((s, bucket))
-    }) else {
+    let Some(storage) = storage else {
+        return Router::new();
+    };
+    let Some(bucket) = storage.push_bucket().map(str::to_owned) else {
         return Router::new();
     };
     let receiver = Arc::new(Receiver {

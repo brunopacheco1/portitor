@@ -5,9 +5,10 @@
 //! The management API: what the operator's own systems use to read a
 //! provider's catalog, to start and follow negotiations and transfers as
 //! consumer, to read and end the transfers it runs as provider (ADR
-//! 0027), and to read the dataset harvest jobs (read only, ADR 0020). It is not part of DSP, so it is served
-//! on its own port (`PORTITOR_MANAGEMENT_BIND`), never on the DSP port, and
-//! every call needs the API key (`Authorization: Bearer <key>`).
+//! 0027), and to read the dataset harvest jobs (read only, ADR 0020). It
+//! is not part of DSP, so it is served on its own port
+//! (`PORTITOR_MANAGEMENT_BIND`), never on the DSP port, and every call
+//! needs the API key (`Authorization: Bearer <key>`).
 //!
 //! The two catalog calls are in the module `catalog`, the transfers as
 //! provider (1.1) in `provided_transfers`; the others are below.
@@ -296,7 +297,7 @@ async fn list(
     }
 }
 
-/// The format of a pull transfer over HTTP, the only kind in 0.4.
+/// The format a transfer request gets when it names none: pull over HTTP.
 const PULL_FORMAT: &str = "HttpData-PULL";
 
 fn pull_format() -> String {
@@ -898,7 +899,7 @@ fn next_after<T>(found: &[T], limit: usize, key: impl Fn(&T) -> &String) -> Opti
     tags(
         (name = "Catalog", description = "A provider's catalog and datasets, read as consumer (DSP 2025-1). The request bodies are those of Eclipse EDC's management API v4."),
         (name = "Negotiations", description = "Contract negotiations as consumer (DSP 2025-1)"),
-        (name = "Transfers", description = "Transfer processes as consumer (DSP 2025-1), pull only"),
+        (name = "Transfers", description = "Transfer processes as consumer (DSP 2025-1): pull, and push into the object storage (ADR 0027)"),
         (name = "Provided transfers", description = "Transfer processes as provider (DSP 2025-1): read them, and end one, which ends access at once (ADR 0027)"),
         (name = "Harvest", description = "Dataset harvest runs: datasets come from the source into the catalog (ADR 0020). Read only.")
     )

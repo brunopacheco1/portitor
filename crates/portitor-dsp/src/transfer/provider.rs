@@ -817,8 +817,9 @@ where
         result.map_err(Failure::DataPlane)
     }
 
-    /// The provider's next message for `t`, as the decider says. The data
-    /// plane is told first (ADR 0013); if it refuses, the transfer ends.
+    /// The provider's next message for `transfer`, as the decider says.
+    /// The data plane is told first (ADR 0013); if it refuses, the
+    /// transfer ends.
     fn next(&self, transfer: &Transfer) -> Option<Outgoing> {
         let transition = match self.decider.decide(transfer) {
             TransferDecision::Wait => return None,

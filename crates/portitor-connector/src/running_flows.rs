@@ -6,8 +6,8 @@
 //! that stops it all at once (ADR 0027, section 5: "suspend or terminate
 //! cuts every download of that flow that is already running").
 //!
-//! A piece of work that moves a flow's data (a `/data` download, and
-//! later a push) asks [`RunningFlows::watch`] for a [`CutSignal`] before
+//! A piece of work that moves a flow's data (a `/data` download, or a
+//! push) asks [`RunningFlows::watch`] for a [`CutSignal`] before
 //! it checks that the flow may still be served, and stops as soon as
 //! [`CutSignal::cut`] finishes. [`RunningFlows::cut`] stops every piece
 //! of work of one flow. It knows nothing of downloads or pushes: it only

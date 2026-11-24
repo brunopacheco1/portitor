@@ -485,8 +485,16 @@ on the heap", one type that holds either (`portitor-shacl/src/graph.rs`).
 
 - `AtomicBool` is a `bool` that threads can share without a lock:
   `store(true, Ordering::SeqCst)` sets it, `load(Ordering::SeqCst)` reads
-  it. `SeqCst` is the simplest and strictest ordering; Portitor uses no
-  other (`started` in `DatasetHarvester`, `portitor-connector/src/harvest.rs`).
+  it. `SeqCst` is the simplest and strictest ordering, and Portitor's
+  default (`started` in `DatasetHarvester`, `portitor-connector/src/harvest.rs`).
+- `AtomicU64` is the same for a number. The push sender and the
+  receiving route count the bytes of a body as it passes:
+  `body.map_frame(...)` sees each frame, and the closure adds its length
+  with `fetch_add(n, Ordering::Relaxed)` (`post` in
+  `portitor-connector/src/push.rs`, `receive` in `receiving.rs`). The
+  total is read once, after the body has ended, for the audit line.
+  `Relaxed` is enough for a counter that nothing else depends on; use
+  `SeqCst` everywhere else.
 
 ### A snapshot swapped as a whole: `RwLock<Arc<View>>`
 
@@ -1292,6 +1300,13 @@ port's size limit and its own (`portitor-runtime/src/request_size.rs`).
   before it records the metrics).
 - `impl Trait` in an argument (`var: impl Fn(&str) -> Option<OsString>`)
   means "any type that implements `Trait`".
+- `impl Trait` as a return type means "some type that implements
+  `Trait`; the caller needs to know no more". `-> Option<impl Send +
+  use<>>` (`push_watchdog` in `portitor-connector/src/data_plane.rs`)
+  returns a value the caller only keeps and drops (dropping it stops
+  the background checks), so its real type stays private. `use<>` says
+  the value borrows nothing from the arguments (not `&self`, not `id`),
+  so the caller may keep it after they are gone.
 - `pub(crate)` is visible inside this crate only.
 - `Self` is the type the `impl` is for.
 - `x.wrapping_add(1)` adds one and wraps around at the maximum instead of

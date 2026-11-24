@@ -352,7 +352,7 @@ impl DcpVerifier {
         let token = bearer(authorization)?;
         let checked = self.check_token(token).await?;
         let caller = checked.doc.id.clone();
-        match self.check_membership_of(&caller, &checked).await {
+        match self.check_credentials_of(&caller, &checked).await {
             Ok(verified) => Ok(Caller {
                 id: caller,
                 credentials: verified.held,
@@ -365,8 +365,9 @@ impl DcpVerifier {
         }
     }
 
-    /// Steps 3 to 5 for `caller`, whose token is valid.
-    async fn check_membership_of(
+    /// Steps 3 to 5 for `caller`, whose token is valid: its credentials,
+    /// which must hold a `MembershipCredential` from a trusted issuer.
+    async fn check_credentials_of(
         &self,
         caller: &str,
         checked: &CheckedToken,

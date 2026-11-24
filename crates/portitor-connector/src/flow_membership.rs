@@ -11,9 +11,9 @@
 //! ([`FlowStore::keep_memberships`], keyed by the provider pid, which is
 //! also the flow id). [`MembershipGate::check`] checks them again, without
 //! the consumer, through the caller verifier
-//! ([`CallerVerifier::check_membership`]): the issuer is still trusted,
-//! the credential has not expired, and no status bit is set (with the
-//! status list cache, `PORTITOR_STATUS_LIST_CACHE_SECONDS`).
+//! ([`crate::auth::CallerVerifier::check_membership`]): the issuer is
+//! still trusted, the credential has not expired, and no status bit is
+//! set (with the status list cache, `PORTITOR_STATUS_LIST_CACHE_SECONDS`).
 //!
 //! The data plane asks the gate on every `/data` request and, while a
 //! download runs, every [`MembershipGate::recheck_interval`]. A push

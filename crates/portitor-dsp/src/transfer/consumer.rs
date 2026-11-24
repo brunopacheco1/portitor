@@ -716,9 +716,9 @@ where
     }
 }
 
-/// The message for `decision` on `t`, if the state machine allows it and
-/// the provider pid is known. `address`: our new data address for a start
-/// again of a push transfer.
+/// The message for `decision` on `transfer`, if the state machine allows
+/// it and the provider pid is known. `address`: our new data address for
+/// a start again of a push transfer.
 fn message(
     transfer: &ConsumerTransfer,
     decision: ConsumerTransferDecision,

@@ -92,7 +92,7 @@ pub struct Caller {
 
 /// One `MembershipCredential` of a caller, as the check verified it:
 /// enough to check it again later without the caller (ADR 0027, section
-/// 7.2). Kept with each pull flow the caller starts.
+/// 7.2). Kept with the data flow of each transfer the caller asks for.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Membership {
@@ -318,8 +318,8 @@ pub trait CallerVerifier: Send + Sync {
     /// Checks `membership` again, without the caller: its issuer is
     /// still trusted, it has not expired, and no status bit is set (ADR
     /// 0027, section 7.2). The data plane calls it on every `/data`
-    /// request and while a download runs. The default refuses: an
-    /// adapter that cannot check lets no data flow.
+    /// request, while a download runs, and before and while a push runs.
+    /// The default refuses: an adapter that cannot check lets no data flow.
     ///
     /// # Errors
     ///

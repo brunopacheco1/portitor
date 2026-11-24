@@ -7,7 +7,6 @@
 //! until one is configured, and the sending of the provider's messages
 //! (ADR 0013). A push transfer's data is sent once the transfer is
 //! `STARTED` (`begin_push`, ADR 0027).
-//! (ADR 0013).
 //!
 //! From 1.1 (ADR 0027, section 7) also: the provider's own view and
 //! termination of its transfers, for the management API; the consumer's
@@ -508,17 +507,17 @@ async fn until_consumer_started(link: &Link, status_url: &str, audience: &str) {
 /// Sends `job` (a push of `provider`'s), writes the audit line, then
 /// completes or terminates the transfer. A push that suspend or terminate
 /// cut leaves the transfer as they made it.
-async fn run_push(provider: Arc<TransferProvider>, plane: Arc<HttpDataPlane>, job: PushJob) {
+async fn run_push(provider: Arc<TransferProvider>, plane: Arc<HttpDataPlane>, mut job: PushJob) {
     let pid = job.flow_id.clone();
     let transfer = provider.service.transfer(&pid).ok();
-    let mut job = job;
     let pushed = crate::push::send(&plane, &mut job).await;
     // the push is over: a later start again may send again
     drop(job);
-    let (agreement, counter_party) = transfer
-        .as_ref()
-        .map(|t| (t.agreement_id.as_str(), t.counter_party.as_str()))
-        .unwrap_or_default();
+    let (agreement, counter_party) = match &transfer {
+        Some(t) => (t.agreement_id.as_str(), t.counter_party.as_str()),
+        // the transfer could not be read: the audit line names no one
+        None => ("", ""),
+    };
     crate::push::audit(&pid, agreement, counter_party, &pushed);
     let failure = match &pushed.sent {
         crate::push::Sent::Done => None,

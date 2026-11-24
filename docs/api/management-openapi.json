@@ -2142,7 +2142,7 @@
     },
     {
       "name": "Transfers",
-      "description": "Transfer processes as consumer (DSP 2025-1), pull only"
+      "description": "Transfer processes as consumer (DSP 2025-1): pull, and push into the object storage (ADR 0027)"
     },
     {
       "name": "Provided transfers",
