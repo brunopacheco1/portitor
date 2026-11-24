@@ -33,7 +33,8 @@
 //! Flows of 1.0 (started before this file had memberships) have none
 //! kept: the migration marks them [`StoredMembership::StartedBefore1_1`].
 //! They are served as in 1.0, until their token expires (at most
-//! `PORTITOR_DATA_TOKEN_SECONDS`), and logged once. A flow of 1.1 with
+//! `PORTITOR_DATA_TOKEN_SECONDS`), and logged once. They never get a new
+//! token (`HttpDataPlane::new_address` refuses), so this ends. A flow of 1.1 with
 //! nothing kept (the write failed, or the caller verifier gave no
 //! membership) is refused: fail closed.
 

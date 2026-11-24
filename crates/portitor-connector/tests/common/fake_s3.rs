@@ -40,6 +40,7 @@ pub fn client(endpoint: &str) -> portitor_connector::object_storage::ObjectStora
             region: "us-east-1".to_owned(),
             access_key_id: KEY_ID.to_owned(),
             secret_access_key: SECRET.to_owned(),
+            session_token: None,
             push_bucket: Some(PUSH_BUCKET.to_owned()),
         },
     )

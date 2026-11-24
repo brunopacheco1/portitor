@@ -570,10 +570,12 @@ async fn suspend_transfer(
 }
 
 /// Start a `SUSPENDED` transfer again, whichever party suspended it (DSP
-/// 2025-1 lets either party start it again). The token in `dataAddress`
-/// stays the same and works again once the transfer is `STARTED`; the
-/// provider sends no new address (ADR 0013). The start message is sent in
-/// the background (added in 1.1).
+/// 2025-1 lets either party start it again). For a pull transfer, the
+/// token in `dataAddress` stays the same and works again once the
+/// transfer is `STARTED`; the provider sends no new address (ADR 0013).
+/// For a push transfer, the start message carries a new token for our
+/// receiving route, and the old one stops working (ADR 0027). The start
+/// message is sent in the background (added in 1.1).
 #[utoipa::path(
     post,
     path = "/v1/transfers/{consumerPid}/start",

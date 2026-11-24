@@ -20,7 +20,7 @@
 #![cfg(feature = "data-plane")]
 #![allow(clippy::unwrap_used, missing_docs)]
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -29,7 +29,9 @@ use axum::body::{Body, to_bytes};
 use axum::extract::State;
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::response::IntoResponse;
+use hyper::body::Bytes;
 use portitor_connector::http_client::Sender;
+use portitor_connector::management::ApiKey;
 use portitor_connector::{Config, Negotiator};
 use portitor_dsp::negotiation::NegotiationState;
 use portitor_dsp::transfer::TransferState;
@@ -42,12 +44,15 @@ use tower::ServiceExt as _;
 mod common;
 use common::fake_s3::{self, FakeS3, PUSH_BUCKET};
 use common::network::Network;
-use common::{CONSUMER as CONSUMER_DID, PROVIDER as PROVIDER_DID, authenticating, bearer};
+use common::{
+    CONSUMER as CONSUMER_DID, PROVIDER as PROVIDER_DID, Revocable, authenticating, bearer,
+};
 
 const PROVIDER: &str = "https://provider.example";
 const CONSUMER: &str = "https://consumer.example";
 const DSP: &str = "/dsp/2025-1";
 const DATA: &str = "day,celsius\nmon,12\n";
+const KEY: &str = "test-only-0123456789abcdef0123456789abcdef";
 
 /// A real HTTP server holding the dataset's data, as `text/csv`.
 async fn upstream() -> String {
@@ -269,6 +274,8 @@ impl Sender for Hop {
 struct Parties {
     network: Arc<Network>,
     provider: Router,
+    /// The provider's management API, with [`KEY`].
+    management: Router,
     consumer: Negotiator,
     hop: Arc<Hop>,
     s3: Arc<FakeS3>,
@@ -285,6 +292,17 @@ async fn parties(source: String, allow_http: bool) -> Parties {
 /// [`parties`], with a consumer that applies the provider's start only
 /// after it has been asked for its state `lag` times ([`Lagging`]).
 async fn parties_lagging(source: String, allow_http: bool, lag: u32) -> Parties {
+    parties_with(source, allow_http, lag, None).await
+}
+
+/// [`parties_lagging`]; the provider checks the consumer's membership
+/// with `verifier` when one is given.
+async fn parties_with(
+    source: String,
+    allow_http: bool,
+    lag: u32,
+    verifier: Option<Revocable>,
+) -> Parties {
     let network = Arc::new(Network::default());
     let lagging = Arc::new(Lagging {
         network: Arc::clone(&network),
@@ -292,6 +310,9 @@ async fn parties_lagging(source: String, allow_http: bool, lag: u32) -> Parties 
     });
     let mut provider_ports =
         authenticating(common::ports(lagging as Arc<dyn Sender>), PROVIDER_DID);
+    if let Some(verifier) = verifier {
+        provider_ports.verifier = Arc::new(verifier);
+    }
     provider_ports.harvest.source = Some(Arc::new(Datasets(json!([{
         "@id": "weather",
         "@type": "Dataset",
@@ -304,7 +325,7 @@ async fn parties_lagging(source: String, allow_http: bool, lag: u32) -> Parties 
     }]))));
     let (s3_url, s3) = fake_s3::start().await;
     provider_ports.object_storage = Some(Arc::new(fake_s3::client(&s3_url)));
-    let (provider_app, _) =
+    let (provider_app, provider) =
         portitor_connector::build(&config(PROVIDER_DID, PROVIDER, allow_http), provider_ports)
             .unwrap();
     let hop = Hop::new(&network);
@@ -315,9 +336,11 @@ async fn parties_lagging(source: String, allow_http: bool, lag: u32) -> Parties 
     let receiving = serve(consumer.receiving_routes()).await;
     network.join(PROVIDER, provider_app.clone());
     network.join(CONSUMER, consumer_app);
+    let management = portitor_connector::management::router(provider, ApiKey::new(KEY).unwrap());
     Parties {
         network,
         provider: provider_app,
+        management,
         consumer,
         hop,
         s3,
@@ -786,4 +809,272 @@ async fn a_missing_object_is_a_bad_gateway_as_for_an_http_source() {
         .unwrap();
     p.until_state(&t.consumer_pid, TransferState::Started).await;
     assert_eq!(fetch(&p, &t.consumer_pid).await.0, StatusCode::BAD_GATEWAY);
+}
+
+/// The provider pid of the consumer's transfer `consumer_pid`.
+fn provider_pid(p: &Parties, consumer_pid: &str) -> String {
+    p.consumer
+        .transfer(consumer_pid)
+        .unwrap()
+        .provider_pid
+        .unwrap()
+}
+
+/// A provider that checks the membership with [`Revocable`], every 50 ms
+/// while a push runs; and the verifier's switches: revoked, unreachable.
+async fn parties_checking(source: String, lag: u32) -> (Parties, Arc<AtomicBool>, Arc<AtomicBool>) {
+    let (verifier, revoked) = Revocable::new(Duration::from_millis(50));
+    let unreachable = Arc::clone(&verifier.unreachable);
+    let p = parties_with(source, true, lag, Some(verifier)).await;
+    (p, revoked, unreachable)
+}
+
+/// ADR 0027, section 7.2: a membership revoked after the transfer was
+/// accepted, before the push goes, ends the transfer; nothing is sent.
+#[tokio::test]
+async fn a_membership_revoked_before_the_push_ends_the_transfer() {
+    // the consumer applies the start late, so the push waits a moment
+    let (p, revoked, _) = parties_checking(upstream().await, 3).await;
+    let agreement = p.agree().await;
+    let (endpoint, received) = fake_endpoint(StatusCode::OK).await;
+    p.aim_at(&endpoint);
+    let answered = p.hop.answers.lock().unwrap().len();
+    let t = p
+        .consumer
+        .request_transfer(&agreement, "HttpData-PUSH")
+        .unwrap();
+    // the provider has accepted the request
+    let answers = until(
+        || p.hop.answers.lock().unwrap().clone(),
+        |a| a.len() > answered,
+    )
+    .await;
+    assert!(answers[answered].is_ok(), "{answers:?}");
+    revoked.store(true, Ordering::SeqCst);
+    p.until_state(&t.consumer_pid, TransferState::Terminated)
+        .await;
+    assert!(received.lock().unwrap().is_empty(), "nothing was pushed");
+}
+
+/// ADR 0027, section 7.2: a membership revoked while the push runs cuts
+/// it, and the transfer ends.
+#[tokio::test]
+async fn a_membership_revoked_during_a_push_ends_the_transfer() {
+    let (p, revoked, _) = parties_checking(endless_upstream().await, 0).await;
+    let agreement = p.agree().await;
+    let (endpoint, received) = fake_endpoint(StatusCode::OK).await;
+    p.aim_at(&endpoint);
+    let t = p
+        .consumer
+        .request_transfer(&agreement, "HttpData-PUSH")
+        .unwrap();
+    until(|| received.lock().unwrap().len(), |n| *n == 1).await;
+    revoked.store(true, Ordering::SeqCst);
+    p.until_state(&t.consumer_pid, TransferState::Terminated)
+        .await;
+    until(|| received.lock().unwrap()[0].cut(), |cut| *cut).await;
+}
+
+/// A membership check that cannot finish while the push runs cuts the
+/// push. The transfer must not stay `STARTED` with nothing sending: it
+/// is terminated, as for any failed push.
+#[tokio::test]
+async fn a_membership_check_that_cannot_finish_ends_a_running_push() {
+    let (p, _, unreachable) = parties_checking(endless_upstream().await, 0).await;
+    let agreement = p.agree().await;
+    let (endpoint, received) = fake_endpoint(StatusCode::OK).await;
+    p.aim_at(&endpoint);
+    let t = p
+        .consumer
+        .request_transfer(&agreement, "HttpData-PUSH")
+        .unwrap();
+    until(|| received.lock().unwrap().len(), |n| *n == 1).await;
+    unreachable.store(true, Ordering::SeqCst);
+    until(|| received.lock().unwrap()[0].cut(), |cut| *cut).await;
+    p.until_state(&t.consumer_pid, TransferState::Terminated)
+        .await;
+    let pid = provider_pid(&p, &t.consumer_pid);
+    let view = p.provided_transfer(&pid).await;
+    assert_eq!(view["state"], "TERMINATED", "{view}");
+}
+
+/// ADR 0027, section 7.1: the provider's own termination cuts a running
+/// push at once.
+#[tokio::test]
+async fn the_providers_termination_cuts_a_running_push() {
+    let p = parties(endless_upstream().await, true).await;
+    let agreement = p.agree().await;
+    let (endpoint, received) = fake_endpoint(StatusCode::OK).await;
+    p.aim_at(&endpoint);
+    let t = p
+        .consumer
+        .request_transfer(&agreement, "HttpData-PUSH")
+        .unwrap();
+    until(|| received.lock().unwrap().len(), |n| *n == 1).await;
+    let pid = provider_pid(&p, &t.consumer_pid);
+    let request = Request::post(format!("/v1/provided-transfers/{pid}/termination"))
+        .header(header::AUTHORIZATION, format!("Bearer {KEY}"))
+        .body(Body::empty())
+        .unwrap();
+    let answer = p.management.clone().oneshot(request).await.unwrap();
+    assert_eq!(answer.status(), StatusCode::ACCEPTED);
+    until(|| received.lock().unwrap()[0].cut(), |cut| *cut).await;
+    p.until_state(&t.consumer_pid, TransferState::Terminated)
+        .await;
+}
+
+/// A request body that gives what the test sends into its channel, and
+/// ends when the channel is closed.
+struct Streamed(tokio::sync::mpsc::Receiver<Result<Bytes, std::io::Error>>);
+
+impl hyper::body::Body for Streamed {
+    type Data = Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, std::io::Error>>> {
+        self.get_mut()
+            .0
+            .poll_recv(context)
+            .map(|chunk| chunk.map(|chunk| chunk.map(hyper::body::Frame::data)))
+    }
+}
+
+/// What the test sends into a [`Streamed`] body.
+type Chunks = tokio::sync::mpsc::Sender<Result<Bytes, std::io::Error>>;
+
+impl Parties {
+    /// The provider's view of its transfer `pid`.
+    async fn provided_transfer(&self, pid: &str) -> Value {
+        let request = Request::get(format!("/v1/provided-transfers/{pid}"))
+            .header(header::AUTHORIZATION, format!("Bearer {KEY}"))
+            .body(Body::empty())
+            .unwrap();
+        let answer = self.management.clone().oneshot(request).await.unwrap();
+        let bytes = to_bytes(answer.into_body(), 1 << 20).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// A push transfer, as consumer, that is `STARTED`; the provider's
+    /// own push runs to a fake endpoint, forever. Returns the consumer pid
+    /// and the token of the receiving route.
+    async fn receiving_transfer(&self) -> (String, String) {
+        let agreement = self.agree().await;
+        let (endpoint, _) = fake_endpoint(StatusCode::OK).await;
+        self.aim_at(&endpoint);
+        let t = self
+            .consumer
+            .request_transfer(&agreement, "HttpData-PUSH")
+            .unwrap();
+        let token = self.hop.token(0).await;
+        self.until_state(&t.consumer_pid, TransferState::Started)
+            .await;
+        (t.consumer_pid, token)
+    }
+
+    /// Starts a push to the consumer's receiving route for
+    /// `consumer_pid` with `token`. Its body is what the test sends into
+    /// the returned channel; the answer comes once the body has ended.
+    fn push_streamed(
+        &self,
+        consumer_pid: &str,
+        token: &str,
+    ) -> (Chunks, tokio::task::JoinHandle<StatusCode>) {
+        let (chunks, receiver) = tokio::sync::mpsc::channel(4);
+        let request = Request::post(format!("/push/{consumer_pid}"))
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::new(Streamed(receiver)))
+            .unwrap();
+        let routes = self.consumer.receiving_routes();
+        let answer = tokio::spawn(async move { routes.oneshot(request).await.unwrap().status() });
+        (chunks, answer)
+    }
+}
+
+/// A push whose body breaks off after its first part has gone up: the
+/// multipart upload is aborted, nothing is stored, the sender gets 400,
+/// and the audit line says `cut`.
+#[tokio::test]
+async fn a_push_body_that_breaks_off_aborts_the_upload() {
+    let p = parties(endless_upstream().await, true).await;
+    let (cpid, token) = p.receiving_transfer().await;
+    let (log, _guard) = Log::start();
+    let (chunks, answer) = p.push_streamed(&cpid, &token);
+    // more than one part, so the upload is a multipart one
+    let part = vec![7u8; portitor_connector::object_storage::PART_BYTES + 10];
+    chunks.send(Ok(Bytes::from(part))).await.unwrap();
+    until(|| p.s3.open_uploads(), |n| *n == 1).await;
+    chunks
+        .send(Err(std::io::Error::other("the sender stopped")))
+        .await
+        .unwrap();
+    assert_eq!(answer.await.unwrap(), StatusCode::BAD_REQUEST);
+    until(|| p.s3.open_uploads(), |n| *n == 0).await;
+    assert!(p.s3.object(PUSH_BUCKET, &cpid).is_none());
+    let audit = log.with_message("data transfer done");
+    assert_eq!(audit.len(), 1, "{audit:?}");
+    assert_eq!(audit[0]["fields"]["outcome"], "cut");
+}
+
+/// One upload at a time per transfer: a second one while the first runs
+/// gets 409 and changes nothing; once the first has ended, the next one
+/// is taken.
+#[tokio::test]
+async fn a_second_push_while_one_runs_is_refused_with_409() {
+    let p = parties(endless_upstream().await, true).await;
+    let (cpid, token) = p.receiving_transfer().await;
+    let (chunks, first) = p.push_streamed(&cpid, &token);
+    chunks.send(Ok(Bytes::from_static(b"first"))).await.unwrap();
+    // the first request is in the handler, reading its body
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        p.push_to_consumer(&cpid, Some(&token)).await,
+        StatusCode::CONFLICT
+    );
+    drop(chunks);
+    assert_eq!(first.await.unwrap(), StatusCode::NO_CONTENT);
+    assert_eq!(p.s3.object(PUSH_BUCKET, &cpid).unwrap().bytes, b"first");
+    assert_eq!(
+        p.push_to_consumer(&cpid, Some(&token)).await,
+        StatusCode::NO_CONTENT
+    );
+}
+
+/// Log lines collected on the test's thread, as JSON.
+#[derive(Clone, Default)]
+struct Log(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for Log {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Log {
+    /// Collects until the guard is dropped.
+    fn start() -> (Self, tracing::subscriber::DefaultGuard) {
+        portitor_runtime::telemetry::testing::keep_a_second_subscriber();
+        let log = Self::default();
+        let writer = log.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(move || writer.clone())
+            .finish();
+        (log, tracing::subscriber::set_default(subscriber))
+    }
+
+    /// The log lines with `message`.
+    fn with_message(&self, message: &str) -> Vec<Value> {
+        let text = String::from_utf8(self.0.lock().unwrap().clone()).unwrap();
+        text.lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|line| line["fields"]["message"] == message)
+            .collect()
+    }
 }

@@ -276,6 +276,46 @@ mod tests {
         );
     }
 
+    /// The same suite, case `get-vanilla-with-session-token`: temporary
+    /// keys add the `x-amz-security-token` header, which is signed like
+    /// any other (files `context.json`, `header-canonical-request.txt`,
+    /// `header-string-to-sign.txt` and `header-signature.txt`, read on
+    /// 2026-11-24).
+    #[test]
+    fn get_vanilla_with_session_token_of_the_aws_test_suite() {
+        let token = "6e86291e8372ff2a2260956d9b8aae1d763fbf315fa00fa31553b73ebf194267";
+        let headers = [
+            ("Host", "example.amazonaws.com"),
+            ("X-Amz-Date", "20150830T123600Z"),
+            ("X-Amz-Security-Token", token),
+        ];
+        let request = Request {
+            method: "GET",
+            path: "/",
+            query: &[],
+            headers: &headers,
+            payload_sha256: EMPTY_PAYLOAD_SHA256,
+        };
+        let canonical = canonical_request(&request);
+        assert_eq!(
+            canonical,
+            format!(
+                "GET\n/\n\nhost:example.amazonaws.com\nx-amz-date:20150830T123600Z\n\
+                 x-amz-security-token:{token}\n\nhost;x-amz-date;x-amz-security-token\n\
+                 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            )
+        );
+        let to_sign = string_to_sign(&suite_scope(), &canonical);
+        assert!(
+            to_sign.ends_with("067b36aa60031588cea4a4cde1f21215227a047690c72247f1d70b32fbbfad2b"),
+            "{to_sign}"
+        );
+        assert_eq!(
+            signature(SUITE_SECRET, &suite_scope(), &to_sign),
+            "07ec1639c89043aa0e3e2de82b96708f198cceab042d4a97044c66dd9f74e7f8"
+        );
+    }
+
     /// The same suite, case `get-vanilla-query-order-key-case`
     /// (`GET /?Param2=value2&Param1=value1`): the query is sorted.
     #[test]

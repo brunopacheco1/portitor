@@ -22,10 +22,24 @@
 //!
 //! The binary serves these routes outside the public port's body size
 //! and time limits (a dataset can be large); the token is checked before
-//! the body is read.
+//! the body is read. These limits apply instead:
+//!
+//! - One upload at a time per transfer: a second request while one runs
+//!   gets 409.
+//! - At most [`MAX_CONCURRENT_UPLOADS`] uploads at once, for all
+//!   transfers; one more gets 503, as the public port answers when it is
+//!   too busy. Each upload holds up to one part
+//!   ([`crate::object_storage::PART_BYTES`], 8 MiB) in memory.
+//! - A body that sends nothing for [`crate::push::IDLE_TIMEOUT`] is
+//!   treated as one that broke off: the upload is aborted, the answer is
+//!   400 and the audit line says `cut`.
 
-use std::sync::Arc;
+use std::collections::BTreeSet;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::task::{Context, Poll};
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
@@ -34,6 +48,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use http_body_util::BodyExt as _;
+use hyper::body::{Bytes, Frame, SizeHint};
 use portitor_dsp::process::StoreError;
 use portitor_dsp::transfer::consumer::ConsumerTransfer;
 use portitor_dsp::transfer::{
@@ -51,6 +66,11 @@ use crate::system::now_secs;
 
 /// The path of the receiving route, before `/{consumerPid}`.
 pub const PUSH_PATH: &str = "/push";
+
+/// How many uploads the receiving route takes at once, for all
+/// transfers (module doc). Each holds up to 8 MiB in memory, so at most
+/// 64 MiB in all.
+pub const MAX_CONCURRENT_UPLOADS: usize = 8;
 
 /// What is kept of a push transfer as consumer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,6 +179,66 @@ pub(crate) struct Receiver {
     receipts: AnyPushReceipts,
     storage: Arc<ObjectStorage>,
     bucket: String,
+    uploads: Uploads,
+}
+
+/// The uploads that run now, by consumer pid.
+struct Uploads {
+    running: Mutex<BTreeSet<String>>,
+    /// The most that may run at once.
+    max: usize,
+}
+
+/// Why an upload cannot begin now.
+#[derive(Debug, PartialEq, Eq)]
+enum Busy {
+    /// One for the same transfer runs: 409.
+    SameTransfer,
+    /// [`Uploads::max`] run: 503.
+    Full,
+}
+
+/// Held while one upload runs; dropping it ends the upload's turn.
+struct UploadTurn<'a> {
+    uploads: &'a Uploads,
+    consumer_pid: String,
+}
+
+impl Uploads {
+    fn new(max: usize) -> Self {
+        Self {
+            running: Mutex::new(BTreeSet::new()),
+            max,
+        }
+    }
+
+    /// The turn of an upload for transfer `consumer_pid`, if it may run
+    /// now.
+    fn begin(&self, consumer_pid: &str) -> Result<UploadTurn<'_>, Busy> {
+        let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
+        if running.contains(consumer_pid) {
+            return Err(Busy::SameTransfer);
+        }
+        if running.len() >= self.max {
+            return Err(Busy::Full);
+        }
+        running.insert(consumer_pid.to_owned());
+        Ok(UploadTurn {
+            uploads: self,
+            consumer_pid: consumer_pid.to_owned(),
+        })
+    }
+}
+
+impl Drop for UploadTurn<'_> {
+    fn drop(&mut self) {
+        let mut running = self
+            .uploads
+            .running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        running.remove(&self.consumer_pid);
+    }
 }
 
 /// Why a push request is refused.
@@ -243,6 +323,7 @@ fn routes(
         receipts,
         storage,
         bucket,
+        uploads: Uploads::new(MAX_CONCURRENT_UPLOADS),
     });
     Router::new()
         .route(
@@ -253,8 +334,10 @@ fn routes(
 }
 
 /// `POST` or `PUT /push/{consumerPid}`: checks the token, then streams
-/// the body into the push bucket. 204 once the object is complete; 502
-/// when the object storage refused it or could not be reached.
+/// the body into the push bucket. 204 once the object is complete; 400
+/// when the body broke off or stopped coming; 409 or 503 when it cannot
+/// run now (module doc); 502 when the object storage refused it or could
+/// not be reached.
 pub(crate) async fn receive(
     State(receiver): State<Arc<Receiver>>,
     Path(consumer_pid): Path<String>,
@@ -269,17 +352,26 @@ pub(crate) async fn receive(
         Err(Refused::Unauthorized) => return unauthorized(),
         Err(Refused::Store) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
+    let _turn = match receiver.uploads.begin(&consumer_pid) {
+        Ok(turn) => turn,
+        Err(Busy::SameTransfer) => return StatusCode::CONFLICT.into_response(),
+        Err(Busy::Full) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok());
     let total = Arc::new(AtomicU64::new(0));
     let per_frame = Arc::clone(&total);
-    let body = Body::new(body.map_frame(move |frame| {
+    let counted = body.map_frame(move |frame| {
         if let Some(bytes) = frame.data_ref() {
             per_frame.fetch_add(bytes.len() as u64, Ordering::Relaxed);
         }
         frame
-    }));
+    });
+    let body = Body::new(StopsWhenIdle::new(
+        Body::new(counted),
+        crate::push::IDLE_TIMEOUT,
+    ));
     let stored = receiver
         .storage
         .upload(&receiver.bucket, &consumer_pid, content_type, body)
@@ -312,4 +404,111 @@ pub(crate) async fn receive(
         outcome,
     );
     response
+}
+
+/// A body that ends with an error when nothing comes for `idle`: the
+/// upload then stops as for a body that broke off.
+struct StopsWhenIdle {
+    inner: Body,
+    idle: Duration,
+    /// Finishes `idle` after the last piece of data.
+    timer: Pin<Box<tokio::time::Sleep>>,
+}
+
+impl StopsWhenIdle {
+    fn new(inner: Body, idle: Duration) -> Self {
+        Self {
+            inner,
+            idle,
+            timer: Box::pin(tokio::time::sleep(idle)),
+        }
+    }
+}
+
+impl hyper::body::Body for StopsWhenIdle {
+    type Data = Bytes;
+    type Error = axum::Error;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, axum::Error>>> {
+        // every field is `Unpin`, so the pin can be undone
+        let this = self.get_mut();
+        match Pin::new(&mut this.inner).poll_frame(context) {
+            Poll::Ready(frame) => {
+                // something came: the time starts again
+                let next = tokio::time::Instant::now() + this.idle;
+                this.timer.as_mut().reset(next);
+                Poll::Ready(frame)
+            }
+            Poll::Pending => {
+                if this.timer.as_mut().poll(context).is_ready() {
+                    let error = std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!("no data for {} s", this.idle.as_secs()),
+                    );
+                    return Poll::Ready(Some(Err(axum::Error::new(error))));
+                }
+                Poll::Pending
+            }
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        self.inner.size_hint()
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_upload_per_transfer_and_a_few_in_all() {
+        let uploads = Uploads::new(2);
+        let first = uploads.begin("t1").unwrap();
+        assert_eq!(uploads.begin("t1").err(), Some(Busy::SameTransfer));
+        let _second = uploads.begin("t2").unwrap();
+        assert_eq!(uploads.begin("t3").err(), Some(Busy::Full));
+        drop(first);
+        assert!(uploads.begin("t1").is_ok(), "its turn ended");
+    }
+
+    /// A body that gives one piece, then waits forever.
+    struct OnePieceThenNothing(bool);
+
+    impl hyper::body::Body for OnePieceThenNothing {
+        type Data = Bytes;
+        type Error = std::convert::Infallible;
+
+        fn poll_frame(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+        ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
+            let this = self.get_mut();
+            if this.0 {
+                return Poll::Pending;
+            }
+            this.0 = true;
+            Poll::Ready(Some(Ok(Frame::data(Bytes::from_static(b"some")))))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_body_that_stops_coming_ends_with_an_error() {
+        let inner = Body::new(OnePieceThenNothing(false));
+        let mut body = StopsWhenIdle::new(inner, Duration::from_millis(100));
+        let first = body.frame().await.unwrap().unwrap();
+        assert_eq!(first.into_data().unwrap(), "some");
+        let waited = tokio::time::timeout(Duration::from_secs(5), body.frame())
+            .await
+            .unwrap();
+        assert!(waited.unwrap().is_err());
+    }
 }

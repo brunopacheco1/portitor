@@ -507,7 +507,10 @@ or route was removed or renamed; the new ones are listed in
    whose issuer left `PORTITOR_TRUSTED_ISSUERS` gets 401, and the
    transfer is terminated. Transfers started before the upgrade have no
    membership kept: they are served as in 1.0 until their token expires,
-   with one INFO line per flow
+   with one INFO line per flow. They never get a new token: a provider
+   policy that starts such a suspended transfer again (only a scripted
+   one, as in the TCK build) terminates it instead, and the consumer
+   asks for a new transfer, which is checked
    ([DEPLOYING, Revocation and running transfers](DEPLOYING.md#revocation-and-running-transfers)).
    Each check reads the status list through the cache
    (`PORTITOR_STATUS_LIST_CACHE_SECONDS`); with a cache of `0`, every
@@ -523,10 +526,15 @@ or route was removed or renamed; the new ones are listed in
    `portitor::audit=info` in it. The other new lines are in
    [Health and logs](#health-and-logs), marked 1.1.
 6. **Only if you use push or `s3://` sources:** set the object storage
-   settings and create the push bucket, let your reverse proxy pass
+   settings and create the push bucket (with a lifecycle rule that
+   aborts incomplete multipart uploads), let your reverse proxy pass
    large, long requests on `/push/`, and keep the egress firewall: a
    push goes to an address the consumer chose
    ([DEPLOYING, Object storage and push transfers](DEPLOYING.md#object-storage-and-push-transfers)).
+   `AWS_*` variables already in your environment are checked only when
+   `PORTITOR_PUSH_BUCKET` is set; otherwise unusable ones are ignored.
+   As consumer, the push token lives `PORTITOR_DATA_TOKEN_SECONDS`
+   from your transfer request, not from the provider's start.
 
 ### From 0.9 to 1.0 in one step
 

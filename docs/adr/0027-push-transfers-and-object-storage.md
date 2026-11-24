@@ -85,6 +85,11 @@ Three ways to move data, all started by the consumer as DSP requires.
 - A 2xx answer: the provider sends the completion message. Any other
   answer, or no answer: the provider terminates the transfer with the
   reason (status code only; the URL and token are not logged).
+- Time limits (1.1 review, 2026-11-24): the connection must open within
+  10 seconds, and the push must make progress at least every 120
+  seconds (a piece of the body written, or the answer's headers), the
+  same two minutes as the longest request to the object storage.
+  Otherwise the push failed, as for no answer.
 - The consumer's token and endpoint are kept in the SQLite file until
   the transfer ends, like the consumer's pull token (ADR 0014), so a
   restart can finish or terminate the transfer. They are never logged
@@ -103,14 +108,23 @@ Three ways to move data, all started by the consumer as DSP requires.
   consumer has object storage configured (below); otherwise 400.
 - The connector builds the `dataAddress`: `endpoint`
   `{PORTITOR_PUBLIC_URL}/push/{consumerPid}`, `endpointType` as above, a
-  bearer token of 32 random bytes from `ring` (base64url), of which only
-  the SHA-256 hash is stored, as for pull tokens (ADR 0013). The token
-  lives `PORTITOR_DATA_TOKEN_SECONDS` and only while the transfer is
-  `REQUESTED` or `STARTED`.
+  bearer token of 32 random bytes from `ring` (base64url). The token
+  itself is in the SQLite file only inside the pending transfer request
+  (or start-again message) until the provider acknowledges it (outbox,
+  ADR 0007), as the provider's pull token is inside its pending start
+  message (ADR 0013); after that only its SHA-256 hash is kept
+  ([R-19](../RISKS_AND_TECHNICAL_DEBTS.md#r-19)). The token lives
+  `PORTITOR_DATA_TOKEN_SECONDS`, counted from the request (or the
+  start-again), not from the provider's start, and only while the
+  transfer is `REQUESTED` or `STARTED`.
 - New public route `POST /push/{consumerPid}` (also `PUT`, since the
   profile does not name a method). It checks the token, then streams
   the body into the consumer's bucket as object `{consumerPid}` with S3
-  multipart upload. A second request replaces the object. Every refusal
+  multipart upload. A second request replaces the object. One upload
+  runs at a time per transfer (a second one gets 409), at most 8 at once
+  for all transfers (one more gets 503), and a body that sends nothing
+  for 120 seconds is treated as one that broke off: the upload is
+  aborted (1.1 review, 2026-11-24). Every refusal
   gets the same 401, as on `/data`.
 - The storage keys stay in the consumer's own configuration. Nothing
   S3-specific crosses between participants.
@@ -138,7 +152,13 @@ AWS SDK environment variables, not new ones:
 | `AWS_ENDPOINT_URL_S3` | The store's address, for example a RustFS server. Without it, AWS S3 for `AWS_REGION` |
 | `AWS_REGION` | Region used in the signature (RustFS accepts any; `us-east-1` by convention) |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | The keys. They follow the AWS SDK rule, not Portitor's `_FILE` rule; DEPLOYING says to inject them from a secret store |
+| `AWS_SESSION_TOKEN` | The session token of temporary keys, sent and signed as `x-amz-security-token` (added in the 1.1 review, 2026-11-24) |
 | `PORTITOR_PUSH_BUCKET` | Bucket where pushed data lands. Without it the connector does not offer to receive push |
+
+The settings are checked only when `PORTITOR_PUSH_BUCKET` is set;
+without it, `AWS_*` variables that cannot be used (one key only, an odd
+endpoint) are ignored with an INFO line, so a 1.0 configuration that has
+them for another tool still starts (1.1 review, 2026-11-24).
 
 Requests are signed with AWS Signature Version 4, written with `ring`
 (HMAC-SHA256, SHA-256), already a dependency, and tested against the
@@ -210,9 +230,20 @@ leaves open, decided while building it:
   download in a busy loop and a long cache still checks every minute.
   The worst case is therefore the cache time for a new request, and up
   to the cache time plus 60 seconds for a running download.
+- A running push cut while its flow is still `STARTED` (a membership
+  check that could not finish) is a failed push: the transfer is
+  terminated, so that it does not stay `STARTED` with nothing sending
+  (1.1 review, 2026-11-24).
 - Flows that started before 1.1 have nothing kept; the migration marks
   them. They are served as in 1.0 until their token expires, logged
   once per flow and process. A 1.1 flow with nothing kept is refused.
+- A flow that started before 1.1 gets no new token (1.1 review,
+  2026-11-24): otherwise its exemption would never end. Only a provider
+  that starts a suspended pull transfer again gives a new token, and the
+  default policy never does (a scripted `TransferDecider` does, as in
+  the TCK build); for a flow of 1.0 the data plane refuses, and the
+  provider terminates the transfer with that reason. The consumer asks
+  for a new transfer, which is checked.
 - The provider's termination (route 1) replaces a message still on its
   way, unlike the consumer's own steps: access must end now. Suspend
   and terminate cut running downloads; completion does not.

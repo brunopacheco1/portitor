@@ -99,9 +99,12 @@ impl CallerVerifier for NamedCaller {
 /// Like [`NamedCaller`], but the membership can be revoked, and a running
 /// download checks it again every `recheck`. While revoked, a DSP request
 /// is refused as from a caller whose token is valid but whose credentials
-/// are not ([`VerifyError::NotAMember`], TD-47).
+/// are not ([`VerifyError::NotAMember`], TD-47). While `unreachable` is
+/// set, a membership check cannot finish ([`VerifyError::Unavailable`]),
+/// as when a status list does not answer.
 pub struct Revocable {
     pub revoked: Arc<AtomicBool>,
+    pub unreachable: Arc<AtomicBool>,
     pub recheck: Duration,
 }
 
@@ -113,6 +116,7 @@ impl Revocable {
         let revoked = Arc::new(AtomicBool::new(false));
         let verifier = Self {
             revoked: Arc::clone(&revoked),
+            unreachable: Arc::new(AtomicBool::new(false)),
             recheck,
         };
         (verifier, revoked)
@@ -147,7 +151,11 @@ impl CallerVerifier for Revocable {
     }
 
     fn check_membership<'a>(&'a self, _: &'a Membership) -> BoxFuture<'a, Result<(), VerifyError>> {
-        let answer = if self.is_revoked() {
+        let answer = if self.unreachable.load(Ordering::SeqCst) {
+            Err(VerifyError::Unavailable(
+                "the status list did not answer".to_owned(),
+            ))
+        } else if self.is_revoked() {
             Err(VerifyError::from(
                 "a credential is revoked or suspended (revocation)",
             ))

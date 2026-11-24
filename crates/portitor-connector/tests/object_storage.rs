@@ -9,6 +9,7 @@
 
 use axum::body::Body;
 use http_body_util::BodyExt as _;
+use hyper::body::Bytes;
 use portitor_connector::object_storage::{ObjectStorage, PART_BYTES, Settings, StorageError};
 
 mod common;
@@ -120,6 +121,7 @@ async fn a_wrong_key_id_is_refused_by_the_store() {
         region: "us-east-1".to_owned(),
         access_key_id: "someone-else".to_owned(),
         secret_access_key: "x".to_owned(),
+        session_token: None,
         push_bucket: None,
     })
     .unwrap();
@@ -129,4 +131,57 @@ async fn a_wrong_key_id_is_refused_by_the_store() {
         StorageError::Status(403, Some("SignatureDoesNotMatch".to_owned()))
     );
     assert!(!error.to_string().contains("someone-else"));
+}
+
+/// A request body that gives what the test sends into its channel.
+struct Streamed(tokio::sync::mpsc::Receiver<Bytes>);
+
+impl hyper::body::Body for Streamed {
+    type Data = Bytes;
+    type Error = std::convert::Infallible;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, Self::Error>>> {
+        self.get_mut()
+            .0
+            .poll_recv(context)
+            .map(|chunk| chunk.map(|chunk| Ok(hyper::body::Frame::data(chunk))))
+    }
+}
+
+/// An upload that is dropped half-way (its request was dropped, or a
+/// time limit ended it) is aborted too: the store keeps no parts.
+#[tokio::test]
+async fn a_dropped_upload_is_aborted() {
+    let (endpoint, fake) = fake_s3::start().await;
+    let store = storage(&endpoint);
+    let (chunks, receiver) = tokio::sync::mpsc::channel(2);
+    let upload = tokio::spawn(async move {
+        store
+            .upload("received", "big", None, Body::new(Streamed(receiver)))
+            .await
+    });
+    chunks
+        .send(Bytes::from(vec![1u8; PART_BYTES + 10]))
+        .await
+        .unwrap();
+    // the first part is up; the upload waits for more of the body
+    for _ in 0..500 {
+        if fake.calls().len() == 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(fake.open_uploads(), 1);
+    upload.abort();
+    for _ in 0..500 {
+        if fake.open_uploads() == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(fake.open_uploads(), 0, "aborted");
+    assert_eq!(fake.calls().last().unwrap(), "DELETE uploadId");
 }
