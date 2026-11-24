@@ -71,6 +71,21 @@ pub(crate) type TransitionOf<R> = <<R as Record>::State as ProcessState>::Transi
 pub(crate) type TransitionErrorOf<R> =
     TransitionError<<R as Record>::State, <<R as Record>::State as ProcessState>::Transition>;
 
+/// Our message to the counter-party, as the core sees it: which transition
+/// it causes once the counter-party has it, and whether it is the
+/// consumer's first request.
+pub(crate) trait Message<T> {
+    /// The transition this message causes once the counter-party has it.
+    fn transition_caused(&self) -> T;
+
+    /// Whether this is the consumer's first request. It created the state
+    /// already, so its acknowledgement changes no state. A provider never
+    /// sends one.
+    fn is_first_request(&self) -> bool {
+        false
+    }
+}
+
 /// One process as one party keeps it: `Negotiation`, `ConsumerNegotiation`,
 /// `Transfer` or `ConsumerTransfer`. Each has a state, our message on its
 /// way (`pending`), and a `version` that changes on every write. The
@@ -80,32 +95,40 @@ pub(crate) trait Record: Clone {
     /// `NegotiationState` or `TransferState`.
     type State: ProcessState;
     /// Our message to the counter-party (the module's `Outgoing`).
-    type Outgoing: Clone + PartialEq;
+    type Outgoing: Clone + PartialEq + Message<<Self::State as ProcessState>::Transition>;
     /// The party that keeps the record. It sends `Outgoing`; every
     /// message it receives comes from the other party.
     const PARTY: Role;
 
+    /// The record's state, our message on its way (if any) and the version
+    /// it was read with. The read-only methods below are built on it.
+    fn parts(&self) -> (Self::State, Option<&Self::Outgoing>, u64);
+    /// The same three fields, to change them.
+    fn parts_mut(&mut self) -> (&mut Self::State, &mut Option<Self::Outgoing>, &mut u64);
+
     /// The current state.
-    fn state(&self) -> Self::State;
+    fn state(&self) -> Self::State {
+        self.parts().0
+    }
     /// Sets the current state.
-    fn set_state(&mut self, state: Self::State);
+    fn set_state(&mut self, state: Self::State) {
+        *self.parts_mut().0 = state;
+    }
     /// Our message on its way, if any.
-    fn pending(&self) -> Option<&Self::Outgoing>;
+    fn pending(&self) -> Option<&Self::Outgoing> {
+        self.parts().1
+    }
     /// Sets (or clears) our message on its way.
-    fn set_pending(&mut self, pending: Option<Self::Outgoing>);
+    fn set_pending(&mut self, pending: Option<Self::Outgoing>) {
+        *self.parts_mut().1 = pending;
+    }
     /// The version the record was read with.
-    fn version(&self) -> u64;
+    fn version(&self) -> u64 {
+        self.parts().2
+    }
     /// Sets the version to write.
-    fn set_version(&mut self, version: u64);
-
-    /// The transition `message` causes once the counter-party has it.
-    fn transition_of(message: &Self::Outgoing) -> TransitionOf<Self>;
-
-    /// Whether `message` is the consumer's first request. It created the
-    /// state already, so its acknowledgement changes no state. A provider
-    /// never sends one.
-    fn is_first_request(_message: &Self::Outgoing) -> bool {
-        false
+    fn set_version(&mut self, version: u64) {
+        *self.parts_mut().2 = version;
     }
 
     /// Applies our message `sent`, which the counter-party has (it
@@ -132,8 +155,8 @@ pub(crate) fn apply_sent<R: Record>(
     record: &mut R,
     sent: &R::Outgoing,
 ) -> Result<(), TransitionErrorOf<R>> {
-    if !R::is_first_request(sent) {
-        let state = R::State::next_state(Some(record.state()), R::transition_of(sent), R::PARTY)?;
+    if !sent.is_first_request() {
+        let state = R::State::next_state(Some(record.state()), sent.transition_caused(), R::PARTY)?;
         record.set_state(state);
     }
     record.set_pending(None);
@@ -172,8 +195,8 @@ pub(crate) fn receive<R: Record>(
     let terminate = R::State::TERMINATE;
     let (first_request, ending) = match record.pending() {
         Some(sent) => (
-            R::is_first_request(sent),
-            R::transition_of(sent) == terminate,
+            sent.is_first_request(),
+            sent.transition_caused() == terminate,
         ),
         None => (false, false),
     };

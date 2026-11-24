@@ -33,29 +33,20 @@ impl Record for Kept {
     type Outgoing = Sent;
     const PARTY: Role = Role::Consumer;
 
-    fn state(&self) -> TransferState {
-        self.state
+    fn parts(&self) -> (TransferState, Option<&Sent>, u64) {
+        (self.state, self.pending.as_ref(), self.version)
     }
-    fn set_state(&mut self, state: TransferState) {
-        self.state = state;
+    fn parts_mut(&mut self) -> (&mut TransferState, &mut Option<Sent>, &mut u64) {
+        (&mut self.state, &mut self.pending, &mut self.version)
     }
-    fn pending(&self) -> Option<&Sent> {
-        self.pending.as_ref()
+}
+
+impl Message<Transition> for Sent {
+    fn transition_caused(&self) -> Transition {
+        self.transition
     }
-    fn set_pending(&mut self, pending: Option<Sent>) {
-        self.pending = pending;
-    }
-    fn version(&self) -> u64 {
-        self.version
-    }
-    fn set_version(&mut self, version: u64) {
-        self.version = version;
-    }
-    fn transition_of(message: &Sent) -> Transition {
-        message.transition
-    }
-    fn is_first_request(message: &Sent) -> bool {
-        message.first
+    fn is_first_request(&self) -> bool {
+        self.first
     }
 }
 

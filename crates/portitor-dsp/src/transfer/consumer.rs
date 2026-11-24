@@ -26,7 +26,7 @@
 //! [`crate::process`].
 
 use crate::Context;
-use crate::process::{self, Lookup, Record, Records, Refused, Write};
+use crate::process::{self, Lookup, Message, Record, Records, Refused, Write};
 
 pub use super::provider::Failure;
 use super::{
@@ -79,29 +79,20 @@ impl Record for ConsumerTransfer {
     type Outgoing = Outgoing;
     const PARTY: Role = Role::Consumer;
 
-    fn state(&self) -> TransferState {
-        self.state
+    fn parts(&self) -> (TransferState, Option<&Outgoing>, u64) {
+        (self.state, self.pending.as_ref(), self.version)
     }
-    fn set_state(&mut self, state: TransferState) {
-        self.state = state;
+    fn parts_mut(&mut self) -> (&mut TransferState, &mut Option<Outgoing>, &mut u64) {
+        (&mut self.state, &mut self.pending, &mut self.version)
     }
-    fn pending(&self) -> Option<&Outgoing> {
-        self.pending.as_ref()
+}
+
+impl Message<Transition> for Outgoing {
+    fn transition_caused(&self) -> Transition {
+        self.transition
     }
-    fn set_pending(&mut self, pending: Option<Outgoing>) {
-        self.pending = pending;
-    }
-    fn version(&self) -> u64 {
-        self.version
-    }
-    fn set_version(&mut self, version: u64) {
-        self.version = version;
-    }
-    fn transition_of(message: &Outgoing) -> Transition {
-        message.transition
-    }
-    fn is_first_request(message: &Outgoing) -> bool {
-        message.initial
+    fn is_first_request(&self) -> bool {
+        self.initial
     }
 }
 

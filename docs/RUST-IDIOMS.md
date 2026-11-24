@@ -343,9 +343,13 @@ with `_` says the default does not use that argument.
 ```rust
 pub(crate) trait Record: Clone {
     type State: ProcessState;
-    type Outgoing: Clone + PartialEq;
+    type Outgoing: Clone + PartialEq + Message<<Self::State as ProcessState>::Transition>;
     const PARTY: Role;
-    fn state(&self) -> Self::State;
+    fn parts(&self) -> (Self::State, Option<&Self::Outgoing>, u64);
+    fn parts_mut(&mut self) -> (&mut Self::State, &mut Option<Self::Outgoing>, &mut u64);
+    fn state(&self) -> Self::State {
+        self.parts().0
+    }
     /* ... */
     fn apply_sent(&mut self, sent: &Self::Outgoing) -> Result<(), TransitionErrorOf<Self>> {
         apply_sent(self, sent)
@@ -375,6 +379,13 @@ process (`ProcessState`, implemented by `NegotiationState` and
 `type TransitionOf<R> = <<R as Record>::State as ProcessState>::Transition;`
 is read from the inside out: the record's `State`, then that state's
 `Transition`. The alias exists so that the long form is written once.
+
+Each record writes only `parts` and `parts_mut`, which hand out its
+three shared fields (state, message on its way, version) as a tuple,
+read-only or to change. The getters and setters (`state`, `set_state`,
+`pending`, ...) are defaults built on them, so they are written once,
+not four times. `*self.parts_mut().0 = state` reads: take the first of
+the three mutable references and write through it (`*`).
 
 `apply_sent` has a default body that only calls the free function
 `process::apply_sent`. Rust has no way for an override to call the

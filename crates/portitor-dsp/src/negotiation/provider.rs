@@ -28,7 +28,7 @@
 
 use crate::catalog::CatalogDatasets;
 use crate::policy::CallerCredentials;
-use crate::process::{self, Lookup, Record, Records, Refused, Write};
+use crate::process::{self, Lookup, Message, Record, Records, Refused, Write};
 pub use crate::process::{Environment, StoreError};
 use crate::{Context, Offer};
 
@@ -77,28 +77,12 @@ impl Record for Negotiation {
     type Outgoing = Outgoing;
     const PARTY: Role = Role::Provider;
 
-    fn state(&self) -> NegotiationState {
-        self.state
+    fn parts(&self) -> (NegotiationState, Option<&Outgoing>, u64) {
+        (self.state, self.pending.as_ref(), self.version)
     }
-    fn set_state(&mut self, state: NegotiationState) {
-        self.state = state;
+    fn parts_mut(&mut self) -> (&mut NegotiationState, &mut Option<Outgoing>, &mut u64) {
+        (&mut self.state, &mut self.pending, &mut self.version)
     }
-    fn pending(&self) -> Option<&Outgoing> {
-        self.pending.as_ref()
-    }
-    fn set_pending(&mut self, pending: Option<Outgoing>) {
-        self.pending = pending;
-    }
-    fn version(&self) -> u64 {
-        self.version
-    }
-    fn set_version(&mut self, version: u64) {
-        self.version = version;
-    }
-    fn transition_of(message: &Outgoing) -> Transition {
-        message.transition
-    }
-
     /// The shared step, and the provider keeps what it sent: the
     /// agreement, or its offer.
     fn apply_sent(&mut self, sent: &Outgoing) -> Result<(), TransitionError> {
@@ -114,6 +98,12 @@ impl Record for Negotiation {
             self.offer = m.offer;
         }
         Ok(())
+    }
+}
+
+impl Message<Transition> for Outgoing {
+    fn transition_caused(&self) -> Transition {
+        self.transition
     }
 }
 
