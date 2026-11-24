@@ -189,6 +189,32 @@ default).
    The worst-case delay between a revocation and the refusal is the
    status list cache time.
 
+**As built in 1.1 (2026-11-24), for review.** Details the text above
+leaves open, decided while building it:
+
+- The memberships are kept in their own table (`flow_membership`,
+  migration 12), keyed by the flow id, which is the provider pid. They
+  are written when the transfer request is accepted, before the start
+  message (and so the token) goes out. Every kept membership must pass,
+  as at the DSP check (DCP 5.4.3).
+- A failed check (revoked, expired, issuer no longer trusted) refuses
+  with 401 and ends the transfer as the provider's own termination,
+  with a WARN line. A check that cannot finish refuses, or cuts the
+  download, but keeps the transfer: the next request may pass.
+- "At the same interval" is `PORTITOR_STATUS_LIST_CACHE_SECONDS`
+  clamped to 5 to 60 seconds, so a cache of 0 does not check a running
+  download in a busy loop and a long cache still checks every minute.
+  The worst case is therefore the cache time for a new request, and up
+  to the cache time plus 60 seconds for a running download.
+- Flows that started before 1.1 have nothing kept; the migration marks
+  them. They are served as in 1.0 until their token expires, logged
+  once per flow and process. A 1.1 flow with nothing kept is refused.
+- The provider's termination (route 1) replaces a message still on its
+  way, unlike the consumer's own steps: access must end now. Suspend
+  and terminate cut running downloads; completion does not.
+- The membership check is `MembershipGate::check` and the cut switch is
+  `RunningFlows`; both are there for push to call.
+
 `PORTITOR_DATA_TOKEN_SECONDS` keeps its default of one hour, the same as
 Eclipse Siglet's default token life (`exp` = `iat` + 3600). With the two
 checks above, revocation no longer depends on it; it only limits how

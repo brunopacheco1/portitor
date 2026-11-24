@@ -25,6 +25,13 @@ the release notes these come from.
 - These steps need 1.1.0 images: with the 1.0.0 images that
   `compose.yaml` still names by default, `run.sh` fails at the
   suspension. CI passes the images it builds.
+- Two steps at the end (ADR 0027): the provider ends the members'
+  transfer through its new management route
+  (`POST /v1/provided-transfers/{providerPid}/termination`) and the
+  token is refused at once; then the issuer revokes the consumer's
+  `MembershipCredential`, its next request for data is refused (401)
+  and the provider ends that transfer. `run-local.sh` passed on
+  2026-11-24 with debug binaries built from the 1.1 branch.
 
 ## 2026-11-24, for 1.0.0
 

@@ -294,6 +294,19 @@ impl CallerVerifier for TckVerifier {
         }
         self.inner.credentials(caller, scopes)
     }
+
+    /// The TCK presents no membership, so only the inner verifier's
+    /// callers have one to check again (ADR 0027).
+    fn check_membership<'a>(
+        &'a self,
+        membership: &'a crate::auth::Membership,
+    ) -> BoxFuture<'a, Result<(), VerifyError>> {
+        self.inner.check_membership(membership)
+    }
+
+    fn membership_recheck_interval(&self) -> std::time::Duration {
+        self.inner.membership_recheck_interval()
+    }
 }
 
 /// Prover: the fixed header for requests to [`TCK_PARTICIPANT`]; a token

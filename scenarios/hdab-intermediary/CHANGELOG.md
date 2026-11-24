@@ -9,6 +9,14 @@ SPDX-License-Identifier: Apache-2.0
 How the scenario changed, newest first. Each entry names the Portitor
 version it ran on.
 
+## 2026-11-24, for 1.1.0
+
+- Step 6: the HDAB's termination of Schuman's last transfer is now
+  accepted (TD-47, fixed in 1.1), so `steps.sh` waits for `TERMINATED`
+  instead of finding the transfer `REQUESTED` and ending it from
+  Schuman's side. Not run yet on 1.1: the change follows the connector's
+  tests of TD-47.
+
 ## 2026-11-24, for 1.0.0
 
 - `compose.yaml` takes the 1.0.0 release images by default. The

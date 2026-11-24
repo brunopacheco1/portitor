@@ -1421,6 +1421,40 @@ by the list's URL, in memory.
 - The cache is per process: a restart empties it. Presentations and
   tokens are not cached; they are checked on every request (ADR 0016).
 
+### Revocation and running transfers
+
+From 1.1 a provider checks the consumer's membership again for every
+use of the data, not only when the transfer is asked for (ADR 0027).
+When the consumer asks for a transfer, the provider keeps the issuer,
+the end of validity and the `credentialStatus` of each of its
+`MembershipCredential`s with the data flow. Then:
+
+- **On every `/data` request** it checks them again, without the
+  consumer: the issuer is still trusted, the credential has not
+  expired, no status bit is set. A revocation is therefore seen on the
+  next request after at most `PORTITOR_STATUS_LIST_CACHE_SECONDS` (the
+  same delay as for DSP requests). The request is refused with 401, the
+  transfer is ended (the provider sends the DSP termination) and the log
+  says why.
+- **While a download runs** it checks again every
+  `PORTITOR_STATUS_LIST_CACHE_SECONDS`, but at least every 60 seconds
+  and at most every 5. On a revocation the download is cut and the
+  transfer ended. So a running download can last up to the cache time
+  plus 60 seconds after a revocation, with the default cache 300 + 60.
+- **A check that cannot finish** (a status list or the issuer's DID
+  document does not answer) refuses the request, or cuts the download,
+  but keeps the transfer: the next request may pass.
+- **Transfers started before 1.1** have no membership kept. They are
+  served as in 1.0 until their token expires (at most
+  `PORTITOR_DATA_TOKEN_SECONDS`), and logged once per flow. A 1.1
+  transfer with no membership kept is refused.
+
+A partner whose membership was revoked can still end a transfer it
+shares with you: a `TransferTerminationMessage` is accepted from a
+caller with a valid DCP token who is the transfer's counter-party, and
+logged (TD-47, [ADR 0016](adr/0016-dsp-caller-authentication.md),
+amended in 1.1). Every other message from it is refused.
+
 ### Management API
 
 Through the management API you read the harvest jobs
@@ -1502,6 +1536,20 @@ suspended the transfer (DSP 2025-1).
 `format` defaults to `HttpData-PULL`. The two list calls
 (`GET /v1/negotiations`, `GET /v1/transfers`) return up to 100 entries
 at a time (`?after=`, `?limit=`).
+
+As provider (1.1), you read the transfers your connector runs and end
+one on your own (ADR 0027):
+
+```sh
+curl -s localhost:8081/v1/provided-transfers -H "authorization: Bearer $(cat key)"
+curl -s -X POST localhost:8081/v1/provided-transfers/urn:uuid:.../termination \
+  -H "authorization: Bearer $(cat key)"
+```
+
+The termination answers 202: access ends at once (the data flow is
+terminated and every running download of it is cut), and the DSP
+termination goes to the consumer in the background. The view shows the
+consumer's DID (`counterPartyId`), never the data token or its hash.
 
 ## Security
 
@@ -1691,7 +1739,9 @@ known risk and technical debt, with its status and target release.
   checked: the issuer publishes each definition's `credentialSchema` URL
   and no component fetches it.
 - **Revocation** takes up to `PORTITOR_STATUS_LIST_CACHE_SECONDS` to be
-  seen ([Status list cache](#status-list-cache)).
+  seen ([Status list cache](#status-list-cache)); a running download up
+  to 60 seconds more
+  ([Revocation and running transfers](#revocation-and-running-transfers)).
 - **Policies.** Only `dateTime` and credential claims are understood,
   any other term is refused, and prohibitions and duties are carried
   into agreements but not enforced ([Policies](#policies)).

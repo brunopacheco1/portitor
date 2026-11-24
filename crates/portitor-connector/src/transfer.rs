@@ -6,8 +6,14 @@
 //! binding (DSP 2025-1, "Transfer Process HTTPS Binding"), the data plane
 //! until one is configured, and the sending of the provider's messages
 //! (ADR 0013).
+//!
+//! From 1.1 (ADR 0027, section 7) also: the provider's own view and
+//! termination of its transfers, for the management API; the consumer's
+//! memberships, kept with each new transfer for the data plane; and the
+//! termination of a transfer whose consumer is no longer a member
+//! ([`EndsThroughProvider`]).
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
@@ -27,10 +33,14 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::auth::{AnyVerifier, Caller, credentials_for};
+use crate::data_plane::FlowStore as _;
+use crate::flow_membership::EndsTransfers;
 use crate::harvest::DatasetCopy;
 use crate::http_client::outbound_url_allowed;
 use crate::outbox::{self, Link, Message, Outbox};
-use crate::ports::{AnyAgreements, AnyDataFlows, AnyTransferDecider, AnyTransferStore};
+use crate::ports::{
+    AnyAgreements, AnyDataFlows, AnyFlowStore, AnyTransferDecider, AnyTransferStore,
+};
 use crate::system::SystemEnvironment;
 
 /// The data plane until one is configured (0.4 PR 4): it supports no
@@ -81,6 +91,9 @@ pub(crate) struct TransferProvider {
     link: Link,
     /// Asks a caller for more credentials when an agreement needs them.
     verifier: AnyVerifier,
+    /// Where the consumer's memberships are kept for the data plane (ADR
+    /// 0027); `None` without the built-in data plane.
+    flow_store: Option<AnyFlowStore>,
     allow_http: bool,
 }
 
@@ -98,7 +111,68 @@ impl TransferProvider {
             ),
             link: Link::new(ports),
             verifier: Arc::clone(&ports.verifier),
+            flow_store: ports.flow_store.clone(),
             allow_http,
+        }
+    }
+
+    /// The transfer `provider_pid`, for the management API.
+    ///
+    /// # Errors
+    ///
+    /// Unknown transfer, or store failure.
+    pub(crate) fn transfer(&self, provider_pid: &str) -> Result<Transfer, Box<Failure>> {
+        self.service.transfer(provider_pid).map_err(Box::new)
+    }
+
+    /// One page of transfers, for the management API.
+    ///
+    /// # Errors
+    ///
+    /// Store failure.
+    pub(crate) fn list(
+        &self,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Transfer>, Box<Failure>> {
+        self.service.list(after, limit).map_err(Box::new)
+    }
+
+    /// The provider ends transfer `provider_pid` for `reason`: the data
+    /// flow is terminated at once, which cuts its running downloads, and
+    /// the termination is sent in the background (ADR 0014, "The
+    /// provider's own steps"). Returns the transfer as saved.
+    ///
+    /// # Errors
+    ///
+    /// Unknown or ended transfer, data plane or store failure.
+    pub(crate) fn terminate_own(
+        self: &Arc<Self>,
+        provider_pid: &str,
+        reason: &str,
+    ) -> Result<Transfer, Box<Failure>> {
+        let (transfer, out) = self
+            .service
+            .terminate_own(provider_pid, reason)
+            .map_err(Box::new)?;
+        if let Some(out) = out {
+            tokio::spawn(outbox::deliver(Arc::clone(self), out));
+        }
+        Ok(transfer)
+    }
+
+    /// Keeps the `MembershipCredential`s of `caller`, just verified, with
+    /// the data flow of transfer `provider_pid`, so the data plane can
+    /// check them again (ADR 0027, section 7.2). Called before the start
+    /// message is sent, so before the consumer has a token. A failure is
+    /// logged: the flow then has nothing kept and is refused (fail
+    /// closed).
+    fn keep_memberships(&self, provider_pid: &str, caller: &Caller) {
+        let Some(store) = &self.flow_store else {
+            return;
+        };
+        if let Err(error) = store.keep_memberships(provider_pid, &caller.memberships) {
+            tracing::error!(transfer = %provider_pid, error = %error.0, "the consumer's memberships could not be kept; its requests for data will be refused");
         }
     }
 
@@ -250,10 +324,10 @@ pub(crate) async fn request(
     // the agreement is evaluated again with fresh credentials (ADR 0019)
     let credentials = provider.credentials(&caller, &msg.agreement_id).await;
     let handled = provider.service.request(&msg, &caller.id, &credentials);
-    if let Err(failure) = &handled
-        && failure.is_no_finalized_agreement()
-    {
-        log_no_finalized_agreement();
+    match &handled {
+        Ok((transfer, _)) => provider.keep_memberships(&transfer.provider_pid, &caller),
+        Err(failure) if failure.is_no_finalized_agreement() => log_no_finalized_agreement(),
+        Err(_) => {}
     }
     provider.finish(handled, StatusCode::CREATED)
 }
@@ -334,5 +408,47 @@ pub(crate) async fn termination(
         };
     let ids = (msg.provider_pid.as_str(), msg.consumer_pid.as_str());
     let handled = provider.service.terminate(&pid, ids, &caller.id);
+    if handled.is_ok() {
+        log_termination_without_membership(&caller, &pid);
+    }
     provider.finish(handled, StatusCode::OK)
+}
+
+/// One WARN line when a transfer termination was accepted from a caller
+/// whose token is valid but whose credentials did not pass (TD-47; ADR
+/// 0016, amended in 1.1): on the provider's side and on the consumer's
+/// callback. `process` is our process id of the transfer. Nothing for a
+/// caller that is a member.
+pub(crate) fn log_termination_without_membership(caller: &Caller, process: &str) {
+    if let Some(reason) = caller.without_membership() {
+        tracing::warn!(
+            %process,
+            caller = %caller.id,
+            %reason,
+            "DSP termination accepted from a partner without membership"
+        );
+    }
+}
+
+/// Ends transfers for the data plane's membership gate
+/// ([`crate::flow_membership::MembershipGate`]) as the provider's own
+/// termination. It holds a weak pointer, because the provider holds the
+/// data plane, which holds the gate: a strong one would keep all three
+/// alive forever.
+pub(crate) struct EndsThroughProvider(pub(crate) Weak<TransferProvider>);
+
+impl EndsTransfers for EndsThroughProvider {
+    fn end_transfer(&self, provider_pid: &str, reason: &str) {
+        let Some(provider) = self.0.upgrade() else {
+            return;
+        };
+        let why = format!("the consumer's membership no longer holds: {reason}");
+        match provider.terminate_own(provider_pid, &why) {
+            Ok(_) => {}
+            // a second request after the first ended it
+            Err(failure) => {
+                tracing::info!(transfer = %provider_pid, failure = ?failure, "transfer not ended again");
+            }
+        }
+    }
 }

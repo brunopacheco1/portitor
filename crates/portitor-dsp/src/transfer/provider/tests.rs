@@ -69,6 +69,16 @@ impl TransferStore for &Store {
             .cloned()
             .collect())
     }
+    fn list(&self, after: Option<&str>, limit: usize) -> Result<Vec<Transfer>, StoreError> {
+        let map = self.0.borrow();
+        let after = after.unwrap_or_default();
+        Ok(map
+            .values()
+            .filter(|t| t.provider_pid.as_str() > after)
+            .take(limit)
+            .cloned()
+            .collect())
+    }
 }
 
 /// Agreements: `a1` for dataset `d1`, `a-expired` whose date limit has
@@ -499,6 +509,9 @@ impl TransferStore for &Racing<'_> {
     }
     fn pending(&self) -> Result<Vec<Transfer>, StoreError> {
         self.0.pending()
+    }
+    fn list(&self, after: Option<&str>, limit: usize) -> Result<Vec<Transfer>, StoreError> {
+        self.0.list(after, limit)
     }
 }
 
@@ -1320,4 +1333,83 @@ fn only_finalized_or_verified_with_the_finalization_on_its_way_is_served() {
             }
         }
     }
+}
+
+/// ADR 0027, section 7.1: the provider ends a started transfer on its
+/// own. The data flow ends first, then the termination is sent; once the
+/// consumer acknowledges it, the transfer is TERMINATED.
+#[test]
+fn the_provider_ends_a_transfer_on_its_own() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = started(&store, &flows);
+    let (transfer, out) = s.terminate_own(PID, "access withdrawn").unwrap();
+    let out = out.unwrap();
+    assert_eq!(out.transition, Transition::Terminate);
+    assert_eq!(out.body["reason"][0], "access withdrawn");
+    assert_eq!(transfer.state, TransferState::Started, "until acknowledged");
+    assert_eq!(flows.calls().last().unwrap(), "terminate urn:uuid:1");
+    // asked again while it is on its way: nothing new to send
+    let (_, again) = s.terminate_own(PID, "again").unwrap();
+    assert!(again.is_none());
+    s.delivered(&out).unwrap();
+    assert_eq!(state(&store), TransferState::Terminated);
+    // an ended transfer cannot be ended again
+    let failure = s.terminate_own(PID, "once more").unwrap_err();
+    assert!(reason(&failure).contains("has ended"), "{failure:?}");
+    assert!(matches!(
+        s.terminate_own("unknown", "x"),
+        Err(Failure::NotFound(_))
+    ));
+}
+
+/// A termination of the provider replaces its start message that is still
+/// on its way; a late acknowledgement of the start then changes nothing.
+#[test]
+fn the_providers_termination_replaces_a_message_on_its_way() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = service(&store, &flows, TransferDecision::Start);
+    let none = CallerCredentials::default();
+    let (_, start) = s
+        .request(&request("a1", "HttpData-PULL"), CONSUMER, &none)
+        .unwrap();
+    let start = start.unwrap();
+    let (_, termination) = s.terminate_own(PID, "revoked").unwrap();
+    let termination = termination.unwrap();
+    assert!(s.delivered(&start).unwrap().is_none(), "no longer pending");
+    assert_eq!(state(&store), TransferState::Requested);
+    s.delivered(&termination).unwrap();
+    assert_eq!(state(&store), TransferState::Terminated);
+}
+
+/// A data plane that fails stops the termination: nothing is sent while
+/// access may still be open.
+#[test]
+fn the_providers_termination_needs_the_data_plane() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = started(&store, &flows);
+    flows.1.set(true);
+    assert!(matches!(
+        s.terminate_own(PID, "x"),
+        Err(Failure::DataPlane(_))
+    ));
+    assert!(store.0.borrow()[PID].pending.is_none());
+}
+
+#[test]
+fn the_provider_reads_and_lists_its_transfers() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = started(&store, &flows);
+    assert_eq!(s.transfer(PID).unwrap().counter_party, CONSUMER);
+    assert!(matches!(s.transfer("unknown"), Err(Failure::NotFound(_))));
+    let mut second = request("a1", "HttpData-PULL");
+    second.consumer_pid = "urn:uuid:c2".to_owned();
+    s.request(&second, CONSUMER, &CallerCredentials::default())
+        .unwrap();
+    let all = s.list(None, 100).unwrap();
+    assert_eq!(all.len(), 2);
+    let page = s.list(None, 1).unwrap();
+    assert_eq!(page.len(), 1);
+    let rest = s.list(Some(&page[0].provider_pid), 0).unwrap();
+    assert_eq!(rest.len(), 1, "a limit of 0 counts as 1");
+    assert_ne!(rest[0].provider_pid, page[0].provider_pid);
 }

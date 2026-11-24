@@ -51,7 +51,8 @@ Out, on purpose:
 | `portitor-connector` as provider | Harvests and checks its datasets, serves the catalog, checks offers at negotiation and transfer, serves the data. |
 | `portitor-connector` as consumer | Reads the catalog, negotiates and transfers, through its management API. |
 | The built-in data plane (HTTP pull) | Serves the file with a token, refused while the transfer is suspended and once it is complete, and writes an audit line for each pull. |
-| Status lists | The provider sees the revoked `DataProcessorCredential` at once (`PORTITOR_STATUS_LIST_CACHE_SECONDS=0`). |
+| Status lists | The provider sees the revoked `DataProcessorCredential`, and later the revoked `MembershipCredential`, at once (`PORTITOR_STATUS_LIST_CACHE_SECONDS=0`). |
+| The provider's management API for its transfers | Lists the transfers it runs as provider and ends one; access ends at once. |
 
 ## Run it
 
@@ -106,6 +107,18 @@ containers running (`KEEP=1`) and add the observability stack.
    it negotiates to `FINALIZED` and a transfer starts. The issuer
    revokes that credential (`POST /v1/credentials/{id}/revoke`), and a
    new transfer request under the same agreement is `TERMINATED`.
+7. The provider ends a transfer on its own (ADR 0027): its management
+   API lists the members' transfer of step 5
+   (`GET /v1/provided-transfers`) and terminates it
+   (`POST /v1/provided-transfers/{providerPid}/termination`, 202). The
+   token is refused at once (401), and the consumer's transfer is
+   `TERMINATED`.
+8. Membership checked again on every data request (ADR 0027): a new
+   transfer under the first agreement, and its data fetched. The issuer
+   revokes the consumer's `MembershipCredential`; the next request for
+   the data is refused (401), and the provider ends the transfer
+   (`TERMINATED`). The provider sees the revocation at once, because its
+   status list cache is 0.
 
 ## Findings
 

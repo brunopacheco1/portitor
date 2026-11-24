@@ -22,7 +22,9 @@
 # 6. Refusals: a transfer under the pilot offer once its end has passed;
 #    after Digital Lux Trust revokes the HDAB's MembershipCredential, the
 #    HDAB is out of the data space: Lux Biobank refuses it, and so does
-#    Schuman's connector, so a new transfer never starts.
+#    Schuman's connector, so a new transfer never starts. The HDAB's
+#    termination is the one message Schuman still accepts from it (TD-47,
+#    fixed in 1.1), so the transfer ends TERMINATED on its own.
 #
 # Environment (set by run.sh):
 #   DIR        scenarios/hdab-intermediary
@@ -177,14 +179,13 @@ if api hdab POST /v1/catalog/request "$(jq -nc --arg addr "$BIOBANK" --arg id "$
 fi
 echo "refused"
 
-step "6. Schuman's connector refuses the HDAB's messages too: a new transfer never starts"
+step "6. Schuman's connector refuses the HDAB's messages too: a new transfer never starts, and ends"
 PID=$(api schuman POST /v1/transfers "$(jq -nc --arg a "$SCHUMAN_AGREEMENT" '{agreementId: $a}')" |
   jq -r '.consumerPid') || fail "request transfer"
-sleep 5
-VIEW=$(api schuman GET "/v1/transfers/$PID") || fail "read the transfer"
-expect "Schuman's transfer, 5 seconds later" "$VIEW" REQUESTED
-echo "the HDAB's start message was refused (its MembershipCredential is revoked); Schuman ends the transfer itself"
-api schuman POST "/v1/transfers/$PID/termination" >/dev/null || fail "terminate"
-expect "Schuman's transfer" "$(until_state schuman "/v1/transfers/$PID" TERMINATED)" TERMINATED
+# the HDAB's start message is refused (its MembershipCredential is
+# revoked); its termination is accepted from it all the same (TD-47)
+VIEW=$(until_state schuman "/v1/transfers/$PID" 'STARTED|TERMINATED')
+expect "Schuman's transfer" "$VIEW" TERMINATED
+echo "the HDAB's start message was refused; its termination was accepted, so the transfer ended without Schuman's operator"
 
 step "Done: two data users took the same genotypes by two roads, peer to peer and through the HDAB; the HDAB pulled only after Schuman's transfer started and kept nothing; roles, claims, an ended offer and a revoked access body were refused"

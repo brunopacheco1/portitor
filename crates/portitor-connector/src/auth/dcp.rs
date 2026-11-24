@@ -68,6 +68,11 @@
 //! ([`status_list_cache`]; ADR 0016, amended in 0.11). Tokens and
 //! presentations are not: they are checked on every request.
 //!
+//! The caller's `MembershipCredential`s go with it too ([`Membership`]),
+//! and a failure after a valid token says which DID it was
+//! ([`VerifyError::NotAMember`], TD-47). The data plane checks a
+//! membership again without the caller ([`membership`], ADR 0027).
+//!
 //! The caller chooses what is in its presentations, and each credential
 //! could make the verifier fetch more (the issuer's DID document, status
 //! lists). So credentials from issuers that are not trusted are skipped
@@ -86,7 +91,6 @@ use portitor_dcp::gaiax::{
 };
 use portitor_dcp::message::{PresentationQueryMessage, PresentationResponseMessage};
 use portitor_dcp::scope::merge_scopes;
-use portitor_dcp::status_list::{self, Status, StatusEntry};
 use portitor_dcp::{Claims, DidDocument, JtiCache, unverified_claims, validate_self_issued};
 use portitor_dsp::policy::HeldCredential;
 use portitor_runtime::BoxFuture;
@@ -96,8 +100,9 @@ use portitor_runtime::system::now_secs;
 use serde_json::Value;
 
 use super::sts::{SecureTokenService, TokenRequest};
-use super::{AuthSettings, Caller, CallerVerifier, VerifyError, with_linked_scopes};
+use super::{AuthSettings, Caller, CallerVerifier, Membership, VerifyError, with_linked_scopes};
 
+pub mod membership;
 pub mod status_list_cache;
 
 use status_list_cache::StatusListCache;
@@ -160,6 +165,9 @@ pub struct DcpVerifier {
     clock: Clock,
     start_tries: u32,
     deadline: Duration,
+    /// How often a running download checks its membership again
+    /// ([`membership::recheck_interval`]).
+    recheck: Duration,
 }
 
 impl std::fmt::Debug for DcpVerifier {
@@ -179,6 +187,16 @@ struct CheckedToken {
     doc: Arc<DidDocument>,
     /// The access token for the caller's Credential Service.
     access_token: String,
+}
+
+/// The credentials of a caller that passed the checks.
+#[derive(Default)]
+struct Verified {
+    /// As the policy evaluator reads them (ADR 0019).
+    held: Vec<HeldCredential>,
+    /// The `MembershipCredential`s among them, to check again later (ADR
+    /// 0027, section 7.2).
+    memberships: Vec<Membership>,
 }
 
 impl DcpVerifier {
@@ -205,6 +223,7 @@ impl DcpVerifier {
             clock: Arc::new(now_secs),
             start_tries: START_TRIES,
             deadline: DEADLINE,
+            recheck: membership::recheck_interval(settings.status_list_cache_seconds),
         })
     }
 
@@ -326,27 +345,42 @@ impl DcpVerifier {
         }
     }
 
-    /// Steps 1 to 5 of the module doc.
+    /// Steps 1 to 5 of the module doc. Once the token is valid, the
+    /// caller's DID is proven: a refusal after that names it
+    /// ([`VerifyError::NotAMember`], TD-47).
     async fn check_steps(&self, authorization: Option<&str>) -> Result<Caller, VerifyError> {
         let token = bearer(authorization)?;
         let checked = self.check_token(token).await?;
         let caller = checked.doc.id.clone();
-        let presentations = self.query(&checked, &self.scopes).await?;
-        let credentials = self
-            .check_presentations(&caller, &checked.doc, &presentations)
+        match self.check_membership_of(&caller, &checked).await {
+            Ok(verified) => Ok(Caller {
+                id: caller,
+                credentials: verified.held,
+                memberships: verified.memberships,
+                access_token: Some(checked.access_token),
+                refused_membership: None,
+            }),
+            Err(VerifyError::Rejected(reason)) => Err(VerifyError::NotAMember { caller, reason }),
+            Err(other) => Err(other),
+        }
+    }
+
+    /// Steps 3 to 5 for `caller`, whose token is valid.
+    async fn check_membership_of(
+        &self,
+        caller: &str,
+        checked: &CheckedToken,
+    ) -> Result<Verified, VerifyError> {
+        let presentations = self.query(checked, &self.scopes).await?;
+        let verified = self
+            .check_presentations(caller, &checked.doc, &presentations)
             .await?;
-        let is_member = credentials
-            .iter()
-            .any(|credential| credential.has_type(MEMBERSHIP));
-        if !is_member {
+        // only a credential from a trusted issuer is kept
+        if verified.memberships.is_empty() {
             let reason = format!("no {MEMBERSHIP} from a trusted issuer");
             return Err(VerifyError::Rejected(reason));
         }
-        Ok(Caller {
-            id: caller,
-            credentials,
-            access_token: Some(checked.access_token),
-        })
+        Ok(verified)
     }
 
     /// Steps 3 and 4 again, for the configured scopes and `extra` (ADR
@@ -364,8 +398,10 @@ impl DcpVerifier {
         let checked = CheckedToken { doc, access_token };
         let scopes = with_linked_scopes(&merge_scopes(&self.scopes, extra));
         let presentations = self.query(&checked, &scopes).await?;
-        self.check_presentations(&caller.id, &checked.doc, &presentations)
-            .await
+        let verified = self
+            .check_presentations(&caller.id, &checked.doc, &presentations)
+            .await?;
+        Ok(verified.held)
     }
 
     /// Step 2: the caller's self-issued ID token.
@@ -444,20 +480,21 @@ impl DcpVerifier {
         caller: &str,
         holder: &DidDocument,
         jwts: &[String],
-    ) -> Result<Vec<HeldCredential>, VerifyError> {
+    ) -> Result<Verified, VerifyError> {
         let now = self.now();
-        let mut verified = Vec::new();
+        let mut verified = Verified::default();
         for jwt in jwts {
             let presentation = self.check_presentation(caller, holder, jwt, now)?;
             // Gaia-X credentials first: they have their own rules (ADR 0022)
             let gaiax = self
                 .check_gaiax(caller, holder, &presentation.credentials, now)
                 .await?;
-            verified.extend(gaiax);
+            verified.held.extend(gaiax);
             let others = self
                 .check_dataspace_credentials(caller, &presentation.credentials, now)
                 .await?;
-            verified.extend(others);
+            verified.held.extend(others.held);
+            verified.memberships.extend(others.memberships);
         }
         Ok(verified)
     }
@@ -508,8 +545,8 @@ impl DcpVerifier {
         caller: &str,
         credentials: &[Credential],
         now: u64,
-    ) -> Result<Vec<HeldCredential>, VerifyError> {
-        let mut verified = Vec::new();
+    ) -> Result<Verified, VerifyError> {
+        let mut verified = Verified::default();
         for credential in credentials {
             if self.takes_gaiax_checks(credential) {
                 continue;
@@ -533,7 +570,10 @@ impl DcpVerifier {
                 Err(error) if error.is_temporary() => return Err(error),
                 Err(error) => return Err(refused(caller, credential, error.reason())),
             }
-            verified.push(held_credential(credential));
+            verified.held.push(held_credential(credential));
+            if credential.has_type(MEMBERSHIP) {
+                verified.memberships.push(membership::of(credential));
+            }
         }
         Ok(verified)
     }
@@ -668,7 +708,8 @@ impl DcpVerifier {
             .verify_stated_dates(&issuer, now, LEEWAY)
             .map_err(|e| format!("credential from {}: {e}", credential.issuer))?;
         for entry in &credential.status {
-            self.check_status(credential, &issuer, entry, now).await?;
+            self.check_status(&credential.issuer, &issuer, entry, now)
+                .await?;
         }
         Ok(())
     }
@@ -682,81 +723,10 @@ impl DcpVerifier {
             .verify(&issuer, now, LEEWAY)
             .map_err(|e| format!("credential from {}: {e}", credential.issuer))?;
         for entry in &credential.status {
-            self.check_status(credential, &issuer, entry, now).await?;
+            self.check_status(&credential.issuer, &issuer, entry, now)
+                .await?;
         }
         Ok(())
-    }
-
-    /// One status entry: takes the status list credential, which must be
-    /// signed by the same issuer and valid now
-    /// ([`DcpVerifier::status_list_credential`]), and looks up the bit. A
-    /// list that cannot be read or checked refuses the credential, unless
-    /// its server did not answer or answered 408, 429 or 5xx (a temporary
-    /// failure).
-    async fn check_status(
-        &self,
-        credential: &Credential,
-        issuer: &DidDocument,
-        entry: &StatusEntry,
-        now: u64,
-    ) -> Result<(), VerifyError> {
-        let url = &entry.status_list_credential;
-        let list_credential = self
-            .status_list_credential(credential, issuer, url, now)
-            .await?;
-        let list = status_list::list_in(&list_credential, entry)
-            .map_err(|e| format!("status list {url}: {e}"))?;
-        match status_list::check(entry, &list).map_err(|e| format!("status list {url}: {e}"))? {
-            Status::Clear => Ok(()),
-            Status::Set => Err(VerifyError::Rejected(format!(
-                "a credential is revoked or suspended ({})",
-                entry.status_purpose
-            ))),
-        }
-    }
-
-    /// The status list credential at `url` for `credential`, signed by
-    /// the same issuer (`issuer` is its DID document) and valid at `now`:
-    /// from the cache, or fetched, checked and then kept in the cache.
-    async fn status_list_credential(
-        &self,
-        credential: &Credential,
-        issuer: &DidDocument,
-        url: &str,
-        now: u64,
-    ) -> Result<Arc<Credential>, VerifyError> {
-        let another_issuer =
-            || VerifyError::Rejected(format!("status list {url} has another issuer"));
-        if let Some(cached) = self.status_lists.get(url, now) {
-            // it was checked against its own issuer when it was fetched;
-            // another issuer's credential may name the same URL
-            if cached.issuer != credential.issuer {
-                return Err(another_issuer());
-            }
-            return Ok(cached);
-        }
-        let text = self
-            .http
-            .get_text(url, "application/vc+jwt", MAX_STATUS_LIST)
-            .await
-            .map_err(|e| fetch_failed(&format!("status list {url}"), &e))?;
-        let list_credential =
-            Credential::parse(text.trim()).map_err(|e| format!("status list {url}: {e}"))?;
-        if list_credential.issuer != credential.issuer {
-            return Err(another_issuer());
-        }
-        list_credential
-            .verify(issuer, now, LEEWAY)
-            .map_err(|e| format!("status list {url}: {e}"))?;
-        // At DEBUG: with a cache time of 0 this is one line for each
-        // credential checked. The EDC interop test reads it to see that
-        // the list was fetched (scenarios/edc-interop/run.sh, step 8e).
-        tracing::debug!(%url, issuer = %list_credential.issuer, "status list fetched and verified");
-        // only now, fetched and verified, may it be kept
-        let list_credential = Arc::new(list_credential);
-        self.status_lists
-            .keep(url, Arc::clone(&list_credential), now);
-        Ok(list_credential)
     }
 }
 
@@ -825,6 +795,18 @@ impl CallerVerifier for DcpVerifier {
             // this port gives text: any failure means no credentials
             more.map_err(|error| error.to_string())
         })
+    }
+
+    fn check_membership<'a>(
+        &'a self,
+        membership: &'a Membership,
+    ) -> BoxFuture<'a, Result<(), VerifyError>> {
+        let check = self.check_membership_again(membership);
+        Box::pin(self.within_deadline("checking a membership again", check))
+    }
+
+    fn membership_recheck_interval(&self) -> Duration {
+        self.recheck
     }
 }
 

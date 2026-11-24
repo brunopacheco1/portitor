@@ -180,8 +180,9 @@ prints what it checks and stops at the first failure.
    is refused. Then Digital Lux Trust revokes the HDAB's
    `MembershipCredential`, and the HDAB is out of the data space. Lux
    Biobank refuses to show it its catalog. Schuman's connector refuses
-   the HDAB's messages, so a new transfer never starts, and Schuman ends
-   it itself.
+   the HDAB's messages, so a new transfer never starts. From 1.1 it
+   still accepts the HDAB's termination of that transfer (TD-47), so the
+   transfer ends `TERMINATED` without Schuman's operator.
 
 ## What it answers
 
@@ -210,12 +211,16 @@ questions. Here is what rc.1 shows.
   the fetch took (with bash 5): 0.9 seconds on 2026-11-23, with
   locally built images on a cloud Linux machine, so far from the limit
   with this small file.
-- **A revoked party leaves its counter-parties waiting**
-  ([TD-47](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-47), fix planned
-  for 1.1). After the
-  revocation, Schuman's connector refuses the HDAB's messages, which is
-  right. But that includes the HDAB's termination, so Schuman's transfer
-  stays `REQUESTED` until Schuman ends it itself (step 6).
+- **A revoked party left its counter-parties waiting**
+  ([TD-47](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-47), fixed in
+  1.1). After the revocation, Schuman's connector refuses the HDAB's
+  messages, which is right. Up to 1.0 that included the HDAB's
+  termination, so Schuman's transfer stayed `REQUESTED` until Schuman
+  ended it itself. From 1.1 a termination is accepted from a partner
+  whose DCP token is valid and who is the transfer's counter-party, even
+  without a valid membership; Schuman logs `DSP termination accepted
+  from a partner without membership`, and the transfer ends
+  `TERMINATED` (step 6).
 - **The catalog shows every offer to every member**
   ([TD-13](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-13)): Schuman
   sees offers it cannot meet.

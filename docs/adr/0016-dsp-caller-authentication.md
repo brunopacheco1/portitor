@@ -323,6 +323,22 @@ termination only ends access, so accepting it gives the caller nothing.
 The log line says `DSP termination accepted from a partner without
 membership` with the process id and the DID.
 
+As built in 1.1 (2026-11-24), for review:
+
+- DSP 2025-1 has no route on which a transfer error arrives: a
+  `TransferError` is only ever an answer body. So only the
+  `TransferTerminationMessage` routes accept such a caller: the
+  provider's `/transfers/{pid}/termination` and the consumer's
+  `/callback/transfers/{pid}/termination`.
+- "Without membership" means any refusal after the token itself was
+  valid: no `MembershipCredential` from a trusted issuer, one revoked or
+  expired, a presentation that failed its checks, or a Credential
+  Service that refused. A refusal of the token, and a check that could
+  not finish (503), are unchanged.
+- The handler then checks, as for any caller, that the caller is the
+  transfer's stored counter-party; another DID gets the same 404 as
+  before. It applies on both sides.
+
 ## Consequences
 
 - Running a connector now needs an identity component (or a compatible

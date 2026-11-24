@@ -527,6 +527,9 @@ fn every_call() -> Vec<Call> {
         Call::without_body("POST", "/v1/transfers/urn:uuid:1/termination"),
         Call::without_body("POST", "/v1/transfers/urn:uuid:1/suspension"),
         Call::without_body("POST", "/v1/transfers/urn:uuid:1/start"),
+        Call::without_body("GET", "/v1/provided-transfers"),
+        Call::without_body("GET", "/v1/provided-transfers/urn:uuid:1"),
+        Call::without_body("POST", "/v1/provided-transfers/urn:uuid:1/termination"),
         Call::without_body("GET", "/v1/harvest-jobs"),
         Call::without_body("GET", "/v1/harvest-jobs/1"),
     ]
@@ -541,7 +544,7 @@ const OLD_NAMES: [(&str, &str); 2] = [
 #[tokio::test]
 async fn every_route_answers_401_without_the_key_and_never_403() {
     let answers = without_the_key(&app(), &every_call(), KEY).await;
-    assert_eq!(answers.len(), 14 * 6);
+    assert_eq!(answers.len(), 17 * 6);
     assert_eq!(statuses_other_than(&[401], &answers), "");
 }
 
@@ -571,7 +574,7 @@ async fn every_route_refuses_a_wrong_body_with_400() {
 #[tokio::test]
 async fn odd_paths_and_queries_are_never_an_error_of_the_server() {
     let answers = with_odd_paths_and_queries(&app(), &every_call(), KEY).await;
-    assert_eq!(answers.len(), 14 * 14);
+    assert_eq!(answers.len(), 17 * 14);
     assert_eq!(
         statuses_other_than(&[200, 201, 400, 404, 502], &answers),
         ""
