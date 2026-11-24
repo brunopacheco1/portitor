@@ -1,0 +1,44 @@
+meta {
+  name: Start push transfer (as consumer)
+  type: http
+  seq: 18
+}
+
+post {
+  url: {{mgmtUrl}}/v1/transfers
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "agreementId": "{{mgmtAgreementId}}",
+    "format": "HttpData-PUSH"
+  }
+}
+
+script:post-response {
+  if (res.body && res.body.consumerPid) {
+    bru.setVar("mgmtTransferConsumerPid", res.body.consumerPid);
+  }
+}
+
+assert {
+  res.status: eq 201
+}
+
+docs {
+  Since 1.1 (ADR 0027). Like "Start transfer", with format HttpData-PUSH: the provider
+  sends the data to this connector's receiving route (/push/{consumerPid}), which stores
+  it in the push bucket as the object {consumerPid}. The connector builds the dataAddress
+  and its token itself; only the token's SHA-256 is kept, and it is never shown.
+  400 when the connector has no object storage settings (AWS_*) or no
+  PORTITOR_PUSH_BUCKET, or when the dataset has no HttpData-PUSH distribution.
+  Then run "Get transfer" until objectKey appears; the provider completes the transfer.
+  Saves mgmtTransferConsumerPid. Debug: consumer_transfer.rs and receiving.rs
+  (crates/portitor-connector/src).
+}

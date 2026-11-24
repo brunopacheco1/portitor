@@ -946,6 +946,10 @@ Besides the [settings of every component](#settings-of-every-component):
 | `PORTITOR_BUNDLE_REFRESH_SECONDS` | `3600` | Seconds between two looks at `latest.json`, `0` (only at start) to `31536000`; not used with a fixed version |
 | `PORTITOR_BUNDLE_CACHE_DIR` | `bundle-cache` next to `PORTITOR_DB_FILE` (`/data/bundle-cache` in the image) | Where the verified bundle and the version in use are kept |
 | `PORTITOR_BUNDLE_DIR` | none | A local bundles folder instead of the URL, not together with `PORTITOR_BUNDLE_URL`; development and tests only |
+| `AWS_ENDPOINT_URL_S3` | AWS S3 of `AWS_REGION` | Since 1.1. Base URL of your S3-compatible object storage, for example `http://rustfs:9000` ([Object storage and push](#object-storage-and-push-transfers)) |
+| `AWS_REGION` | `us-east-1` | Since 1.1. Region in the request signature |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | none (no object storage) | Since 1.1. The object storage keys; both or neither |
+| `PORTITOR_PUSH_BUCKET` | none (push transfers as consumer refused) | Since 1.1. Bucket where data pushed to you lands; needs the keys |
 
 - `PORTITOR_PUBLIC_URL` has no query or fragment. The DSP endpoint is
   this plus `/dsp/2025-1`, the consumer callback address this plus
@@ -1037,7 +1041,7 @@ port) and [api/management-openapi.json](api/management-openapi.json)
   message did not arrive, it terminates the negotiation or transfer. A
   partner's message that arrives before its acknowledgement of ours is
   recorded proves ours arrived, so it is accepted at once.
-- **Transfers are pull only** (`HttpData-PULL`,
+- **Pull transfers** (`HttpData-PULL`,
   [ADR 0013](adr/0013-transfer-and-data-plane.md)). The connector
   accepts a transfer request under a finalized agreement held by the
   caller, starts it at once and sends the consumer a data address:
@@ -1049,6 +1053,11 @@ port) and [api/management-openapi.json](api/management-openapi.json)
   source is refused. A transfer request sent again by the same consumer
   with the same `consumerPid` starts nothing new: the answer is the
   transfer it already has.
+- **Push transfers** (`HttpData-PUSH`, since 1.1,
+  [ADR 0027](adr/0027-push-transfers-and-object-storage.md)). The
+  connector sends the data itself, as provider, or receives it into its
+  object storage, as consumer. See
+  [Object storage and push transfers](#object-storage-and-push-transfers).
 
 ### Datasets file
 
@@ -1070,6 +1079,14 @@ the catalog serves them, without `@context`. See
   ```json
   { "@id": "weather-stations", "@type": "Dataset", "portitor:source": "https://data.internal.example/weather.csv", ... }
   ```
+- Since 1.1 `portitor:source` may also be an object in your own object
+  storage, written `s3://{bucket}/{key}` (bucket in lower case, the key
+  as stored). The connector reads it with its own keys
+  ([Object storage and push transfers](#object-storage-and-push-transfers));
+  the consumer sees an ordinary pull, and the keys never leave your
+  connector.
+- A dataset offers push when one of its distributions has the format
+  `HttpData-PUSH`, next to (or instead of) `HttpData-PULL`.
 - An offer in the datasets file has no `target`, `assigner` or
   `assignee`.
 
@@ -1421,6 +1438,71 @@ by the list's URL, in memory.
 - The cache is per process: a restart empties it. Presentations and
   tokens are not cached; they are checked on every request (ADR 0016).
 
+### Object storage and push transfers
+
+Since 1.1 ([ADR 0027](adr/0027-push-transfers-and-object-storage.md)).
+One S3-compatible object storage per connector, for two uses: datasets
+whose `portitor:source` is `s3://{bucket}/{key}`, and, as consumer, the
+bucket where data pushed to you lands. Tested with RustFS
+(`scenarios/two-party`); the connector uses path-style addresses
+(`{endpoint}/{bucket}/{key}`) and AWS Signature Version 4, which RustFS,
+MinIO and AWS S3 accept.
+
+- **Settings.** `AWS_ENDPOINT_URL_S3`, `AWS_REGION`,
+  `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (the AWS SDK names) and
+  `PORTITOR_PUSH_BUCKET`. Without the keys the connector has no object
+  storage: `s3://` sources answer 502 and push transfers as consumer
+  are refused. The log line `object storage` names the endpoint and the
+  push bucket, never the keys.
+- **The keys.** They follow the AWS rule, not Portitor's `_FILE` rule
+  for secrets: inject `AWS_SECRET_ACCESS_KEY` into the container's
+  environment from your secret store (Docker or Kubernetes secrets,
+  Vault), never write it in a compose file or a shell history. Give the
+  connector a key of its own, limited to reading the source buckets and
+  writing the push bucket.
+- **Create the push bucket first.** The connector does not create
+  buckets. Each pushed transfer becomes the object `{consumerPid}` in
+  it; a second push for the same transfer replaces it. Uploads go in
+  parts of 8 MiB (multipart upload, aborted if anything fails).
+
+**As provider**, nothing else is needed: list `HttpData-PUSH` in the
+dataset's distributions. The consumer's transfer request carries its
+endpoint (`endpointType`
+`https://w3id.org/dspace-sig/profile/http-push`) and a token; once the
+transfer is started, the connector sends the data as one `POST` with
+`Authorization: Bearer <token>` and the source's `Content-Type`. A 2xx
+answer completes the transfer; any other answer, or none, terminates
+it, and the reason holds only the status code. Suspend or terminate, by
+either side, cuts a running push; a start again sends everything again.
+The consumer's endpoint and token are kept in the SQLite file until the
+transfer ends, and are never logged or shown.
+
+- **The endpoint is an address the consumer chose** (R-17 in
+  [RISKS_AND_TECHNICAL_DEBTS](RISKS_AND_TECHNICAL_DEBTS.md#r-17)), like
+  the `callbackAddress`: it must be `https://` unless
+  `PORTITOR_ALLOW_HTTP` is `true`; redirects are not followed, and the
+  answer's body is not read. Internal addresses are not blocked, so
+  keep the egress firewall of [Security](#security): it now also guards
+  the data you push.
+
+**As consumer**, set `PORTITOR_PUSH_BUCKET` with the keys, then request
+a transfer with `"format": "HttpData-PUSH"`. The connector gives the
+provider the address `{PORTITOR_PUBLIC_URL}/push/{consumerPid}` and a
+token of 32 random bytes, of which it keeps only the SHA-256. The token
+works for `PORTITOR_DATA_TOKEN_SECONDS` and only while the transfer is
+`REQUESTED` or `STARTED`; a start again gives a new one. The transfer
+view shows `objectKey` once data has arrived; the provider completes the
+transfer.
+
+- **The receiving route** (`POST` or `PUT /push/{consumerPid}`) is open,
+  like `/data`, and checks its own token before it reads the body; every
+  refusal is the same 401. It is not subject to
+  `PORTITOR_MAX_REQUEST_BYTES` nor to the request time limit, since a
+  dataset can be large: let your reverse proxy pass large, long
+  requests on `/push/` (for nginx, `client_max_body_size 0;` and a long
+  `proxy_read_timeout` in that `location`), and limit them there if you
+  need a bound.
+
 ### Management API
 
 Through the management API you read the harvest jobs
@@ -1490,7 +1572,11 @@ curl -s -X POST localhost:8081/v1/transfers/urn:uuid:.../completion \
   -H "authorization: Bearer $(cat key)"
 ```
 
-`format` defaults to `HttpData-PULL`. The two list calls
+`format` defaults to `HttpData-PULL`. With `"format": "HttpData-PUSH"`
+(since 1.1) the provider sends the data to your connector, which stores
+it in your push bucket ([Object storage and push
+transfers](#object-storage-and-push-transfers)): wait for `objectKey` in
+the transfer, then read that object from your bucket. The two list calls
 (`GET /v1/negotiations`, `GET /v1/transfers`) return up to 100 entries
 at a time (`?after=`, `?limit=`).
 
@@ -1688,7 +1774,10 @@ known risk and technical debt, with its status and target release.
   into agreements but not enforced ([Policies](#policies)).
 - **Negotiations** start from the consumer only; a provider cannot start
   one with an offer ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)).
-- **Transfers.** Pull only. A data access token ends
+- **Transfers.** Pull, and since 1.1 push over HTTP into S3-compatible
+  object storage; no other way to move data. A push token is the
+  consumer's, and a push is sent whole, in one request, from the
+  beginning each time. A data access token ends
   `PORTITOR_DATA_TOKEN_SECONDS` after the transfer starts and is not
   renewed; the consumer then asks for a new transfer. Only `GET` of the
   whole source; no credentials are sent to it. As provider, a transfer
@@ -1696,7 +1785,8 @@ known risk and technical debt, with its status and target release.
   already has ([TD-34](RISKS_AND_TECHNICAL_DEBTS.md#td-34)).
 - **Transfers as consumer.** Each `POST /v1/transfers` starts a new
   transfer. Your own system fetches the data with the data address; the
-  connector does not download it. The management API completes or
+  connector does not download it, except for a push, which it stores in
+  your push bucket. The management API completes or
   terminates a transfer; suspend and start again are not offered yet.
 - **Reading a provider's catalog** (`POST /v1/catalog/request` and
   `/v1/catalog/dataset/request`, [Management API](#management-api)). At
