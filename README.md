@@ -27,8 +27,9 @@ a policy (Gaia-X Trust Framework).
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](CODE_OF_CONDUCT.md)
 
 Status: 1.0, stable. The HTTP routes and the settings change only in
-2.0 ([docs/STABILITY.md](docs/STABILITY.md)). Not for
-production use yet.
+2.0 ([docs/STABILITY.md](docs/STABILITY.md)). It is tested against
+the DSP and DCP conformance kits, Eclipse EDC and a local Gaia-X
+compliance service, but has not yet run in a production deployment.
 
 Website: <https://bruno.pacheco.lu/portitor/> (objectives, minimum
 functionality, components, roadmap).
