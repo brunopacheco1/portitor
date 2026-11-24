@@ -5,8 +5,9 @@
 #
 # The health demo (README.md) in Docker Compose (compose.yaml): Digital
 # Lux Trust, Lux Biobank, Lux Biomedicine Lab, the HDAB and Schuman
-# Clinical Research. Runs the scenario (steps.sh) from this machine, then
-# removes everything, volumes included.
+# Clinical Research, and the HDAB's own issuer. Runs the two scenarios
+# (steps.sh, then steps-permits.sh) from this machine, then removes
+# everything, volumes included.
 #
 #  1. Keys and secrets, in run/; the HealthDCAT-AP bundle, built and
 #     signed with the issuer image (scripts/demo-bundle.sh) into
@@ -15,7 +16,8 @@
 #  2. Docker Compose up.
 #  3. The authority registers the four participants with their claims;
 #     each identity asks it for its credentials.
-#  4. The scenario (steps.sh).
+#  4. The scenarios: access through the HDAB (steps.sh), then data
+#     permits from the HDAB's issuer (steps-permits.sh).
 #
 # Usage: examples/demos/health-lu/run.sh [connector image [identity image [issuer image]]]
 #   Without images it uses the compose file's defaults (the release images).
@@ -46,6 +48,7 @@ PILOT_SECONDS=${PILOT_SECONDS:-150}
 # who is who (compose.yaml)
 AUTHORITY=did:web:authority%3A8070
 AUTHORITY_MANAGEMENT=http://127.0.0.1:18071
+HDAB_ISSUER_MANAGEMENT=http://127.0.0.1:18125
 MEMBER_OF="Lux health data space"
 PARTICIPANTS=(biobank lab hdab schuman)
 declare -A IDENTITY_PORT=([biobank]=18103 [lab]=18113 [hdab]=18123 [schuman]=18133)
@@ -73,9 +76,11 @@ step "Write the keys and the secrets into $RUN"
 # old keys: remove them first, so this run starts clean
 "${COMPOSE[@]}" --profile apps down --volumes --remove-orphans >/dev/null 2>&1 || true
 rm -rf "$RUN"
-mkdir -p "$RUN/authority" "$RUN/pipeline" "$RUN/lab/storage"
+mkdir -p "$RUN/authority" "$RUN/hdab-issuer" "$RUN/pipeline" "$RUN/lab/storage"
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$RUN/authority/authority-key.pem" 2>/dev/null
 openssl rand -hex 32 >"$RUN/authority/management.key"
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$RUN/hdab-issuer/issuer-key.pem" 2>/dev/null
+openssl rand -hex 32 >"$RUN/hdab-issuer/management.key"
 for participant in "${PARTICIPANTS[@]}"; do
   mkdir -p "$RUN/$participant"
   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \
@@ -127,6 +132,7 @@ chmod a+w "$RUN/lab/storage"
 step "Start the data space"
 "${COMPOSE[@]}" up -d --quiet-pull
 wait_for "$AUTHORITY_MANAGEMENT/health"
+wait_for "$HDAB_ISSUER_MANAGEMENT/health"
 for participant in "${PARTICIPANTS[@]}"; do
   wait_for "http://127.0.0.1:${IDENTITY_PORT[$participant]}/health"
   wait_for "http://127.0.0.1:${CONNECTOR_PORT[$participant]}/health"
@@ -189,7 +195,8 @@ request_credentials hdab membership-vc20
 request_credentials schuman membership-vc20
 echo "the lab holds a MembershipCredential and a DataProcessorCredential; the others a MembershipCredential"
 
-# --- 4. the scenario ----------------------------------------------------------
+# --- 4. the scenarios ---------------------------------------------------------
 
-export DEMO RUN AUTHORITY_MANAGEMENT PILOT_END
+export DEMO RUN AUTHORITY_MANAGEMENT HDAB_ISSUER_MANAGEMENT PILOT_END
 examples/demos/health-lu/steps.sh
+examples/demos/health-lu/steps-permits.sh

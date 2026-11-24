@@ -237,6 +237,10 @@ CI job (maintainer, 2026-11-15).
   list of purposes exists to reuse (maintainer, 2026-11-15;
   [R-40](RISKS_AND_TECHNICAL_DEBTS.md#r-40)).
 - A data permit as a verifiable credential that policies can require.
+  The health demo's second scenario already runs one on 1.0, as a
+  credential type in the HDAB issuer's configuration, with placeholder
+  claims; it raised [R-48](RISKS_AND_TECHNICAL_DEBTS.md#r-48) and
+  [TD-46](RISKS_AND_TECHNICAL_DEBTS.md#td-46).
 - As consumer, accept a provider's offer with credential constraints
   ([TD-11](RISKS_AND_TECHNICAL_DEBTS.md#td-11)); the catalog hides offers
   the caller cannot meet ([TD-13](RISKS_AND_TECHNICAL_DEBTS.md#td-13)).
@@ -420,6 +424,7 @@ data holder are compared, with pros and cons (maintainer, 2026-11-23).
 | A mixed data space | One participant runs Eclipse EDC instead of Portitor, in the health story | 1.0 |
 | The holder withdraws its dataset | New negotiations fail, existing agreements keep their data (ADR 0020) | 1.0 |
 | Cross-border | A data user in another Member State, with its own authority, issuer and bundle; how HealthData@EU links national nodes is read first | partly 1.0 (several trusted issuers) |
+| A foreign issuer (maintainer, 2026-11-24) | Lux Biobank trusts an issuer of another Member State next to Digital Lux Trust, and what that issuer may then issue ([R-48](RISKS_AND_TECHNICAL_DEBTS.md#r-48)) | 1.0 |
 | A holder without its own connector | A small holder puts its data with the HDAB, which publishes it; the legal side is read first | 1.0 |
 | Opt-out | A person's opt-out of secondary use (EHDS Art. 71) changes the data before it leaves | 1.8, research first |
 
@@ -434,7 +439,7 @@ what worked and what did not, and a demo or an ADR where it earns one
 | Order | Way | Who the holder checks, where the data goes | Status |
 | --- | --- | --- | --- |
 | 1 | A. The HDAB as intermediary | the HDAB; data to the HDAB, results to the user | done: step 0, `examples/demos/health-lu` |
-| 2 | F. Permit-gated peer to peer | the user's credential; data to the user (non-personal data only, EHDS Art. 73(2)) | runs on 1.0 |
+| 2 | F. Permit-gated peer to peer | the user's credential; data to the user (non-personal data only, EHDS Art. 73(2)) | explored on 1.0: second scenario of `examples/demos/health-lu`, placeholder permit claims; findings [R-48](RISKS_AND_TECHNICAL_DEBTS.md#r-48), [TD-20](RISKS_AND_TECHNICAL_DEBTS.md#td-20), [TD-46](RISKS_AND_TECHNICAL_DEBTS.md#td-46) |
 | 3 | C. Permit credential, data to the SPE | the user's permit; data into the SPE the permit names | needs 1.1, 1.2 and a destination check |
 | 4 | E. The trusted holder runs the SPE (EHDS Art. 72) | the user's permit; data stays, results leave | needs 1.2; the SPE is outside Portitor |
 | 5 | B. Chained agreements | the HDAB; its offers held inside its agreement | 1.3, research and ADR (R-39) |

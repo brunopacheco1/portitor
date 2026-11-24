@@ -37,8 +37,9 @@ versions may change behaviour and configuration.
   a research lab, an HDAB and a hospital research unit), synthetic
   genotypes made with msprime, an HDAB pipeline that pulls and counts
   only during a data user's transfer, and refusals. It gives the first
-  answers to the roadmap's four questions on v1.0.0-rc.1. It is a
-  manual test, not run in CI.
+  answers to the roadmap's four questions on v1.0.0-rc.1. A second
+  scenario has the HDAB's own issuer grant data permits as credentials,
+  which the biobank checks itself. It is a manual test, not run in CI.
 
 ### Changed
 

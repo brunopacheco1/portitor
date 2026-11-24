@@ -32,7 +32,9 @@ genotypes the way the European Health Data Space plans it for
 secondary use. A biobank offers the genotypes. A research lab takes a
 copy peer to peer. A health data access body (HDAB) takes them too and
 offers only counts made from them. A hospital research unit gets those
-counts, and never the genotypes. It answers the roadmap's four questions
+counts, and never the genotypes. A second scenario has the HDAB only
+grant data permits, as credentials, which the biobank checks itself. It
+answers the roadmap's four questions
 for the health data space demo, and lists where Portitor falls short
 today. It is a manual test, not run in CI.
 [health-lu/README.md](health-lu/README.md) explains it.
@@ -44,8 +46,10 @@ examples/demos/health-lu/run.sh
 ## Planned: the HDAB as permit authority
 
 The HDAB only issues data permits. The data holder checks the permit
-when it negotiates and sends the data where the permit says. It needs
-the data permit and push transfers, so it waits for 1.1 and 1.2
+when it negotiates and sends the data where the permit says. The
+permit check runs today, in health-lu's second scenario. Sending the
+data where the permit says needs push transfers and a destination
+check, so it waits for 1.1 and 1.2
 ([roadmap](../../docs/ROADMAP.md#12-purpose-and-data-permit-in-policies)).
 
 ## Planned: the HDAB negotiates on a data user's behalf
@@ -59,6 +63,6 @@ specification we know defines, so it starts as research
 ## More planned scenarios
 
 A mixed data space (one participant on Eclipse EDC), a holder that
-withdraws its dataset, a cross-border data user, a holder without its
-own connector, and opt-out. The [roadmap](../../docs/ROADMAP.md#more-health-scenarios-maintainer-2026-11-23)
+withdraws its dataset, a cross-border data user, a foreign issuer, a
+holder without its own connector, and opt-out. The [roadmap](../../docs/ROADMAP.md#more-health-scenarios-maintainer-2026-11-23)
 lists what each one shows and which release it needs.

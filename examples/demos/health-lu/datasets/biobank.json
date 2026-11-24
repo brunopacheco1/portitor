@@ -103,6 +103,58 @@
             ]
           }
         ]
+      },
+      {
+        "@id": "genotypes:offer:permit-P-2026-001",
+        "@type": "Offer",
+        "permission": [
+          {
+            "action": "use",
+            "constraint": [
+              {
+                "leftOperand": "DataPermitCredential.permitId",
+                "operator": "eq",
+                "rightOperand": "P-2026-001"
+              },
+              {
+                "leftOperand": "DataPermitCredential.purpose",
+                "operator": "eq",
+                "rightOperand": "scientific-research"
+              },
+              {
+                "leftOperand": "dateTime",
+                "operator": "lteq",
+                "rightOperand": "2027-12-31"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "@id": "genotypes:offer:permit-P-2026-002",
+        "@type": "Offer",
+        "permission": [
+          {
+            "action": "use",
+            "constraint": [
+              {
+                "leftOperand": "DataPermitCredential.permitId",
+                "operator": "eq",
+                "rightOperand": "P-2026-002"
+              },
+              {
+                "leftOperand": "DataPermitCredential.purpose",
+                "operator": "eq",
+                "rightOperand": "scientific-research"
+              },
+              {
+                "leftOperand": "dateTime",
+                "operator": "lteq",
+                "rightOperand": "2027-12-31"
+              }
+            ]
+          }
+        ]
       }
     ],
     "distribution": [

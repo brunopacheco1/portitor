@@ -103,6 +103,7 @@ of work with no release yet.
 | [R-45](#r-45) | No request limit per partner | Security | Open | not named |
 | [R-46](#r-46) | The EDC Issuer Service names a request status address that is not found | Interoperability, upstream | Open | report upstream; the next EDC release |
 | [R-47](#r-47) | The EDC Issuer Service's admin API may change with the next release candidate | Interoperability | Accepted | EDC 1.0.0 |
+| [R-48](#r-48) | An issuer trusted for data permits can also issue memberships | Security | Open | not named |
 | [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | Open | research, with TD-03 |
 | [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | Open | research; code 1.5 |
 | [TD-03](#td-03) | A provider in several dataspaces, each with its own rules | Technical debt | Accepted | profiles in one connector: after 1.0 |
@@ -131,6 +132,7 @@ of work with no release yet.
 | [TD-40](#td-40) | Database calls block the async runtime | Technical debt | Accepted | measure each release |
 | [TD-42](#td-42) | Four near-copies of the negotiation and transfer logic | Technical debt | Open | 1.x (merge) |
 | [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | Open | none |
+| [TD-46](#td-46) | The issuer keeps one set of claims per participant | Technical debt | Open | not named |
 
 Counts on 2026-11-20: 36 risks and 28 technical debts are not closed
 (Open 31, Mitigated 19, Accepted 14); 11 risks and 17 technical debts
@@ -718,6 +720,27 @@ are closed.
 - **Next.** Read the admin API again at each EDC update. Suspension is
   not tested until EDC implements it.
 
+<a id="r-48"></a>
+### R-48 An issuer trusted for data permits can also issue memberships
+
+- **What.** `PORTITOR_TRUSTED_ISSUERS` is one list for every credential
+  type (threat model finding F-08, [TD-03](#td-03)). The health demo's
+  second scenario shows it inside one data space: Lux Biobank trusts the
+  HDAB's issuer for data permits, and the same issuer gives Schuman
+  Clinical Research a `MembershipCredential` with the role
+  `health-data-access-body`, which Lux Biobank accepts
+  ([health-lu, step 11](../examples/demos/health-lu/README.md#second-scenario-data-permits)).
+  Revoking the HDAB's own membership does not change it.
+- **Why it matters.** Data permits need a second issuer next to the
+  authority (ROADMAP 1.2 and 1.3). With one list, that issuer can grant
+  any role, so the authority is no longer the only one who decides who
+  is a member. EDC limits each trusted issuer to its `supportedtypes`.
+- **Current state: Open.** Only an issuer's operator can misuse it, and
+  each holder chooses whom it trusts.
+- **Next.** Trusted issuers by credential type (TD-03 calls it
+  additive), before a data space runs a second issuer. Which release is
+  the maintainer's call.
+
 ## Technical debt
 
 <a id="td-01"></a>
@@ -997,7 +1020,10 @@ are closed.
   status lists, so it keeps presenting a revoked credential next to its
   reissued one.
 - **Why it matters.** A participant is refused until its operator
-  deletes the revoked credential.
+  deletes the revoked credential. With data permits it is wider: a data
+  user shows every permit it holds, so one revoked permit blocks all its
+  other permits until it is deleted
+  ([health-lu, step 10](../examples/demos/health-lu/README.md#second-scenario-data-permits)).
 - **Current state: Open.** Documented in DEPLOYING.
 - **Next.** ROADMAP 1.4.
 
@@ -1179,6 +1205,27 @@ are closed.
 - **Next.** Find where the memory goes (buffers of the proxy, of the
   HTTP client, of TLS) before changing anything; measure again in each
   release.
+
+<a id="td-46"></a>
+### TD-46 The issuer keeps one set of claims per participant
+
+- **What.** `portitor-issuer` copies a credential's claims from the
+  participant's registration (`subject_claims` in
+  `crates/portitor-issuer/src/issue.rs`), and a participant has one
+  registration, with no call to change it. A holder may hold several
+  credentials of one type (`PORTITOR_ISSUER_MAX_ACTIVE_PER_HOLDER`), and
+  a policy holds if any one of them matches, but each new value needs
+  the registration deleted and made again. The health demo does this for
+  a second data permit
+  ([health-lu, step 9](../examples/demos/health-lu/README.md#second-scenario-data-permits)).
+- **Why it matters.** A data user may hold several data permits at once
+  (maintainer, 2026-11-24), each with its own id and purpose. Deleting
+  and registering again leaves a moment when the participant is not
+  registered, and a request it made then ends `REJECTED`.
+- **Current state: Open.**
+- **Next.** Claims per credential request, or per issued credential,
+  when the data permit comes (ROADMAP 1.2). Check first how EDC's
+  Issuer Service (attestations) and the EHDS permit template do it.
 
 ## Closed
 

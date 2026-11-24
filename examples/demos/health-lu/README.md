@@ -10,7 +10,9 @@ Five parties share synthetic genotypes the way the European Health Data
 Space (EHDS, [Regulation (EU) 2025/327](https://eur-lex.europa.eu/eli/reg/2025/327/oj))
 plans it for secondary use. One data user agrees with the data holder
 directly, peer to peer. Another gets only counts, made by a health data
-access body (HDAB). This is step 0 of the health data space demo in the
+access body (HDAB). A second scenario has the HDAB issue data permits
+as credentials, which Lux Biobank checks itself. This is step 0 of the
+health data space demo in the
 [roadmap](../../../docs/ROADMAP.md#the-health-dataspace-demo). It uses
 only what v1.0.0-rc.1 can do, and it grows as releases 1.1 to 1.3 land.
 
@@ -28,12 +30,13 @@ so the demo calls it just "HDAB".
 | Digital Lux Trust | The authority: issues the credentials and the HealthDCAT-AP bundle, and grants no data access | Ministry for Digitalisation |
 | Lux Biobank | Health data holder: offers the genotypes | Integrated Biobank of Luxembourg (IBBL), part of LIH |
 | Lux Biomedicine Lab | Data user, peer to peer: takes a copy of the genotypes | University of Luxembourg |
-| HDAB | Health data access body: gets the genotypes, counts, offers only the counts | Luxembourg's future HDAB |
+| HDAB | Health data access body: gets the genotypes, counts, offers only the counts; in the second scenario, issues data permits | Luxembourg's future HDAB |
 | Schuman Clinical Research | Data user through the HDAB: gets only the counts | Hôpitaux Robert Schuman |
 
 Each participant runs a `portitor-connector` and a `portitor-identity`.
-Digital Lux Trust runs `portitor-issuer`. All of it runs in one Compose
-file on one machine ([compose.yaml](compose.yaml)), 11 containers in all.
+Digital Lux Trust runs `portitor-issuer`, and so does the HDAB, for the
+data permits of the second scenario. All of it runs in one Compose file
+on one machine ([compose.yaml](compose.yaml)), 12 containers in all.
 Two more run only when needed: the two data users' apps, which fetch the
 data of a started transfer.
 
@@ -81,6 +84,10 @@ against the data space's release 8 bundle when each connector starts:
   offers: one for access bodies (`MembershipCredential.role` =
   `health-data-access-body`, until 2027-12-31), one for EU processors
   (`DataProcessorCredential.processing` = `eu`, until 2027-06-30).
+- Two more offers of the genotypes, one per data permit, for the
+  second scenario: `DataPermitCredential.permitId` = `P-2026-001` (or
+  `P-2026-002`) and `DataPermitCredential.purpose` =
+  `scientific-research`, until 2027-12-31.
 - The HDAB's **carriers of each variant per population**
   ([datasets/hdab.json](datasets/hdab.json)), health category HGPD. One
   offer for data users (`MembershipCredential.role` = `data-user`, until
@@ -112,12 +119,13 @@ examples/demos/health-lu/run.sh <connector image> <identity image> <issuer image
 
 It needs Docker or Podman with Docker Compose, bash 4.4 or later, curl,
 jq and openssl ([docs/TESTING.md, "Docker or Podman"](../../../docs/TESTING.md#docker-or-podman)).
-It takes about two and a half minutes, most of it waiting for the pilot
+It runs both scenarios and takes about three minutes, most of it waiting for the pilot
 offer to end. `PILOT_SECONDS=60` makes that shorter. `KEEP=1` leaves
 everything running, with the keys in `run/`. The management APIs are then
 on `127.0.0.1`: Digital Lux Trust 18071, Lux Biobank 18101, the lab
-18111, the HDAB 18121, Schuman Clinical Research 18131. The key of each
-is in `run/<participant>/management.key`.
+18111, the HDAB 18121, the HDAB's issuer 18125, Schuman Clinical
+Research 18131. The key of each is in `run/<participant>/management.key`
+(`run/hdab-issuer/` for the HDAB's issuer).
 
 The check of the pipeline's count runs without containers:
 
@@ -160,6 +168,47 @@ failure.
    the HDAB's messages, so a new transfer never starts, and Schuman ends
    it itself.
 
+## Second scenario: data permits
+
+[steps-permits.sh](steps-permits.sh) runs it, after the first. Here the
+HDAB does not fetch or count anything: it only grants data permits, and
+Lux Biobank checks them itself. It is way F of the
+[roadmap](../../../docs/ROADMAP.md#ways-to-link-data-user-hdab-and-holder-maintainer-2026-11-23),
+permit-gated peer to peer, and it needs no code: the permit is a
+credential type in the HDAB issuer's configuration
+([hdab-issuer-credentials.json](hdab-issuer-credentials.json)).
+
+The permit's claims, `permitId` and `purpose`, are placeholders. No data
+permit format is published yet: EHDS Art. 68(10) lists what a permit
+states, and the template of Art. 70 is still to come. The permit's end is
+the credential's own `validUntil`. Schuman Clinical Research takes the
+genotypes itself, with no secure processing environment. The EHDS would
+not allow that for these data (Art. 73), so this shows the checks only.
+
+7. **A permit.** The HDAB's issuer registers Schuman with the claims of
+   permit P-2026-001, and Schuman's identity asks for the
+   `DataPermitCredential`.
+8. **The holder checks it.** Schuman takes Lux Biobank's offer for
+   P-2026-001 and pulls the genotypes, checked against the original. The
+   offer for P-2026-002 is refused: Schuman has no such permit.
+9. **A second permit.** A data user may hold several permits at once.
+   The issuer keeps one set of claims per participant, so the HDAB
+   deletes Schuman's registration and makes it again with P-2026-002.
+   Schuman holds both, takes the second offer, and the first agreement
+   still works.
+10. **A revoked permit.** The HDAB revokes P-2026-001, and a transfer
+    under it is refused. A transfer under P-2026-002 is refused too:
+    Schuman shows every permit it holds, and Lux Biobank refuses a
+    presentation that holds a revoked credential. Schuman's record gives
+    no reason; Lux Biobank's log does. Once Schuman deletes the revoked
+    permit from its identity, P-2026-002 works again.
+11. **Trust covers every type.** The HDAB's issuer gives Schuman a
+    `MembershipCredential` with the role `health-data-access-body`. Lux
+    Biobank's offer for access bodies accepts it, although Digital Lux
+    Trust revoked the HDAB's own membership in step 6. The HDAB issuer's
+    configuration holds a `MembershipCredential` on purpose, to show
+    this.
+
 ## What it answers
 
 The [roadmap](../../../docs/ROADMAP.md#the-health-dataspace-demo) asks four
@@ -192,6 +241,15 @@ questions. Here is what rc.1 shows.
   revocation, Schuman's connector refuses the HDAB's messages, which is
   right. But that includes the HDAB's termination, so Schuman's transfer
   stays `REQUESTED` until Schuman ends it itself (step 6).
+- **An issuer trusted for permits can issue memberships too**
+  ([R-48](../../../docs/RISKS_AND_TECHNICAL_DEBTS.md#r-48)): trusted
+  issuers are one list for every credential type (step 11).
+- **One revoked permit blocks all the others**
+  ([TD-20](../../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-20)) until the
+  data user deletes it (step 10), and the data user is told no reason.
+- **One set of claims per participant at the issuer**
+  ([TD-46](../../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-46)): a second
+  permit needs the registration made again (step 9).
 - **The catalog shows every offer to every member**
   ([TD-13](../../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-13)): Schuman
   sees offers it cannot meet.

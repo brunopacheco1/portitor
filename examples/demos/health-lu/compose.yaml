@@ -24,6 +24,9 @@
 #              offers counts made from them by its pipeline
 #   schuman    Schuman Clinical Research, a data user that takes the
 #              counts from the HDAB
+#   hdab-issuer  the HDAB's own issuer: issues data permits
+#              (DataPermitCredential) for the second scenario
+#              (steps-permits.sh; did:web:hdab-issuer%3A8070)
 # Each participant is a connector and its identity component; the DID is
 # did:web:<participant>-identity%3A8090.
 #
@@ -122,14 +125,15 @@ services:
       PORTITOR_PARTICIPANT_ID: did:web:biobank-identity%3A8090
       PORTITOR_STS_URL: http://biobank-identity:8090/sts/token
       PORTITOR_STS_CLIENT_SECRET_FILE: /run/secrets/biobank-sts-secret
-      PORTITOR_TRUSTED_ISSUERS: did:web:authority%3A8070
+      # the authority, and the HDAB's issuer for data permits
+      PORTITOR_TRUSTED_ISSUERS: did:web:authority%3A8070,did:web:hdab-issuer%3A8070
       # status lists fetched on every check, so a revocation is seen at once
       PORTITOR_STATUS_LIST_CACHE_SECONDS: "0"
       # where data addresses point: the apps reach it in this network
       PORTITOR_PUBLIC_URL: http://biobank:8080
-      # offers may check DataProcessorCredential claims, and data users
-      # show it when asked (ADR 0019)
-      PORTITOR_POLICY_CREDENTIALS: DataProcessorCredential
+      # offers may check DataProcessorCredential and DataPermitCredential
+      # claims (ADR 0019)
+      PORTITOR_POLICY_CREDENTIALS: DataProcessorCredential,DataPermitCredential
       PORTITOR_ALLOW_HTTP: "true"
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8081
       PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/biobank-management-key
@@ -147,6 +151,9 @@ services:
       - 127.0.0.1:18101:8081 # management API
     depends_on:
       biobank-identity:
+        condition: service_healthy
+      # its issuer DID is resolved when a permit is checked
+      hdab-issuer:
         condition: service_healthy
       # the bundle is read at start
       authority:
@@ -287,6 +294,34 @@ services:
       - ./pipeline/counts.py:/app/counts.py:ro
       - ./run/pipeline:/config:ro
 
+  # the HDAB's own issuer: data permits as credentials (steps-permits.sh).
+  # Its definitions (hdab-issuer-credentials.json) also hold a
+  # MembershipCredential, on purpose: a trusted issuer is trusted for
+  # every credential type, and the scenario shows it
+  hdab-issuer:
+    image: ${PORTITOR_ISSUER_IMAGE:-ghcr.io/brunopacheco1/portitor-issuer:1.0.0-rc.1}
+    environment:
+      PORTITOR_PARTICIPANT_ID: did:web:hdab-issuer%3A8070
+      PORTITOR_ISSUER_SERVICE_URL: http://hdab-issuer:8070/issuer
+      PORTITOR_ISSUER_KEY_FILE: /run/secrets/hdab-issuer-key
+      PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE: /config/issuer-credentials.json
+      PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8071
+      PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/hdab-issuer-management-key
+      PORTITOR_ALLOW_HTTP: "true"
+    secrets:
+      - hdab-issuer-key
+      - hdab-issuer-management-key
+    volumes:
+      - ./hdab-issuer-credentials.json:/config/issuer-credentials.json:ro
+      - hdab-issuer-data:/data
+    ports:
+      - 127.0.0.1:18125:8071 # management API
+    healthcheck:
+      test: ["CMD", "/portitor-issuer", "health"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
   # --- Schuman Clinical Research: a data user, through the HDAB --------------
 
   schuman-identity:
@@ -296,7 +331,8 @@ services:
       PORTITOR_IDENTITY_KEY_FILE: /run/secrets/schuman-identity-key
       PORTITOR_CREDENTIAL_SERVICE_URL: http://schuman-identity:8090/cs
       PORTITOR_STS_CLIENT_SECRET_FILE: /run/secrets/schuman-sts-secret
-      PORTITOR_TRUSTED_ISSUERS: did:web:authority%3A8070
+      # the authority, and the HDAB's issuer, which delivers data permits
+      PORTITOR_TRUSTED_ISSUERS: did:web:authority%3A8070,did:web:hdab-issuer%3A8070
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8091
       PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/schuman-identity-management-key
       PORTITOR_ALLOW_HTTP: "true"
@@ -320,9 +356,9 @@ services:
       PORTITOR_STATUS_LIST_CACHE_SECONDS: "0"
       # where data addresses point: the apps reach it in this network
       PORTITOR_PUBLIC_URL: http://schuman:8080
-      # offers may check DataProcessorCredential claims, and data users
-      # show it when asked (ADR 0019)
-      PORTITOR_POLICY_CREDENTIALS: DataProcessorCredential
+      # offers may check DataProcessorCredential and DataPermitCredential
+      # claims, and Schuman shows them when asked (ADR 0019)
+      PORTITOR_POLICY_CREDENTIALS: DataProcessorCredential,DataPermitCredential
       PORTITOR_ALLOW_HTTP: "true"
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8081
       PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/schuman-management-key
@@ -379,6 +415,10 @@ secrets:
     file: ./run/schuman/identity-management.key
   schuman-management-key:
     file: ./run/schuman/management.key
+  hdab-issuer-key:
+    file: ./run/hdab-issuer/issuer-key.pem
+  hdab-issuer-management-key:
+    file: ./run/hdab-issuer/management.key
 
 volumes:
   authority-data:
@@ -390,3 +430,4 @@ volumes:
   hdab-data:
   schuman-identity-data:
   schuman-data:
+  hdab-issuer-data:
