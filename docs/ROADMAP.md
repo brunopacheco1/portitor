@@ -217,6 +217,9 @@ CI job (maintainer, 2026-11-15).
   (maintainer, 2026-11-13).
 - Management API: suspend and start a transfer again
   ([TD-11](RISKS_AND_TECHNICAL_DEBTS.md#td-11)).
+- A transfer whose provider was revoked does not stay `REQUESTED`
+  forever ([TD-47](RISKS_AND_TECHNICAL_DEBTS.md#td-47); found by the
+  hdab-intermediary scenario, maintainer, 2026-11-24).
 - An audit log line for each data pull: flow, agreement, consumer DID
   and bytes sent. It needs no user identity
   ([ADR 0025](adr/0025-users-and-roles.md), maintainer, 2026-11-20).
@@ -237,10 +240,17 @@ CI job (maintainer, 2026-11-15).
   list of purposes exists to reuse (maintainer, 2026-11-15;
   [R-40](RISKS_AND_TECHNICAL_DEBTS.md#r-40)).
 - A data permit as a verifiable credential that policies can require.
-  The health demo's second scenario already runs one on 1.0, as a
-  credential type in the HDAB issuer's configuration, with placeholder
-  claims; it raised [R-48](RISKS_AND_TECHNICAL_DEBTS.md#r-48) and
-  [TD-46](RISKS_AND_TECHNICAL_DEBTS.md#td-46).
+  The data-permits scenario already runs one on 1.0, as a credential
+  type in the HDAB issuer's configuration, with placeholder claims. What
+  it found is fixed here, because the permit brings a second issuer and
+  several permits per data user (maintainer, 2026-11-24):
+  - trusted issuers by credential type
+    ([R-48](RISKS_AND_TECHNICAL_DEBTS.md#r-48));
+  - claims per credential at the issuer, not per participant
+    ([TD-46](RISKS_AND_TECHNICAL_DEBTS.md#td-46));
+  - the identity reads status lists and stops presenting a revoked
+    credential, so one revoked permit no longer blocks the others
+    ([TD-20](RISKS_AND_TECHNICAL_DEBTS.md#td-20), moved from 1.4).
 - As consumer, accept a provider's offer with credential constraints
   ([TD-11](RISKS_AND_TECHNICAL_DEBTS.md#td-11)); the catalog hides offers
   the caller cannot meet ([TD-13](RISKS_AND_TECHNICAL_DEBTS.md#td-13)).
@@ -253,8 +263,9 @@ CI job (maintainer, 2026-11-15).
   release has yet: a check that the transfer's destination matches a
   claim in the permit. No specification for that is known; research
   first. A folder in `scenarios/` once it runs.
-- Exit: purpose and permit tested granted and refused; the TCKs and the
-  EDC interop test stay green.
+- Exit: purpose and permit tested granted and refused; data-permits runs
+  with the R-48, TD-46 and TD-20 steps changed to refusals or passes;
+  the TCKs and the EDC interop test stay green.
 - Main risk: DPV purposes may not map one to one to the purposes of the
   EHDS (Article 53).
 
@@ -294,15 +305,12 @@ CI job (maintainer, 2026-11-15).
 - A signer port with an OpenBao transit adapter (P-256 signing, versioned
   keys; the private key never leaves OpenBao), optional
   ([TD-05](RISKS_AND_TECHNICAL_DEBTS.md#td-05)).
-- The identity reads status lists and stops presenting a revoked
-  credential ([TD-20](RISKS_AND_TECHNICAL_DEBTS.md#td-20)).
 - Credential schemas, presentation definitions and issuance policies, if
   a target dataspace needs them
   ([TD-14](RISKS_AND_TECHNICAL_DEBTS.md#td-14)); STS token and
   presentation caching only if the 0.11 measurements show the need
   ([TD-07](RISKS_AND_TECHNICAL_DEBTS.md#td-07)).
-- Exit: a key change in OpenBao with no verification gap (tested); a
-  revoked credential leaves the presentations by itself.
+- Exit: a key change in OpenBao with no verification gap (tested).
 - Main risk: OpenBao must stay optional.
 
 ### 1.5 Users and the data plane

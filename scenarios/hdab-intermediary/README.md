@@ -130,7 +130,9 @@ questions. Here is what rc.1 shows.
   the fetch took (with bash 5): 0.9 seconds on 2026-11-23, with
   locally built images on a cloud Linux machine, so far from the limit
   with this small file.
-- **A revoked party leaves its counter-parties waiting.** After the
+- **A revoked party leaves its counter-parties waiting**
+  ([TD-47](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-47), fix planned
+  for 1.1). After the
   revocation, Schuman's connector refuses the HDAB's messages, which is
   right. But that includes the HDAB's termination, so Schuman's transfer
   stays `REQUESTED` until Schuman ends it itself (step 6).

@@ -103,7 +103,7 @@ of work with no release yet.
 | [R-45](#r-45) | No request limit per partner | Security | Open | not named |
 | [R-46](#r-46) | The EDC Issuer Service names a request status address that is not found | Interoperability, upstream | Open | report upstream; the next EDC release |
 | [R-47](#r-47) | The EDC Issuer Service's admin API may change with the next release candidate | Interoperability | Accepted | EDC 1.0.0 |
-| [R-48](#r-48) | An issuer trusted for data permits can also issue memberships | Security | Open | not named |
+| [R-48](#r-48) | An issuer trusted for data permits can also issue memberships | Security | Open | 1.2 |
 | [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | Open | research, with TD-03 |
 | [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | Open | research; code 1.5 |
 | [TD-03](#td-03) | A provider in several dataspaces, each with its own rules | Technical debt | Accepted | profiles in one connector: after 1.0 |
@@ -121,7 +121,7 @@ of work with no release yet.
 | [TD-16](#td-16) | One harvest source; no dataspace registry; other catalogs not checked; no bundle expiry or bundle key rotation | Technical debt | Open | Later |
 | [TD-17](#td-17) | The data plane runs inside the connector process | Technical debt | Accepted | after 1.0, when Signaling 1.0 is released |
 | [TD-19](#td-19) | No TLS inside the services | Technical debt | Accepted | none |
-| [TD-20](#td-20) | A holder must delete a revoked credential by hand after a reissue | Technical debt | Open | 1.4 |
+| [TD-20](#td-20) | A holder must delete a revoked credential by hand after a reissue | Technical debt | Open | 1.2 |
 | [TD-21](#td-21) | Gaia-X beyond 0.8 | Technical debt | Open | Later |
 | [TD-22](#td-22) | Migrations run forward only; a rollback needs the backup | Technical debt | Accepted | none |
 | [TD-28](#td-28) | No trace across participants | Technical debt | Accepted | none |
@@ -132,7 +132,8 @@ of work with no release yet.
 | [TD-40](#td-40) | Database calls block the async runtime | Technical debt | Accepted | measure each release |
 | [TD-42](#td-42) | Four near-copies of the negotiation and transfer logic | Technical debt | Open | 1.x (merge) |
 | [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | Open | none |
-| [TD-46](#td-46) | The issuer keeps one set of claims per participant | Technical debt | Open | not named |
+| [TD-46](#td-46) | The issuer keeps one set of claims per participant | Technical debt | Open | 1.2 |
+| [TD-47](#td-47) | A transfer stays REQUESTED when its provider is revoked | Technical debt | Open | 1.1 |
 
 Counts on 2026-11-20: 36 risks and 28 technical debts are not closed
 (Open 31, Mitigated 19, Accepted 14); 11 risks and 17 technical debts
@@ -738,8 +739,8 @@ are closed.
 - **Current state: Open.** Only an issuer's operator can misuse it, and
   each holder chooses whom it trusts.
 - **Next.** Trusted issuers by credential type (TD-03 calls it
-  additive), before a data space runs a second issuer. Which release is
-  the maintainer's call.
+  additive), in ROADMAP 1.2, with the data permit (maintainer,
+  2026-11-24).
 
 ## Technical debt
 
@@ -1025,7 +1026,7 @@ are closed.
   other permits until it is deleted
   ([data-permits, step 4](../scenarios/data-permits/README.md#the-steps)).
 - **Current state: Open.** Documented in DEPLOYING.
-- **Next.** ROADMAP 1.4.
+- **Next.** ROADMAP 1.2 (moved from 1.4 by the maintainer, 2026-11-24, because several data permits make it worse).
 
 <a id="td-21"></a>
 ### TD-21 Gaia-X beyond 0.8
@@ -1224,8 +1225,25 @@ are closed.
   registered, and a request it made then ends `REJECTED`.
 - **Current state: Open.**
 - **Next.** Claims per credential request, or per issued credential,
-  when the data permit comes (ROADMAP 1.2). Check first how EDC's
+  in ROADMAP 1.2, with the data permit (maintainer, 2026-11-24). Check first how EDC's
   Issuer Service (attestations) and the EHDS permit template do it.
+
+<a id="td-47"></a>
+### TD-47 A transfer stays REQUESTED when its provider is revoked
+
+- **What.** Once a provider's `MembershipCredential` is revoked, the
+  consumer's connector refuses all its DSP messages, which is right for
+  new work. That includes the provider's termination of a transfer the
+  consumer just requested, so the transfer stays `REQUESTED` until the
+  consumer's operator ends it
+  ([hdab-intermediary, step 6](../scenarios/hdab-intermediary/README.md#the-steps)).
+- **Why it matters.** Transfers pile up that will never start, and the
+  operator learns why only from the logs.
+- **Current state: Open.**
+- **Next.** ROADMAP 1.1, with the transfer work: check what DSP 2025-1
+  says of messages from a party that is no longer trusted, then either
+  end a `REQUESTED` transfer after a time limit or accept a termination
+  from such a party. An ADR if it changes what callers are accepted.
 
 ## Closed
 
