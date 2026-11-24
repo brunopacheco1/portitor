@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Sourced, not run: Portitor participants with DCP on this machine, as
-# examples/demos/two-party/demo.sh, scripts/measure.sh and scripts/dev-identities.sh start
+# scenarios/two-party/demo.sh, scripts/measure.sh and scripts/dev-identities.sh start
 # them. Each participant is a portitor-identity and (most often) a
 # portitor-connector. A portitor-issuer, the data space's authority,
 # registers them; each identity then asks it for its credentials through

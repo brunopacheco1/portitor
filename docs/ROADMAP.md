@@ -164,7 +164,7 @@ Decisions about the plan itself that no ADR or changelog entry holds.
   1.0 does and does not do. The clean-machine run is one timed run by
   the maintainer ([RELEASING](RELEASING.md#releasing-a-version), step
   4). It gets no CI job of its own: `CI` already runs the Compose demo
-  (`examples/demos/two-party/demo-compose.sh`) that the quickstart uses.
+  (`scenarios/two-party/demo-compose.sh`) that the quickstart uses.
 - Before 1.0: the trademark and domain check of the name
   ([R-25](RISKS_AND_TECHNICAL_DEBTS.md#r-25)). Done on 2026-11-21: no
   trademark conflict was found, and the maintainer accepted the
@@ -252,7 +252,7 @@ CI job (maintainer, 2026-11-15).
   the permit credential (above) and push (1.1), and one more piece no
   release has yet: a check that the transfer's destination matches a
   claim in the permit. No specification for that is known; research
-  first. A folder in `examples/demos/` once it runs.
+  first. A folder in `scenarios/` once it runs.
 - Exit: purpose and permit tested granted and refused; the TCKs and the
   EDC interop test stay green.
 - Main risk: DPV purposes may not map one to one to the purposes of the
@@ -402,7 +402,8 @@ The demo must answer, by running it:
 
 Step 0 runs on v1.0.0-rc.1 as it is, with pull transfers and synthetic
 genotypes, and gives the first answers:
-[examples/demos/health-lu](../examples/demos/health-lu/README.md)
+the [hdab-intermediary](../scenarios/hdab-intermediary/README.md)
+scenario on the [health-lu](../scenarios/health-lu/README.md) data space
 (maintainer, 2026-11-23). Steps 1 to 3 update it as 1.1 to 1.3 land.
 
 Checked against the EHDS (Regulation (EU) 2025/327, 2026-11-15): for
@@ -413,7 +414,7 @@ applies from March 2029.
 
 #### More health scenarios (maintainer, 2026-11-23)
 
-Each one becomes a folder in `examples/demos/`. Before the next ones are
+Each one becomes a folder in `scenarios/`. Before the next ones are
 built, the ways to set up the relationship between data user, HDAB and
 data holder are compared, with pros and cons (maintainer, 2026-11-23).
 
@@ -438,8 +439,8 @@ what worked and what did not, and a demo or an ADR where it earns one
 
 | Order | Way | Who the holder checks, where the data goes | Status |
 | --- | --- | --- | --- |
-| 1 | A. The HDAB as intermediary | the HDAB; data to the HDAB, results to the user | done: step 0, `examples/demos/health-lu` |
-| 2 | F. Permit-gated peer to peer | the user's credential; data to the user (non-personal data only, EHDS Art. 73(2)) | explored on 1.0: second scenario of `examples/demos/health-lu`, placeholder permit claims; findings [R-48](RISKS_AND_TECHNICAL_DEBTS.md#r-48), [TD-20](RISKS_AND_TECHNICAL_DEBTS.md#td-20), [TD-46](RISKS_AND_TECHNICAL_DEBTS.md#td-46) |
+| 1 | A. The HDAB as intermediary | the HDAB; data to the HDAB, results to the user | done: `scenarios/hdab-intermediary` |
+| 2 | F. Permit-gated peer to peer | the user's credential; data to the user (non-personal data only, EHDS Art. 73(2)) | explored on 1.0: `scenarios/data-permits`, placeholder permit claims; findings [R-48](RISKS_AND_TECHNICAL_DEBTS.md#r-48), [TD-20](RISKS_AND_TECHNICAL_DEBTS.md#td-20), [TD-46](RISKS_AND_TECHNICAL_DEBTS.md#td-46) |
 | 3 | C. Permit credential, data to the SPE | the user's permit; data into the SPE the permit names | needs 1.1, 1.2 and a destination check |
 | 4 | E. The trusted holder runs the SPE (EHDS Art. 72) | the user's permit; data stays, results leave | needs 1.2; the SPE is outside Portitor |
 | 5 | B. Chained agreements | the HDAB; its offers held inside its agreement | 1.3, research and ADR (R-39) |

@@ -20,9 +20,9 @@ __pycache__/
 !.vscode/extensions.json
 
 # the Compose demos' generated keys, secrets and authority site
-# (examples/demos/two-party/demo-compose.sh and examples/demos/health-lu/run.sh write them)
-/examples/demos/two-party/run/
-/examples/demos/health-lu/run/
+# (scenarios/two-party/demo-compose.sh and scenarios/health-lu/run.sh write them)
+/scenarios/two-party/run/
+/scenarios/health-lu/run/
 
 # the EDC interop test's generated keys, secrets and authority site
 # (scripts/edc-interop.sh writes them), and its Gradle outputs

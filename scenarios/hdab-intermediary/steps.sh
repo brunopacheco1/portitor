@@ -3,8 +3,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# The health demo's scenario (README.md, "The scenario"), against the
-# data space run.sh started. Every call goes through a participant's own
+# The hdab-intermediary scenario (README.md), against the health data
+# space that ../health-lu/run.sh started. Runs alone, or first: it needs
+# the HDAB still a member and Schuman without an access body's role. Every call goes through a participant's own
 # management API; the data users' apps (lab-app, schuman-app) fetch the
 # data. Exits non-zero at the first failed check.
 #
@@ -25,17 +26,17 @@
 #    Schuman's connector, so a new transfer never starts.
 #
 # Environment (set by run.sh):
-#   DEMO   examples/demos/health-lu
+#   DEMO   scenarios/health-lu
 #   RUN    its run/ folder, with the management keys
 #   AUTHORITY_MANAGEMENT  the authority's management API base URL
 #   PILOT_END  when the HDAB's pilot offer ends
 
 set -euo pipefail
 # shellcheck source=scripts/require-bash.sh
-source "$(dirname "$0")/../../../scripts/require-bash.sh"
+source "$(dirname "$0")/../../scripts/require-bash.sh"
 
 : "${DEMO:?}" "${RUN:?}" "${AUTHORITY_MANAGEMENT:?}" "${PILOT_END:?}"
-# shellcheck source=examples/demos/health-lu/steps-lib.sh
+# shellcheck source=scenarios/health-lu/steps-lib.sh
 source "$DEMO/steps-lib.sh"
 
 hdab_pulls() { # how many transfers the HDAB has asked Lux Biobank for

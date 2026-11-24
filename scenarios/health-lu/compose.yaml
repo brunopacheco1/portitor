@@ -5,7 +5,7 @@
 # The health demo (README.md): a Luxembourg-style health data space with
 # four participants and its authority, each in its own containers.
 #
-#   examples/demos/health-lu/run.sh
+#   scenarios/health-lu/run.sh
 #
 # writes the keys and secrets into run/, starts everything, has each
 # participant get its credentials and runs the scenario (steps.sh).
@@ -80,7 +80,7 @@ services:
       - authority-key
       - authority-management-key
     volumes:
-      - ../../issuer-credentials.json:/config/issuer-credentials.json:ro
+      - ../../examples/issuer-credentials.json:/config/issuer-credentials.json:ro
       - ./run/authority/bundle:/config/bundle:ro
       - authority-data:/data
     ports:

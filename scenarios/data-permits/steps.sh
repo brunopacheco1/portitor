@@ -3,29 +3,29 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# The health demo's second scenario (README.md, "Second scenario: data
-# permits"), after steps.sh, against the data space run.sh started. The
-# HDAB's own issuer gives Schuman Clinical Research data permits as
-# credentials (DataPermitCredential); Lux Biobank has one offer per
-# permit and checks it when Schuman negotiates and at each transfer.
-# Exits non-zero at the first failed check.
+# The data-permits scenario (README.md), against the health data space
+# that ../health-lu/run.sh started. The HDAB's own issuer gives Schuman
+# Clinical Research data permits as credentials (DataPermitCredential);
+# Lux Biobank has one offer per permit and checks it when Schuman
+# negotiates and at each transfer. Runs alone or after
+# ../hdab-intermediary. Exits non-zero at the first failed check.
 #
-# 7. The HDAB grants permit P-2026-001: its issuer registers Schuman with
+# 1. The HDAB grants permit P-2026-001: its issuer registers Schuman with
 #    the permit's claims, and Schuman's identity asks for the credential.
-# 8. Schuman takes Lux Biobank's offer for that permit and pulls the
+# 2. Schuman takes Lux Biobank's offer for that permit and pulls the
 #    genotypes. The offer for P-2026-002 is refused: no such permit yet.
-# 9. A second permit, P-2026-002. The issuer keeps one set of claims per
+# 3. A second permit, P-2026-002. The issuer keeps one set of claims per
 #    participant, so the HDAB registers Schuman again with the new ones.
 #    Schuman holds both permits and takes the second offer.
-# 10. The HDAB revokes P-2026-001. Schuman shows every permit it holds,
+# 4. The HDAB revokes P-2026-001. Schuman shows every permit it holds,
 #    and a presentation with a revoked credential is refused as a whole:
 #    the transfer under P-2026-002 is refused too, until Schuman deletes
 #    the revoked permit from its identity.
-# 11. A trusted issuer is trusted for every credential type: the HDAB's
+# 5. A trusted issuer is trusted for every credential type: Digital Lux
+#    Trust revokes the HDAB's own MembershipCredential, then the HDAB's
 #    issuer gives Schuman a MembershipCredential with the role
 #    health-data-access-body, and Lux Biobank's offer for access bodies
-#    accepts it. Digital Lux Trust revoked the HDAB's own
-#    MembershipCredential in step 6; its issuer is trusted all the same.
+#    accepts it.
 #
 # The permit's claims (permitId, purpose) are placeholders: no data permit
 # format is published yet (EHDS Art. 68(10) lists what a permit states;
@@ -33,16 +33,17 @@
 # credential's own validUntil.
 #
 # Environment (set by run.sh):
-#   DEMO   examples/demos/health-lu
+#   DEMO   scenarios/health-lu
 #   RUN    its run/ folder, with the management keys
+#   AUTHORITY_MANAGEMENT    the authority's management API base URL
 #   HDAB_ISSUER_MANAGEMENT  the HDAB issuer's management API base URL
 
 set -euo pipefail
 # shellcheck source=scripts/require-bash.sh
-source "$(dirname "$0")/../../../scripts/require-bash.sh"
+source "$(dirname "$0")/../../scripts/require-bash.sh"
 
-: "${DEMO:?}" "${RUN:?}" "${HDAB_ISSUER_MANAGEMENT:?}"
-# shellcheck source=examples/demos/health-lu/steps-lib.sh
+: "${DEMO:?}" "${RUN:?}" "${AUTHORITY_MANAGEMENT:?}" "${HDAB_ISSUER_MANAGEMENT:?}"
+# shellcheck source=scenarios/health-lu/steps-lib.sh
 source "$DEMO/steps-lib.sh"
 
 HDAB_ISSUER=did:web:hdab-issuer%3A8070
@@ -123,75 +124,84 @@ permit_offer() { # catalog permit-id
   offer "$1" "$GENOTYPES" "genotypes:offer:permit-$2"
 }
 
-# --- 7 ------------------------------------------------------------------------
+# --- 1 ------------------------------------------------------------------------
 
-step "7. The HDAB grants Schuman data permit P-2026-001, as a credential from its own issuer"
+step "1. The HDAB grants Schuman data permit P-2026-001, as a credential from its own issuer"
 register_schuman "$(jq -nc --arg p "$PURPOSE" '{permitId: "P-2026-001", purpose: $p}')"
 schuman_asks data-permit-vc20
 PERMIT_1=$(newest_permit)
 echo "permit P-2026-001 is credential $PERMIT_1"
 
-# --- 8 ------------------------------------------------------------------------
+# --- 2 ------------------------------------------------------------------------
 
-step "8. Schuman reads Lux Biobank's catalog: one offer per permit"
+step "2. Schuman reads Lux Biobank's catalog: one offer per permit"
 CATALOG=$(catalog schuman "$BIOBANK" "$BIOBANK_ID")
 jq -c '.dataset[] | .hasPolicy[] | select(.["@id"] | startswith("genotypes:offer:permit-"))
   | {"@id", constraint: .permission[0].constraint}' <<<"$CATALOG"
 
-step "8. Schuman takes the offer for P-2026-001: Lux Biobank checks the permit"
+step "2. Schuman takes the offer for P-2026-001: Lux Biobank checks the permit"
 VIEW=$(negotiate schuman "$BIOBANK" "$BIOBANK_ID" "$GENOTYPES" "$(permit_offer "$CATALOG" P-2026-001)")
 expect "Schuman's agreement under P-2026-001" "$VIEW" FINALIZED
 AGREEMENT_1=$(jq -r '.agreement["@id"]' <<<"$VIEW")
 pull_genotypes "$AGREEMENT_1"
 
-step "8. Schuman asks for the offer for P-2026-002: refused, it has no such permit"
+step "2. Schuman asks for the offer for P-2026-002: refused, it has no such permit"
 VIEW=$(negotiate schuman "$BIOBANK" "$BIOBANK_ID" "$GENOTYPES" "$(permit_offer "$CATALOG" P-2026-002)")
 expect "Schuman's request under P-2026-002" "$VIEW" TERMINATED
 
-# --- 9 ------------------------------------------------------------------------
+# --- 3 ------------------------------------------------------------------------
 
-step "9. A second permit, P-2026-002: the issuer keeps one set of claims per participant, so the HDAB registers Schuman again"
+step "3. A second permit, P-2026-002: the issuer keeps one set of claims per participant, so the HDAB registers Schuman again"
 register_schuman "$(jq -nc --arg p "$PURPOSE" '{permitId: "P-2026-002", purpose: $p}')"
 schuman_asks data-permit-vc20
 [[ $(permits_held) == 2 ]] || fail "Schuman does not hold two permits: $(identity_api GET /v1/credentials)"
 echo "Schuman holds two permits"
 
-step "9. Schuman takes the offer for P-2026-002; the agreement under P-2026-001 still works"
+step "3. Schuman takes the offer for P-2026-002; the agreement under P-2026-001 still works"
 VIEW=$(negotiate schuman "$BIOBANK" "$BIOBANK_ID" "$GENOTYPES" "$(permit_offer "$CATALOG" P-2026-002)")
 expect "Schuman's agreement under P-2026-002" "$VIEW" FINALIZED
 AGREEMENT_2=$(jq -r '.agreement["@id"]' <<<"$VIEW")
 pull_genotypes "$AGREEMENT_1"
 
-# --- 10 -----------------------------------------------------------------------
+# --- 4 ------------------------------------------------------------------------
 
-step "10. The HDAB revokes permit P-2026-001"
+step "4. The HDAB revokes permit P-2026-001"
 issuer_api POST "/v1/credentials/$(uri "$PERMIT_1")/revoke" >/dev/null || fail "revoke $PERMIT_1"
 echo "revoked $PERMIT_1"
 TRANSFER=$(transfer schuman "$AGREEMENT_1")
 expect "a transfer under P-2026-001" "$TRANSFER" TERMINATED
 REFUSALS=$(revoked_permit_refusals)
 
-step "10. A transfer under P-2026-002 is refused too: Schuman shows both permits, and one is revoked"
+step "4. A transfer under P-2026-002 is refused too: Schuman shows both permits, and one is revoked"
 TRANSFER=$(transfer schuman "$AGREEMENT_2")
 expect "a transfer under P-2026-002" "$TRANSFER" TERMINATED
 # Schuman's record gives no reason; Lux Biobank's log does
 [[ $(revoked_permit_refusals) -gt $REFUSALS ]] || fail "Lux Biobank's log does not name the revoked permit"
 echo "Lux Biobank's log: a DataPermitCredential is revoked, so the presentation is invalid; Schuman is told no reason"
 
-step "10. Schuman deletes the revoked permit from its identity: P-2026-002 works again"
+step "4. Schuman deletes the revoked permit from its identity: P-2026-002 works again"
 identity_api DELETE "/v1/credentials/$(uri "$PERMIT_1")" >/dev/null || fail "delete $PERMIT_1"
 [[ $(permits_held) == 1 ]] || fail "Schuman still holds $(permits_held) permits"
 pull_genotypes "$AGREEMENT_2"
 
-# --- 11 -----------------------------------------------------------------------
+# --- 5 ------------------------------------------------------------------------
 
-step "11. The HDAB's issuer gives Schuman a MembershipCredential with the role health-data-access-body"
+step "5. Digital Lux Trust revokes the HDAB's own MembershipCredential"
+CREDENTIAL=$(curl -sS --fail-with-body "$AUTHORITY_MANAGEMENT/v1/credentials?holder=$(uri "$HDAB_ID")" \
+  -H "authorization: Bearer $(cat "$RUN/authority/management.key")" |
+  jq -r '.[] | select(.credentialType == "MembershipCredential") | .id') || fail "list the HDAB's credentials"
+# revoking again (after hdab-intermediary's step 6) only signs the list again
+curl -sS --fail-with-body -X POST "$AUTHORITY_MANAGEMENT/v1/credentials/$(uri "$CREDENTIAL")/revoke" \
+  -H "authorization: Bearer $(cat "$RUN/authority/management.key")" >/dev/null || fail "revoke $CREDENTIAL"
+echo "revoked $CREDENTIAL: the HDAB is out of the data space, its issuer is still trusted"
+
+step "5. The HDAB's issuer gives Schuman a MembershipCredential with the role health-data-access-body"
 register_schuman '{"memberOf": "Lux health data space", "role": "health-data-access-body"}'
 schuman_asks membership-vc20
 
-step "11. Lux Biobank's offer for access bodies accepts it: a trusted issuer is trusted for every type"
+step "5. Lux Biobank's offer for access bodies accepts it: a trusted issuer is trusted for every type"
 VIEW=$(negotiate schuman "$BIOBANK" "$BIOBANK_ID" "$GENOTYPES" "$(offer "$CATALOG" "$GENOTYPES" genotypes:offer:access-body)")
 expect "Schuman's request for the offer for access bodies" "$VIEW" FINALIZED
-echo "accepted: Lux Biobank cannot say which issuer may issue which type, and the HDAB's own MembershipCredential was revoked in step 6"
+echo "accepted: Lux Biobank cannot say which issuer may issue which type"
 
 step "Done: two permits gave two agreements; one revoked permit blocked the other until Schuman deleted it; an issuer trusted for permits could also make Schuman an access body"

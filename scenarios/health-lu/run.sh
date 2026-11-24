@@ -3,11 +3,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# The health demo (README.md) in Docker Compose (compose.yaml): Digital
-# Lux Trust, Lux Biobank, Lux Biomedicine Lab, the HDAB and Schuman
-# Clinical Research, and the HDAB's own issuer. Runs the two scenarios
-# (steps.sh, then steps-permits.sh) from this machine, then removes
-# everything, volumes included.
+# The Luxembourg-style health data space (README.md) in Docker Compose
+# (compose.yaml): Digital Lux Trust, Lux Biobank, Lux Biomedicine Lab, the
+# HDAB with its own issuer, and Schuman Clinical Research. Starts it, runs
+# the scenarios that use it from this machine, then removes everything,
+# volumes included.
 #
 #  1. Keys and secrets, in run/; the HealthDCAT-AP bundle, built and
 #     signed with the issuer image (scripts/demo-bundle.sh) into
@@ -16,15 +16,20 @@
 #  2. Docker Compose up.
 #  3. The authority registers the four participants with their claims;
 #     each identity asks it for its credentials.
-#  4. The scenarios: access through the HDAB (steps.sh), then data
-#     permits from the HDAB's issuer (steps-permits.sh).
+#  4. The scenarios, each one's steps.sh, in this order:
+#     ../hdab-intermediary (the HDAB pulls and counts for a data user),
+#     then ../data-permits (the HDAB's issuer grants data permits).
 #
-# Usage: examples/demos/health-lu/run.sh [connector image [identity image [issuer image]]]
+# Usage: scenarios/health-lu/run.sh [connector image [identity image [issuer image]]]
 #   Without images it uses the compose file's defaults (the release images).
 # Environment:
+#   SCENARIOS="a b"   the scenarios to run, in order (default
+#                     "hdab-intermediary data-permits"); each also runs
+#                     alone, but data-permits ends the HDAB's membership,
+#                     so it never runs before hdab-intermediary
 #   KEEP=1            leave the containers running, and run/, at the end
 #   PILOT_SECONDS=n   how long the HDAB's pilot offer lasts (default 150);
-#                     the scenario waits for its end at step 6
+#                     hdab-intermediary waits for its end at step 6
 #   CONTAINER_ENGINE=docker|podman
 #                     the container engine (scripts/container-engine.sh)
 # Needs Docker or Podman with Docker Compose (docs/TESTING.md, "Docker or
@@ -32,15 +37,15 @@
 
 set -euo pipefail
 # shellcheck source=scripts/require-bash.sh
-source "$(dirname "$0")/../../../scripts/require-bash.sh"
+source "$(dirname "$0")/../../scripts/require-bash.sh"
 
-cd "$(dirname "$0")/../../.."
+cd "$(dirname "$0")/../.."
 if [[ $# -gt 0 ]]; then export PORTITOR_IMAGE=$1; fi
 if [[ $# -gt 1 ]]; then export PORTITOR_IDENTITY_IMAGE=$2; fi
 if [[ $# -gt 2 ]]; then export PORTITOR_ISSUER_IMAGE=$3; fi
 # shellcheck source=scripts/container-engine.sh
 source scripts/container-engine.sh
-DEMO=examples/demos/health-lu
+DEMO=scenarios/health-lu
 COMPOSE=("${ENGINE_COMPOSE[@]}" -f "$DEMO/compose.yaml")
 RUN=$DEMO/run
 PILOT_SECONDS=${PILOT_SECONDS:-150}
@@ -102,7 +107,7 @@ cleanup() {
 trap cleanup EXIT
 
 step "Build and sign the HealthDCAT-AP bundle with the issuer image"
-# as examples/demos/two-party/demo-compose.sh does
+# as scenarios/two-party/demo-compose.sh does
 cat >"$RUN/issuer-command" <<SCRIPT
 #!/bin/sh
 exec ${COMPOSE[*]} run --rm --no-deps -q --user "$(engine_bind_mount_user)" \\
@@ -198,5 +203,8 @@ echo "the lab holds a MembershipCredential and a DataProcessorCredential; the ot
 # --- 4. the scenarios ---------------------------------------------------------
 
 export DEMO RUN AUTHORITY_MANAGEMENT HDAB_ISSUER_MANAGEMENT PILOT_END
-examples/demos/health-lu/steps.sh
-examples/demos/health-lu/steps-permits.sh
+for scenario in ${SCENARIOS:-hdab-intermediary data-permits}; do
+  [[ -x scenarios/$scenario/steps.sh ]] || fail "no scenario $scenario"
+  step "Scenario $scenario (scenarios/$scenario/README.md)"
+  "scenarios/$scenario/steps.sh"
+done

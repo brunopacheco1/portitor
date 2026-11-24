@@ -588,7 +588,7 @@ are closed.
   Clinical Research rests on the HDAB's agreement with Lux Biobank and
   must not be wider than it. DSP and ODRL have no link between two
   agreements. Step 0 of the demo keeps the HDAB's end date inside its
-  agreement by hand ([examples/demos/health-lu](../examples/demos/health-lu/README.md)).
+  agreement by hand ([scenarios/hdab-intermediary](../scenarios/hdab-intermediary/README.md)).
 - **Why it matters.** Portitor's design may differ from what EDC or
   Simpl-Open choose later.
 - **Current state: Open.**
@@ -729,7 +729,7 @@ are closed.
   HDAB's issuer for data permits, and the same issuer gives Schuman
   Clinical Research a `MembershipCredential` with the role
   `health-data-access-body`, which Lux Biobank accepts
-  ([health-lu, step 11](../examples/demos/health-lu/README.md#second-scenario-data-permits)).
+  ([data-permits, step 5](../scenarios/data-permits/README.md#the-steps)).
   Revoking the HDAB's own membership does not change it.
 - **Why it matters.** Data permits need a second issuer next to the
   authority (ROADMAP 1.2 and 1.3). With one list, that issuer can grant
@@ -1023,7 +1023,7 @@ are closed.
   deletes the revoked credential. With data permits it is wider: a data
   user shows every permit it holds, so one revoked permit blocks all its
   other permits until it is deleted
-  ([health-lu, step 10](../examples/demos/health-lu/README.md#second-scenario-data-permits)).
+  ([data-permits, step 4](../scenarios/data-permits/README.md#the-steps)).
 - **Current state: Open.** Documented in DEPLOYING.
 - **Next.** ROADMAP 1.4.
 
@@ -1217,7 +1217,7 @@ are closed.
   a policy holds if any one of them matches, but each new value needs
   the registration deleted and made again. The health demo does this for
   a second data permit
-  ([health-lu, step 9](../examples/demos/health-lu/README.md#second-scenario-data-permits)).
+  ([data-permits, step 3](../scenarios/data-permits/README.md#the-steps)).
 - **Why it matters.** A data user may hold several data permits at once
   (maintainer, 2026-11-24), each with its own id and purpose. Deleting
   and registering again leaves a moment when the participant is not

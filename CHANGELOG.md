@@ -32,21 +32,24 @@ versions may change behaviour and configuration.
 
 ### Added
 
-- A health data demo, `examples/demos/health-lu/`: a Luxembourg-style
-  health data space with an authority and four participants (a biobank,
-  a research lab, an HDAB and a hospital research unit), synthetic
-  genotypes made with msprime, an HDAB pipeline that pulls and counts
-  only during a data user's transfer, and refusals. It gives the first
-  answers to the roadmap's four questions on v1.0.0-rc.1. A second
-  scenario has the HDAB's own issuer grant data permits as credentials,
-  which the biobank checks itself. It is a manual test, not run in CI.
+- Two health scenarios on a Luxembourg-style health data space
+  (`scenarios/health-lu/`: an authority and four participants, synthetic
+  genotypes made with msprime): `scenarios/hdab-intermediary/`, where an
+  HDAB pulls and counts only during a data user's transfer, and
+  `scenarios/data-permits/`, where the HDAB's own issuer grants data
+  permits as credentials that the biobank checks itself. They give the
+  first answers to the roadmap's four questions on v1.0.0-rc.1. Manual
+  tests, not run in CI.
+- Every scenario has a README (what it is about, scope, components
+  tested and why, steps, findings), C4 deployment and dynamic diagrams,
+  and its own changelog; `scenarios/README.md` sets the template.
 
 ### Changed
 
-- All demos are in `examples/demos/`, one folder per scenario, with an
-  index. The two-party demo moved there: `scripts/demo.sh`,
+- The demos are scenarios, in `scenarios/` at the root, one folder each.
+  The two-party demo moved there: `scripts/demo.sh`,
   `scripts/demo-compose.sh` and `scripts/demo-steps.sh` are now in
-  `examples/demos/two-party/`, with `examples/compose/`'s files.
+  `scenarios/two-party/`, with `examples/compose/`'s files.
 
 ## [1.0.0-rc.1] - 2026-11-22
 

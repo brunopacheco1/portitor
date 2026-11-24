@@ -10,15 +10,15 @@
 # plain HTTP between the containers (PORTITOR_ALLOW_HTTP), and
 # the issuer next to the participants. The issuer also serves the
 # dataspace's HealthDCAT-AP demo bundle (scripts/demo-bundle.sh), which the
-# provider follows and checks its datasets (../../healthdcat-datasets.json)
+# provider follows and checks its datasets (../../examples/healthdcat-datasets.json)
 # against.
 #
-#   examples/demos/two-party/demo-compose.sh
+#   scenarios/two-party/demo-compose.sh
 #
 # writes the keys and secrets into run/, builds and signs the demo bundle
 # into run/issuer/bundle/ (with the issuer image), starts everything, registers both
 # participants at the issuer, has each identity ask it for its credentials
-# and runs the demo checks (examples/demos/two-party/demo-steps.sh). KEEP=1 leaves it
+# and runs the demo checks (scenarios/two-party/demo-steps.sh). KEEP=1 leaves it
 # running: then use the consumer's management API on
 # http://127.0.0.1:18091 (docs/DEPLOYING.md, "Management API"), with the key in
 # run/consumer/management.key, and negotiate with the provider at
@@ -57,7 +57,7 @@ x-connector: &connector
 services:
   # The dataspace's authority: did:web:issuer%3A8070, its issuer service
   # (credential requests, status lists) and its management API, where
-  # examples/demos/two-party/demo-compose.sh registers the participants.
+  # scenarios/two-party/demo-compose.sh registers the participants.
   issuer:
     image: ${PORTITOR_ISSUER_IMAGE:-ghcr.io/brunopacheco1/portitor-issuer:1.0.0-rc.1}
     environment:
@@ -80,7 +80,7 @@ services:
       - issuer-key
       - issuer-management-key
     volumes:
-      - ../../issuer-credentials.json:/config/issuer-credentials.json:ro
+      - ../../examples/issuer-credentials.json:/config/issuer-credentials.json:ro
       - ./run/issuer/bundle:/config/bundle:ro
       - issuer-data:/data
     ports:
@@ -95,7 +95,7 @@ services:
   data:
     image: docker.io/library/nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
     volumes:
-      - ../../data:/usr/share/nginx/html:ro
+      - ../../examples/data:/usr/share/nginx/html:ro
 
   # --- the provider ---------------------------------------------------------
 
@@ -152,7 +152,7 @@ services:
       - provider-sts-secret
       - provider-management-key
     volumes:
-      - ../../healthdcat-datasets.json:/config/datasets.json:ro
+      - ../../examples/healthdcat-datasets.json:/config/datasets.json:ro
       - provider-data:/data
     ports:
       - 127.0.0.1:18080:8080
@@ -218,7 +218,7 @@ services:
       consumer-identity:
         condition: service_healthy
 
-# written by examples/demos/two-party/demo-compose.sh; the images run as user 65532, which
+# written by scenarios/two-party/demo-compose.sh; the images run as user 65532, which
 # must read them
 secrets:
   issuer-key:

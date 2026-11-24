@@ -19,7 +19,7 @@ stdpopsim (GPL-3.0) run only here, to make the files; nothing of them is
 shipped. Run it from the repository root:
 
   python3 -m venv /tmp/gen && /tmp/gen/bin/pip install msprime==1.3.4 stdpopsim==0.3.0
-  /tmp/gen/bin/python examples/demos/health-lu/data/generate.py
+  /tmp/gen/bin/python scenarios/health-lu/data/generate.py
 """
 
 import io

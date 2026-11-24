@@ -10,7 +10,7 @@
 # (scripts/demo-bundle.sh) on its issuer; the provider follows it and offers
 # examples/healthdcat-datasets.json, with the files of examples/data
 # served by a local web server as their sources. The checks are in
-# examples/demos/two-party/demo-steps.sh; examples/demos/two-party/demo-compose.sh runs the same checks in
+# scenarios/two-party/demo-steps.sh; scenarios/two-party/demo-compose.sh runs the same checks in
 # Docker Compose.
 #
 #  1. The demo bundle, signed with a new bundle key; the issuer, serving
@@ -25,7 +25,7 @@
 #     issuer; the provider loads the bundle from the issuer and checks its
 #     datasets against it. Then the demo steps.
 #
-# Usage: examples/demos/two-party/demo.sh [portitor-connector [portitor-identity [portitor-issuer]]]
+# Usage: scenarios/two-party/demo.sh [portitor-connector [portitor-identity [portitor-issuer]]]
 #   Without paths it builds the debug binaries. The identity and issuer
 #   binaries default to the ones next to the connector.
 # Needs curl, jq, openssl and python3. Exits non-zero if a step fails, so
@@ -33,9 +33,9 @@
 
 set -euo pipefail
 # shellcheck source=scripts/require-bash.sh
-source "$(dirname "$0")/../../../scripts/require-bash.sh"
+source "$(dirname "$0")/../../scripts/require-bash.sh"
 
-cd "$(dirname "$0")/../../.."
+cd "$(dirname "$0")/../.."
 if [[ $# -eq 0 ]]; then
   cargo build --quiet -p portitor-connector -p portitor-identity -p portitor-issuer
 fi
@@ -133,5 +133,5 @@ PROVIDER=http://$PROVIDER MANAGEMENT=http://$CONSUMER_MANAGEMENT \
   KEY_FILE="$WORK/consumer/management.key" \
   CONSUMER_ID="$CONSUMER_ID" PROVIDER_ID="$PROVIDER_ID" \
   ISSUER_MANAGEMENT="http://$ISSUER_MANAGEMENT" ISSUER_KEY_FILE="$WORK/issuer/management.key" \
-  DATA=examples/data TMPDIR="$WORK" examples/demos/two-party/demo-steps.sh ||
+  DATA=examples/data TMPDIR="$WORK" scenarios/two-party/demo-steps.sh ||
   fail "the demo steps"

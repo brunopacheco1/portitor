@@ -79,7 +79,7 @@ consumer. It needs Docker with the Compose plugin, or
 `curl`, `jq` and `openssl`.
 
 ```sh
-examples/demos/two-party/demo-compose.sh
+scenarios/two-party/demo-compose.sh
 ```
 
 The script checks that the two participants authenticate, agree a

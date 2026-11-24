@@ -51,7 +51,8 @@ Today's crates:
 - `crates/portitor-bundle`: adapter crate for the authority's signed bundle on a participant's side, reusable by any service: `source.rs` (`BundleSource` port, `UrlSource`, `FolderSource`, `PORTITOR_BUNDLE_*` settings) and `store.rs` (`BundleStore` port, `CacheFolder`: disk cache and version in use). How schemas are collected and stored is technical debt (`docs/RISKS_AND_TECHNICAL_DEBTS.md`, TD-01).
 - `crates/portitor-identity`: the identity component binary (ADR 0015): DID document, STS, credential service (presentation, Storage and offer APIs), management API, SQLite store, X.509 certificate chain and Gaia-X onboarding (ADR 0021); its own image.
 - `crates/portitor-issuer`: the issuer component binary (ADR 0018), run once per dataspace by its authority: DID document, DCP issuer service (metadata, credential requests and status), delivery outbox, status lists, management API, SQLite store; its own image. Also `portitor-issuer bundle build`, which signs a schema and vocabulary bundle offline, and the read-only bundle route.
-- `examples/`: the demos' datasets, data and Compose file, and the sources of the HealthDCAT-AP demo bundle (`examples/bundle/`).
+- `examples/`: example datasets, data and credential definitions, and the sources of the HealthDCAT-AP demo bundle (`examples/bundle/`).
+- `scenarios/`: one folder per scenario (a small data space, a story and its checks), each with a README, diagrams and a changelog (`scenarios/README.md`).
 - `docs/`: architecture, ADRs (with an index), roadmap, risks and technical debts, the reading guide for the code, security assurance, releasing.
 - `site/`: the project website (added in 0.1).
 

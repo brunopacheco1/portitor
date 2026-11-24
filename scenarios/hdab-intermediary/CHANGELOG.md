@@ -1,0 +1,34 @@
+<!--
+SPDX-FileCopyrightText: Portitor contributors
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
+# hdab-intermediary: changelog
+
+How the scenario changed, newest first. Each entry names the Portitor
+version it ran on.
+
+## 2026-11-24, on 1.0.0-rc.1
+
+- Moved to `scenarios/hdab-intermediary/`, with its own README and this
+  changelog; the data space it runs on is `scenarios/health-lu/`. It
+  runs alone with `SCENARIOS=hdab-intermediary`. What it checks is
+  unchanged.
+
+## 2026-11-23, on 1.0.0-rc.1
+
+- First version: steps 1 to 6. The lab peer to peer; the HDAB's
+  agreement with Lux Biobank; Schuman refused by Lux Biobank; Schuman's
+  counts through the HDAB's pipeline, which pulls only during Schuman's
+  fetch; the known gap of step 5; an ended pilot offer and the HDAB's
+  revoked membership. A manual test, not run in CI (maintainer,
+  2026-11-15).
+- Finding: a revoked party leaves its counter-parties' transfers
+  `REQUESTED`.
+
+## Next
+
+- 1.1: push transfers into object storage for the lab.
+- 1.2: purpose and data permit; step 5's gap closes.
+- 1.3: the HDAB's offers tied to its own agreement (R-39).

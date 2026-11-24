@@ -3,26 +3,26 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# The demo in Docker Compose (examples/demos/two-party/compose.yaml): a provider
+# The demo in Docker Compose (scenarios/two-party/compose.yaml): a provider
 # and a consumer, each a connector with its identity component, the data
 # space's portitor-issuer and a data server, each in its own container.
-# Runs the checks of examples/demos/two-party/demo-steps.sh from this machine, then removes
+# Runs the checks of scenarios/two-party/demo-steps.sh from this machine, then removes
 # everything, volumes included.
 #
-#  1. Keys and secrets, in examples/demos/two-party/run/; the HealthDCAT-AP demo
+#  1. Keys and secrets, in scenarios/two-party/run/; the HealthDCAT-AP demo
 #     bundle, built and signed with the issuer image (scripts/demo-bundle.sh)
 #     into run/issuer/bundle/, which the issuer serves.
 #  2. Docker Compose up.
 #  3. The issuer registers both participants; each identity asks it for
 #     its credentials through its own management API and waits for the
-#     delivery (as examples/demos/two-party/demo.sh).
+#     delivery (as scenarios/two-party/demo.sh).
 #  4. The demo steps.
 #
-# Usage: examples/demos/two-party/demo-compose.sh [connector image [identity image [issuer image]]]
+# Usage: scenarios/two-party/demo-compose.sh [connector image [identity image [issuer image]]]
 #   Without images it uses the compose file's defaults (the release images).
 # Environment:
 #   KEEP=1       leave the containers running, and run/, at the end
-#   EXTRA_COMPOSE=examples/demos/two-party/observability.yaml
+#   EXTRA_COMPOSE=scenarios/two-party/observability.yaml
 #                one more Compose file, used with compose.yaml (here: the
 #                optional observability stack)
 #   CONTAINER_ENGINE=docker|podman
@@ -33,18 +33,18 @@
 
 set -euo pipefail
 # shellcheck source=scripts/require-bash.sh
-source "$(dirname "$0")/../../../scripts/require-bash.sh"
+source "$(dirname "$0")/../../scripts/require-bash.sh"
 
-cd "$(dirname "$0")/../../.."
+cd "$(dirname "$0")/../.."
 if [[ $# -gt 0 ]]; then export PORTITOR_IMAGE=$1; fi
 if [[ $# -gt 1 ]]; then export PORTITOR_IDENTITY_IMAGE=$2; fi
 if [[ $# -gt 2 ]]; then export PORTITOR_ISSUER_IMAGE=$3; fi
 # ENGINE_COMPOSE: `docker compose` or `podman compose`
 # shellcheck source=scripts/container-engine.sh
 source scripts/container-engine.sh
-COMPOSE=("${ENGINE_COMPOSE[@]}" -f examples/demos/two-party/compose.yaml)
+COMPOSE=("${ENGINE_COMPOSE[@]}" -f scenarios/two-party/compose.yaml)
 if [[ -n ${EXTRA_COMPOSE:-} ]]; then COMPOSE+=(-f "$EXTRA_COMPOSE"); fi
-RUN=examples/demos/two-party/run
+RUN=scenarios/two-party/run
 
 # who is who (compose.yaml)
 AUTHORITY=did:web:issuer%3A8070
@@ -174,4 +174,4 @@ PROVIDER=http://provider:8080 HERE=http://127.0.0.1:18080 \
   MANAGEMENT=http://127.0.0.1:18091 KEY_FILE="$RUN/consumer/management.key" \
   CONSUMER_ID="$CONSUMER_ID" PROVIDER_ID="$PROVIDER_ID" \
   ISSUER_MANAGEMENT="$ISSUER_MANAGEMENT" ISSUER_KEY_FILE="$RUN/issuer/management.key" \
-  DATA=examples/data examples/demos/two-party/demo-steps.sh
+  DATA=examples/data scenarios/two-party/demo-steps.sh
