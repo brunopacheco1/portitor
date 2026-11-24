@@ -12,6 +12,19 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-24
+
+Portitor 1.0, the first stable release. From now on, a 1.x release may
+add to what [STABILITY](docs/STABILITY.md) lists, and only 2.0 may remove
+or rename it. No setting, route, file format or database schema changed
+since 1.0.0-rc.1: the changes below are the reproducible-build check,
+documentation, and the demos moved into `scenarios/`. The only Rust
+changes are comments and test file paths. All six scenarios passed on
+the release candidate on Linux (five on its images, two-data-spaces
+built from source), and its images were checked with
+`cosign verify`, before this release. Upgrading from 0.9 or later:
+[OPERATING, From 0.9 to 1.0 in one step](docs/OPERATING.md#from-09-to-10-in-one-step).
+
 ### Fixed
 
 - Reproducible build, release mode: the comparison read the rebuild's
@@ -60,6 +73,9 @@ versions may change behaviour and configuration.
 - Each scenario stands alone: its own `run.sh` starts only the services
   it needs. The helpers the scenarios share are in
   `scripts/scenario-lib.sh`.
+- Version 1.0.0. The website quickstart clones `v1.0.0`, and the
+  scenarios that pull release images (two-party, hdab-intermediary,
+  data-permits) default to the 1.0.0 images.
 
 ## [1.0.0-rc.1] - 2026-11-22
 

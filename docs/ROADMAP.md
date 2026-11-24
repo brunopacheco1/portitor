@@ -36,6 +36,7 @@ and debts each release raised or closed are in
 | 0.12 | 2026-11-20 | v0.12.0 | Interoperability and performance: strict policy reading, DSP and DCP fixes checked against EDC, benchmarks published, a panic fails one request, ADR 0025 proposed | [0.12.0](../CHANGELOG.md#0120---2026-11-20) |
 | 0.13 | 2026-11-20 | v0.13.0 | API and configuration freeze ([STABILITY](STABILITY.md)); management call that reads a catalog; EDC test on 1.0.0-RC8 with Gaia-X; ADRs 0024, 0025 and 0026 accepted | [0.13.0](../CHANGELOG.md#0130---2026-11-20) |
 | 0.14 | 2026-11-21 | v0.14.0 | Release candidate for 1.0: shorter documentation with [OPERATING](OPERATING.md); Roman website; EDC Issuer Service in the EDC test; CI scope and gates; CodeQL gate; OpenSSF Baseline level 1 self-assessment | [0.14.0](../CHANGELOG.md#0140---2026-11-21) |
+| 1.0 | 2026-11-24 | v1.0.0 | Stable: the 0.14 release candidate, tried as v1.0.0-rc.1 on 2026-11-22; routes and settings kept until 2.0 ([STABILITY](STABILITY.md)); the demos as self-contained scenarios, with two health scenarios | [1.0.0](../CHANGELOG.md#100---2026-11-24) |
 
 Older documents cite sections of this file that the table replaced, for
 example "ROADMAP 0.11, Decisions on the 0.11 plan". Their full text is in
@@ -197,12 +198,16 @@ The health dataspace demo (see below) grows one step per release, from
 1.1 to 1.3. It is a manual test, run with Compose and a runbook, not a
 CI job (maintainer, 2026-11-15).
 
-### 1.0 Stable
+### 1.0 Stable (released 2026-11-24 as v1.0.0)
 
 - The 0.14 release candidate and the "before 1.0" items of 0.14.
 - Exit: upgrade notes from 0.9 to 1.0; the website says which APIs and
   settings 1.0 keeps stable.
 - Main risk: a breaking change found after the freeze.
+- Shipped as 1.0.0-rc.1 (2026-11-22), then 1.0.0 with no API or
+  configuration change. Before the tag, all six scenarios passed on
+  Linux with the candidate and `cosign verify` passed on its images
+  (2026-11-24).
 
 ### 1.1 Push to object storage
 
