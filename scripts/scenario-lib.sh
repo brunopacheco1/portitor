@@ -36,22 +36,26 @@ wait_for() { # url
   fail "$url did not answer"
 }
 
-uri() { jq -rn --arg v "$1" '$v | @uri'; }
+uri() { # text: the text, percent-encoded for a URL path
+  local text=$1
+  jq -rn --arg v "$text" '$v | @uri'
+}
 
 # --- keys and the bundle ------------------------------------------------------
 
 write_issuer_keys() { # issuer: its signing key and its management API key
-  mkdir -p "$RUN/$1"
-  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$RUN/$1/issuer-key.pem" 2>/dev/null
-  openssl rand -hex 32 >"$RUN/$1/management.key"
+  local dir=$RUN/$1
+  mkdir -p "$dir"
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$dir/issuer-key.pem" 2>/dev/null
+  openssl rand -hex 32 >"$dir/management.key"
 }
 
 write_participant_keys() { # participant: its identity key and the secrets of its identity and connector
-  mkdir -p "$RUN/$1"
-  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$RUN/$1/identity-key.pem" 2>/dev/null
-  local secret
+  local dir=$RUN/$1 secret
+  mkdir -p "$dir"
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$dir/identity-key.pem" 2>/dev/null
   for secret in identity-management.key sts-client-secret management.key; do
-    openssl rand -hex 32 >"$RUN/$1/$secret"
+    openssl rand -hex 32 >"$dir/$secret"
   done
 }
 
@@ -89,11 +93,11 @@ identity_api() { # participant method path [body]: that participant's identity m
 participant_did() { echo "did:web:$1-identity%3A8090"; }
 
 register() { # issuer participant claims-json: the issuer registers the participant with its claims
-  local did
-  did=$(participant_did "$2")
-  issuer_api "$1" POST /v1/participants "$(jq -nc --arg did "$did" --argjson claims "$3" \
-    '{did: $did, claims: $claims}')" >/dev/null || fail "$1: register $did"
-  echo "$1 registered $2: $3"
+  local issuer=$1 participant=$2 claims=$3 did
+  did=$(participant_did "$participant")
+  issuer_api "$issuer" POST /v1/participants "$(jq -nc --arg did "$did" --argjson claims "$claims" \
+    '{did: $did, claims: $claims}')" >/dev/null || fail "$issuer: register $did"
+  echo "$issuer registered $participant: $claims"
 }
 
 request_credentials() { # participant issuer-did credential-id...: asks, then waits for the delivery
@@ -110,6 +114,7 @@ request_credentials() { # participant issuer-did credential-id...: asks, then wa
     case $status in
       ISSUED) return 0 ;;
       REJECTED) fail "$issuer rejected $who's request: $view" ;;
+      *) ;; # still asked: wait
     esac
     sleep 0.2
   done
@@ -126,7 +131,10 @@ api() { # participant method path [body]: that participant's connector managemen
   curl "${args[@]}"
 }
 
-state_of() { jq -r '.state' <<<"$1"; }
+state_of() { # record: its state
+  local record=$1
+  jq -r '.state' <<<"$record"
+}
 
 until_state() { # participant path states(regex): prints the record once in one of them
   local who=$1 path=$2 states=$3 view state
@@ -143,33 +151,35 @@ until_state() { # participant path states(regex): prints the record once in one 
 }
 
 catalog() { # participant address provider-id: the provider's catalog
-  api "$1" POST /v1/catalog/request "$(jq -nc --arg addr "$2" --arg id "$3" --arg p "$PROTOCOL" \
-    '{counterPartyAddress: $addr, counterPartyId: $id, protocol: $p}')" || fail "$1: catalog of $3"
+  local who=$1 address=$2 provider=$3
+  api "$who" POST /v1/catalog/request "$(jq -nc --arg addr "$address" --arg id "$provider" --arg p "$PROTOCOL" \
+    '{counterPartyAddress: $addr, counterPartyId: $id, protocol: $p}')" || fail "$who: catalog of $provider"
 }
 
 offer() { # catalog dataset offer-id: the offer, as the catalog gives it
-  jq -ce --arg d "$2" --arg o "$3" '.dataset[] | select(.["@id"] == $d) | .hasPolicy[]
-    | select(.["@id"] == $o)' <<<"$1" || fail "no offer $3 in the catalog"
+  local catalog=$1 dataset=$2 offer_id=$3
+  jq -ce --arg d "$dataset" --arg o "$offer_id" '.dataset[] | select(.["@id"] == $d) | .hasPolicy[]
+    | select(.["@id"] == $o)' <<<"$catalog" || fail "no offer $offer_id in the catalog"
 }
 
 negotiate() { # participant address provider-id dataset offer: prints the ended negotiation
-  local who=$1 pid
-  pid=$(api "$who" POST /v1/negotiations "$(jq -nc --arg addr "$2" --arg id "$3" --arg d "$4" \
-    --argjson offer "$5" '{counterPartyAddress: $addr, counterPartyId: $id, datasetId: $d, offer: $offer}')" |
+  local who=$1 address=$2 provider=$3 dataset=$4 offer=$5 pid
+  pid=$(api "$who" POST /v1/negotiations "$(jq -nc --arg addr "$address" --arg id "$provider" --arg d "$dataset" \
+    --argjson offer "$offer" '{counterPartyAddress: $addr, counterPartyId: $id, datasetId: $d, offer: $offer}')" |
     jq -r '.consumerPid') || fail "$who: start negotiation"
   until_state "$who" "/v1/negotiations/$pid" 'FINALIZED|TERMINATED'
 }
 
 transfer() { # participant agreement: prints the transfer once STARTED or TERMINATED
-  local who=$1 pid
-  pid=$(api "$who" POST /v1/transfers "$(jq -nc --arg a "$2" '{agreementId: $a}')" |
+  local who=$1 agreement=$2 pid
+  pid=$(api "$who" POST /v1/transfers "$(jq -nc --arg a "$agreement" '{agreementId: $a}')" |
     jq -r '.consumerPid') || fail "$who: request transfer"
   until_state "$who" "/v1/transfers/$pid" 'STARTED|TERMINATED'
 }
 
 complete() { # participant transfer
-  local who=$1 pid
-  pid=$(jq -r '.consumerPid' <<<"$2")
+  local who=$1 transfer=$2 pid
+  pid=$(jq -r '.consumerPid' <<<"$transfer")
   api "$who" POST "/v1/transfers/$pid/completion" >/dev/null || fail "$who: complete $pid"
   until_state "$who" "/v1/transfers/$pid" 'COMPLETED' >/dev/null
 }
@@ -183,6 +193,8 @@ app_fetch() { # app transfer [output]: the data user's app (a Compose service) f
 }
 
 expect() { # what record expected-state
-  [[ $(state_of "$2") == "$3" ]] || fail "$1: expected $3, got $(jq -c '{state, errorDetail}' <<<"$2")"
-  echo "$1: $3"
+  local what=$1 record=$2 expected=$3
+  [[ $(state_of "$record") == "$expected" ]] ||
+    fail "$what: expected $expected, got $(jq -c '{state, errorDetail}' <<<"$record")"
+  echo "$what: $expected"
 }
