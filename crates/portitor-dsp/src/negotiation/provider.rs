@@ -24,6 +24,7 @@
 
 use crate::catalog::CatalogDatasets;
 use crate::policy::CallerCredentials;
+pub use crate::process::{Environment, StoreError};
 use crate::{Context, Offer};
 use crate::{WRITE_ATTEMPTS, Write};
 
@@ -66,18 +67,6 @@ impl Negotiation {
         self.offer.target.as_deref().unwrap_or_default()
     }
 }
-
-/// A store failure (I/O, corruption); the request cannot be served.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StoreError(pub String);
-
-impl std::fmt::Display for StoreError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "negotiation store: {}", self.0)
-    }
-}
-
-impl std::error::Error for StoreError {}
 
 /// Port: where the provider keeps its negotiations.
 pub trait NegotiationStore {
@@ -182,14 +171,6 @@ pub enum Failure {
     NotFound(ContractNegotiationError),
     /// HTTP 500: the store failed.
     Store(StoreError),
-}
-
-/// Values the service needs from outside the domain.
-pub trait Environment {
-    /// A new, unique identifier (for example `urn:uuid:...`).
-    fn new_id(&self) -> String;
-    /// The current time as XSD dateTime in UTC.
-    fn now(&self) -> String;
 }
 
 /// The provider side of contract negotiation.

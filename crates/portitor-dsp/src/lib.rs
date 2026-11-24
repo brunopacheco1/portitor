@@ -71,10 +71,35 @@ pub enum Role {
     Consumer,
 }
 
-/// The state of a DSP process (a negotiation or a transfer).
-pub trait ProcessState: Copy + std::fmt::Debug {
+/// The state of a DSP process (a negotiation or a transfer), with its
+/// state machine. The shared core of the services ([`process`]) moves a
+/// process through it without knowing which one it is.
+pub trait ProcessState: Copy + PartialEq + std::fmt::Debug {
     /// The process, as error messages name it.
     const PROCESS: &'static str;
+
+    /// What a message does to the state machine (the module's
+    /// `Transition`).
+    type Transition: Copy + PartialEq + std::fmt::Debug;
+
+    /// The termination, which either party may send in any state that is
+    /// not terminal.
+    const TERMINATE: Self::Transition;
+
+    /// Whether no message may move the process any more.
+    fn is_terminal(self) -> bool;
+
+    /// The state after `transition` sent by `sender` in state `from`
+    /// (`None`: no process yet). The module's `next_state`.
+    ///
+    /// # Errors
+    ///
+    /// The transition is not allowed.
+    fn next_state(
+        from: Option<Self>,
+        transition: Self::Transition,
+        sender: Role,
+    ) -> Result<Self, TransitionError<Self, Self::Transition>>;
 }
 
 /// Why a message cannot move a process: `S` is its state, `T` its
@@ -229,6 +254,7 @@ pub mod catalog;
 pub mod guard;
 pub mod negotiation;
 pub mod policy;
+pub mod process;
 pub mod transfer;
 pub mod unique_keys;
 

@@ -22,12 +22,13 @@
 //! As everywhere (ADR 0007): a message is saved as `pending` before it is
 //! sent, a provider message that fits only the state our pending message
 //! leads to proves that message arrived, and every write compares the
-//! transfer's `version`.
+//! transfer's `version`. These steps are the shared core in
+//! [`crate::process`].
 
 use crate::Context;
-use crate::{WRITE_ATTEMPTS, Write};
+use crate::process::{self, Lookup, Record, Records, Refused, Write};
 
-pub use super::provider::{Environment, Failure, StoreError};
+pub use super::provider::Failure;
 use super::{
     DataAddress, Role, TransferCompletionMessage, TransferCompletionMessageType, TransferError,
     TransferProcess, TransferRequestMessage, TransferRequestMessageType, TransferStartMessage,
@@ -35,6 +36,7 @@ use super::{
     TransferSuspensionMessageType, TransferTerminationMessage, TransferTerminationMessageType,
     Transition, TransitionError, next_state,
 };
+pub use crate::process::{Environment, StoreError};
 
 /// One transfer as the consumer keeps it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +71,37 @@ impl ConsumerTransfer {
             &self.consumer_pid,
             self.state,
         )
+    }
+}
+
+impl Record for ConsumerTransfer {
+    type State = TransferState;
+    type Outgoing = Outgoing;
+    const PARTY: Role = Role::Consumer;
+
+    fn state(&self) -> TransferState {
+        self.state
+    }
+    fn set_state(&mut self, state: TransferState) {
+        self.state = state;
+    }
+    fn pending(&self) -> Option<&Outgoing> {
+        self.pending.as_ref()
+    }
+    fn set_pending(&mut self, pending: Option<Outgoing>) {
+        self.pending = pending;
+    }
+    fn version(&self) -> u64 {
+        self.version
+    }
+    fn set_version(&mut self, version: u64) {
+        self.version = version;
+    }
+    fn transition_of(message: &Outgoing) -> Transition {
+        message.transition
+    }
+    fn is_first_request(message: &Outgoing) -> bool {
+        message.initial
     }
 }
 
@@ -412,7 +445,7 @@ where
         consumer_pid: &str,
         decision: ConsumerTransferDecision,
     ) -> Result<Outgoing, Failure> {
-        let saved = self.update(consumer_pid, |transfer| {
+        let saved = process::update(self, &Lookup::own(consumer_pid), |transfer| {
             if transfer.pending.is_some() {
                 return Err(bad(
                     transfer.provider_pid.as_deref().unwrap_or_default(),
@@ -429,7 +462,7 @@ where
                     )
                 })?;
             transfer.pending = Some(out);
-            Ok(Write::AsIs)
+            Ok(Write::Save)
         })?;
         saved
             .and_then(|transfer| transfer.pending)
@@ -449,8 +482,8 @@ where
         sent: &Outgoing,
         ack: Option<&serde_json::Value>,
     ) -> Result<Option<Outgoing>, Failure> {
-        let saved = self.update(&sent.consumer_pid, |transfer| {
-            if transfer.pending.as_ref() != Some(sent) {
+        let saved = process::update(self, &Lookup::own(&sent.consumer_pid), |transfer| {
+            if !process::is_pending(transfer, sent) {
                 return Ok(Write::Skip);
             }
             if sent.initial {
@@ -467,8 +500,11 @@ where
                     })?;
                 transfer.provider_pid = Some(pid);
             }
-            apply_sent(transfer, sent).map_err(|e| transition_failure(transfer, e))?;
-            Ok(Write::Settle)
+            transfer
+                .apply_sent(sent)
+                .map_err(|e| transition_failure(transfer, e))?;
+            self.settle(transfer);
+            Ok(Write::Save)
         })?;
         Ok(saved.and_then(|transfer| transfer.pending))
     }
@@ -480,13 +516,13 @@ where
     ///
     /// Unknown transfer, or store failure.
     pub fn not_started(&self, consumer_pid: &str) -> Result<(), Failure> {
-        self.update(consumer_pid, |transfer| {
+        process::update(self, &Lookup::own(consumer_pid), |transfer| {
             if !transfer.pending.as_ref().is_some_and(|p| p.initial) {
                 return Ok(Write::Skip);
             }
             transfer.state = TransferState::Terminated;
             transfer.pending = None;
-            Ok(Write::AsIs)
+            Ok(Write::Save)
         })?;
         Ok(())
     }
@@ -499,15 +535,15 @@ where
     ///
     /// Unknown transfer, or store failure.
     pub fn abort(&self, sent: &Outgoing, reason: &str) -> Result<Option<Outgoing>, Failure> {
-        let saved = self.update(&sent.consumer_pid, |transfer| {
-            if transfer.state.is_terminal() || transfer.pending.as_ref() != Some(sent) {
+        let saved = process::update(self, &Lookup::own(&sent.consumer_pid), |transfer| {
+            if !process::can_abort(transfer, sent) {
                 return Ok(Write::Skip);
             }
             let Some(out) = message(transfer, ConsumerTransferDecision::Terminate, reason) else {
                 return Ok(Write::Skip);
             };
             transfer.pending = Some(out);
-            Ok(Write::AsIs)
+            Ok(Write::Save)
         })?;
         Ok(saved.and_then(|transfer| transfer.pending))
     }
@@ -520,10 +556,7 @@ where
     /// Store failure.
     pub fn pending(&self) -> Result<Vec<Outgoing>, Failure> {
         let transfers = self.store.pending().map_err(Failure::Store)?;
-        Ok(transfers
-            .into_iter()
-            .filter_map(|transfer| transfer.pending)
-            .collect())
+        Ok(process::pending_messages(transfers))
     }
 
     /// Applies a provider's message with `receive`, then asks the decider
@@ -533,47 +566,21 @@ where
         consumer_pid: &str,
         receive: impl Fn(&mut ConsumerTransfer) -> Result<(), Failure>,
     ) -> Handled {
-        let saved = self.update(consumer_pid, |transfer| {
+        let saved = process::update(self, &Lookup::own(consumer_pid), |transfer| {
             receive(transfer)?;
-            Ok(Write::Settle)
+            self.settle(transfer);
+            Ok(Write::Save)
         })?;
         let transfer = saved.ok_or_else(|| not_found(consumer_pid))?;
         Ok((transfer.ack(), transfer.pending))
     }
 
-    /// Reads a transfer, changes it and writes it if its version is
-    /// unchanged; otherwise reads it again and repeats, a few times.
-    /// Returns what was written, or `None` for `Write::Skip`.
-    fn update(
-        &self,
-        consumer_pid: &str,
-        change: impl Fn(&mut ConsumerTransfer) -> Result<Write, Failure>,
-    ) -> Result<Option<ConsumerTransfer>, Failure> {
-        for _ in 0..WRITE_ATTEMPTS {
-            let mut transfer = self.load(consumer_pid)?;
-            match change(&mut transfer)? {
-                Write::Skip => return Ok(None),
-                Write::Settle => {
-                    if transfer.pending.is_none() {
-                        transfer.pending = self.next(&transfer);
-                    }
-                }
-                Write::AsIs => {}
-            }
-            if transfer.state.is_terminal() {
-                // an ended transfer keeps no token
-                transfer.data_address = None;
-            }
-            // compare-and-update: written only if nobody wrote in between
-            let read_version = transfer.version;
-            transfer.version = read_version.wrapping_add(1);
-            let written = self.store.replace_if(&transfer, read_version);
-            if written.map_err(Failure::Store)? {
-                return Ok(Some(transfer));
-            }
+    /// Asks the decider for our next message, unless one is still on its
+    /// way.
+    fn settle(&self, transfer: &mut ConsumerTransfer) {
+        if transfer.pending.is_none() {
+            transfer.pending = self.next(transfer);
         }
-        let reason = "the transfer keeps changing concurrently; retry";
-        Err(bad("", consumer_pid, reason))
     }
 
     /// The consumer's next message, as the decider says.
@@ -594,6 +601,41 @@ where
             .get(consumer_pid)
             .map_err(Failure::Store)?
             .ok_or_else(|| not_found(consumer_pid))
+    }
+}
+
+/// How the shared core ([`process::update`]) reads and writes transfers.
+/// The provider is checked separately, in `from_provider`.
+impl<S, D, E> Records for ConsumerTransferService<S, D, E>
+where
+    S: ConsumerTransferStore,
+{
+    type Record = ConsumerTransfer;
+    type Failure = Failure;
+
+    fn read(&self, lookup: &Lookup<'_>) -> Result<ConsumerTransfer, Failure> {
+        self.store
+            .get(lookup.pid)
+            .map_err(Failure::Store)?
+            .ok_or_else(|| not_found(lookup.pid))
+    }
+
+    fn replace_if(&self, transfer: &ConsumerTransfer, expected: u64) -> Result<bool, Failure> {
+        self.store
+            .replace_if(transfer, expected)
+            .map_err(Failure::Store)
+    }
+
+    fn keeps_changing(&self, lookup: &Lookup<'_>) -> Failure {
+        let reason = "the transfer keeps changing concurrently; retry";
+        bad("", lookup.pid, reason)
+    }
+
+    fn before_write(&self, transfer: &mut ConsumerTransfer) {
+        if transfer.state.is_terminal() {
+            // an ended transfer keeps no token
+            transfer.data_address = None;
+        }
     }
 }
 
@@ -675,53 +717,20 @@ fn message(
     })
 }
 
-/// Applies our acknowledged message `sent` to `t`.
-fn apply_sent(transfer: &mut ConsumerTransfer, sent: &Outgoing) -> Result<(), TransitionError> {
-    if !sent.initial {
-        transfer.state = next_state(Some(transfer.state), sent.transition, Role::Consumer)?;
-    }
-    transfer.pending = None;
-    Ok(())
-}
-
-/// Applies a provider's message to `t`. If it does not fit the current
-/// state but fits the state our pending message leads to, the provider has
-/// received that message (it could not have sent this one otherwise), so
-/// both are applied. A provider message proves our request arrived.
+/// Applies a provider's message to `transfer` with the shared core
+/// ([`process::receive`]). A provider message proves our request arrived,
+/// and one that fits only the state our pending message leads to proves
+/// that message arrived (ADR 0007).
 fn receive(transfer: &mut ConsumerTransfer, transition: Transition) -> Result<(), Failure> {
-    match transfer.pending.as_ref() {
-        Some(p) if p.initial => transfer.pending = None,
-        Some(p) if p.transition == Transition::Terminate && transition != Transition::Terminate => {
-            return Err(bad(
-                transfer.provider_pid.as_deref().unwrap_or_default(),
-                &transfer.consumer_pid,
-                "the consumer is ending this transfer",
-            ));
-        }
-        _ => {}
+    match process::receive(transfer, transition) {
+        Ok(()) => Ok(()),
+        Err(Refused::Ending) => Err(bad(
+            transfer.provider_pid.as_deref().unwrap_or_default(),
+            &transfer.consumer_pid,
+            "the consumer is ending this transfer",
+        )),
+        Err(Refused::NotAllowed(error)) => Err(transition_failure(transfer, error)),
     }
-    let error = match next_state(Some(transfer.state), transition, Role::Provider) {
-        Ok(state) => {
-            transfer.state = state;
-            return Ok(());
-        }
-        Err(e) => e,
-    };
-    // our pending message may have arrived without its acknowledgement
-    // being recorded yet: if the counter-party's message fits the state
-    // that message leads to, it is proof of delivery (ADR 0007), and both
-    // are applied together
-    if let Some(sent) = transfer.pending.clone() {
-        let mut proved = transfer.clone();
-        if apply_sent(&mut proved, &sent).is_ok()
-            && let Ok(state) = next_state(Some(proved.state), transition, Role::Provider)
-        {
-            proved.state = state;
-            *transfer = proved;
-            return Ok(());
-        }
-    }
-    Err(transition_failure(transfer, error))
 }
 
 /// The message must name this transfer. The provider's first message may

@@ -134,6 +134,20 @@ impl Transition {
 
 impl crate::ProcessState for TransferState {
     const PROCESS: &'static str = "transfer";
+    type Transition = Transition;
+    const TERMINATE: Transition = Transition::Terminate;
+
+    fn is_terminal(self) -> bool {
+        TransferState::is_terminal(self)
+    }
+
+    fn next_state(
+        from: Option<Self>,
+        transition: Transition,
+        sender: Role,
+    ) -> Result<Self, TransitionError> {
+        next_state(from, transition, sender)
+    }
 }
 
 /// Why a message cannot move the transfer.
