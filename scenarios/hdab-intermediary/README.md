@@ -6,8 +6,9 @@ SPDX-License-Identifier: Apache-2.0
 
 # hdab-intermediary: the HDAB pulls, counts and passes on only the counts
 
-A scenario on the [health-lu](../health-lu/) data space. Changes are in
-its [changelog](CHANGELOG.md).
+A health data space for secondary use, the way the European Health Data
+Space (EHDS, [Regulation (EU) 2025/327](https://eur-lex.europa.eu/eli/reg/2025/327/oj))
+plans it, on one machine. Changes are in its [changelog](CHANGELOG.md).
 
 ## What it is about
 
@@ -23,6 +24,62 @@ the HDAB as intermediary.
 
 It answers the roadmap's four questions for the health data space demo
 ([What it answers](#what-it-answers)).
+
+### Who takes part
+
+The organisations are made up. Each one is modelled on a Luxembourg
+institution that could play the role. None of those institutions takes
+part in or endorses this scenario. Luxembourg has not named its HDAB
+yet, so the scenario calls it just "HDAB".
+
+| Party | Role | Modelled on | `MembershipCredential` `role` | `DataProcessorCredential` `processing` |
+| --- | --- | --- | --- | --- |
+| Digital Lux Trust | The authority: issues the credentials and the HealthDCAT-AP bundle | Ministry for Digitalisation | | |
+| Lux Biobank | Health data holder: offers the genotypes | Integrated Biobank of Luxembourg (IBBL), part of LIH | `data-holder` | none |
+| Lux Biomedicine Lab | Data user, peer to peer: takes a copy of the genotypes | University of Luxembourg | `data-user` | `eu` |
+| HDAB | Health data access body: gets the genotypes and offers only counts | Luxembourg's future HDAB | `health-data-access-body` | none |
+| Schuman Clinical Research | Data user: gets the counts through the HDAB | Hôpitaux Robert Schuman | `data-user` | none |
+
+Each participant runs a `portitor-connector` and a `portitor-identity`;
+Digital Lux Trust runs `portitor-issuer`. The credentials are the ones
+Portitor already knows
+([examples/issuer-credentials.json](../../examples/issuer-credentials.json)).
+The `role` values are scenario values: no specification defines them.
+
+![Deployment: hdab-intermediary on one machine](diagrams/deployment.drawio.svg)
+
+### The data and the datasets
+
+Lux Biobank's data are the [synthetic genotypes](../../examples/genotypes/)
+in `examples/genotypes/`: no real person is in them. Two datasets, by two
+publishers, both in HealthDCAT-AP and checked against the data space's
+release 8 bundle when each connector starts:
+
+- Lux Biobank's **genotypes** ([datasets/biobank.json](datasets/biobank.json)),
+  health categories HGPD (human genetic data) and EINS (biobanks). Two
+  offers: one for access bodies (`MembershipCredential.role` =
+  `health-data-access-body`, until 2027-12-31), one for EU processors
+  (`DataProcessorCredential.processing` = `eu`, until 2027-06-30).
+- The HDAB's **carriers of each variant per population**
+  ([datasets/hdab.json](datasets/hdab.json)), health category HGPD. One
+  offer for data users (`MembershipCredential.role` = `data-user`, until
+  2027-12-31). `run.sh` adds a pilot offer with the same terms that ends
+  a few minutes after the start, to show an ended offer.
+
+The health category labels come from the HealthDCAT-AP code list as
+[metadata101/dcat-ap](https://github.com/metadata101/dcat-ap/blob/main/resources/thesauri/theme/health-healthcategory.rdf)
+copies it. The official page could not be read from here.
+
+The HDAB's source is its pipeline, [pipeline/counts.py](pipeline/counts.py)
+(Python standard library only). It runs only when Schuman Clinical
+Research's app fetches the data of a started transfer. Then it starts a
+transfer from Lux Biobank under the HDAB's agreement, through the HDAB's
+own management API. It pulls the genotypes, completes that transfer and
+counts. For each variant it gives the people per population who carry
+it. Counts from 1 to 4 show as `<5`, and a variant below 5 in every
+population is left out. Nothing is kept. The pipeline stands in for a
+secure processing environment (EHDS Art. 73), which this scenario does
+not build.
 
 ## Scope
 
@@ -64,10 +121,33 @@ Out, on purpose:
 scenarios/hdab-intermediary/run.sh
 ```
 
-[health-lu, "Run it"](../health-lu/README.md#run-it) says what it needs
-and how to keep it running. It takes about two and a half minutes, most
-of it waiting for the pilot offer to end (`PILOT_SECONDS=60` makes that
-shorter). [steps.sh](steps.sh) runs the steps below.
+```sh
+scenarios/hdab-intermediary/run.sh                       # the release images
+CONTAINER_ENGINE=podman scenarios/hdab-intermediary/run.sh
+scenarios/hdab-intermediary/run.sh <connector image> <identity image> <issuer image>
+```
+
+It needs Docker or Podman with Docker Compose, bash 4.4 or later, curl,
+jq and openssl ([docs/TESTING.md, "Docker or Podman"](../../docs/TESTING.md#docker-or-podman)).
+[run.sh](run.sh) writes the keys into `run/`, starts the 11 containers
+of [compose.yaml](compose.yaml), has Digital Lux Trust register the
+four participants and issue their credentials, then runs
+[steps.sh](steps.sh), the steps below. The two data users' apps run only
+when a step needs them.
+
+It takes about three minutes, most of it waiting for the pilot offer to
+end (`PILOT_SECONDS=60` makes that shorter). `KEEP=1` leaves everything
+running, with the keys in `run/`. The management APIs are then on
+`127.0.0.1`: Digital Lux Trust 18071, Lux Biobank 18101, the lab 18111,
+the HDAB 18121, Schuman Clinical Research 18131. The key of each is in
+`run/<participant>/management.key`. The host ports are those of
+data-permits, so run one at a time.
+
+The check of the pipeline's count runs without containers:
+
+```sh
+cd scenarios/hdab-intermediary/pipeline && python3 -m unittest
+```
 
 ## The steps
 

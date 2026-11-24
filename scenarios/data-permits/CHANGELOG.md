@@ -11,10 +11,14 @@ version it ran on.
 
 ## 2026-11-24, on 1.0.0-rc.1
 
+- On its own: its own `compose.yaml`, `run.sh` and datasets, and only
+  what it needs (Digital Lux Trust, the HDAB's issuer, Lux Biobank,
+  Schuman Clinical Research: 8 containers instead of 14). The lab, the
+  HDAB's connector and its pipeline are gone. So step 5 no longer
+  revokes the HDAB's membership: the HDAB is not a participant here.
+  Lux Biobank's dataset has only the offers this scenario uses.
 - Moved to `scenarios/data-permits/`, with its own README and this
-  changelog; steps 7 to 11 of the health demo are now steps 1 to 5. It
-  runs alone with its own `run.sh`, so step 5 now has Digital
-  Lux Trust revoke the HDAB's membership itself.
+  changelog; steps 7 to 11 of the health demo are now steps 1 to 5.
 - First version, the same day: the HDAB's own issuer grants permits
   P-2026-001 and P-2026-002 as `DataPermitCredential`s (placeholder
   claims `permitId` and `purpose`); Lux Biobank has one offer per

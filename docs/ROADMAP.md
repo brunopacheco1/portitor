@@ -411,8 +411,7 @@ The demo must answer, by running it:
 Step 0 runs on v1.0.0-rc.1 as it is, with pull transfers and synthetic
 genotypes, and gives the first answers:
 the [hdab-intermediary](../scenarios/hdab-intermediary/README.md)
-scenario on the [health-lu](../scenarios/health-lu/README.md) data space
-(maintainer, 2026-11-23). Steps 1 to 3 update it as 1.1 to 1.3 land.
+scenario (maintainer, 2026-11-23). Steps 1 to 3 update it as 1.1 to 1.3 land.
 
 Checked against the EHDS (Regulation (EU) 2025/327, 2026-11-15): for
 secondary use a data user applies to the HDAB, which issues a data

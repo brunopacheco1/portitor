@@ -262,7 +262,7 @@ are closed.
 ### R-09 EDC is tested at a release candidate (1.0.0-RC8)
 
 - **What.** The EDC interop test runs EDC 1.0.0-RC8
-  (`interop/edc/runtimes/gradle.properties`). The IdentityHub Identity
+  (`scenarios/edc-interop/runtimes/gradle.properties`). The IdentityHub Identity
   API the test uses is in the package `v1.unstable` in RC8
   ([TESTING](TESTING.md#edc-interop-test)); for the Issuer Service's
   admin API see [R-47](#r-47). EDC's reading of a
@@ -318,7 +318,7 @@ are closed.
   in test mode: `DISABLE_SIGNATURE_CHECK=true` (certificate chains not
   checked against Gaia-X trust anchors) and `production=false` (any
   registration number issuer accepted), with a test CA and a test notary
-  (`interop/gaiax/compose.yaml`). A run against the Gaia-X Lab needs a
+  (`examples/gaiax/compliance.yaml`). A run against the Gaia-X Lab needs a
   public `did:web` and a CA certificate; Portitor runs only on the
   maintainer's laptop (maintainer, 2026-11-15).
 - **Why it matters.** The real trust chain and a real notary are not
@@ -716,7 +716,7 @@ are closed.
   script. Only the test is affected: Portitor's components speak DCP to
   an issuer and never call that API.
 - **Current state: Accepted.** The cost is a change to
-  `scripts/edc-interop.sh` when EDC is updated, as with the Identity API
+  `scenarios/edc-interop/run.sh` when EDC is updated, as with the Identity API
   ([R-09](#r-09); TESTING, "From RC7 to RC8").
 - **Next.** Read the admin API again at each EDC update. Suspension is
   not tested until EDC implements it.
@@ -801,7 +801,7 @@ are closed.
   dataspace. One DID per dataspace is the documented default; a shared DID
   is allowed, and DEPLOYING names what it discloses
   ([Two data spaces](DEPLOYING.md#two-data-spaces);
-  `scripts/two-data-spaces.sh`).
+  `scenarios/two-data-spaces/run.sh`).
 - **Next.** After 1.0, no release named: one connector with several
   dataspace profiles, behind its own ADR; trusted issuers by
   credential type (threat model finding F-08), which is additive.

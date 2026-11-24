@@ -11,10 +11,13 @@ version it ran on.
 
 ## 2026-11-24, on 1.0.0-rc.1
 
+- On its own: its own `compose.yaml`, `run.sh`, datasets and pipeline,
+  without the HDAB's issuer of data-permits. Lux Biobank trusts only
+  Digital Lux Trust, and its dataset has only the two offers this
+  scenario uses. The genotypes moved to `examples/genotypes/`. What it
+  checks is unchanged.
 - Moved to `scenarios/hdab-intermediary/`, with its own README and this
-  changelog; the data space it runs on is `scenarios/health-lu/`. It
-  runs alone with its own `run.sh`. What it checks is
-  unchanged.
+  changelog.
 
 ## 2026-11-23, on 1.0.0-rc.1
 

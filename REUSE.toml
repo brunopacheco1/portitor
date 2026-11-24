@@ -16,22 +16,23 @@ path = [
     "examples/*.json",
     # made-up demo data (CSV has no comments)
     "examples/data/*",
-    # the health data space: its HealthDCAT-AP datasets (JSON) and its
-    # synthetic genotypes (VCF, written by data/generate.py)
-    "scenarios/health-lu/datasets/*.json",
-    "scenarios/health-lu/hdab-issuer-credentials.json",
-    "scenarios/health-lu/data/genotypes.vcf",
+    # the health scenarios: their HealthDCAT-AP datasets and credential
+    # definitions (JSON), and the synthetic genotypes (VCF, written by
+    # examples/genotypes/generate.py)
+    "scenarios/*/datasets/*.json",
+    "scenarios/data-permits/hdab-issuer-credentials.json",
+    "examples/genotypes/genotypes.vcf",
     # the scenarios' diagrams: draw.io rewrites the whole .drawio.svg file on save
     "scenarios/*/diagrams/*.drawio.svg",
     "tck/*.json",
     # the EDC interop test's datasets (JSON) and made-up data (CSV)
-    "interop/edc/config/*.json",
-    "interop/edc/data/*",
+    "scenarios/edc-interop/config/*.json",
+    "scenarios/edc-interop/data/*",
     # the Gaia-X end-to-end test's datasets (JSON)
-    "interop/gaiax/config/*.json",
+    "scenarios/gaiax-compliance/config/*.json",
     # Gradle dependency verification of the EDC runtimes, written by
     # Gradle (--write-verification-metadata), so no header
-    "interop/edc/runtimes/gradle/verification-metadata.xml",
+    "scenarios/edc-interop/runtimes/gradle/verification-metadata.xml",
     "docs/api/*.json",
     # C4 diagrams: draw.io rewrites the whole .drawio.svg file on save
     "docs/diagrams/*.drawio.svg",

@@ -205,7 +205,7 @@ self_test_classify() {
   expect "$EVERYTHING" .github/dependabot.yml
   expect "$EVERYTHING" examples/datasets.json
   expect "$EVERYTHING" examples/bundle/healthdcat-ap-r8/README.md
-  expect "$EVERYTHING" interop/edc/compose.yaml
+  expect "$EVERYTHING" scenarios/edc-interop/compose.yaml
   expect "$EVERYTHING" tck/datasets.json
   expect "$EVERYTHING" REUSE.toml
   expect "$EVERYTHING" LICENSE

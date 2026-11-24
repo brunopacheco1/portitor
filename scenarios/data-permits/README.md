@@ -6,8 +6,9 @@ SPDX-License-Identifier: Apache-2.0
 
 # data-permits: the HDAB grants data permits, the holder checks them
 
-A scenario on the [health-lu](../health-lu/) data space. Changes are in
-its [changelog](CHANGELOG.md).
+A health data space for secondary use, the way the European Health Data
+Space (EHDS, [Regulation (EU) 2025/327](https://eur-lex.europa.eu/eli/reg/2025/327/oj))
+plans it, on one machine. Changes are in its [changelog](CHANGELOG.md).
 
 ## What it is about
 
@@ -23,12 +24,46 @@ It asks: can v1.0.0-rc.1 carry a data permit with configuration alone,
 and what breaks when a data user holds several permits and one is
 revoked?
 
+### Who takes part
+
+The organisations are made up. Each one is modelled on a Luxembourg
+institution that could play the role. None of those institutions takes
+part in or endorses this scenario. Luxembourg has not named its HDAB
+yet, so the scenario calls it just "HDAB".
+
+| Party | Role | Modelled on | Runs |
+| --- | --- | --- | --- |
+| Digital Lux Trust | The authority: issues the memberships and the HealthDCAT-AP bundle | Ministry for Digitalisation | `portitor-issuer` |
+| HDAB | Health data access body: grants data permits. It needs no connector here | Luxembourg's future HDAB | `portitor-issuer` |
+| Lux Biobank | Health data holder: offers the genotypes, one offer per permit | Integrated Biobank of Luxembourg (IBBL), part of LIH | `portitor-connector`, `portitor-identity` |
+| Schuman Clinical Research | Data user: holds the permits and gets the genotypes | Hôpitaux Robert Schuman | `portitor-connector`, `portitor-identity` |
+
+Digital Lux Trust gives Lux Biobank a `MembershipCredential` with the
+`role` `data-holder`, and Schuman one with `data-user`. The HDAB's
+issuer has its own credential definitions,
+[hdab-issuer-credentials.json](hdab-issuer-credentials.json): a
+`DataPermitCredential` (claims `permitId` and `purpose`) and, on
+purpose, a `MembershipCredential` (step 5).
+
+![Deployment: data-permits on one machine](diagrams/deployment.drawio.svg)
+
+### The data and the dataset
+
+Lux Biobank's data are the [synthetic genotypes](../../examples/genotypes/)
+in `examples/genotypes/`: no real person is in them. Its dataset
+([datasets/biobank.json](datasets/biobank.json)) is in HealthDCAT-AP,
+checked against the data space's release 8 bundle at start, with three
+offers: one per permit (`DataPermitCredential.permitId` = `P-2026-001`,
+or `P-2026-002`, and `DataPermitCredential.purpose` =
+`scientific-research`, until 2027-12-31), and one for access bodies
+(`MembershipCredential.role` = `health-data-access-body`).
+
 ## Scope
 
 In:
 
 - A data permit as a credential type defined only in the HDAB issuer's
-  configuration ([hdab-issuer-credentials.json](../health-lu/hdab-issuer-credentials.json)),
+  configuration ([hdab-issuer-credentials.json](hdab-issuer-credentials.json)),
   with no code.
 - Two permits held at once by one data user (maintainer, 2026-11-24),
   each with its own offer and agreement.
@@ -54,7 +89,7 @@ Out, on purpose:
 | Component or interface | Why it is in the story |
 | --- | --- |
 | `portitor-issuer` (the HDAB's) | Issues the permits from configuration alone; one registration per participant, so a second permit means registering again; revokes a permit. |
-| `portitor-issuer` (Digital Lux Trust) | Issues the memberships; revokes the HDAB's in step 5. |
+| `portitor-issuer` (Digital Lux Trust) | Issues the memberships and serves the HealthDCAT-AP bundle. |
 | `portitor-identity` (Schuman) | Trusts both issuers, stores both permits, presents every credential of the type asked for, and deletes the revoked permit. |
 | `portitor-connector` as provider (Lux Biobank) | Trusts both issuers (`PORTITOR_TRUSTED_ISSUERS`), reads `DataPermitCredential` claims in its offers (`PORTITOR_POLICY_CREDENTIALS`), checks them at negotiation and at each transfer, refuses a presentation with a revoked credential. |
 | `portitor-connector` as consumer (Schuman) | Asks for the `DataPermitCredential` scope the offer needs, negotiates and transfers. |
@@ -67,10 +102,20 @@ Out, on purpose:
 scenarios/data-permits/run.sh
 ```
 
-[health-lu, "Run it"](../health-lu/README.md#run-it) says what it needs
-and how to keep it running. Alone it takes about a minute. It runs alone
-or after hdab-intermediary, never before it: step 5 ends the HDAB's
-membership. [steps.sh](steps.sh) runs the steps below.
+It needs Docker or Podman with Docker Compose, bash 4.4 or later, curl,
+jq and openssl ([docs/TESTING.md, "Docker or Podman"](../../docs/TESTING.md#docker-or-podman)).
+The images can be given as arguments, and `CONTAINER_ENGINE=podman`
+picks Podman, as in [hdab-intermediary](../hdab-intermediary/README.md#run-it).
+[run.sh](run.sh) writes the keys into `run/`, starts the 8 containers of
+[compose.yaml](compose.yaml), has Digital Lux Trust register the two
+participants and issue their memberships, then runs
+[steps.sh](steps.sh), the steps below. It takes about a minute.
+
+`KEEP=1` leaves everything running, with the keys in `run/`. The
+management APIs are then on `127.0.0.1`: Digital Lux Trust 18071, the
+HDAB's issuer 18125, Lux Biobank 18101, Schuman Clinical Research 18131.
+The key of each is in `run/<party>/management.key`. The host ports are
+those of hdab-intermediary, so run one at a time.
 
 ## The steps
 
@@ -94,8 +139,7 @@ membership. [steps.sh](steps.sh) runs the steps below.
    no reason; the script checks that Lux Biobank's log does. Once
    Schuman deletes the revoked permit from its identity, P-2026-002
    works again.
-5. **Trust covers every type.** Digital Lux Trust revokes the HDAB's own
-   `MembershipCredential`. Then the HDAB's issuer gives Schuman a
+5. **Trust covers every type.** The HDAB's issuer gives Schuman a
    `MembershipCredential` with the role `health-data-access-body`, and
    Lux Biobank's offer for access bodies accepts it. The HDAB issuer's
    configuration holds a `MembershipCredential` on purpose, to show
@@ -105,13 +149,12 @@ membership. [steps.sh](steps.sh) runs the steps below.
 
 - **An issuer trusted for permits can issue memberships too**
   ([R-48](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#r-48), fix planned
-  for 1.2): trusted
-  issuers are one list for every credential type, and an issuer stays
-  trusted when its owner leaves the data space (step 5).
+  for 1.2): trusted issuers are one list for every credential type
+  (step 5). The list is configuration, so an issuer also stays trusted
+  when its owner leaves the data space.
 - **One revoked permit blocks all the others**
   ([TD-20](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-20), fix planned
-  for 1.2) until the
-  data user deletes it, and the data user is told no reason (step 4).
+  for 1.2) until the data user deletes it, and the data user is told no reason (step 4).
 - **One set of claims per participant at the issuer**
   ([TD-46](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-46), fix planned
   for 1.2): a second

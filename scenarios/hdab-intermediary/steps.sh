@@ -3,11 +3,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# The hdab-intermediary scenario (README.md), against the health data
-# space that ../health-lu/run.sh started. Runs alone, or first: it needs
-# the HDAB still a member and Schuman without an access body's role. Every call goes through a participant's own
-# management API; the data users' apps (lab-app, schuman-app) fetch the
-# data. Exits non-zero at the first failed check.
+# The hdab-intermediary scenario (README.md), against the data space that
+# run.sh started. Every call goes through a participant's own management
+# API; the data users' apps (lab-app, schuman-app) fetch the data. Exits
+# non-zero at the first failed check.
 #
 # 1. Lux Biomedicine Lab reads Lux Biobank's catalog, takes the offer for
 #    EU processors (its DataProcessorCredential) and pulls the genotypes
@@ -26,18 +25,32 @@
 #    Schuman's connector, so a new transfer never starts.
 #
 # Environment (set by run.sh):
-#   DEMO   scenarios/health-lu
-#   RUN    its run/ folder, with the management keys
-#   AUTHORITY_MANAGEMENT  the authority's management API base URL
+#   DIR        scenarios/hdab-intermediary
+#   RUN        its run/ folder, with the management keys
 #   PILOT_END  when the HDAB's pilot offer ends
 
 set -euo pipefail
 # shellcheck source=scripts/require-bash.sh
 source "$(dirname "$0")/../../scripts/require-bash.sh"
 
-: "${DEMO:?}" "${RUN:?}" "${AUTHORITY_MANAGEMENT:?}" "${PILOT_END:?}"
-# shellcheck source=scenarios/health-lu/steps-lib.sh
-source "$DEMO/steps-lib.sh"
+: "${DIR:?}" "${RUN:?}" "${PILOT_END:?}"
+# shellcheck source=scripts/container-engine.sh
+source scripts/container-engine.sh
+COMPOSE=("${ENGINE_COMPOSE[@]}" -f "$DIR/compose.yaml")
+
+# who is who (compose.yaml)
+declare -A ISSUER_MANAGEMENT=([authority]=http://127.0.0.1:18071)
+declare -A MANAGEMENT=([biobank]=http://127.0.0.1:18101 [lab]=http://127.0.0.1:18111
+  [hdab]=http://127.0.0.1:18121 [schuman]=http://127.0.0.1:18131)
+# shellcheck source=scripts/scenario-lib.sh
+source scripts/scenario-lib.sh
+BIOBANK=http://biobank:8080/$DSP
+BIOBANK_ID=$(participant_did biobank)
+HDAB=http://hdab:8080/$DSP
+HDAB_ID=$(participant_did hdab)
+GENOTYPES=https://biobank.health-lu.example/datasets/genotypes
+CARRIERS=https://hdab.health-lu.example/datasets/variant-carriers
+ORIGINAL=examples/genotypes/genotypes.vcf
 
 hdab_pulls() { # how many transfers the HDAB has asked Lux Biobank for
   api hdab GET /v1/transfers | jq '.transfers | length'
@@ -59,7 +72,7 @@ TRANSFER=$(transfer lab "$LAB_AGREEMENT")
 expect "the lab's transfer" "$TRANSFER" STARTED
 app_fetch lab-app "$TRANSFER" /storage/genotypes.vcf
 complete lab "$TRANSFER"
-cmp -s "$RUN/lab/storage/genotypes.vcf" "$DEMO/data/genotypes.vcf" || fail "the lab's copy differs"
+cmp -s "$RUN/lab/storage/genotypes.vcf" "$ORIGINAL" || fail "the lab's copy differs"
 echo "the lab has genotypes.vcf, $(wc -c <"$RUN/lab/storage/genotypes.vcf") bytes; transfer COMPLETED"
 
 step "1. The lab asks for the offer for access bodies: refused, its role is data-user"
@@ -108,8 +121,8 @@ if [[ -n $BEFORE ]]; then # bash 5: the fetch time, app start included (the HDAB
 fi
 complete schuman "$TRANSFER"
 [[ $(hdab_pulls) == 1 ]] || fail "the HDAB did not pull once: $(api hdab GET /v1/transfers)"
-EXPECTED=$("${COMPOSE[@]}" run --rm --no-deps -q -v "$PWD/$DEMO:/demo:ro" schuman-app \
-  python /demo/pipeline/counts.py /demo/data/genotypes.vcf)
+EXPECTED=$("${COMPOSE[@]}" run --rm --no-deps -q -v "$PWD:/repo:ro" schuman-app \
+  python "/repo/$DIR/pipeline/counts.py" "/repo/$ORIGINAL")
 [[ $COUNTS == "$EXPECTED" ]] || fail "the counts differ from counts.py on the genotypes"
 echo "Schuman got $(($(wc -l <<<"$COUNTS") - 1)) variants; the first lines:"
 head -5 <<<"$COUNTS"
@@ -152,14 +165,9 @@ TRANSFER=$(transfer schuman "$PILOT_AGREEMENT")
 expect "a transfer under the ended pilot" "$TRANSFER" TERMINATED
 
 step "6. Digital Lux Trust revokes the HDAB's MembershipCredential"
-authority_api() { # method path
-  curl -sS --fail-with-body -X "$1" "$AUTHORITY_MANAGEMENT$2" \
-    -H "authorization: Bearer $(cat "$RUN/authority/management.key")"
-}
-CREDENTIAL=$(authority_api GET "/v1/credentials?holder=$(jq -rn --arg d "$HDAB_ID" '$d | @uri')" |
+CREDENTIAL=$(issuer_api authority GET "/v1/credentials?holder=$(uri "$HDAB_ID")" |
   jq -r '.[] | select(.credentialType == "MembershipCredential") | .id') || fail "list the HDAB's credentials"
-authority_api POST "/v1/credentials/$(jq -rn --arg c "$CREDENTIAL" '$c | @uri')/revoke" >/dev/null ||
-  fail "revoke $CREDENTIAL"
+issuer_api authority POST "/v1/credentials/$(uri "$CREDENTIAL")/revoke" >/dev/null || fail "revoke $CREDENTIAL"
 echo "revoked $CREDENTIAL"
 
 step "6. The HDAB is out of the data space: Lux Biobank refuses to show it its catalog"

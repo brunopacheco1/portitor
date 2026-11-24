@@ -3,8 +3,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# What the Gaia-X end-to-end test (scripts/gaiax-e2e.sh) and the EDC
-# interop test (scripts/edc-interop.sh) share: the test CA and its
+# What the Gaia-X end-to-end test (scenarios/gaiax-compliance/run.sh) and the EDC
+# interop test (scenarios/edc-interop/run.sh) share: the test CA and its
 # certificates, the test notary, a Gaia-X participant's files, and the
 # calls to a Portitor identity's Gaia-X onboarding (ADR 0021).
 #

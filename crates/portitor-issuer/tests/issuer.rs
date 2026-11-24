@@ -656,7 +656,7 @@ fn the_definitions_files_of_the_repository_are_valid() {
     for file in [
         "examples/issuer-credentials.json",
         "tck/issuer-credentials.json",
-        "interop/edc/config/issuer-credentials.json",
+        "scenarios/edc-interop/config/issuer-credentials.json",
     ] {
         let text = std::fs::read_to_string(root.join(file)).unwrap();
         let definitions = match portitor_issuer::definitions::parse(&text) {

@@ -101,7 +101,7 @@ jobs:
       # the OpenSSF Scorecard counts them too)
       scan-args: |-
         -L Cargo.lock
-        -L interop/edc/runtimes/gradle/verification-metadata.xml
+        -L scenarios/edc-interop/runtimes/gradle/verification-metadata.xml
       # advisory: findings go to Security > Code scanning; cargo-deny blocks on RustSec advisories
       fail-on-vuln: false
 

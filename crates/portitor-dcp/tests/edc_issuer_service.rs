@@ -11,7 +11,7 @@
 //! recording: the issuer's DID document, a credential it delivered to a
 //! Portitor identity, and its status list credential fetched before and
 //! after `POST .../credentials/{id}/revoke` on its admin API. The EDC
-//! interop test (`scripts/edc-interop.sh`) does the same with running
+//! interop test (`scenarios/edc-interop/run.sh`) does the same with running
 //! components; this test keeps the formats under `cargo test`.
 #![allow(clippy::unwrap_used, missing_docs)]
 

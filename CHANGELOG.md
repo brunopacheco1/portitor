@@ -32,12 +32,12 @@ versions may change behaviour and configuration.
 
 ### Added
 
-- Two health scenarios on a Luxembourg-style health data space
-  (`scenarios/health-lu/`: an authority and four participants, synthetic
-  genotypes made with msprime): `scenarios/hdab-intermediary/`, where an
-  HDAB pulls and counts only during a data user's transfer, and
-  `scenarios/data-permits/`, where the HDAB's own issuer grants data
-  permits as credentials that the biobank checks itself. They give the
+- Two health scenarios on a Luxembourg-style health data space, with
+  synthetic genotypes made with msprime (`examples/genotypes/`):
+  `scenarios/hdab-intermediary/`, where an HDAB pulls and counts only
+  during a data user's transfer, and `scenarios/data-permits/`, where
+  the HDAB's own issuer grants data permits as credentials that the
+  biobank checks itself. They give the
   first answers to the roadmap's four questions on v1.0.0-rc.1. Manual
   tests, not run in CI.
 - Every scenario has a README (what it is about, scope, components
@@ -50,8 +50,16 @@ versions may change behaviour and configuration.
   The two-party demo moved there: `scripts/demo.sh`,
   `scripts/demo-compose.sh` and `scripts/demo-steps.sh` are now
   `scenarios/two-party/run-local.sh`, `run.sh` and `steps.sh`, with
-  `examples/compose/`'s files. Every scenario has a `run.sh` and a
-  `steps.sh`.
+  `examples/compose/`'s files. The EDC interop, Gaia-X and two data
+  spaces tests are scenarios too: `interop/edc/` and
+  `scripts/edc-interop.sh` are now `scenarios/edc-interop/`,
+  `interop/gaiax/` and `scripts/gaiax-e2e.sh` are now
+  `scenarios/gaiax-compliance/`, and `scripts/two-data-spaces.sh` is
+  `scenarios/two-data-spaces/run.sh`. The Gaia-X compliance service
+  that both use is in `examples/gaiax/compliance.yaml`.
+- Each scenario stands alone: its own `run.sh` starts only the services
+  it needs. The helpers the scenarios share are in
+  `scripts/scenario-lib.sh`.
 
 ## [1.0.0-rc.1] - 2026-11-22
 

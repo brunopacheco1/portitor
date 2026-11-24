@@ -12,7 +12,7 @@ name: Gaia-X
 # This workflow has a path filter, so it must not be a required check: a
 # pull request that does not match would wait for it for ever
 # (CONTRIBUTING.md, "Required checks"). The filter lists what the job
-# reads; keep it in step with scripts/gaiax-e2e.sh.
+# reads; keep it in step with scenarios/gaiax-compliance/run.sh.
 on:
   pull_request:
     paths:
@@ -22,8 +22,8 @@ on:
       - "Dockerfile"
       - ".dockerignore"
       - "examples/issuer-credentials.json"
-      - "interop/gaiax/**"
-      - "scripts/gaiax-e2e.sh"
+      - "scenarios/gaiax-compliance/**"
+      - "examples/gaiax/**" # the compliance service and its graph database
       - "scripts/container-engine.sh"
       - "scripts/require-bash.sh"
       - "scripts/gaiax-lib.sh"
@@ -74,7 +74,7 @@ jobs:
       - name: Run the Gaia-X test
         env:
           LOGS: gaiax.log
-        run: scripts/gaiax-e2e.sh
+        run: scenarios/gaiax-compliance/run.sh
       - name: Keep the container logs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

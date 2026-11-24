@@ -10,12 +10,12 @@
 # second issuer (the EDC Issuer Service: a test credential issued to both,
 # required and checked both ways, then revoked), then revocation by
 # portitor-issuer both ways. The EDC runtimes are built from Maven Central
-# (interop/edc/runtimes); there are no EDC images.
+# (scenarios/edc-interop/runtimes); there are no EDC images.
 name: EDC interop
 # This workflow has a path filter, so it must not be a required check: a
 # pull request that does not match would wait for it for ever
 # (CONTRIBUTING.md, "Required checks"). The filter lists what the job
-# reads; keep it in step with scripts/edc-interop.sh.
+# reads; keep it in step with scenarios/edc-interop/run.sh.
 on:
   pull_request:
     paths:
@@ -24,10 +24,9 @@ on:
       - "Cargo.lock"
       - "Dockerfile"
       - ".dockerignore"
-      - "interop/edc/**" # Compose file, settings, data, and the EDC runtimes (the Issuer Service too)
-      - "interop/gaiax/compose.yaml" # the compliance service and its graph database come from there
+      - "scenarios/edc-interop/**" # Compose file, settings, data, and the EDC runtimes (the Issuer Service too)
+      - "examples/gaiax/**" # the compliance service and its graph database
       - "examples/bundle/**" # the bundle the issuer serves, signed by scripts/demo-bundle.sh
-      - "scripts/edc-interop.sh"
       - "scripts/demo-bundle.sh"
       - "scripts/container-engine.sh"
       - "scripts/require-bash.sh"
@@ -80,7 +79,7 @@ jobs:
       - name: Run the interop test
         env:
           LOGS: edc-interop.log
-        run: scripts/edc-interop.sh
+        run: scenarios/edc-interop/run.sh
       - name: Keep the container logs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

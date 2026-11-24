@@ -3,12 +3,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# The data-permits scenario (README.md), against the health data space
-# that ../health-lu/run.sh started. The HDAB's own issuer gives Schuman
-# Clinical Research data permits as credentials (DataPermitCredential);
-# Lux Biobank has one offer per permit and checks it when Schuman
-# negotiates and at each transfer. Runs alone or after
-# ../hdab-intermediary. Exits non-zero at the first failed check.
+# The data-permits scenario (README.md), against the data space that
+# run.sh started. The HDAB's own issuer gives Schuman Clinical Research
+# data permits as credentials (DataPermitCredential); Lux Biobank has one
+# offer per permit and checks it when Schuman negotiates and at each
+# transfer. Exits non-zero at the first failed check.
 #
 # 1. The HDAB grants permit P-2026-001: its issuer registers Schuman with
 #    the permit's claims, and Schuman's identity asks for the credential.
@@ -21,8 +20,7 @@
 #    and a presentation with a revoked credential is refused as a whole:
 #    the transfer under P-2026-002 is refused too, until Schuman deletes
 #    the revoked permit from its identity.
-# 5. A trusted issuer is trusted for every credential type: Digital Lux
-#    Trust revokes the HDAB's own MembershipCredential, then the HDAB's
+# 5. A trusted issuer is trusted for every credential type: the HDAB's
 #    issuer gives Schuman a MembershipCredential with the role
 #    health-data-access-body, and Lux Biobank's offer for access bodies
 #    accepts it.
@@ -33,84 +31,59 @@
 # credential's own validUntil.
 #
 # Environment (set by run.sh):
-#   DEMO   scenarios/health-lu
-#   RUN    its run/ folder, with the management keys
-#   AUTHORITY_MANAGEMENT    the authority's management API base URL
-#   HDAB_ISSUER_MANAGEMENT  the HDAB issuer's management API base URL
+#   DIR   scenarios/data-permits
+#   RUN   its run/ folder, with the management keys
 
 set -euo pipefail
 # shellcheck source=scripts/require-bash.sh
 source "$(dirname "$0")/../../scripts/require-bash.sh"
 
-: "${DEMO:?}" "${RUN:?}" "${AUTHORITY_MANAGEMENT:?}" "${HDAB_ISSUER_MANAGEMENT:?}"
-# shellcheck source=scenarios/health-lu/steps-lib.sh
-source "$DEMO/steps-lib.sh"
+: "${DIR:?}" "${RUN:?}"
+# shellcheck source=scripts/container-engine.sh
+source scripts/container-engine.sh
+COMPOSE=("${ENGINE_COMPOSE[@]}" -f "$DIR/compose.yaml")
 
+# who is who (compose.yaml)
+declare -A ISSUER_MANAGEMENT=([authority]=http://127.0.0.1:18071 [hdab-issuer]=http://127.0.0.1:18125)
+declare -A IDENTITY_MANAGEMENT=([biobank]=http://127.0.0.1:18103 [schuman]=http://127.0.0.1:18133)
+declare -A MANAGEMENT=([biobank]=http://127.0.0.1:18101 [schuman]=http://127.0.0.1:18131)
+# shellcheck source=scripts/scenario-lib.sh
+source scripts/scenario-lib.sh
+BIOBANK=http://biobank:8080/$DSP
+BIOBANK_ID=$(participant_did biobank)
+SCHUMAN_ID=$(participant_did schuman)
 HDAB_ISSUER=did:web:hdab-issuer%3A8070
-SCHUMAN_ID=did:web:schuman-identity%3A8090
-SCHUMAN_IDENTITY=http://127.0.0.1:18133
+GENOTYPES=https://biobank.health-lu.example/datasets/genotypes
+ORIGINAL=examples/genotypes/genotypes.vcf
 PURPOSE=scientific-research # EHDS Art. 53(1)(e), as a placeholder value
 
-issuer_api() { # method path [body]: the HDAB issuer's management API
-  local method=$1 path=$2 body=${3-}
-  local args=(-sS --fail-with-body -X "$method" "$HDAB_ISSUER_MANAGEMENT$path"
-    -H "authorization: Bearer $(cat "$RUN/hdab-issuer/management.key")")
-  if [[ $# -gt 2 ]]; then args+=(-H 'content-type: application/json' -d "$body"); fi
-  curl "${args[@]}"
-}
-
-identity_api() { # method path: Schuman's identity management API
-  curl -sS --fail-with-body -X "$1" "$SCHUMAN_IDENTITY$2" \
-    -H "authorization: Bearer $(cat "$RUN/schuman/identity-management.key")"
-}
-
-uri() { jq -rn --arg v "$1" '$v | @uri'; }
-
 register_schuman() { # claims-json: the HDAB's issuer registers Schuman, again if it was
-  if issuer_api GET /v1/participants | jq -e --arg d "$SCHUMAN_ID" 'any(.[]; .did == $d)' >/dev/null; then
-    issuer_api DELETE "/v1/participants/$(uri "$SCHUMAN_ID")" >/dev/null || fail "remove Schuman's registration"
+  if issuer_api hdab-issuer GET /v1/participants | jq -e --arg d "$SCHUMAN_ID" 'any(.[]; .did == $d)' >/dev/null; then
+    issuer_api hdab-issuer DELETE "/v1/participants/$(uri "$SCHUMAN_ID")" >/dev/null ||
+      fail "remove Schuman's registration"
   fi
-  issuer_api POST /v1/participants "$(jq -nc --arg did "$SCHUMAN_ID" --argjson claims "$1" \
-    '{did: $did, claims: $claims}')" >/dev/null || fail "register Schuman at the HDAB's issuer"
-  echo "the HDAB's issuer registered Schuman with $1"
+  register hdab-issuer schuman "$1"
 }
 
 schuman_asks() { # credential-id: Schuman's identity asks the HDAB's issuer, then waits for it
-  local holder_pid view status
-  holder_pid=$(curl -sS --fail-with-body -X POST "$SCHUMAN_IDENTITY/v1/credential-requests" \
-    -H "authorization: Bearer $(cat "$RUN/schuman/identity-management.key")" \
-    -H 'content-type: application/json' \
-    -d "$(jq -nc --arg issuer "$HDAB_ISSUER" --arg id "$1" '{issuerDid: $issuer, credentialIds: [$id]}')" |
-    jq -r '.holderPid') || fail "Schuman's request for $1"
-  for _ in $(seq 1 100); do
-    view=$(identity_api GET "/v1/credential-requests/$holder_pid") || fail "read Schuman's request"
-    status=$(jq -r '.status' <<<"$view")
-    case $status in
-      ISSUED)
-        echo "Schuman holds a new $1"
-        return 0
-        ;;
-      REJECTED) fail "the HDAB's issuer rejected Schuman's request: $view" ;;
-    esac
-    sleep 0.2
-  done
-  fail "Schuman's $1 did not arrive: $view"
+  request_credentials schuman "$HDAB_ISSUER" "$1"
+  echo "Schuman holds a new $1"
 }
 
 newest_permit() { # the id of the newest DataPermitCredential the HDAB's issuer gave Schuman
-  issuer_api GET "/v1/credentials?holder=$(uri "$SCHUMAN_ID")" |
+  issuer_api hdab-issuer GET "/v1/credentials?holder=$(uri "$SCHUMAN_ID")" |
     jq -r '[.[] | select(.credentialType == "DataPermitCredential")] | sort_by(.issued) | last | .id'
 }
 
 permits_held() { # how many DataPermitCredentials Schuman's identity holds
-  identity_api GET /v1/credentials | jq '[.[] | select(.types | index("DataPermitCredential"))] | length'
+  identity_api schuman GET /v1/credentials | jq '[.[] | select(.types | index("DataPermitCredential"))] | length'
 }
 
 pull_genotypes() { # agreement: Schuman pulls the genotypes and checks them
   local view
   view=$(transfer schuman "$1")
   expect "Schuman's transfer under $1" "$view" STARTED
-  [[ $(app_fetch schuman-app "$view" | sha256sum) == "$(sha256sum <"$DEMO/data/genotypes.vcf")" ]] ||
+  [[ $(app_fetch schuman-app "$view" | sha256sum) == "$(sha256sum <"$ORIGINAL")" ]] ||
     fail "Schuman's copy differs"
   complete schuman "$view"
   echo "Schuman has the genotypes; transfer COMPLETED"
@@ -154,7 +127,7 @@ expect "Schuman's request under P-2026-002" "$VIEW" TERMINATED
 step "3. A second permit, P-2026-002: the issuer keeps one set of claims per participant, so the HDAB registers Schuman again"
 register_schuman "$(jq -nc --arg p "$PURPOSE" '{permitId: "P-2026-002", purpose: $p}')"
 schuman_asks data-permit-vc20
-[[ $(permits_held) == 2 ]] || fail "Schuman does not hold two permits: $(identity_api GET /v1/credentials)"
+[[ $(permits_held) == 2 ]] || fail "Schuman does not hold two permits: $(identity_api schuman GET /v1/credentials)"
 echo "Schuman holds two permits"
 
 step "3. Schuman takes the offer for P-2026-002; the agreement under P-2026-001 still works"
@@ -166,7 +139,7 @@ pull_genotypes "$AGREEMENT_1"
 # --- 4 ------------------------------------------------------------------------
 
 step "4. The HDAB revokes permit P-2026-001"
-issuer_api POST "/v1/credentials/$(uri "$PERMIT_1")/revoke" >/dev/null || fail "revoke $PERMIT_1"
+issuer_api hdab-issuer POST "/v1/credentials/$(uri "$PERMIT_1")/revoke" >/dev/null || fail "revoke $PERMIT_1"
 echo "revoked $PERMIT_1"
 TRANSFER=$(transfer schuman "$AGREEMENT_1")
 expect "a transfer under P-2026-001" "$TRANSFER" TERMINATED
@@ -180,20 +153,11 @@ expect "a transfer under P-2026-002" "$TRANSFER" TERMINATED
 echo "Lux Biobank's log: a DataPermitCredential is revoked, so the presentation is invalid; Schuman is told no reason"
 
 step "4. Schuman deletes the revoked permit from its identity: P-2026-002 works again"
-identity_api DELETE "/v1/credentials/$(uri "$PERMIT_1")" >/dev/null || fail "delete $PERMIT_1"
+identity_api schuman DELETE "/v1/credentials/$(uri "$PERMIT_1")" >/dev/null || fail "delete $PERMIT_1"
 [[ $(permits_held) == 1 ]] || fail "Schuman still holds $(permits_held) permits"
 pull_genotypes "$AGREEMENT_2"
 
 # --- 5 ------------------------------------------------------------------------
-
-step "5. Digital Lux Trust revokes the HDAB's own MembershipCredential"
-CREDENTIAL=$(curl -sS --fail-with-body "$AUTHORITY_MANAGEMENT/v1/credentials?holder=$(uri "$HDAB_ID")" \
-  -H "authorization: Bearer $(cat "$RUN/authority/management.key")" |
-  jq -r '.[] | select(.credentialType == "MembershipCredential") | .id') || fail "list the HDAB's credentials"
-# revoking again (after hdab-intermediary's step 6) only signs the list again
-curl -sS --fail-with-body -X POST "$AUTHORITY_MANAGEMENT/v1/credentials/$(uri "$CREDENTIAL")/revoke" \
-  -H "authorization: Bearer $(cat "$RUN/authority/management.key")" >/dev/null || fail "revoke $CREDENTIAL"
-echo "revoked $CREDENTIAL: the HDAB is out of the data space, its issuer is still trusted"
 
 step "5. The HDAB's issuer gives Schuman a MembershipCredential with the role health-data-access-body"
 register_schuman '{"memberOf": "Lux health data space", "role": "health-data-access-body"}'

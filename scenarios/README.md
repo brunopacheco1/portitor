@@ -14,17 +14,23 @@ running so you can look around.
 | Scenario | What it shows | Runs |
 | --- | --- | --- |
 | [two-party](two-party/) | A provider and a consumer: DCP, a checked catalog, contracts, a transfer, refusals | in CI, on every pull request |
+| [edc-interop](edc-interop/) | Portitor and Eclipse EDC in one data space, both ways, with Gaia-X and a second issuer | in CI, on pull requests that touch it, and nightly |
+| [gaiax-compliance](gaiax-compliance/) | A provider admits only Gaia-X compliant participants | in CI, on pull requests that touch it, and nightly |
+| [two-data-spaces](two-data-spaces/) | One organisation in two data spaces, one connector each | by hand |
 | [hdab-intermediary](hdab-intermediary/) | A health data access body (HDAB) pulls genotypes, counts, and passes on only the counts | by hand |
 | [data-permits](data-permits/) | The HDAB grants data permits as credentials; the data holder checks them itself | by hand |
 
-The two health scenarios share one data space, [health-lu](health-lu/):
-its parties, data, datasets and the script that starts it. health-lu is
-not a scenario itself.
+Each scenario stands alone: its `run.sh` starts only what that scenario
+needs, and removes it at the end. What several scenarios use lives
+outside them: the synthetic genotypes in
+[examples/genotypes](../examples/genotypes/), the Gaia-X compliance
+service in [examples/gaiax](../examples/gaiax/), and the shell helpers in
+[scripts/scenario-lib.sh](../scripts/scenario-lib.sh). The health
+scenarios use the same host ports, so run one at a time.
 
 ```sh
 scenarios/two-party/run.sh
-scenarios/health-lu/run.sh                              # both health scenarios
-scenarios/data-permits/run.sh                           # one of them
+scenarios/data-permits/run.sh portitor-connector:local portitor-identity:local portitor-issuer:local
 ```
 
 ## What each scenario folder holds
@@ -54,6 +60,11 @@ scenarios/data-permits/run.sh                           # one of them
   as arguments (connector, identity, issuer), `KEEP=1`,
   `CONTAINER_ENGINE`. A scenario may add `run-local.sh` for a run
   without containers.
+- Not yet: the scenarios that were tests before (edc-interop,
+  gaiax-compliance, two-data-spaces) keep their steps in `run.sh`, take
+  the images as `PORTITOR_IMAGE`, `PORTITOR_IDENTITY_IMAGE` and
+  `PORTITOR_ISSUER_IMAGE`, and two-data-spaces runs processes, not
+  containers. Each README says so.
 
 The repository's [CHANGELOG](../CHANGELOG.md) names a new or removed
 scenario; the scenario's own changelog keeps the detail.
