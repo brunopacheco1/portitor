@@ -341,6 +341,48 @@ outboxes write their own (`outbox.rs`, `consumer.rs`). A name starting
 with `_` says the default does not use that argument.
 
 ```rust
+pub(crate) trait Record: Clone {
+    type State: ProcessState;
+    type Outgoing: Clone + PartialEq;
+    const PARTY: Role;
+    fn state(&self) -> Self::State;
+    /* ... */
+    fn apply_sent(&mut self, sent: &Self::Outgoing) -> Result<(), TransitionErrorOf<Self>> {
+        apply_sent(self, sent)
+    }
+}
+
+impl Record for Negotiation {
+    type State = NegotiationState;
+    type Outgoing = Outgoing;
+    const PARTY: Role = Role::Provider;
+    /* ... */
+}
+```
+
+A trait can leave types and constants to each type that implements it:
+`type State` and `const PARTY` are *associated* items. Each of the four
+process records names its own (`portitor-dsp/src/process.rs`, and the
+`impl Record for ...` in each service file). Inside the trait,
+`Self::State` is "the state type of whichever record this is". This is
+what lets one function serve all four:
+`fn receive<R: Record>(record: &mut R, transition: TransitionOf<R>)`
+works on a `Negotiation` as on a `ConsumerTransfer`, and
+`R::State::next_state(...)` calls the state machine of that record's
+process (`ProcessState`, implemented by `NegotiationState` and
+`TransferState`).
+
+`type TransitionOf<R> = <<R as Record>::State as ProcessState>::Transition;`
+is read from the inside out: the record's `State`, then that state's
+`Transition`. The alias exists so that the long form is written once.
+
+`apply_sent` has a default body that only calls the free function
+`process::apply_sent`. Rust has no way for an override to call the
+default it replaces, so the shared step is a plain function: the
+provider's `Negotiation` overrides `apply_sent`, calls
+`process::apply_sent` and then keeps the agreement or offer it sent.
+
+```rust
 fn from_json<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, StoreError>
 fn to_json(value: &impl serde::Serialize) -> Result<String, StoreError>
 ```

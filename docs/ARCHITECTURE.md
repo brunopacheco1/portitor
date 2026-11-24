@@ -245,7 +245,10 @@ function in the middle, the ports (traits, dashed yellow) it uses, the
 adapters behind them, and the HTTP edge that calls it. The names are the
 real type, trait, function and file names, so you can search the code
 for them. Consumer negotiation and consumer transfers follow the same
-pattern and are not drawn.
+pattern and are not drawn. The four services share their steps (receive
+with proof of delivery, compare-and-update) through
+`portitor-dsp/src/process.rs` (`Record`, `Records`, `update`), named in
+the legend of both diagrams.
 
 The provider side of contract negotiation: `ProviderService` in
 `portitor-dsp`, behind the DSP handlers of `portitor-connector`.

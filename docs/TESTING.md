@@ -207,12 +207,17 @@ cargo test --workspace
 cargo test -p portitor-connector --features tck   # also the TCK scripts
 ```
 
-**Changed one, check the other three.** The negotiation and transfer
-logic exists four times in near-copies: provider and consumer, for
-negotiations and for transfers
-([TD-42](RISKS_AND_TECHNICAL_DEBTS.md#td-42)). A fix or a new test for
-one of them most often applies to the other three; the table of files is
-in [READING-THE-CODE](READING-THE-CODE.md#the-three-siblings).
+**Changed one, check the other three.** Negotiation and transfer, as
+provider and as consumer, are four services with the same shape
+([TD-42](RISKS_AND_TECHNICAL_DEBTS.md#td-42)). The steps they share
+(receive with proof of delivery, apply our sent message,
+compare-and-update) are written once, in `portitor-dsp/src/process.rs`,
+and tested there on a small record of its own (`process/tests.rs`); a
+fix there reaches all four, and the four services' tests must still
+pass. A fix or a new test for one service's own rules (its checks, its
+messages, its decider) most often applies to the other three; the table
+of files is in
+[READING-THE-CODE](READING-THE-CODE.md#the-three-siblings).
 
 Where the tests are:
 

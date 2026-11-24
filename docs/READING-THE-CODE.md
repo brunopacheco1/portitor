@@ -120,20 +120,56 @@ with `replace_if`. If the consumer cannot be reached,
 
 The next messages of the same negotiation (`event`, `verify`,
 `terminate`) take the same seven steps. In the service they go through
-`handle` and `update`, which read, change and `replace_if`.
+`handle`, which calls `update` in `portitor-dsp/src/process.rs`: it
+reads the negotiation, changes it and writes it with `replace_if`. The
+change applies the message with `process::receive`, which also takes
+it as proof that our pending message arrived (ADR 0007), then asks the
+decider for the next message (`next`).
 
 ## The three siblings
 
 Negotiation as provider is one of four services with the same shape
 ([TD-42](RISKS_AND_TECHNICAL_DEBTS.md#td-42)). Once you can read one,
-you can read the others. **If you change one, check the other three.**
+you can read the others.
+
+The steps they share are written once, in `portitor-dsp/src/process.rs`
+(read its module comment first):
+
+- `receive`: apply the counter-party's message; one that fits only the
+  state our pending message leads to proves that message arrived, and
+  both are applied (ADR 0007);
+- `apply_sent`: apply our message once the counter-party has it;
+- `update`: read, change, write with `replace_if`, and try again a few
+  times when another write came first;
+- `is_pending`, `can_abort`, `pending_messages`: what `delivered`,
+  `abort` and `pending` check.
+
+Each service implements two traits for the core: `Record` on its
+record (`Negotiation`, `ConsumerNegotiation`, `Transfer`,
+`ConsumerTransfer`: state, pending message, version) and `Records` on
+itself (how it reads and writes its store, and its "not found"
+answer). The states and transitions come from `ProcessState`
+(`portitor-dsp/src/lib.rs`), which `NegotiationState` and
+`TransferState` implement with their `next_state`. What stays in each
+service file is what differs: its checks, its decider, the messages it
+builds.
 
 | | Domain service (`portitor-dsp/src/`) | Connector adapter (`portitor-connector/src/`) |
 |---|---|---|
+| All four | `process.rs` (`Record`, `Records`, `receive`, `update`) | `outbox.rs` (`Outbox`) |
 | Negotiation, provider | `negotiation/provider.rs` (`ProviderService`) | `negotiation.rs` |
 | Negotiation, consumer | `negotiation/consumer.rs` (`ConsumerService`) | `consumer.rs` |
 | Transfer, provider | `transfer/provider.rs` (`TransferService`) | `transfer.rs` |
 | Transfer, consumer | `transfer/consumer.rs` (`ConsumerTransferService`) | `consumer_transfer.rs` |
+
+**A change to a shared step goes in `process.rs`** and reaches all four.
+A change to one service's own rules (a check, a message) may still be
+needed in its siblings: check the other three.
+
+The connector keeps every store in SQLite (`store.rs`). Unit tests that
+need a store in memory find the few that are left in
+`portitor-connector/src/test_stores.rs`, which is compiled only for
+tests; the integration tests use an in-memory SQLite database.
 
 The consumer side starts at the management API, not at a DSP route:
 `start` in `portitor-connector/src/management.rs` calls
