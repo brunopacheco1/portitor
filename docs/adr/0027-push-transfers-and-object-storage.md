@@ -74,7 +74,11 @@ Three ways to move data, all started by the consumer as DSP requires.
   address a partner gives (the profile says a receiving party MUST
   reject a non-HTTPS endpoint).
 - The provider sends the start message (no `dataAddress`, as DSP says
-  for push), then its data plane reads the dataset's source and sends it
+  for push). Once the consumer has acknowledged it, the provider asks
+  for the consumer's state until it is no longer `REQUESTED`, for at
+  most 30 seconds: Eclipse EDC acknowledges a start before it applies
+  it, and refuses a completion until then (found in the EDC interop
+  scenario). Then its data plane reads the dataset's source and sends it
   as the body of one `POST` to the `endpoint`, with `Authorization:
   Bearer <token>` and the source's `Content-Type`. The profile does not
   name a method; `POST` is what EDC's push test sends.

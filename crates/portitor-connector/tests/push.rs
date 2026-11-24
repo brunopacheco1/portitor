@@ -20,6 +20,7 @@
 #![cfg(feature = "data-plane")]
 #![allow(clippy::unwrap_used, missing_docs)]
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -278,11 +279,19 @@ struct Parties {
 /// The provider offers `weather` for pull and push, from `source`; it
 /// takes `http://` endpoints when `allow_http`.
 async fn parties(source: String, allow_http: bool) -> Parties {
+    parties_lagging(source, allow_http, 0).await
+}
+
+/// [`parties`], with a consumer that applies the provider's start only
+/// after it has been asked for its state `lag` times ([`Lagging`]).
+async fn parties_lagging(source: String, allow_http: bool, lag: u32) -> Parties {
     let network = Arc::new(Network::default());
-    let mut provider_ports = authenticating(
-        common::ports(Arc::clone(&network) as Arc<dyn Sender>),
-        PROVIDER_DID,
-    );
+    let lagging = Arc::new(Lagging {
+        network: Arc::clone(&network),
+        lag: AtomicU32::new(lag),
+    });
+    let mut provider_ports =
+        authenticating(common::ports(lagging as Arc<dyn Sender>), PROVIDER_DID);
     provider_ports.harvest.source = Some(Arc::new(Datasets(json!([{
         "@id": "weather",
         "@type": "Dataset",
@@ -313,6 +322,54 @@ async fn parties(source: String, allow_http: bool) -> Parties {
         hop,
         s3,
         receiving,
+    }
+}
+
+/// The provider's view of a consumer that acknowledges a start before it
+/// applies it, as Eclipse EDC does: while `lag` is above zero, each state
+/// read answers `REQUESTED` (and lowers `lag`), and a completion is
+/// refused with 400.
+struct Lagging {
+    network: Arc<Network>,
+    lag: AtomicU32,
+}
+
+impl Lagging {
+    fn lagging(&self) -> bool {
+        self.lag.load(Ordering::SeqCst) > 0
+    }
+}
+
+impl Sender for Lagging {
+    fn post<'a>(&'a self, url: &'a str, body: &'a Value) -> BoxFuture<'a, Result<Value, String>> {
+        self.network.post(url, body)
+    }
+
+    fn post_authorized<'a>(
+        &'a self,
+        url: &'a str,
+        body: &'a Value,
+        authorization: &'a str,
+    ) -> BoxFuture<'a, Result<Value, String>> {
+        if body["@type"] == "TransferCompletionMessage" && self.lagging() {
+            return Box::pin(async { Err("HTTP 400 Bad Request".to_owned()) });
+        }
+        self.network.post_authorized(url, body, authorization)
+    }
+
+    fn get_authorized<'a>(
+        &'a self,
+        url: &'a str,
+        authorization: &'a str,
+    ) -> BoxFuture<'a, Result<Value, String>> {
+        Box::pin(async move {
+            let mut state = self.network.get_authorized(url, authorization).await?;
+            if self.lagging() {
+                self.lag.fetch_sub(1, Ordering::SeqCst);
+                state["state"] = json!("REQUESTED");
+            }
+            Ok(state)
+        })
     }
 }
 
@@ -502,6 +559,23 @@ async fn the_receiving_route_takes_only_the_token_of_a_running_transfer() {
     );
     assert_eq!(p.s3.object(PUSH_BUCKET, cpid).unwrap().bytes, b"pushed");
     assert_eq!(p.consumer.object_key(cpid), Some(cpid.to_owned()));
+}
+
+#[tokio::test]
+async fn a_push_waits_until_the_consumer_has_applied_the_start() {
+    // without the wait, the completion would come while the consumer
+    // still says REQUESTED, be refused, and end the transfer
+    let p = parties_lagging(upstream().await, true, 3).await;
+    let agreement = p.agree().await;
+    p.aim_at_the_receiving_route();
+    let t = p
+        .consumer
+        .request_transfer(&agreement, "HttpData-PUSH")
+        .unwrap();
+    p.until_state(&t.consumer_pid, TransferState::Completed)
+        .await;
+    let stored = p.s3.object(PUSH_BUCKET, &t.consumer_pid).unwrap();
+    assert_eq!(stored.bytes, DATA.as_bytes());
 }
 
 #[tokio::test]

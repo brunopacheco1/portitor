@@ -23,8 +23,8 @@ has those entries in full.
   distribution. The EDC data plane is registered for `HttpData-PUSH`
   too, and `runtimes/dataplane` names the push address (endpoint type
   `https://w3id.org/dspace-sig/profile/http-push`, a bearer token),
-  keeps what arrives, and answers a push only once its control plane
-  has said the flow started (README, "Findings").
+  and keeps what arrives at once. Portitor waits until EDC reports the
+  transfer started before it pushes (README, "Findings").
 - Needs 1.1.0 Portitor images: push came in 1.1.
 - Not yet run: written without a container engine.
 

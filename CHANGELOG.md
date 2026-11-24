@@ -19,7 +19,9 @@ versions may change behaviour and configuration.
   request must carry an `http-push` data address
   (`https://w3id.org/dspace-sig/profile/http-push`, an `https://`
   endpoint unless `PORTITOR_ALLOW_HTTP`, `authType` `bearer`), else 400.
-  Once started, the data plane sends the dataset as one `POST` with the
+  Once started, and once the consumer no longer reports `REQUESTED` (at
+  most 30 seconds: Eclipse EDC applies a start after it acknowledges
+  it), the data plane sends the dataset as one `POST` with the
   consumer's bearer token and the source's `Content-Type`; 2xx completes
   the transfer, anything else terminates it with the status code as the
   reason. Suspend and terminate cut a running push; a start again sends

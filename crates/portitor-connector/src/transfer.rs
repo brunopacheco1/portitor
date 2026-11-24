@@ -16,6 +16,7 @@
 //! ([`EndsThroughProvider`]).
 
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
@@ -138,12 +139,25 @@ impl TransferProvider {
     /// background if it is a push transfer that is `STARTED` and not being
     /// sent already; does nothing otherwise.
     fn begin_push(&self, provider_pid: &str) {
+        self.begin_push_once_started(provider_pid, None);
+    }
+
+    /// [`Self::begin_push`], but with `consumer` (its state URL and its
+    /// id) the push first waits until the consumer has applied our start
+    /// ([`until_consumer_started`]).
+    fn begin_push_once_started(&self, provider_pid: &str, consumer: Option<(String, String)>) {
         let (Some(plane), Some(me)) = (&self.plane, self.me.upgrade()) else {
             return;
         };
         match plane.push_job(provider_pid) {
             Ok(Some(job)) => {
-                tokio::spawn(run_push(me, Arc::clone(plane), job));
+                let plane = Arc::clone(plane);
+                tokio::spawn(async move {
+                    if let Some((status_url, audience)) = consumer {
+                        until_consumer_started(&me.link, &status_url, &audience).await;
+                    }
+                    run_push(me, plane, job).await;
+                });
             }
             Ok(None) => {}
             Err(error) => {
@@ -337,8 +351,10 @@ impl Outbox for TransferProvider {
     fn delivered(&self, out: &Outgoing, _: Option<&Value>) -> Result<Option<Outgoing>, Failure> {
         let next = self.service.delivered(out)?;
         if out.transition == Transition::Start {
-            // the consumer has our start: a push transfer's data goes now
-            self.begin_push(&out.provider_pid);
+            // the consumer has our start: a push transfer's data goes as
+            // soon as the consumer has applied it
+            let consumer = (out.status_url.clone(), out.counter_party.clone());
+            self.begin_push_once_started(&out.provider_pid, Some(consumer));
         }
         Ok(next)
     }
@@ -462,6 +478,30 @@ fn push_endpoint_allowed(address: Option<&DataAddress>, allow_http: bool) -> boo
     match address.and_then(|a| a.endpoint.as_deref()) {
         Some(endpoint) => outbound_url_allowed(endpoint, allow_http),
         None => true,
+    }
+}
+
+/// The longest a push waits for the consumer to apply our start.
+const START_WAIT: Duration = Duration::from_secs(30);
+
+/// Waits until the consumer at `status_url` no longer says the transfer is
+/// `REQUESTED`, for at most [`START_WAIT`]. A consumer may acknowledge our
+/// start and apply it later: Eclipse EDC answers 200, moves to `STARTED`
+/// only once it has signalled its data plane, and until then refuses a
+/// completion with 400, which would end the transfer. Any other state, no
+/// answer, or the time limit ends the wait: the push goes ahead.
+async fn until_consumer_started(link: &Link, status_url: &str, audience: &str) {
+    let still_requested = || {
+        outbox::arrived(link, status_url, audience, |state| {
+            reached_state(state, TransferState::Requested)
+        })
+    };
+    let mut delay = Duration::from_millis(100);
+    let mut waited = Duration::ZERO;
+    while waited < START_WAIT && still_requested().await {
+        tokio::time::sleep(delay).await;
+        waited += delay;
+        delay = delay.saturating_mul(2).min(Duration::from_secs(2));
     }
 }
 

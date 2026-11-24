@@ -38,11 +38,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
@@ -68,13 +64,10 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  * it, so the test can compare it with the provider's file.</li>
  * </ul>
  *
- * A push is answered only once the control plane has told this data plane
- * that the flow started. EDC acknowledges the provider's
- * TransferStartMessage at once but stays in STARTUP_REQUESTED (DSP state
- * REQUESTED) until its state machine signals the data plane; a
- * TransferCompletionMessage that arrives before that is refused (400).
- * A provider that answers our push with its completion would otherwise
- * race EDC's state machine.
+ * A push is taken at once. EDC acknowledges the provider's
+ * TransferStartMessage before its state machine has signalled this data
+ * plane, and refuses a TransferCompletionMessage until then (400): the
+ * provider must wait until EDC reports STARTED (Portitor does, ADR 0027).
  *
  * Signaling with the control plane uses no authentication (profile type
  * "none"), see the control plane's NoneSignalingAuthorizationExtension.
@@ -86,8 +79,6 @@ public class TestDataPlaneExtension implements ServiceExtension {
     /** The push endpoint type of the Data Plane Signaling HTTP transfer profile. */
     static final String HTTP_PUSH_ENDPOINT_TYPE = "https://w3id.org/dspace-sig/profile/http-push";
     private static final String AUTHORIZATION = "authorization";
-    /** How long a push waits for the control plane to signal that its flow started. */
-    private static final long STARTED_WAIT_SECONDS = 30;
 
     @Setting(key = "dataplane.id", description = "Id of this data plane, as registered at the control plane")
     private String dataplaneId;
@@ -108,8 +99,6 @@ public class TestDataPlaneExtension implements ServiceExtension {
     private final Map<String, DataAddress> received = new ConcurrentHashMap<>();
     /** Consumer side of a push: flow id to the token the provider must present. */
     private final Map<String, String> pushTokens = new ConcurrentHashMap<>();
-    /** Consumer side of a push: flow id to "the control plane said it started". */
-    private final Map<String, CompletableFuture<Void>> pushStarted = new ConcurrentHashMap<>();
     /** Consumer side of a push: flow id to the data the provider pushed (kept after the flow ends). */
     private final Map<String, byte[]> pushed = new ConcurrentHashMap<>();
 
@@ -148,7 +137,6 @@ public class TestDataPlaneExtension implements ServiceExtension {
         }
         var token = UUID.randomUUID().toString();
         pushTokens.put(flow.getId(), token);
-        pushStarted.put(flow.getId(), new CompletableFuture<>());
         flow.setDataAddress(new DataAddress(HTTP_PUSH_ENDPOINT_TYPE, publicUrl + "/push/" + flow.getId(), List.of(
                 new DataAddress.EndpointProperty("string", AUTHORIZATION, token),
                 new DataAddress.EndpointProperty("string", "authType", "bearer"))));
@@ -172,10 +160,8 @@ public class TestDataPlaneExtension implements ServiceExtension {
 
     /** Consumer: keep the provider's data address (pull), or let the push in (push). */
     private Result<DataFlow> started(DataFlow flow) {
-        if (HTTP_PUSH.equals(flow.getProfile())) {
-            // the address here is our own push address, sent back by the control plane
-            Optional.ofNullable(pushStarted.get(flow.getId())).ifPresent(started -> started.complete(null));
-        } else if (flow.getDataAddress() != null) {
+        // a push's address here is our own, sent back by the control plane
+        if (!HTTP_PUSH.equals(flow.getProfile()) && flow.getDataAddress() != null) {
             received.put(flow.getId(), flow.getDataAddress());
         }
         monitor.info("data flow %s started as consumer".formatted(flow.getId()));
@@ -186,7 +172,6 @@ public class TestDataPlaneExtension implements ServiceExtension {
         tokens.remove(flow.getId());
         received.remove(flow.getId());
         pushTokens.remove(flow.getId());
-        pushStarted.remove(flow.getId());
         return Result.success(flow);
     }
 
@@ -283,18 +268,8 @@ public class TestDataPlaneExtension implements ServiceExtension {
         public Response receive(@PathParam("flowId") String flowId, @HeaderParam("Authorization") String header,
                                 byte[] body) {
             var expected = dataPlane.pushTokens.get(flowId);
-            var started = dataPlane.pushStarted.get(flowId);
-            if (expected == null || started == null || header == null || !same(withoutBearer(header), expected)) {
+            if (expected == null || header == null || !same(withoutBearer(header), expected)) {
                 return Response.status(Response.Status.UNAUTHORIZED).build();
-            }
-            try {
-                started.get(STARTED_WAIT_SECONDS, TimeUnit.SECONDS);
-            } catch (TimeoutException | ExecutionException e) {
-                dataPlane.monitor.warning("push for data flow %s: the flow did not start".formatted(flowId));
-                return Response.status(Response.Status.CONFLICT).build();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return Response.status(Response.Status.SERVICE_UNAVAILABLE).build();
             }
             dataPlane.pushed.put(flowId, body == null ? new byte[0] : body);
             dataPlane.monitor.info("data flow %s: received %d bytes by push".formatted(flowId,

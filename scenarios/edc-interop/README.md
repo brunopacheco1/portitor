@@ -135,12 +135,13 @@ of its header comment. Steps 1 and 2 make the keys and start everything.
   end.** On the provider's `TransferStartMessage` EDC answers 200 but
   stays in `STARTUP_REQUESTED`, shown as `REQUESTED` over DSP, until its
   state machine (one pass a second by default) tells its data plane; a
-  `TransferCompletionMessage` before that gets 400, and Portitor then
-  terminates the transfer. A small dataset is pushed within that second.
-  So the test data plane answers a push only once its control plane has
-  told it the flow started. A consumer data plane that answers at once
-  would see such a transfer terminated whenever the push ends before
-  EDC's state machine has run.
+  `TransferCompletionMessage` before that gets 400. A small dataset is
+  pushed within that second, so a provider that completes right after
+  the push loses the race and the transfer ends terminated. Portitor
+  therefore pushes only once EDC reports the transfer is no longer
+  `REQUESTED` (it asks for the state, for at most 30 seconds; ADR 0027).
+  The test data plane takes the push at once, so this step checks that
+  wait.
 
 - **EDC as provider cannot ask for Gaia-X compliance** (out of scope
   above): EDC refuses a credential whose subject is not the presenter,
