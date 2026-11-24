@@ -26,7 +26,6 @@ has those entries in full.
   and keeps what arrives at once. Portitor waits until EDC reports the
   transfer started before it pushes (README, "Findings").
 - Needs 1.1.0 Portitor images: push came in 1.1.
-- Not yet run: written without a container engine.
 
 ## 2026-11-24, on 1.0.0-rc.1
 
