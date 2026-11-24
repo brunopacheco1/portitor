@@ -1239,11 +1239,16 @@ are closed.
   ([hdab-intermediary, step 6](../scenarios/hdab-intermediary/README.md#the-steps)).
 - **Why it matters.** Transfers pile up that will never start, and the
   operator learns why only from the logs.
-- **Current state: Open.**
-- **Next.** ROADMAP 1.1, with the transfer work: check what DSP 2025-1
-  says of messages from a party that is no longer trusted, then either
-  end a `REQUESTED` transfer after a time limit or accept a termination
-  from such a party. An ADR if it changes what callers are accepted.
+- **Current state: Open; fixed on the 1.1 branch.** A termination is
+  accepted from a caller with a valid DCP token who is the transfer's
+  counter-party, even without a valid membership, on both sides, and
+  logged ([ADR 0016](adr/0016-dsp-caller-authentication.md), amended in
+  1.1, with what was built). Tests: `provider_control.rs`
+  (`a_consumer_without_membership_may_still_end_its_transfer`,
+  `a_provider_without_membership_may_still_end_our_transfer`); the
+  hdab-intermediary scenario, step 6, now expects `TERMINATED`.
+- **Next.** Move to Closed when 1.1 is released, after a run of the
+  hdab-intermediary scenario on 1.1.
 
 ## Closed
 

@@ -1,0 +1,22 @@
+meta {
+  name: Get provided transfer
+  type: http
+  seq: 19
+}
+
+get {
+  url: {{mgmtUrl}}/v1/provided-transfers/{{mgmtProvidedTransferPid}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+  res.body.providerPid: isDefined
+}
+
+docs {
+  One transfer this connector runs as provider (1.1): its state, the consumer's
+  DID (counterPartyId), the agreement, the dataset and the format. 404 for an
+  unknown providerPid.
+}

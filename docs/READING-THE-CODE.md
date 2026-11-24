@@ -180,7 +180,16 @@ From there the steps are the same: state machine, store, outbox.
 
 - A transfer: `TransferService` adds two ports, `Agreements` and
   `DataFlows`. `DataFlows` leads to the data plane
-  (`portitor-connector/src/data_flows.rs`, `data_plane.rs`).
+  (`portitor-connector/src/data_flows.rs`, `data_plane.rs`). The
+  provider's own steps (read, list, end a transfer, 1.1) are in
+  `portitor-dsp/src/transfer/provider/own_steps.rs`; their management
+  routes in `portitor-connector/src/management/provided_transfers.rs`.
+- How a provider ends access (ADR 0027, 1.1): `running_flows.rs` (the
+  per-flow switch that cuts running downloads), `flow_membership.rs`
+  (the consumer's membership, kept with the flow and checked again),
+  `data_plane/download.rs` (the body that can be cut, and the check
+  while a download runs) and `auth/dcp/membership.rs` (the check itself,
+  without the consumer).
 - The DCP check of step 2 in full:
   `portitor-connector/src/auth/dcp.rs`.
 - Datasets and the bundle: `portitor-connector/src/harvest.rs` and

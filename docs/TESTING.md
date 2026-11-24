@@ -247,7 +247,13 @@ Where the tests are:
   `tests/dsp_transfer.rs` does the same for transfers as provider, with a
   fake data plane and a fixed agreement; its last tests use the built-in
   data plane and fetch data from an upstream served on a local port (no
-  network needed). `tests/end_to_end.rs` runs two connectors in one
+  network needed). `tests/provider_control.rs` (1.1, ADR 0027) uses the
+  built-in data plane too, with a never-ending upstream download: a
+  revoked membership refuses the next request and cuts a running
+  download, the provider's termination route and a suspension cut it, a
+  flow from before 1.1 is served until its token expires, and a partner
+  without membership may still end a shared transfer (TD-47), on both
+  sides. `tests/end_to_end.rs` runs two connectors in one
   process, joined by a fake network: the consumer negotiates, requests a
   transfer, fetches the data from the provider's built-in data plane and
   completes the transfer. `tests/credential_constraints.rs` does the same
