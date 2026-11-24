@@ -141,6 +141,11 @@ fn table(secrets: &TempDir, bundle_from: BundleFrom) -> Vec<Case> {
             "test-only-secret-key",
             "test-only-other-key",
         ),
+        Case::optional(
+            "AWS_SESSION_TOKEN",
+            "test-only-token",
+            "test-only-other-token",
+        ),
         Case::optional("PORTITOR_PUSH_BUCKET", "pushed", "other"),
     ]
 }
@@ -158,9 +163,13 @@ fn read(var: &Lookup) -> Read {
     let limits = RequestLimits::from_vars(var)?;
     let storage = object_storage::Settings::from_vars(var)?;
     // the `Debug` text leaves the keys out
-    let keys = storage
-        .as_ref()
-        .map(|s| (s.access_key_id.clone(), s.secret_access_key.clone()));
+    let keys = storage.as_ref().map(|s| {
+        (
+            s.access_key_id.clone(),
+            s.secret_access_key.clone(),
+            s.session_token.clone(),
+        )
+    });
     Ok(format!(
         "{config:?}\n{auth:?}\n{secret:?}\n{bundle:?}\n{management:?}\n{limits:?}\n{storage:?}\n{keys:?}"
     ))

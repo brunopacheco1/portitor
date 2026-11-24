@@ -133,9 +133,10 @@ of work with no release yet.
 | [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | Open | none |
 | [TD-46](#td-46) | The issuer keeps one set of claims per participant | Technical debt | Open | 1.2 |
 | [TD-47](#td-47) | A transfer stays REQUESTED when its provider is revoked | Technical debt | Open | 1.1 |
+| [TD-48](#td-48) | Data plane steps run inside the retried update of a transfer | Technical debt | Open | Later |
 
-Counts on 2026-11-24, on the 1.1 branch: 36 risks and 29 technical
-debts are not closed (Open 29, Mitigated 21, Accepted 15); 12 risks and
+Counts on 2026-11-24, on the 1.1 branch: 36 risks and 30 technical
+debts are not closed (Open 30, Mitigated 21, Accepted 15); 12 risks and
 18 technical debts are closed.
 
 ## Risks
@@ -1265,6 +1266,33 @@ debts are not closed (Open 29, Mitigated 21, Accepted 15); 12 risks and
   hdab-intermediary scenario, step 6, now expects `TERMINATED`.
 - **Next.** Move to Closed when 1.1 is released, after a run of the
   hdab-intermediary scenario on 1.1.
+
+<a id="td-48"></a>
+### TD-48 Data plane steps run inside the retried update of a transfer
+
+- **What.** A transfer is changed by reading it, changing it, and
+  writing it only if no other write came first; otherwise the change
+  runs again on the new version, a few times
+  (`crates/portitor-dsp/src/process.rs`, `update`). The provider's
+  transfer service tells the data plane inside that change (for example
+  `flows.terminate` in `push_finished`, `flows.suspend` on a
+  suspension). So a data plane step can run although its write then
+  loses to another one, or run twice. Found in the 1.1 review
+  (2026-11-24, finding L3).
+- **Why it matters.** The data flow and the transfer can disagree for
+  a moment: for example the flow is terminated by a push that just
+  failed while the consumer's suspension wins the write, so the
+  transfer is `SUSPENDED` with a terminated flow and cannot start
+  again. Access is never widened: the steps only stop or cut.
+- **Current state: Open.** The steps are written to be repeated
+  (`SignalingDataFlows` treats a step to the state the flow is already
+  in as done), cutting running work is always safe, and a conflict
+  needs two writes to the same transfer at the same moment. The push
+  sender reads the flow's state before it ends a transfer, so a
+  suspension or termination that cut it is not undone.
+- **Next.** Tell the data plane after the write, from what was written,
+  or record the step with the write and run it once (as the outbox does
+  for messages). No release named.
 
 ## Closed
 

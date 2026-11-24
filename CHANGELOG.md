@@ -38,8 +38,9 @@ versions may change behaviour and configuration.
   `s3://{bucket}/{key}`, read with a signed `GET` (AWS Signature Version
   4, path-style), with the same 401 and 502 answers as an HTTP source.
 - Object storage settings, the AWS SDK names: `AWS_ENDPOINT_URL_S3`,
-  `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and
-  `PORTITOR_PUSH_BUCKET`
+  `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+  `AWS_SESSION_TOKEN` (temporary keys, sent and signed as
+  `x-amz-security-token`), and `PORTITOR_PUSH_BUCKET`
   ([DEPLOYING, Object storage and push transfers](docs/DEPLOYING.md#object-storage-and-push-transfers)).
 - The audit line `data transfer done` is also written for each push sent
   and each push received.
@@ -47,7 +48,9 @@ versions may change behaviour and configuration.
 - Management API: `POST /v1/transfers/{consumerPid}/suspension` and
   `POST /v1/transfers/{consumerPid}/start` suspend a transfer as
   consumer and start it again, with the rules of `/completion` and
-  `/termination` (TD-11, first half). The token stays the same.
+  `/termination` (TD-11, first half). The token of a pull transfer
+  stays the same; a push transfer gets a new token for the receiving
+  route.
 - Audit line for each data pull: the provider's data plane writes one
   INFO line, `data transfer done` (target `portitor::audit`), with
   `flow`, `agreement`, `counterParty`, `bytes` and `outcome`
@@ -70,6 +73,27 @@ versions may change behaviour and configuration.
 
 ### Fixed
 
+Found in the review of the 1.1 branch, before its release:
+
+- A push cut because the consumer's membership could not be checked,
+  or one that could not begin, terminates the transfer; before, the
+  transfer stayed `STARTED` with nothing sending.
+- A push has time limits: the connection must open within 10 seconds,
+  and the push fails after 120 seconds in which the endpoint takes no
+  data and gives no answer.
+- The receiving route `/push/{consumerPid}` takes one upload at a time
+  per transfer (a second one gets 409) and at most 8 at once (503), and
+  cuts a body that sends nothing for 120 seconds (400, upload aborted).
+- A multipart upload cut half-way is aborted, so the store keeps no
+  parts. DEPLOYING now recommends a lifecycle rule
+  (`AbortIncompleteMultipartUpload`) on the push bucket.
+- A transfer that started before 1.1 gets no new token when the
+  provider starts it again (only a scripted provider policy does), so
+  it is no longer exempt from the membership check for good; the
+  transfer is terminated instead.
+- `AWS_*` variables are checked only when `PORTITOR_PUSH_BUCKET` is
+  set: a 1.0 configuration with, say, only `AWS_ACCESS_KEY_ID` set for
+  another tool starts again, without object storage.
 - A partner whose membership was revoked can still end a transfer it
   shares with you: its `TransferTerminationMessage` is accepted when its
   DCP token is valid and it is the transfer's counter-party, and logged

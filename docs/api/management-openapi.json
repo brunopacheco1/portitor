@@ -1162,7 +1162,7 @@
         "tags": [
           "Transfers"
         ],
-        "summary": "Start a `SUSPENDED` transfer again, whichever party suspended it (DSP\n2025-1 lets either party start it again). The token in `dataAddress`\nstays the same and works again once the transfer is `STARTED`; the\nprovider sends no new address (ADR 0013). The start message is sent in\nthe background (added in 1.1).",
+        "summary": "Start a `SUSPENDED` transfer again, whichever party suspended it (DSP\n2025-1 lets either party start it again). For a pull transfer, the\ntoken in `dataAddress` stays the same and works again once the\ntransfer is `STARTED`; the provider sends no new address (ADR 0013).\nFor a push transfer, the start message carries a new token for our\nreceiving route, and the old one stops working (ADR 0027). The start\nmessage is sent in the background (added in 1.1).",
         "operationId": "start_transfer_again",
         "parameters": [
           {

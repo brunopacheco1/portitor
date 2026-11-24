@@ -948,7 +948,8 @@ Besides the [settings of every component](#settings-of-every-component):
 | `PORTITOR_BUNDLE_DIR` | none | A local bundles folder instead of the URL, not together with `PORTITOR_BUNDLE_URL`; development and tests only |
 | `AWS_ENDPOINT_URL_S3` | AWS S3 of `AWS_REGION` | Since 1.1. Base URL of your S3-compatible object storage, for example `http://rustfs:9000` ([Object storage and push](#object-storage-and-push-transfers)) |
 | `AWS_REGION` | `us-east-1` | Since 1.1. Region in the request signature |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | none (no object storage) | Since 1.1. The object storage keys; both or neither |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | none (no object storage) | Since 1.1. The object storage keys; both or neither. Checked only with `PORTITOR_PUSH_BUCKET` set |
+| `AWS_SESSION_TOKEN` | none | Since 1.1. The session token of temporary keys (AWS STS), sent and signed as `x-amz-security-token` |
 | `PORTITOR_PUSH_BUCKET` | none (push transfers as consumer refused) | Since 1.1. Bucket where data pushed to you lands; needs the keys |
 
 - `PORTITOR_PUBLIC_URL` has no query or fragment. The DSP endpoint is
@@ -1449,11 +1450,22 @@ bucket where data pushed to you lands. Tested with RustFS
 MinIO and AWS S3 accept.
 
 - **Settings.** `AWS_ENDPOINT_URL_S3`, `AWS_REGION`,
-  `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (the AWS SDK names) and
-  `PORTITOR_PUSH_BUCKET`. Without the keys the connector has no object
-  storage: `s3://` sources answer 502 and push transfers as consumer
-  are refused. The log line `object storage` names the endpoint and the
-  push bucket, never the keys.
+  `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`
+  (the AWS SDK names) and `PORTITOR_PUSH_BUCKET`. Without the keys the
+  connector has no object storage: `s3://` sources answer 502 and push
+  transfers as consumer are refused. The log line `object storage`
+  names the endpoint and the push bucket, never the keys.
+- **Checked only with a push bucket.** With `PORTITOR_PUSH_BUCKET` set,
+  a start with only one of the two keys, or an `AWS_ENDPOINT_URL_S3`
+  that is not an `http(s)` URL, stops. Without it, such `AWS_*`
+  variables (perhaps set for another tool, as a 1.0 connector allowed)
+  are ignored: one INFO line, `no object storage`, and no object
+  storage. If you use `s3://` sources without a push bucket, look for
+  that line.
+- **Temporary keys.** With keys from AWS STS (an assumed role, for
+  example), also set `AWS_SESSION_TOKEN`; it is sent and signed as
+  `x-amz-security-token`. The connector reads it once at start, so
+  restart it with fresh keys before they expire.
 - **The keys.** They follow the AWS rule, not Portitor's `_FILE` rule
   for secrets: inject `AWS_SECRET_ACCESS_KEY` into the container's
   environment from your secret store (Docker or Kubernetes secrets,
@@ -1463,7 +1475,13 @@ MinIO and AWS S3 accept.
 - **Create the push bucket first.** The connector does not create
   buckets. Each pushed transfer becomes the object `{consumerPid}` in
   it; a second push for the same transfer replaces it. Uploads go in
-  parts of 8 MiB (multipart upload, aborted if anything fails).
+  parts of 8 MiB (multipart upload, aborted if anything fails, and when
+  the request is cut half-way).
+- **Add a lifecycle rule to the push bucket** that aborts incomplete
+  multipart uploads after a day (`AbortIncompleteMultipartUpload`, for
+  example `DaysAfterInitiation` 1; RustFS and MinIO support it too). An
+  upload under way when the connector stops cannot be aborted by it,
+  and its parts would otherwise stay in the bucket, and be billed.
 
 **As provider**, nothing else is needed: list `HttpData-PUSH` in the
 dataset's distributions. The consumer's transfer request carries its
@@ -1472,8 +1490,12 @@ endpoint (`endpointType`
 transfer is started, the connector sends the data as one `POST` with
 `Authorization: Bearer <token>` and the source's `Content-Type`. A 2xx
 answer completes the transfer; any other answer, or none, terminates
-it, and the reason holds only the status code. Suspend or terminate, by
-either side, cuts a running push; a start again sends everything again.
+it, and the reason holds only the status code. The connection to the
+endpoint must open within 10 seconds, and the push fails when the
+endpoint takes no data and gives no answer for 120 seconds. Suspend or
+terminate, by either side, cuts a running push; a start again sends
+everything again. A push cut because the membership check could not
+finish terminates the transfer.
 The consumer's endpoint and token are kept in the SQLite file until the
 transfer ends, and are never logged or shown. The consumer's membership
 is checked before each push and while it runs, as for a download
@@ -1490,9 +1512,13 @@ is checked before each push and while it runs, as for a download
 **As consumer**, set `PORTITOR_PUSH_BUCKET` with the keys, then request
 a transfer with `"format": "HttpData-PUSH"`. The connector gives the
 provider the address `{PORTITOR_PUBLIC_URL}/push/{consumerPid}` and a
-token of 32 random bytes, of which it keeps only the SHA-256. The token
-works for `PORTITOR_DATA_TOKEN_SECONDS` and only while the transfer is
-`REQUESTED` or `STARTED`; a start again gives a new one. The transfer
+token of 32 random bytes, of which it keeps only the SHA-256 once the
+provider has it. The token works for `PORTITOR_DATA_TOKEN_SECONDS` and
+only while the transfer is `REQUESTED` or `STARTED`; a start again
+gives a new one. Its life counts from your request (or start again),
+not from the provider's start: a provider that starts late leaves less
+time for the push, so give `PORTITOR_DATA_TOKEN_SECONDS` room for the
+provider's delay and the size of the data. The transfer
 view shows `objectKey` once data has arrived; the provider completes the
 transfer.
 
@@ -1503,7 +1529,11 @@ transfer.
   dataset can be large: let your reverse proxy pass large, long
   requests on `/push/` (for nginx, `client_max_body_size 0;` and a long
   `proxy_read_timeout` in that `location`), and limit them there if you
-  need a bound.
+  need a bound. It has limits of its own: one upload at a time per
+  transfer (a second one gets 409), at most 8 at once in all (one more
+  gets 503; each holds up to 8 MiB in memory), and a body that sends
+  nothing for 120 seconds is cut: the upload is aborted, the answer is
+  400, and the audit line says `cut`.
 
 ### Revocation and running transfers
 
