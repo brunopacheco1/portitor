@@ -12,7 +12,9 @@
 
 use std::sync::Arc;
 
-use portitor_dps::message::{DataFlowBaseMessage, DataFlowStartMessage, HTTP_PULL, ReasonMessage};
+use portitor_dps::message::{
+    DataFlowBaseMessage, DataFlowStartMessage, HTTP_PULL, HTTP_PUSH, ReasonMessage,
+};
 use portitor_dps::port::{DataPlane, SignalError};
 use portitor_dps::state::DataFlowState;
 use portitor_dsp::transfer::DataAddress;
@@ -22,8 +24,11 @@ use crate::data_plane::UpstreamSources;
 use crate::system::new_uuid;
 
 /// The DSP formats the built-in data plane serves, with the Data Plane
-/// Signaling profile of each. Pull only in 0.4.
-const FORMATS: &[(&str, &str)] = &[("HttpData-PULL", HTTP_PULL)];
+/// Signaling profile of each: pull since 0.4, push since 1.1 (ADR 0027).
+const FORMATS: &[(&str, &str)] = &[
+    ("HttpData-PULL", HTTP_PULL),
+    (portitor_dsp::transfer::HTTP_DATA_PUSH, HTTP_PUSH),
+];
 
 /// The Data Plane Signaling profile for a DSP format, if supported.
 fn profile_of(format: &str) -> Option<&'static str> {
@@ -122,8 +127,9 @@ impl<P: DataPlane + NewAddress> DataFlows for SignalingDataFlows<P> {
         profile_of(format).is_some() && self.sources.upstream_of(dataset_id).is_some()
     }
 
-    fn start(&self, t: &Transfer) -> Result<DataAddress, String> {
+    fn start(&self, t: &Transfer) -> Result<Option<DataAddress>, String> {
         let profile = profile_of(&t.format).ok_or("unsupported format")?;
+        let push = profile == HTTP_PUSH;
         let message = DataFlowStartMessage {
             flow: DataFlowBaseMessage {
                 message_id: new_uuid(),
@@ -139,12 +145,14 @@ impl<P: DataPlane + NewAddress> DataFlows for SignalingDataFlows<P> {
                 metadata: None,
                 labels: Vec::new(),
             },
-            // pull: the data plane makes the address (the spec forbids one here)
-            data_address: None,
+            // pull: the data plane makes the address (the spec forbids one
+            // here); push: where the data plane sends the data
+            data_address: if push { t.data_address.clone() } else { None },
         };
         let status = self.plane.start(&message).map_err(|e| e.to_string())?;
         match (status.state, status.data_address) {
-            (DataFlowState::Started, Some(address)) => Ok(address),
+            (DataFlowState::Started, _) if push => Ok(None),
+            (DataFlowState::Started, Some(address)) => Ok(Some(address)),
             (DataFlowState::Started, None) => Err("the data plane gave no data address".to_owned()),
             (other, _) => Err(format!(
                 "the data plane answered {other:?}; only an immediate start is supported"
@@ -157,20 +165,27 @@ impl<P: DataPlane + NewAddress> DataFlows for SignalingDataFlows<P> {
         self.settle(pid, DataFlowState::Suspended, answer)
     }
 
-    fn resume(&self, pid: &str) -> Result<(), String> {
+    fn resume(&self, pid: &str, address: Option<&DataAddress>) -> Result<(), String> {
         let message = portitor_dps::message::AddressMessage {
             message_id: new_uuid(),
-            data_address: None,
+            // a push started again with a new token of the consumer's
+            data_address: address.cloned(),
         };
         let answer = self.plane.resume(pid, &message).map(|_| ());
         self.settle(pid, DataFlowState::Started, answer)
     }
 
-    fn restart(&self, pid: &str) -> Result<DataAddress, String> {
+    fn restart(&self, t: &Transfer) -> Result<Option<DataAddress>, String> {
+        let pid = t.provider_pid.as_str();
+        if profile_of(&t.format) == Some(HTTP_PUSH) {
+            // the data goes to the consumer's address the flow keeps
+            self.resume(pid, None)?;
+            return Ok(None);
+        }
         // the new token first, so the old one never works again
         let address = self.plane.new_address(pid).map_err(|e| e.to_string())?;
-        self.resume(pid)?;
-        Ok(address)
+        self.resume(pid, None)?;
+        Ok(Some(address))
     }
 
     fn complete(&self, pid: &str) -> Result<(), String> {
@@ -232,8 +247,9 @@ mod tests {
             Err(SignalError::Invalid("not used".to_owned()))
         }
         fn start(&self, m: &DataFlowStartMessage) -> Result<DataFlowStatusMessage, SignalError> {
-            assert_eq!(m.flow.profile, HTTP_PULL);
-            assert!(m.data_address.is_none());
+            // a push start carries the consumer's address, a pull start none
+            assert_eq!(m.flow.profile == HTTP_PUSH, m.data_address.is_some());
+            let push = m.flow.profile == HTTP_PUSH;
             let state = self.1.borrow().unwrap_or(DataFlowState::Started);
             self.0
                 .borrow_mut()
@@ -242,7 +258,7 @@ mod tests {
                 message_id: "m".to_owned(),
                 data_flow_id: m.flow.data_flow_id.clone(),
                 state,
-                data_address: Some(DataAddress {
+                data_address: (!push).then(|| DataAddress {
                     kind: DataAddressType,
                     endpoint_type: HTTP_PULL.to_owned(),
                     endpoint: Some("https://p.example/data".to_owned()),
@@ -323,40 +339,69 @@ mod tests {
             agreement_id: "a".to_owned(),
             dataset_id: "d".to_owned(),
             format: format.to_owned(),
+            data_address: None,
             pending: None,
             version: 0,
         }
     }
 
+    /// A push transfer, with the consumer's address.
+    fn push_transfer() -> Transfer {
+        let mut push = transfer("HttpData-PUSH");
+        push.data_address = Some(DataAddress {
+            kind: DataAddressType,
+            endpoint_type: HTTP_PUSH.to_owned(),
+            endpoint: Some("https://c.example/push/c".to_owned()),
+            endpoint_properties: vec![],
+        });
+        push
+    }
+
     #[test]
-    fn supports_http_pull_of_known_datasets_only() {
+    fn supports_http_pull_and_push_of_known_datasets_only() {
         let plane = Plane::default();
         let flows = flows_over(&plane);
         assert!(flows.supports("d", "HttpData-PULL"));
-        assert!(!flows.supports("d", "HttpData-PUSH"));
+        assert!(flows.supports("d", "HttpData-PUSH"));
+        assert!(!flows.supports("d", "S3-PUSH"));
         assert!(!flows.supports("other", "HttpData-PULL"), "no data for it");
-        assert!(flows.start(&transfer("HttpData-PUSH")).is_err());
+        assert!(flows.start(&transfer("S3-PUSH")).is_err());
+    }
+
+    #[test]
+    fn a_push_flow_gets_the_consumers_address_and_gives_none() {
+        let plane = Plane::default();
+        let flows = flows_over(&plane);
+        let push = push_transfer();
+        assert_eq!(flows.start(&push).unwrap(), None);
+        flows.suspend("p").unwrap();
+        assert_eq!(flows.restart(&push).unwrap(), None, "started again");
+        assert_eq!((&plane).status("p").unwrap().state, DataFlowState::Started);
     }
 
     #[test]
     fn a_full_flow_and_repeated_signals() {
         let plane = Plane::default();
         let flows = flows_over(&plane);
-        let address = flows.start(&transfer("HttpData-PULL")).unwrap();
+        let pull = transfer("HttpData-PULL");
+        let address = flows.start(&pull).unwrap().unwrap();
         assert_eq!(address.endpoint.as_deref(), Some("https://p.example/data"));
         flows.suspend("p").unwrap();
         flows.suspend("p").unwrap(); // already suspended: done
-        flows.resume("p").unwrap();
-        flows.resume("p").unwrap(); // already started: done
+        flows.resume("p", None).unwrap();
+        flows.resume("p", None).unwrap(); // already started: done
         flows.suspend("p").unwrap();
-        assert!(flows.restart("p").is_ok(), "a new address, then resumed");
+        assert!(
+            flows.restart(&pull).unwrap().is_some(),
+            "a new address, then resumed"
+        );
         assert_eq!((&plane).status("p").unwrap().state, DataFlowState::Started);
         flows.complete("p").unwrap();
         flows.complete("p").unwrap();
         // completed is final: terminating it is refused, not hidden
         assert!(flows.terminate("p").unwrap_err().contains("final"));
         assert!(flows.suspend("p").is_err());
-        assert!(flows.restart("p").is_err(), "nothing to start again");
+        assert!(flows.restart(&pull).is_err(), "nothing to start again");
     }
 
     #[test]

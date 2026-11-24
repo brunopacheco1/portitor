@@ -19,6 +19,7 @@ use portitor_dps::state::DataFlowState;
 use portitor_dsp::negotiation::consumer::{ConsumerNegotiation, ConsumerStore};
 use portitor_dsp::negotiation::provider::{Negotiation, NegotiationStore, StoreError};
 use portitor_dsp::negotiation::{Agreement, NegotiationState};
+use portitor_dsp::transfer::DataAddress;
 use portitor_dsp::transfer::consumer::{
     AgreementProvider, ConsumerTransfer, ConsumerTransferStore, HeldAgreements,
 };
@@ -273,6 +274,9 @@ impl FlowStore for InMemoryFlows {
         match map.get_mut(id) {
             Some(flow) if flow.state == from => {
                 flow.state = to;
+                if to.is_final() {
+                    flow.push_address = None;
+                }
                 Ok(true)
             }
             _ => Ok(false),
@@ -295,6 +299,30 @@ impl FlowStore for InMemoryFlows {
             }
             _ => Ok(false),
         }
+    }
+
+    fn set_push_address(
+        &self,
+        id: &str,
+        state: DataFlowState,
+        address: &DataAddress,
+    ) -> Result<bool, FlowStoreError> {
+        let mut map = self.map();
+        match map.get_mut(id) {
+            Some(flow) if flow.state == state && flow.push_address.is_some() => {
+                flow.push_address = Some(address.clone());
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    fn started_pushes(&self) -> Result<Vec<String>, FlowStoreError> {
+        let map = self.map();
+        let started = map
+            .values()
+            .filter(|f| f.state == DataFlowState::Started && f.push_address.is_some());
+        Ok(started.map(|f| f.id.clone()).collect())
     }
 }
 

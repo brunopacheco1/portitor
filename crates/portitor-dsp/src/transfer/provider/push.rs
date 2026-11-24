@@ -1,0 +1,66 @@
+// SPDX-FileCopyrightText: Portitor contributors
+//
+// SPDX-License-Identifier: Apache-2.0
+
+//! The end of a push transfer (ADR 0027, section 1): the data plane has
+//! sent the data, or failed to, and the provider completes or terminates
+//! the transfer.
+
+use super::{
+    Agreements, CatalogDatasets, DataFlows, Environment, Failure, Lookup, Outgoing,
+    TransferDecider, TransferService, TransferState, TransferStore, Write, completion, process,
+    termination,
+};
+
+impl<S, A, F, D, C, E> TransferService<S, A, F, D, C, E>
+where
+    S: TransferStore,
+    A: Agreements,
+    F: DataFlows,
+    D: TransferDecider,
+    C: CatalogDatasets,
+    E: Environment,
+{
+    /// The data plane finished sending the data of push transfer
+    /// `provider_pid` (ADR 0027, section 1): `failure` is `None` when the
+    /// consumer's endpoint answered 2xx, else the reason (a status code,
+    /// never the URL or the token). Ends the data flow and the transfer: completed
+    /// on success, terminated with the reason otherwise. Returns the
+    /// completion or termination to send.
+    ///
+    /// Changes nothing when the transfer is no longer `STARTED` (it was
+    /// suspended or ended meanwhile) or a message of ours is still on its
+    /// way.
+    ///
+    /// # Errors
+    ///
+    /// Unknown transfer, data plane or store failure.
+    pub fn push_finished(
+        &self,
+        provider_pid: &str,
+        failure: Option<&str>,
+    ) -> Result<Option<Outgoing>, Failure> {
+        let saved = process::update(self, &Lookup::own(provider_pid), |transfer| {
+            if transfer.state != TransferState::Started || transfer.pending.is_some() {
+                return Ok(Write::Skip);
+            }
+            let message = match failure {
+                None => {
+                    self.flows
+                        .complete(provider_pid)
+                        .map_err(Failure::DataPlane)?;
+                    completion(transfer)
+                }
+                Some(reason) => {
+                    self.flows
+                        .terminate(provider_pid)
+                        .map_err(Failure::DataPlane)?;
+                    termination(transfer, &format!("the push failed: {reason}"))
+                }
+            };
+            transfer.pending = Some(message);
+            Ok(Write::Save)
+        })?;
+        Ok(saved.and_then(|transfer| transfer.pending))
+    }
+}

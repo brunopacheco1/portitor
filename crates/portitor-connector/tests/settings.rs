@@ -16,7 +16,7 @@
 use portitor_bundle::source::BundleConfig;
 use portitor_connector::auth::AuthSettings;
 use portitor_connector::management::{DEFAULT_MANAGEMENT_BIND, ManagementConfig};
-use portitor_connector::{Config, REMOVED_SETTINGS};
+use portitor_connector::{Config, REMOVED_SETTINGS, object_storage};
 use portitor_runtime::request_size::RequestLimits;
 use portitor_runtime::testing::settings_rule::{
     Case, Read, SWITCH_TRUTH_TABLE, check_binary_refuses_to_start, check_removed, check_rule,
@@ -124,6 +124,24 @@ fn table(secrets: &TempDir, bundle_from: BundleFrom) -> Vec<Case> {
             "did:web:other.example",
         ),
         Case::optional("PORTITOR_BUNDLE_CACHE_DIR", "/cache/a", "/cache/b"),
+        // object storage (ADR 0027): both keys, or neither
+        Case::optional(
+            "AWS_ENDPOINT_URL_S3",
+            "https://s3.example",
+            "https://other.example",
+        ),
+        Case::optional("AWS_REGION", "eu-central-1", "eu-west-1"),
+        Case::required(
+            "AWS_ACCESS_KEY_ID",
+            "test-only-key-id",
+            "test-only-other-id",
+        ),
+        Case::required(
+            "AWS_SECRET_ACCESS_KEY",
+            "test-only-secret-key",
+            "test-only-other-key",
+        ),
+        Case::optional("PORTITOR_PUSH_BUCKET", "pushed", "other"),
     ]
 }
 
@@ -138,8 +156,13 @@ fn read(var: &Lookup) -> Read {
         .map_err(|error| error.to_string())?;
     let management = ManagementConfig::from_vars(DEFAULT_MANAGEMENT_BIND, var);
     let limits = RequestLimits::from_vars(var)?;
+    let storage = object_storage::Settings::from_vars(var)?;
+    // the `Debug` text leaves the keys out
+    let keys = storage
+        .as_ref()
+        .map(|s| (s.access_key_id.clone(), s.secret_access_key.clone()));
     Ok(format!(
-        "{config:?}\n{auth:?}\n{secret:?}\n{bundle:?}\n{management:?}\n{limits:?}"
+        "{config:?}\n{auth:?}\n{secret:?}\n{bundle:?}\n{management:?}\n{limits:?}\n{storage:?}\n{keys:?}"
     ))
 }
 

@@ -87,10 +87,17 @@ pub struct Ports {
     /// the `data-plane` feature) the connector runs its HTTP pull data
     /// plane and uses it for transfers; `None` keeps `transfers.flows`.
     pub flow_store: Option<AnyFlowStore>,
+    /// Where the tokens of push transfers as consumer are kept (ADR 0027).
+    pub push_receipts: crate::receiving::AnyPushReceipts,
     /// The adapters of the dataset harvest (ADR 0020): the store of the
     /// read copy, and optionally another source than the datasets file and
     /// a check after the DSP rules.
     pub harvest: crate::harvest::HarvestPorts,
+    /// The connector's S3-compatible object storage (ADR 0027): the
+    /// provider's `s3://` sources, and where a consumer's pushed data
+    /// lands. [`Ports::new`] starts without; the binary sets it from the
+    /// `AWS_*` settings ([`crate::object_storage::Settings`]).
+    pub object_storage: Option<Arc<crate::object_storage::ObjectStorage>>,
     /// The credential types that policies may use (ADR 0019): which scopes
     /// to ask for, and grant, for an offer's credential constraints.
     /// [`crate::build`] sets it from [`crate::Config::credential_types`].
@@ -126,6 +133,7 @@ impl Ports {
                 decider: default_transfer_decider(),
             },
             flow_store: Some(Shared(Arc::clone(store) as _)),
+            push_receipts: Shared(Arc::clone(store) as _),
             decider: default_decider(),
             sender,
             verifier: Arc::new(RefuseAll),
@@ -144,6 +152,7 @@ impl Ports {
                 source: None,
                 extra_check: None,
             },
+            object_storage: None,
             credential_types: CredentialTypes::default(),
         }
     }
@@ -164,6 +173,7 @@ impl Ports {
         self.consumer_transfers.store = Shared(Arc::clone(store) as _);
         self.consumer_transfers.held = Shared(Arc::clone(store) as _);
         self.harvest.store = Shared(Arc::clone(store) as _);
+        self.push_receipts = Shared(Arc::clone(store) as _);
         if self.flow_store.is_some() {
             self.flow_store = Some(Shared(Arc::clone(store) as _));
         }
@@ -485,17 +495,17 @@ impl DataFlows for AnyDataFlows {
     fn supports(&self, dataset_id: &str, format: &str) -> bool {
         self.0.supports(dataset_id, format)
     }
-    fn start(&self, transfer: &Transfer) -> Result<DataAddress, String> {
+    fn start(&self, transfer: &Transfer) -> Result<Option<DataAddress>, String> {
         self.0.start(transfer)
     }
     fn suspend(&self, pid: &str) -> Result<(), String> {
         self.0.suspend(pid)
     }
-    fn restart(&self, pid: &str) -> Result<DataAddress, String> {
-        self.0.restart(pid)
+    fn restart(&self, transfer: &Transfer) -> Result<Option<DataAddress>, String> {
+        self.0.restart(transfer)
     }
-    fn resume(&self, pid: &str) -> Result<(), String> {
-        self.0.resume(pid)
+    fn resume(&self, pid: &str, address: Option<&DataAddress>) -> Result<(), String> {
+        self.0.resume(pid, address)
     }
     fn complete(&self, pid: &str) -> Result<(), String> {
         self.0.complete(pid)
@@ -600,5 +610,16 @@ impl FlowStore for AnyFlowStore {
         expires_at: u64,
     ) -> Result<bool, FlowStoreError> {
         self.0.set_token(id, state, token_hash, expires_at)
+    }
+    fn set_push_address(
+        &self,
+        id: &str,
+        state: DataFlowState,
+        address: &DataAddress,
+    ) -> Result<bool, FlowStoreError> {
+        self.0.set_push_address(id, state, address)
+    }
+    fn started_pushes(&self) -> Result<Vec<String>, FlowStoreError> {
+        self.0.started_pushes()
     }
 }

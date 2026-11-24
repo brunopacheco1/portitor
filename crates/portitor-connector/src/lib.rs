@@ -73,6 +73,8 @@ pub mod negotiation;
 pub mod object_storage;
 mod outbox;
 pub mod ports;
+pub mod push;
+pub mod receiving;
 pub mod running_flows;
 // the signed schema and vocabulary bundle (ADR 0005): where it comes
 // from and its read copy are in `portitor-bundle` (its settings are read
@@ -349,6 +351,7 @@ pub struct Negotiator {
     transfer_consumer: Arc<consumer_transfer::TransferConsumer>,
     harvester: Arc<harvest::DatasetHarvester>,
     catalog_reader: Arc<catalog_reader::CatalogReader>,
+    receiving: Router,
 }
 
 impl std::fmt::Debug for Negotiator {
@@ -418,6 +421,22 @@ impl Negotiator {
         format: &str,
     ) -> Result<ConsumerTransfer, Box<TransferFailure>> {
         self.transfer_consumer.request(agreement_id, format)
+    }
+
+    /// The routes that receive push transfers (`/push/{consumerPid}`,
+    /// ADR 0027), when the connector has object storage and a push
+    /// bucket. They are not in [`build`]'s router: the binary serves them
+    /// outside the public port's body size and time limits. [`router`]
+    /// has them.
+    pub fn receiving_routes(&self) -> Router {
+        self.receiving.clone()
+    }
+
+    /// The object the data of push transfer `consumer_pid` went into, once
+    /// some arrived (ADR 0027).
+    #[must_use]
+    pub fn object_key(&self, consumer_pid: &str) -> Option<String> {
+        self.transfer_consumer.object_key(consumer_pid)
     }
 
     /// The transfer, as consumer, with this consumer pid.
@@ -584,7 +603,7 @@ impl Negotiator {
 ///
 /// The stored datasets cannot be read (see [`build`]).
 pub fn router(config: &Config, ports: Ports) -> Result<Router, StartError> {
-    build(config, ports).map(|(router, _)| router)
+    build(config, ports).map(|(router, negotiator)| router.merge(negotiator.receiving_routes()))
 }
 
 /// Like [`router`], and also returns the handle that starts negotiations
@@ -614,11 +633,8 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         config.participant_id.clone(),
         config.allow_http,
     ));
-    let transfer_consumer = Arc::new(consumer_transfer::TransferConsumer::new(
-        &ports,
-        callback_address,
-        config.allow_http,
-    ));
+    let (transfer_consumer, receiving) =
+        receiving::consumer_transfers(config, &ports, callback_address);
     #[cfg(feature = "tck")]
     {
         // the adapter itself (`.0`), not the `Shared` around it: see
@@ -632,11 +648,12 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         config.allow_http,
     ));
     let data_plane = start_data_plane(config, &mut ports, &datasets);
-    let transfers = Arc::new(transfer::TransferProvider::new(
+    let transfers = transfer::TransferProvider::new_shared(
         &ports,
         datasets.clone(),
         config.allow_http,
-    ));
+        data_plane.clone(),
+    );
     let provider = Arc::new(negotiation::Provider::new(
         ports,
         datasets.clone(),
@@ -675,6 +692,7 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         transfer_consumer: Arc::clone(&transfer_consumer),
         harvester,
         catalog_reader,
+        receiving,
     };
     let state = Arc::new(AppState { catalog, versions });
     // open: discovery (DSP 2025-1), health, and the data plane, which
@@ -824,9 +842,10 @@ fn start_harvest(
     Ok(harvester)
 }
 
-/// Builds the built-in HTTP pull data plane, if the `data-plane` feature
-/// is on and `ports` has a flow store, and makes transfers use it. It
-/// reads each dataset's upstream URL from the read copy `datasets`.
+/// Builds the built-in HTTP data plane, if the `data-plane` feature is on
+/// and `ports` has a flow store, and makes transfers use it. It reads
+/// each dataset's source from the read copy `datasets`, and `s3://`
+/// sources from `ports.object_storage`.
 fn start_data_plane(
     config: &Config,
     ports: &mut Ports,
@@ -837,12 +856,15 @@ fn start_data_plane(
     }
     let store = ports.flow_store.clone()?;
     let sources: Arc<dyn data_plane::UpstreamSources> = Arc::new(datasets.clone());
-    let plane = match data_plane::HttpDataPlane::new(
+    let plane = data_plane::HttpDataPlane::new(
         store,
         Arc::clone(&sources),
         &config.public_url,
         config.data_token_seconds,
-    ) {
+    )
+    .and_then(|plane| plane.with_push_over_http(config.allow_http))
+    .map(|plane| plane.with_object_storage(ports.object_storage.clone()));
+    let plane = match plane {
         Ok(plane) => plane,
         Err(e) => {
             tracing::error!(error = %e, "no data plane: transfers will be refused");

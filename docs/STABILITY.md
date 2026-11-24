@@ -45,8 +45,8 @@ finding F-01 in [SECURITY-ASSURANCE](SECURITY-ASSURANCE.md),
 [R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17)). 1.0 does not refuse them.
 
 Each service needs its own host name (or its own port): the connector
-serves `/dsp/2025-1`, `/data` and `/.well-known/dspace-version` at the
-root of its host. The path of `PORTITOR_PUBLIC_URL` is not used for
+serves `/dsp/2025-1`, `/data`, `/push` (since 1.1) and
+`/.well-known/dspace-version` at the root of its host. The path of `PORTITOR_PUBLIC_URL` is not used for
 routing; it is only put in front of the addresses the connector gives
 to partners.
 
@@ -71,6 +71,8 @@ the three `*management-openapi.json` files there.
 GET /.well-known/dspace-version
 GET /health
 GET /data/{flowId}
+POST /push/{consumerPid}
+PUT /push/{consumerPid}
 POST /dsp/2025-1/catalog/request
 GET /dsp/2025-1/catalog/datasets/{id}
 POST /dsp/2025-1/negotiations/request
@@ -301,7 +303,7 @@ named in the CHANGELOG.
 
 | File | Set with | Format |
 |---|---|---|
-| Datasets file | `PORTITOR_DATASETS_FILE` | A JSON list of DCAT datasets with their ODRL offers and `portitor:source` ([ADR 0020](adr/0020-dataset-harvest.md), [DEPLOYING](DEPLOYING.md#dataset-harvest)). Policies are read strictly ([ADR 0009](adr/0009-minimal-odrl-policies.md)); a 1.x release may understand more terms |
+| Datasets file | `PORTITOR_DATASETS_FILE` | A JSON list of DCAT datasets with their ODRL offers and `portitor:source` ([ADR 0020](adr/0020-dataset-harvest.md), [DEPLOYING](DEPLOYING.md#dataset-harvest)). `portitor:source` is an `http://` or `https://` URL, or, since 1.1, an object of the connector's object storage written `s3://{bucket}/{key}` ([ADR 0027](adr/0027-push-transfers-and-object-storage.md)). Policies are read strictly ([ADR 0009](adr/0009-minimal-odrl-policies.md)); a 1.x release may understand more terms |
 | Credential definitions | `PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE` | A JSON list ([DEPLOYING, credential definitions file](DEPLOYING.md#credential-definitions-file), `examples/issuer-credentials.json`) |
 | Bundle | `PORTITOR_BUNDLE_URL`, `portitor-issuer bundle build` | A folder per version with `manifest.json` and `manifest.jws`, and `latest.json` ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)); the manifest follows [bundle-manifest.schema.json](schemas/bundle-manifest.schema.json) |
 | Gaia-X participant file | `PORTITOR_GAIAX_PARTICIPANT_FILE` | JSON ([DEPLOYING, Gaia-X onboarding](DEPLOYING.md#gaia-x-onboarding-optional)) |
@@ -356,8 +358,10 @@ confirmed this for 1.x at the freeze (2026-11-20,
 
 ## What 1.0 does not do
 
-- **Pull transfers only** (`HttpData-PULL`). No push
-  ([ADR 0013](adr/0013-transfer-and-data-plane.md)).
+- **Pull transfers only** (`HttpData-PULL`) in 1.0. Push
+  (`HttpData-PUSH`) exists since 1.1, as provider and as consumer, with
+  S3-compatible object storage
+  ([ADR 0027](adr/0027-push-transfers-and-object-storage.md)).
 - **No negotiation started by the provider.** The consumer starts
   ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)). It can be added in 1.x.
 - **No Data Plane Signaling over HTTP.** The data plane runs inside the

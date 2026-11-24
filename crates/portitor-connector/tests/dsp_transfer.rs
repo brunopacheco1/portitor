@@ -110,9 +110,9 @@ impl DataFlows for FakeFlows {
     fn supports(&self, _: &str, format: &str) -> bool {
         format == "HttpData-PULL"
     }
-    fn start(&self, t: &Transfer) -> Result<DataAddress, String> {
+    fn start(&self, t: &Transfer) -> Result<Option<DataAddress>, String> {
         self.record(format!("start {}", t.dataset_id));
-        Ok(DataAddress {
+        Ok(Some(DataAddress {
             kind: DataAddressType,
             endpoint_type: "https://w3id.org/idsa/v4.1/HTTP".to_owned(),
             endpoint: Some("https://provider.example/data".to_owned()),
@@ -120,9 +120,9 @@ impl DataFlows for FakeFlows {
                 EndpointProperty::new("authorization", "t0ken"),
                 EndpointProperty::new("authType", "bearer"),
             ],
-        })
+        }))
     }
-    fn restart(&self, _: &str) -> Result<DataAddress, String> {
+    fn restart(&self, _: &Transfer) -> Result<Option<DataAddress>, String> {
         self.record("restart".to_owned());
         Err("the fake provider never starts a transfer again".to_owned())
     }
@@ -130,7 +130,7 @@ impl DataFlows for FakeFlows {
         self.record("suspend".to_owned());
         Ok(())
     }
-    fn resume(&self, _: &str) -> Result<(), String> {
+    fn resume(&self, _: &str, _: Option<&DataAddress>) -> Result<(), String> {
         self.record("resume".to_owned());
         Ok(())
     }

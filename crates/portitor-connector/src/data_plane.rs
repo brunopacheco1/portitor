@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! The built-in HTTP pull data plane (ADR 0013, "The data"). It implements
-//! the Data Plane Signaling [`DataPlane`] port and serves the data at
-//! `GET /data/{flowId}`.
+//! The built-in HTTP data plane (ADR 0013, "The data"; ADR 0027). It
+//! implements the Data Plane Signaling [`DataPlane`] port, serves the data
+//! of pull transfers at `GET /data/{flowId}`, and holds what a push
+//! transfer needs (the consumer's address) for the push sender
+//! (`crate::push`).
 //!
 //! - Starting a data flow makes a random access token (32 bytes from the
 //!   OS generator). Only its SHA-256 hash is stored. The token goes to the
@@ -14,12 +16,20 @@
 //!   not expired. Unknown flow, wrong token, suspended or ended flow, and
 //!   expired token all get the same 401 answer, so a caller learns nothing
 //!   about which flows exist.
-//! - The data comes from the dataset's upstream URL (`portitor:source` in
-//!   the datasets file), fetched with a plain `GET` and streamed through.
+//! - The data comes from the dataset's source (`portitor:source` in the
+//!   datasets file): an upstream URL, fetched with a plain `GET`, or an
+//!   object in the connector's object storage (`s3://{bucket}/{key}`, ADR
+//!   0027, section 3), read with a signed `GET`. Either is streamed
+//!   through.
 //!   The URL is looked up in the harvest's read copy at each request
 //!   ([`UpstreamSources`]), in any state, so transfers under agreements
 //!   already made keep working after the dataset is withdrawn.
 //!   The consumer's request headers are not passed on.
+//! - A push flow (profile `http-push`) keeps the consumer's data address
+//!   instead of a token of ours, until it ends. It has no token, so `/data`
+//!   never serves it.
+//! - Suspend, terminate and complete cut what is moving for the flow now
+//!   ([`RunningFlows`]).
 
 #[cfg(test)]
 use std::collections::BTreeMap;
@@ -37,14 +47,18 @@ use portitor_dcp::bundle::sha256_hex;
 use portitor_dps::message::{
     DataFlowPrepareMessage, DataFlowResumeMessage, DataFlowStartMessage,
     DataFlowStartedNotificationMessage, DataFlowStatusMessage, DataFlowStatusResponseMessage,
-    DataFlowSuspendMessage, DataFlowTerminateMessage, HTTP_PULL,
+    DataFlowSuspendMessage, DataFlowTerminateMessage, HTTP_PULL, HTTP_PUSH,
 };
 use portitor_dps::port::{DataPlane, SignalError};
 use portitor_dps::state::DataFlowState;
-use portitor_dsp::transfer::{DataAddress, DataAddressType, EndpointProperty};
+use portitor_dsp::transfer::{DataAddress, DataAddressType, EndpointProperty, check_push_address};
 
-use crate::http_client::{HttpsClient, bearer_token_in, https_client};
+use crate::http_client::{
+    HttpsClient, StreamingHttpsClient, bearer_token_in, https_client, https_streaming_client,
+};
+use crate::object_storage::{ObjectStorage, parse_s3_uri};
 use crate::ports::AnyFlowStore;
+use crate::running_flows::{FlowGuard, RunningFlows};
 use crate::system::{new_uuid, now_secs};
 use portitor_runtime::telemetry::http::{ClientCall, Peer};
 use tracing::Instrument as _;
@@ -84,10 +98,15 @@ pub struct Flow {
     pub state: DataFlowState,
     /// The dataset whose data is served.
     pub dataset_id: String,
-    /// SHA-256 of the access token, hex.
+    /// SHA-256 of the access token, hex. Empty for a push flow, which
+    /// has no token of ours: no hash matches it.
     pub token_hash: String,
     /// When the token stops working, in seconds since 1970.
     pub expires_at: u64,
+    /// A push flow: where to send the data, the consumer's data address
+    /// with its token (ADR 0027). `None` for a pull flow, and once the
+    /// flow has ended. Never logged.
+    pub push_address: Option<DataAddress>,
 }
 
 /// A flow store failure.
@@ -136,17 +155,40 @@ pub trait FlowStore {
         token_hash: &str,
         expires_at: u64,
     ) -> Result<bool, FlowStoreError>;
+
+    /// Replaces the consumer's address of a push flow that is in `state`
+    /// (a start again with a new token). Returns `false` if the flow was
+    /// not in `state`. A flow that moves to a final state through
+    /// [`FlowStore::set_state`] loses its address there.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be written.
+    fn set_push_address(
+        &self,
+        id: &str,
+        state: DataFlowState,
+        address: &DataAddress,
+    ) -> Result<bool, FlowStoreError>;
+
+    /// The ids of the push flows that are STARTED: after a restart, the
+    /// pushes to send again.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be read.
+    fn started_pushes(&self) -> Result<Vec<String>, FlowStoreError>;
 }
 
 /// SHA-256 of `token`, hex. Comparing two such hashes with `==` is safe:
 /// what a timing difference could reveal is a prefix of the hash, and no
 /// one can work back from a hash prefix to a token.
-fn hash(token: &str) -> String {
+pub(crate) fn hash(token: &str) -> String {
     sha256_hex(token.as_bytes())
 }
 
 /// A new random access token: 32 bytes from the OS generator, base64url.
-fn new_token() -> Result<String, SignalError> {
+pub(crate) fn new_token() -> Result<String, SignalError> {
     use ring::rand::SecureRandom as _;
     let mut bytes = [0u8; 32];
     ring::rand::SystemRandom::new()
@@ -155,7 +197,7 @@ fn new_token() -> Result<String, SignalError> {
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }
 
-/// The built-in HTTP pull data plane.
+/// The built-in HTTP data plane.
 #[derive(Clone)]
 pub struct HttpDataPlane {
     flows: AnyFlowStore,
@@ -163,6 +205,13 @@ pub struct HttpDataPlane {
     public_url: String,
     token_seconds: u64,
     client: HttpsClient,
+    /// The object storage of `s3://` sources, if the connector has one.
+    storage: Option<Arc<ObjectStorage>>,
+    /// The client of pushes: to an address a partner chose, so plain
+    /// `http://` only with `PORTITOR_ALLOW_HTTP`.
+    push_client: StreamingHttpsClient,
+    /// What moves now, per flow: cut on suspend, terminate and complete.
+    running: RunningFlows,
 }
 
 impl std::fmt::Debug for HttpDataPlane {
@@ -206,7 +255,39 @@ impl HttpDataPlane {
             public_url: public_url.trim_end_matches('/').to_owned(),
             token_seconds,
             client,
+            storage: None,
+            push_client: https_streaming_client(false)?,
+            running: RunningFlows::new(),
         })
+    }
+
+    /// The same data plane, reading `s3://` sources from `storage`.
+    #[must_use]
+    pub fn with_object_storage(mut self, storage: Option<Arc<ObjectStorage>>) -> Self {
+        self.storage = storage;
+        self
+    }
+
+    /// The same data plane, pushing to plain `http://` endpoints too
+    /// when `allow_http` (`PORTITOR_ALLOW_HTTP`, development only).
+    ///
+    /// # Errors
+    ///
+    /// The HTTP client cannot be built.
+    pub fn with_push_over_http(mut self, allow_http: bool) -> Result<Self, String> {
+        self.push_client = https_streaming_client(allow_http)?;
+        Ok(self)
+    }
+
+    /// What moves now, per flow (shared: cloning it shares the registry).
+    #[must_use]
+    pub fn running(&self) -> &RunningFlows {
+        &self.running
+    }
+
+    /// The client pushes are sent with.
+    pub(crate) fn push_client(&self) -> &StreamingHttpsClient {
+        &self.push_client
     }
 
     #[allow(clippy::needless_pass_by_value)] // used as map_err(Self::store_failed)
@@ -230,6 +311,11 @@ impl HttpDataPlane {
             .set_state(id, flow.state, to)
             .map_err(Self::store_failed)?;
         if moved {
+            if to != DataFlowState::Started {
+                // suspend, terminate or complete: cut what moves now
+                // (ADR 0027, sections 1 and 5)
+                self.running.cancel(id);
+            }
             Ok(())
         } else {
             Err(SignalError::Failed(format!(
@@ -277,6 +363,11 @@ impl HttpDataPlane {
     /// Unknown or ended flow, or the store failed.
     pub fn new_address(&self, id: &str) -> Result<DataAddress, SignalError> {
         let flow = self.flow(id)?;
+        if flow.push_address.is_some() {
+            return Err(SignalError::Invalid(format!(
+                "data flow {id} is a push; it has no token of ours"
+            )));
+        }
         if !matches!(
             flow.state,
             DataFlowState::Suspended | DataFlowState::Started
@@ -313,6 +404,7 @@ impl HttpDataPlane {
             .map_err(|_| Denied::Store)?
             .ok_or(Denied::Unauthorized)?;
         let allowed = flow.state == DataFlowState::Started
+            && flow.push_address.is_none()
             && now < flow.expires_at
             && hash(token) == flow.token_hash;
         if !allowed {
@@ -321,6 +413,170 @@ impl HttpDataPlane {
         self.sources
             .upstream_of(&flow.dataset_id)
             .ok_or(Denied::Unauthorized)
+    }
+}
+
+impl HttpDataPlane {
+    /// `start` for a push flow: the message carries the consumer's data
+    /// address, which the flow keeps; the answer carries none.
+    fn start_push(
+        &self,
+        message: &DataFlowStartMessage,
+    ) -> Result<DataFlowStatusMessage, SignalError> {
+        let request = &message.flow;
+        let Some(address) = &message.data_address else {
+            return Err(SignalError::Invalid(
+                "a push start carries the consumer's data address".to_owned(),
+            ));
+        };
+        check_push_address(address).map_err(SignalError::Invalid)?;
+        self.check_source(&request.dataset_id)?;
+        let flow = Flow {
+            id: request.data_flow_id.clone(),
+            state: DataFlowState::Started,
+            dataset_id: request.dataset_id.clone(),
+            token_hash: String::new(),
+            expires_at: 0,
+            push_address: Some(address.clone()),
+        };
+        if !self.flows.insert(&flow).map_err(Self::store_failed)? {
+            return Err(SignalError::DataFlowExists(flow.id));
+        }
+        Ok(Self::status_message(&flow.id, flow.state, None))
+    }
+
+    /// The dataset has a source this data plane can read.
+    fn check_source(&self, dataset_id: &str) -> Result<(), SignalError> {
+        match self.sources.upstream_of(dataset_id) {
+            None => Err(SignalError::Invalid(format!(
+                "dataset {dataset_id} has no source"
+            ))),
+            Some(source) if !self.can_read(&source) => Err(SignalError::Invalid(format!(
+                "dataset {dataset_id} is in object storage, which this connector does not have"
+            ))),
+            Some(_) => Ok(()),
+        }
+    }
+
+    /// Replaces the consumer's address of push flow `id`, SUSPENDED.
+    fn replace_push_address(&self, id: &str, address: &DataAddress) -> Result<(), SignalError> {
+        let flow = self.flow(id)?;
+        if flow.push_address.is_none() {
+            return Err(SignalError::Invalid(
+                "a pull resume carries no data address".to_owned(),
+            ));
+        }
+        check_push_address(address).map_err(SignalError::Invalid)?;
+        let replaced = self
+            .flows
+            .set_push_address(id, flow.state, address)
+            .map_err(Self::store_failed)?;
+        if replaced {
+            Ok(())
+        } else {
+            Err(SignalError::Failed(format!(
+                "data flow {id} changed concurrently"
+            )))
+        }
+    }
+}
+
+/// A push to send: what [`HttpDataPlane::push_job`] hands to the sender.
+#[derive(Debug)]
+pub struct PushJob {
+    /// The data flow (the transfer's provider pid).
+    pub flow_id: String,
+    /// The dataset's source.
+    pub source: String,
+    /// The consumer's data address. Never logged.
+    pub address: DataAddress,
+    /// Held while the push runs; cancelled on suspend or terminate.
+    pub guard: FlowGuard,
+}
+
+/// A source's answer: its media type and its bytes as they come.
+pub struct SourceData {
+    /// The source's `Content-Type`, if it gave one.
+    pub content_type: Option<header::HeaderValue>,
+    /// The bytes.
+    pub body: Body,
+}
+
+impl HttpDataPlane {
+    /// The push to send now for flow `id`, if it is a push flow that is
+    /// STARTED and none of its pushes runs already. The caller sends it
+    /// (`crate::push`) and keeps the job's guard until it is done.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn push_job(&self, id: &str) -> Result<Option<PushJob>, SignalError> {
+        let flow = self.flow(id)?;
+        let Some(address) = flow.push_address else {
+            return Ok(None);
+        };
+        if flow.state != DataFlowState::Started {
+            return Ok(None);
+        }
+        let Some(source) = self.sources.upstream_of(&flow.dataset_id) else {
+            return Err(SignalError::Invalid(format!(
+                "dataset {} has no source",
+                flow.dataset_id
+            )));
+        };
+        let Some(guard) = self.running.register_if_idle(id) else {
+            // already being sent
+            return Ok(None);
+        };
+        Ok(Some(PushJob {
+            flow_id: flow.id,
+            source,
+            address,
+            guard,
+        }))
+    }
+
+    /// The push flows that are STARTED (after a restart, the pushes to
+    /// send again).
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn started_pushes(&self) -> Result<Vec<String>, SignalError> {
+        self.flows.started_pushes().map_err(Self::store_failed)
+    }
+
+    /// Whether this data plane can read `source`: an `http(s)` URL, or an
+    /// `s3://` object when the connector has object storage.
+    fn can_read(&self, source: &str) -> bool {
+        parse_s3_uri(source).is_none() || self.storage.is_some()
+    }
+
+    /// Opens `source`, an upstream URL or an `s3://` object, and returns
+    /// its media type and its bytes as a stream (2xx answers only).
+    ///
+    /// # Errors
+    ///
+    /// The source did not answer, or not with 2xx; the text names no URL.
+    pub async fn open_source(&self, source: &str) -> Result<SourceData, String> {
+        match parse_s3_uri(source) {
+            Some(object) => {
+                let Some(storage) = &self.storage else {
+                    return Err(
+                        "the source is in object storage, which is not configured".to_owned()
+                    );
+                };
+                let found = storage
+                    .get(&object.bucket, &object.key)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(SourceData {
+                    content_type: found.content_type,
+                    body: Body::new(found.body),
+                })
+            }
+            None => fetch(&self.client, source).await,
+        }
     }
 }
 
@@ -333,6 +589,9 @@ impl DataPlane for HttpDataPlane {
 
     fn start(&self, message: &DataFlowStartMessage) -> Result<DataFlowStatusMessage, SignalError> {
         let request = &message.flow;
+        if request.profile == HTTP_PUSH {
+            return self.start_push(message);
+        }
         if request.profile != HTTP_PULL {
             return Err(SignalError::Invalid(format!(
                 "unsupported profile {}",
@@ -345,12 +604,7 @@ impl DataPlane for HttpDataPlane {
                 "a pull start carries no data address".to_owned(),
             ));
         }
-        if self.sources.upstream_of(&request.dataset_id).is_none() {
-            return Err(SignalError::Invalid(format!(
-                "dataset {} has no source",
-                request.dataset_id
-            )));
-        }
+        self.check_source(&request.dataset_id)?;
         let token = new_token()?;
         let flow = Flow {
             id: request.data_flow_id.clone(),
@@ -358,6 +612,7 @@ impl DataPlane for HttpDataPlane {
             dataset_id: request.dataset_id.clone(),
             token_hash: hash(&token),
             expires_at: now_secs().saturating_add(self.token_seconds),
+            push_address: None,
         };
         if !self.flows.insert(&flow).map_err(Self::store_failed)? {
             return Err(SignalError::DataFlowExists(flow.id));
@@ -379,8 +634,12 @@ impl DataPlane for HttpDataPlane {
     fn resume(
         &self,
         id: &str,
-        _: &DataFlowResumeMessage,
+        message: &DataFlowResumeMessage,
     ) -> Result<DataFlowStatusMessage, SignalError> {
+        if let Some(address) = &message.data_address {
+            // a push started again with a new token (ADR 0027)
+            self.replace_push_address(id, address)?;
+        }
         // the same token works again (ADR 0013), so no new address
         self.move_to(id, DataFlowState::Started)?;
         Ok(Self::status_message(id, DataFlowState::Started, None))
@@ -403,7 +662,7 @@ impl DataPlane for HttpDataPlane {
     }
 }
 
-fn unauthorized() -> Response {
+pub(crate) fn unauthorized() -> Response {
     let challenge = [(header::WWW_AUTHENTICATE, "Bearer")];
     (StatusCode::UNAUTHORIZED, challenge).into_response()
 }
@@ -423,21 +682,27 @@ pub(crate) async fn serve(
         Err(Denied::Unauthorized) => return unauthorized(),
         Err(Denied::Store) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    match fetch(&plane.client, &source).await {
-        Ok(response) => response,
+    match plane.open_source(&source).await {
+        Ok(data) => {
+            let mut response = Response::new(data.body);
+            if let Some(value) = data.content_type {
+                response.headers_mut().insert(header::CONTENT_TYPE, value);
+            }
+            response
+        }
         Err(error) => {
-            // the upstream URL is private: log it, do not show it
+            // the source is private: the log names the flow, not the URL
             tracing::warn!(flow = %id, %error, "upstream fetch failed");
             StatusCode::BAD_GATEWAY.into_response()
         }
     }
 }
 
-/// GETs `url` and turns a 2xx answer into our response, streaming the body.
+/// GETs `url` and returns a 2xx answer's media type and body, streamed.
 /// The data source is our participant's own, so the request carries our
 /// trace context (ADR 0023, section 4). Its span ends when the answer's
 /// headers came; the body is streamed afterwards.
-async fn fetch(client: &HttpsClient, url: &str) -> Result<Response, String> {
+async fn fetch(client: &HttpsClient, url: &str) -> Result<SourceData, String> {
     let mut request = hyper::Request::get(url)
         .body(Full::new(Bytes::new()))
         .map_err(|e| e.to_string())?;
@@ -465,11 +730,10 @@ async fn fetch(client: &HttpsClient, url: &str) -> Result<Response, String> {
         return Err(format!("upstream answered HTTP {}", answer.status()));
     }
     let content_type = answer.headers().get(header::CONTENT_TYPE).cloned();
-    let mut response = Response::new(Body::new(answer.into_body()));
-    if let Some(value) = content_type {
-        response.headers_mut().insert(header::CONTENT_TYPE, value);
-    }
-    Ok(response)
+    Ok(SourceData {
+        content_type,
+        body: Body::new(answer.into_body()),
+    })
 }
 
 #[cfg(test)]

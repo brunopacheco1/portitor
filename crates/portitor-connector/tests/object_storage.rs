@@ -15,14 +15,7 @@ mod common;
 use common::fake_s3;
 
 fn storage(endpoint: &str) -> ObjectStorage {
-    ObjectStorage::new(Settings {
-        endpoint: endpoint.to_owned(),
-        region: "us-east-1".to_owned(),
-        access_key_id: fake_s3::KEY_ID.to_owned(),
-        secret_access_key: fake_s3::SECRET.to_owned(),
-        push_bucket: Some("received".to_owned()),
-    })
-    .unwrap()
+    fake_s3::client(endpoint)
 }
 
 #[tokio::test]

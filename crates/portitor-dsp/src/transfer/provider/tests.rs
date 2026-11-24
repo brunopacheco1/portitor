@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use serde_json::json;
 
 use super::*;
+use crate::Context;
 use crate::negotiation::AgreementType;
 use crate::transfer::{DataAddressType, EndpointProperty, TransferRequestMessageType};
 use crate::{Dataset, DatasetType, Distribution, DistributionType, Rule};
@@ -170,21 +171,34 @@ fn address(pid: &str, token: &str) -> DataAddress {
 
 impl DataFlows for &Flows {
     fn supports(&self, _: &str, format: &str) -> bool {
-        format == "HttpData-PULL"
+        format == "HttpData-PULL" || format == "HttpData-PUSH"
     }
-    fn start(&self, t: &Transfer) -> Result<DataAddress, String> {
+    /// A pull flow gives an address; a push flow (one with the consumer's
+    /// address) none.
+    fn start(&self, t: &Transfer) -> Result<Option<DataAddress>, String> {
+        if let Some(to) = &t.data_address {
+            let token = to.property("authorization").unwrap_or_default();
+            self.record(&format!("start {} push with {token}", t.provider_pid))?;
+            return Ok(None);
+        }
         self.record(&format!("start {}", t.provider_pid))?;
-        Ok(address(&t.provider_pid, "t0ken"))
+        Ok(Some(address(&t.provider_pid, "t0ken")))
     }
-    fn restart(&self, pid: &str) -> Result<DataAddress, String> {
-        self.record(&format!("restart {pid}"))?;
-        Ok(address(pid, "t0ken-2"))
+    fn restart(&self, t: &Transfer) -> Result<Option<DataAddress>, String> {
+        self.record(&format!("restart {}", t.provider_pid))?;
+        if t.data_address.is_some() {
+            return Ok(None);
+        }
+        Ok(Some(address(&t.provider_pid, "t0ken-2")))
     }
     fn suspend(&self, pid: &str) -> Result<(), String> {
         self.record(&format!("suspend {pid}"))
     }
-    fn resume(&self, pid: &str) -> Result<(), String> {
-        self.record(&format!("resume {pid}"))
+    fn resume(&self, pid: &str, to: Option<&DataAddress>) -> Result<(), String> {
+        match to.and_then(|to| to.property("authorization")) {
+            Some(token) => self.record(&format!("resume {pid} push with {token}")),
+            None => self.record(&format!("resume {pid}")),
+        }
     }
     fn complete(&self, pid: &str) -> Result<(), String> {
         self.record(&format!("complete {pid}"))
@@ -542,10 +556,11 @@ fn requests_that_break_a_rule_are_refused_before_anything_starts() {
         ("a-other", "HttpData-PULL", "no finalized agreement"),
         ("a-expired", "HttpData-PULL", "does not allow it now"),
         ("a1", "S3-PULL", "not offered in this format"),
+        // a push request without the consumer's address (ADR 0027)
         (
             "a1",
             "HttpData-PUSH",
-            "cannot transfer this dataset in this format",
+            "a push transfer request has a dataAddress",
         ),
     ];
     for (agreement_id, format, expected) in cases {
@@ -1320,4 +1335,184 @@ fn only_finalized_or_verified_with_the_finalization_on_its_way_is_served() {
             }
         }
     }
+}
+
+/// The consumer's address of a push transfer, with `token`.
+fn push_address(token: &str) -> DataAddress {
+    DataAddress {
+        kind: DataAddressType,
+        endpoint_type: crate::transfer::HTTP_PUSH_ENDPOINT_TYPE.to_owned(),
+        endpoint: Some("https://consumer.example/push/urn:uuid:c".to_owned()),
+        endpoint_properties: vec![
+            EndpointProperty::new("authorization", token),
+            EndpointProperty::new("authType", "bearer"),
+        ],
+    }
+}
+
+fn push_request(address: Option<DataAddress>) -> TransferRequestMessage {
+    let mut push = request("a1", "HttpData-PUSH");
+    push.data_address = address;
+    push
+}
+
+/// A push transfer that is STARTED, its start message acknowledged.
+fn started_push<'a>(store: &'a Store, flows: &'a Flows) -> Service<'a> {
+    let s = service(store, flows, TransferDecision::Start);
+    let (_, out) = s
+        .request(
+            &push_request(Some(push_address("p1"))),
+            CONSUMER,
+            &CallerCredentials::default(),
+        )
+        .unwrap();
+    s.delivered(&out.unwrap()).unwrap();
+    s
+}
+
+#[test]
+fn a_push_request_needs_a_valid_push_address() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = service(&store, &flows, TransferDecision::Start);
+    let refused = |msg: &TransferRequestMessage| {
+        reason(
+            &s.request(msg, CONSUMER, &CallerCredentials::default())
+                .unwrap_err(),
+        )
+    };
+    assert!(refused(&push_request(None)).contains("has a dataAddress"));
+    let mut pull_type = push_address("p1");
+    pull_type.endpoint_type = "https://w3id.org/idsa/v4.1/HTTP".to_owned();
+    assert!(refused(&push_request(Some(pull_type))).contains("endpointType"));
+    let mut no_endpoint = push_address("p1");
+    no_endpoint.endpoint = None;
+    assert!(refused(&push_request(Some(no_endpoint))).contains("endpoint"));
+    let mut basic = push_address("p1");
+    basic.endpoint_properties[1] = EndpointProperty::new("authType", "basic");
+    let refusal = refused(&push_request(Some(basic)));
+    assert!(refusal.contains("bearer"), "{refusal}");
+    assert!(!refusal.contains("p1"), "the token is not repeated");
+    assert!(store.0.borrow().is_empty());
+    assert!(flows.calls().is_empty());
+}
+
+#[test]
+fn a_push_starts_with_the_consumers_address_and_no_address_of_ours() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = service(&store, &flows, TransferDecision::Start);
+    let (_, out) = s
+        .request(
+            &push_request(Some(push_address("p1"))),
+            CONSUMER,
+            &CallerCredentials::default(),
+        )
+        .unwrap();
+    assert_eq!(flows.calls(), ["start urn:uuid:1 push with p1"]);
+    let out = out.unwrap();
+    let sent: TransferStartMessage = serde_json::from_value(out.body.clone()).unwrap();
+    assert_eq!(sent.data_address, None, "DSP: no dataAddress for a push");
+    assert_eq!(
+        store.0.borrow()[PID].data_address,
+        Some(push_address("p1")),
+        "kept until the transfer ends"
+    );
+    // the same request again is the same transfer; another address is not
+    let (again, none) = s
+        .request(
+            &push_request(Some(push_address("p1"))),
+            CONSUMER,
+            &CallerCredentials::default(),
+        )
+        .unwrap();
+    assert_eq!((again.provider_pid.as_str(), none), (PID, None));
+    assert!(
+        s.request(
+            &push_request(Some(push_address("other"))),
+            CONSUMER,
+            &CallerCredentials::default()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn a_finished_push_completes_and_a_failed_one_terminates() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = started_push(&store, &flows);
+    let out = s.push_finished(PID, None).unwrap().unwrap();
+    assert_eq!(out.transition, Transition::Complete);
+    assert_eq!(flows.calls().last().unwrap(), "complete urn:uuid:1");
+    s.delivered(&out).unwrap();
+    assert_eq!(state(&store), TransferState::Completed);
+    assert_eq!(store.0.borrow()[PID].data_address, None, "no token kept");
+
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = started_push(&store, &flows);
+    let failed = Some("the consumer answered HTTP 503");
+    let out = s.push_finished(PID, failed).unwrap().unwrap();
+    assert_eq!(out.transition, Transition::Terminate);
+    assert!(out.body.to_string().contains("HTTP 503"));
+    assert_eq!(flows.calls().last().unwrap(), "terminate urn:uuid:1");
+}
+
+#[test]
+fn a_push_that_ends_after_a_suspension_changes_nothing() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = started_push(&store, &flows);
+    s.suspend(PID, IDS, CONSUMER).unwrap();
+    assert_eq!(s.push_finished(PID, None).unwrap(), None);
+    assert_eq!(state(&store), TransferState::Suspended);
+}
+
+#[test]
+fn a_push_started_again_by_the_consumer_takes_its_new_address() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = started_push(&store, &flows);
+    s.suspend(PID, IDS, CONSUMER).unwrap();
+    let mut restart: TransferStartMessage = serde_json::from_value(json!({
+        "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+        "@type": "TransferStartMessage", "providerPid": PID, "consumerPid": "urn:uuid:c"
+    }))
+    .unwrap();
+    restart.data_address = Some(push_address("p2"));
+    let (ack, out) = s.start(PID, &restart, CONSUMER).unwrap();
+    assert_eq!((ack.state, out), (TransferState::Started, None));
+    assert_eq!(
+        flows.calls().last().unwrap(),
+        "resume urn:uuid:1 push with p2"
+    );
+    assert_eq!(store.0.borrow()[PID].data_address, Some(push_address("p2")));
+
+    // a pull transfer is not started again with an address
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = started(&store, &flows);
+    s.suspend(PID, IDS, CONSUMER).unwrap();
+    let refusal = reason(&s.start(PID, &restart, CONSUMER).unwrap_err());
+    assert!(refusal.contains("only a push transfer"), "{refusal}");
+    assert_eq!(state(&store), TransferState::Suspended);
+}
+
+#[test]
+fn the_provider_starts_a_push_again_without_an_address() {
+    use TransferDecision::{Start, Suspend};
+    let (store, flows) = (Store::default(), Flows::default());
+    let steps = Steps(RefCell::new(vec![Start, Suspend, Start]));
+    let s = TransferService::new(&store, Agreed, &flows, &steps, Catalog, Env::default());
+    let (_, out) = s
+        .request(
+            &push_request(Some(push_address("p1"))),
+            CONSUMER,
+            &CallerCredentials::default(),
+        )
+        .unwrap();
+    let mut sent = Vec::new();
+    let mut next = out;
+    while let Some(out) = next {
+        next = s.delivered(&out).unwrap();
+        sent.push(out);
+    }
+    assert_eq!(sent[2].transition, Transition::Start);
+    assert!(sent[2].body.get("dataAddress").is_none());
+    assert_eq!(flows.calls().last().unwrap(), "restart urn:uuid:1");
+    assert_eq!(state(&store), TransferState::Started);
 }

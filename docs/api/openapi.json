@@ -2028,6 +2028,96 @@
         }
       }
     },
+    "/push/{consumerPid}": {
+      "post": {
+        "tags": [
+          "Data plane"
+        ],
+        "summary": "Receive the data of a push transfer (since 1.1)",
+        "description": "Open route with its own token, on a connector with object storage settings and PORTITOR_PUSH_BUCKET (ADR 0027): the provider's data plane sends the data of a push transfer (format HttpData-PUSH) this connector asked for. The endpoint and the bearer token are those of the dataAddress in our transfer request (endpointType https://w3id.org/dspace-sig/profile/http-push). The token is valid while the transfer is REQUESTED or STARTED and for PORTITOR_DATA_TOKEN_SECONDS after the request (or the last start again). The body is streamed into the push bucket as the object named {consumerPid}, with its Content-Type; a second request replaces the object. POST and PUT do the same: the HTTP Transfer Profile names no method. Not subject to PORTITOR_MAX_REQUEST_BYTES nor to the request time limit.",
+        "operationId": "receivePushedData",
+        "parameters": [
+          {
+            "name": "consumerPid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "The data, with its Content-Type",
+          "content": {
+            "*/*": {
+              "schema": {}
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "The data is in the push bucket"
+          },
+          "400": {
+            "description": "The request body broke off; nothing was stored"
+          },
+          "401": {
+            "description": "No token, a wrong or expired token, an unknown transfer, or a transfer that is not REQUESTED or STARTED"
+          },
+          "500": {
+            "description": "The store could not be read or written (no body), or a bug in the handler (a problem document)"
+          },
+          "502": {
+            "description": "The object storage refused the data or did not answer; nothing was stored"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Data plane"
+        ],
+        "summary": "Receive the data of a push transfer (since 1.1)",
+        "description": "Open route with its own token, on a connector with object storage settings and PORTITOR_PUSH_BUCKET (ADR 0027): the provider's data plane sends the data of a push transfer (format HttpData-PUSH) this connector asked for. The endpoint and the bearer token are those of the dataAddress in our transfer request (endpointType https://w3id.org/dspace-sig/profile/http-push). The token is valid while the transfer is REQUESTED or STARTED and for PORTITOR_DATA_TOKEN_SECONDS after the request (or the last start again). The body is streamed into the push bucket as the object named {consumerPid}, with its Content-Type; a second request replaces the object. POST and PUT do the same: the HTTP Transfer Profile names no method. Not subject to PORTITOR_MAX_REQUEST_BYTES nor to the request time limit.",
+        "operationId": "receivePushedDataPut",
+        "parameters": [
+          {
+            "name": "consumerPid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "The data, with its Content-Type",
+          "content": {
+            "*/*": {
+              "schema": {}
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "The data is in the push bucket"
+          },
+          "400": {
+            "description": "The request body broke off; nothing was stored"
+          },
+          "401": {
+            "description": "No token, a wrong or expired token, an unknown transfer, or a transfer that is not REQUESTED or STARTED"
+          },
+          "500": {
+            "description": "The store could not be read or written (no body), or a bug in the handler (a problem document)"
+          },
+          "502": {
+            "description": "The object storage refused the data or did not answer; nothing was stored"
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [

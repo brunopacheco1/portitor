@@ -731,7 +731,7 @@
         "tags": [
           "Transfers"
         ],
-        "summary": "Request a transfer as consumer, under an agreement from one of our\nnegotiations. The request is sent in the background; follow the\ntransfer with `GET /v1/transfers/{consumerPid}` until it is `STARTED`\nand has a `dataAddress`.",
+        "summary": "Request a transfer as consumer, under an agreement from one of our\nnegotiations. The request is sent in the background; follow the\ntransfer with `GET /v1/transfers/{consumerPid}` until it is `STARTED`\nand has a `dataAddress` (pull), or until it has an `objectKey` (push).\nA push transfer is completed by the provider once the data is in the\npush bucket.",
         "operationId": "start_transfer",
         "requestBody": {
           "content": {
@@ -755,7 +755,7 @@
             }
           },
           "400": {
-            "description": "Invalid request, or no finalized negotiation holds the agreement",
+            "description": "Invalid request, no finalized negotiation holds the agreement, or HttpData-PUSH without object storage and a push bucket",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1578,7 +1578,7 @@
           },
           "format": {
             "type": "string",
-            "description": "A format of one of the dataset's distributions (default\n`HttpData-PULL`, the only one this connector's data plane serves).",
+            "description": "A format of one of the dataset's distributions: `HttpData-PULL`\n(the default), or, since 1.1, `HttpData-PUSH`, where the provider\nsends the data to this connector, which stores it in its push\nbucket. `HttpData-PUSH` needs the object storage settings and\n`PORTITOR_PUSH_BUCKET`; without them the request is refused (400).",
             "example": "HttpData-PULL"
           }
         },
@@ -1645,6 +1645,14 @@
           "format": {
             "type": "string",
             "description": "The format asked for."
+          },
+          "objectKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A push transfer (`HttpData-PUSH`, since 1.1): the key of the object\nin the push bucket (`PORTITOR_PUSH_BUCKET`) that holds the data,\nonce data has arrived. A push transfer never has a `dataAddress`.",
+            "example": "urn:uuid:4f1c2d3e-0000-4000-8000-000000000001"
           },
           "providerPid": {
             "type": [

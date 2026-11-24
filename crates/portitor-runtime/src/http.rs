@@ -299,6 +299,34 @@ impl HttpSender {
 /// The ring provider supports no safe TLS version (does not happen with
 /// the rustls versions in `Cargo.lock`).
 pub fn https_client(allow_http: bool) -> Result<(HttpsClient, bool), String> {
+    let (connector, has_ca_certificates) = https_connector(allow_http)?;
+    let client = Client::builder(TokioExecutor::new()).build(connector);
+    Ok((client, has_ca_certificates))
+}
+
+/// The client of [`https_streaming_client`]: like [`HttpsClient`], with a
+/// request body that is streamed (any `axum` body), for uploads of
+/// unknown length.
+pub type StreamingHttpsClient =
+    Client<hyper_rustls::HttpsConnector<HttpConnector>, axum::body::Body>;
+
+/// Like [`https_client`], for requests whose body is streamed as it is
+/// read rather than held whole: the connector's push of a dataset to a
+/// consumer (ADR 0027).
+///
+/// # Errors
+///
+/// As [`https_client`].
+pub fn https_streaming_client(allow_http: bool) -> Result<StreamingHttpsClient, String> {
+    let (connector, _) = https_connector(allow_http)?;
+    Ok(Client::builder(TokioExecutor::new()).build(connector))
+}
+
+/// The TLS connector of both clients, and whether the system's CA
+/// certificates were found.
+fn https_connector(
+    allow_http: bool,
+) -> Result<(hyper_rustls::HttpsConnector<HttpConnector>, bool), String> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let (https, has_ca_certificates) = match hyper_rustls::HttpsConnectorBuilder::new()
         .with_provider_and_native_roots(Arc::clone(&provider))
@@ -322,8 +350,7 @@ pub fn https_client(allow_http: bool) -> Result<(HttpsClient, bool), String> {
     } else {
         https.https_only().enable_http1().build()
     };
-    let client = Client::builder(TokioExecutor::new()).build(connector);
-    Ok((client, has_ca_certificates))
+    Ok((connector, has_ca_certificates))
 }
 
 impl Sender for HttpSender {

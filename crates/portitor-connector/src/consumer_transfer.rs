@@ -17,14 +17,15 @@ use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use portitor_dsp::policy::credential_scopes;
+use portitor_dsp::process::StoreError;
 use portitor_dsp::transfer::consumer::{
     ConsumerTransfer, ConsumerTransferDecision, ConsumerTransferService, Handled, HeldAgreements,
-    Outgoing,
+    Outgoing, Request,
 };
 use portitor_dsp::transfer::provider::Failure;
 use portitor_dsp::transfer::{
     TransferCompletionMessage, TransferError, TransferStartMessage, TransferSuspensionMessage,
-    TransferTerminationMessage, Transition,
+    TransferTerminationMessage, Transition, is_push_format,
 };
 use portitor_runtime::telemetry::metrics;
 use serde::de::DeserializeOwned;
@@ -37,6 +38,7 @@ use crate::outbox::{self, Link, Message, Outbox};
 use crate::ports::{
     AnyConsumerTransferDecider, AnyConsumerTransferStore, AnyHeldAgreements, Ports,
 };
+use crate::receiving::PushAddresses;
 use crate::system::SystemEnvironment;
 use crate::transfer::{bad_request, failed, reached_state};
 
@@ -53,10 +55,18 @@ pub(crate) struct TransferConsumer {
     held: AnyHeldAgreements,
     link: Link,
     allow_http: bool,
+    /// Our push data addresses (ADR 0027): `None` without object storage
+    /// and a push bucket, and then push transfers are refused.
+    push: Option<PushAddresses>,
 }
 
 impl TransferConsumer {
-    pub(crate) fn new(ports: &Ports, callback_address: String, allow_http: bool) -> Self {
+    pub(crate) fn new(
+        ports: &Ports,
+        callback_address: String,
+        allow_http: bool,
+        push: Option<PushAddresses>,
+    ) -> Self {
         let transfer_ports = ports.consumer_transfers.clone();
         Self {
             service: ConsumerTransferService::new(
@@ -68,6 +78,7 @@ impl TransferConsumer {
             held: transfer_ports.held,
             link: Link::new(ports),
             allow_http,
+            push,
         }
     }
 
@@ -83,6 +94,9 @@ impl TransferConsumer {
         agreement_id: &str,
         format: &str,
     ) -> Result<ConsumerTransfer, Box<Failure>> {
+        if is_push_format(format) {
+            self.push_addresses()?;
+        }
         let provider = self
             .held
             .provider_of(agreement_id)
@@ -97,8 +111,8 @@ impl TransferConsumer {
     ///
     /// # Errors
     ///
-    /// The address is not an allowed URL, an id is empty, or the store
-    /// failed.
+    /// The address is not an allowed URL, an id is empty, a push without
+    /// object storage, or the store failed.
     pub(crate) fn start(
         self: &Arc<Self>,
         provider_address: &str,
@@ -111,12 +125,54 @@ impl TransferConsumer {
                 "the provider address must be an https URL",
             )));
         }
-        let (transfer, out) = self
-            .service
-            .start(provider_address, provider_id, agreement_id, format)
-            .map_err(Box::new)?;
+        let (transfer, out) = if is_push_format(format) {
+            let request = Request {
+                provider_address,
+                provider_id,
+                agreement_id,
+                format,
+            };
+            self.start_push(&request)?
+        } else {
+            self.service
+                .start(provider_address, provider_id, agreement_id, format)
+                .map_err(Box::new)?
+        };
         tokio::spawn(outbox::deliver(Arc::clone(self), out));
         Ok(transfer)
+    }
+
+    /// The request of a push transfer: with our data address and a new
+    /// token, whose hash is kept before the request is sent.
+    fn start_push(
+        &self,
+        request: &Request<'_>,
+    ) -> Result<(ConsumerTransfer, Outgoing), Box<Failure>> {
+        let push = self.push_addresses()?;
+        let token =
+            PushAddresses::new_token().map_err(|e| Box::new(Failure::Store(StoreError(e))))?;
+        let (transfer, out) = self
+            .service
+            .start_push(request, &|consumer_pid| push.address(consumer_pid, &token))
+            .map_err(Box::new)?;
+        push.keep(&transfer.consumer_pid, &token)
+            .map_err(|e| Box::new(Failure::Store(e)))?;
+        Ok((transfer, out))
+    }
+
+    /// Our push addresses, or the refusal of a push transfer.
+    fn push_addresses(&self) -> Result<&PushAddresses, Box<Failure>> {
+        self.push.as_ref().ok_or_else(|| {
+            Box::new(refused(
+                "push transfers need object storage settings and PORTITOR_PUSH_BUCKET",
+            ))
+        })
+    }
+
+    /// The object the data of push transfer `consumer_pid` went into, once
+    /// some arrived.
+    pub(crate) fn object_key(&self, consumer_pid: &str) -> Option<String> {
+        self.push.as_ref()?.object_key(consumer_pid)
     }
 
     /// Our own step on a transfer (suspend, start again, complete or
@@ -132,7 +188,24 @@ impl TransferConsumer {
         consumer_pid: &str,
         decision: ConsumerTransferDecision,
     ) -> Result<ConsumerTransfer, Box<Failure>> {
-        let out = self.service.act(consumer_pid, decision).map_err(Box::new)?;
+        let push_again = decision == ConsumerTransferDecision::Start
+            && is_push_format(&self.transfer(consumer_pid)?.format);
+        let out = if push_again {
+            // a new token, which replaces the one the provider has
+            let push = self.push_addresses()?;
+            let token =
+                PushAddresses::new_token().map_err(|e| Box::new(Failure::Store(StoreError(e))))?;
+            let address = push.address(consumer_pid, &token);
+            let out = self
+                .service
+                .act_with_address(consumer_pid, decision, Some(&address))
+                .map_err(Box::new)?;
+            push.keep(consumer_pid, &token)
+                .map_err(|e| Box::new(Failure::Store(e)))?;
+            out
+        } else {
+            self.service.act(consumer_pid, decision).map_err(Box::new)?
+        };
         tokio::spawn(outbox::deliver(Arc::clone(self), out));
         self.transfer(consumer_pid)
     }

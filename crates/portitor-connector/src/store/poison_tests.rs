@@ -60,6 +60,7 @@ fn a_transfer_is_stored_and_found_after_a_panic() {
         agreement_id: "urn:uuid:a".to_owned(),
         dataset_id: "d".to_owned(),
         format: "HttpData-PULL".to_owned(),
+        data_address: None,
         pending: None,
         version: 0,
     };

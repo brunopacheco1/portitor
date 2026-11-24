@@ -5,9 +5,10 @@
 //! Adapters for the provider side of the transfer process: the HTTPS
 //! binding (DSP 2025-1, "Transfer Process HTTPS Binding"), the data plane
 //! until one is configured, and the sending of the provider's messages
-//! (ADR 0013).
+//! (ADR 0013). A push transfer's data is sent once the transfer is
+//! `STARTED` (`begin_push`, ADR 0027).
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
@@ -27,6 +28,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::auth::{AnyVerifier, Caller, credentials_for};
+use crate::data_plane::{HttpDataPlane, PushJob};
 use crate::harvest::DatasetCopy;
 use crate::http_client::outbound_url_allowed;
 use crate::outbox::{self, Link, Message, Outbox};
@@ -42,16 +44,16 @@ impl DataFlows for NoDataFlows {
     fn supports(&self, _: &str, _: &str) -> bool {
         false
     }
-    fn start(&self, _: &Transfer) -> Result<DataAddress, String> {
+    fn start(&self, _: &Transfer) -> Result<Option<DataAddress>, String> {
         Err(NO_DATA_PLANE.to_owned())
     }
     fn suspend(&self, _: &str) -> Result<(), String> {
         Err(NO_DATA_PLANE.to_owned())
     }
-    fn restart(&self, _: &str) -> Result<DataAddress, String> {
+    fn restart(&self, _: &Transfer) -> Result<Option<DataAddress>, String> {
         Err(NO_DATA_PLANE.to_owned())
     }
-    fn resume(&self, _: &str) -> Result<(), String> {
+    fn resume(&self, _: &str, _: Option<&DataAddress>) -> Result<(), String> {
         Err(NO_DATA_PLANE.to_owned())
     }
     fn complete(&self, _: &str) -> Result<(), String> {
@@ -82,12 +84,25 @@ pub(crate) struct TransferProvider {
     /// Asks a caller for more credentials when an agreement needs them.
     verifier: AnyVerifier,
     allow_http: bool,
+    /// The built-in data plane, which sends the data of push transfers.
+    plane: Option<Arc<HttpDataPlane>>,
+    /// This provider itself, for the pushes it starts in the background
+    /// from a method that only has `&self` (`Weak`: a pointer that does
+    /// not keep the provider alive by itself).
+    me: Weak<TransferProvider>,
 }
 
 impl TransferProvider {
-    pub(crate) fn new(ports: &crate::Ports, catalog: DatasetCopy, allow_http: bool) -> Self {
+    /// The provider, shared. `plane`: the built-in data plane, if any.
+    pub(crate) fn new_shared(
+        ports: &crate::Ports,
+        catalog: DatasetCopy,
+        allow_http: bool,
+        plane: Option<Arc<HttpDataPlane>>,
+    ) -> Arc<Self> {
         let transfer = ports.transfers.clone();
-        Self {
+        // `new_cyclic` hands over the `Weak` pointer to the `Arc` it makes
+        Arc::new_cyclic(|me| Self {
             service: TransferService::new(
                 transfer.store,
                 transfer.agreements,
@@ -99,6 +114,38 @@ impl TransferProvider {
             link: Link::new(ports),
             verifier: Arc::clone(&ports.verifier),
             allow_http,
+            plane,
+            me: me.clone(),
+        })
+    }
+
+    /// Starts sending the data of transfer `provider_pid` in the
+    /// background if it is a push transfer that is `STARTED` and not being
+    /// sent already; does nothing otherwise.
+    fn begin_push(&self, provider_pid: &str) {
+        let (Some(plane), Some(me)) = (&self.plane, self.me.upgrade()) else {
+            return;
+        };
+        match plane.push_job(provider_pid) {
+            Ok(Some(job)) => {
+                tokio::spawn(run_push(me, Arc::clone(plane), job));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(flow = %provider_pid, %error, "push: cannot start");
+            }
+        }
+    }
+
+    /// The push of `provider_pid` ended: complete or terminate the
+    /// transfer, and send that message.
+    async fn push_finished(self: Arc<Self>, provider_pid: &str, failure: Option<&str>) {
+        match self.service.push_finished(provider_pid, failure) {
+            Ok(Some(out)) => outbox::deliver(self, out).await,
+            Ok(None) => {}
+            Err(failure) => {
+                tracing::error!(flow = %provider_pid, ?failure, "push: the end of the transfer could not be saved");
+            }
         }
     }
 
@@ -140,7 +187,35 @@ impl TransferProvider {
     /// Returns how many.
     pub(crate) fn resume(self: &Arc<Self>) -> Result<usize, Box<Failure>> {
         let pending = self.service.pending().map_err(Box::new)?;
+        self.resume_pushes();
         Ok(outbox::resume(self, pending))
+    }
+
+    /// Sends again, from the start, the pushes a restart cut: transfers
+    /// that are `STARTED`, with nothing of ours on its way. A push whose
+    /// start message is still on its way begins once it is delivered.
+    fn resume_pushes(&self) {
+        let Some(plane) = &self.plane else {
+            return;
+        };
+        let started = match plane.started_pushes() {
+            Ok(started) => started,
+            Err(error) => {
+                tracing::error!(%error, "push: the started pushes cannot be read");
+                return;
+            }
+        };
+        for pid in started {
+            let ready = self
+                .service
+                .transfer(&pid)
+                .ok()
+                .flatten()
+                .is_some_and(|t| t.state == TransferState::Started && t.pending.is_none());
+            if ready {
+                self.begin_push(&pid);
+            }
+        }
     }
 
     /// Turns the service's answer into the HTTP response and starts
@@ -186,7 +261,12 @@ impl Outbox for TransferProvider {
     }
 
     fn delivered(&self, out: &Outgoing, _: Option<&Value>) -> Result<Option<Outgoing>, Failure> {
-        self.service.delivered(out)
+        let next = self.service.delivered(out)?;
+        if out.transition == Transition::Start {
+            // the consumer has our start: a push transfer's data goes now
+            self.begin_push(&out.provider_pid);
+        }
+        Ok(next)
     }
 
     fn abort(&self, out: &Outgoing) -> Result<Option<Outgoing>, Failure> {
@@ -247,6 +327,10 @@ pub(crate) async fn request(
         let reason = "callbackAddress must be an https URL";
         return bad_request(TransferError::new("", &msg.consumer_pid, "400", reason));
     }
+    if !push_endpoint_allowed(msg.data_address.as_ref(), provider.allow_http) {
+        let reason = "the dataAddress endpoint must be an https URL";
+        return bad_request(TransferError::new("", &msg.consumer_pid, "400", reason));
+    }
     // the agreement is evaluated again with fresh credentials (ADR 0019)
     let credentials = provider.credentials(&caller, &msg.agreement_id).await;
     let handled = provider.service.request(&msg, &caller.id, &credentials);
@@ -282,8 +366,51 @@ pub(crate) async fn start(
         Ok(m) => m,
         Err(refused) => return bad_request(*refused),
     };
+    if !push_endpoint_allowed(msg.data_address.as_ref(), provider.allow_http) {
+        let reason = "the dataAddress endpoint must be an https URL";
+        return bad_request(TransferError::new(&pid, &msg.consumer_pid, "400", reason));
+    }
     let handled = provider.service.start(&pid, &msg, &caller.id);
-    provider.finish(handled, StatusCode::OK)
+    let started = matches!(&handled, Ok((ack, _)) if ack.state == TransferState::Started);
+    let response = provider.finish(handled, StatusCode::OK);
+    if started {
+        // started again: a push transfer sends its data again (ADR 0027)
+        provider.begin_push(&pid);
+    }
+    response
+}
+
+/// Whether the endpoint of a push `address`, chosen by the consumer, may
+/// be called: `https://`, or `http://` with `PORTITOR_ALLOW_HTTP` (ADR
+/// 0027, section 1; the HTTP profile says a receiving party MUST reject a
+/// non-HTTPS endpoint). No address, nothing to check.
+fn push_endpoint_allowed(address: Option<&DataAddress>, allow_http: bool) -> bool {
+    match address.and_then(|a| a.endpoint.as_deref()) {
+        Some(endpoint) => outbound_url_allowed(endpoint, allow_http),
+        None => true,
+    }
+}
+
+/// Sends `job` (a push of `provider`'s), writes the audit line, then
+/// completes or terminates the transfer. A push that suspend or terminate
+/// cut leaves the transfer as they made it.
+async fn run_push(provider: Arc<TransferProvider>, plane: Arc<HttpDataPlane>, job: PushJob) {
+    let pid = job.flow_id.clone();
+    let transfer = provider.service.transfer(&pid).ok().flatten();
+    let pushed = crate::push::send(&plane, &job).await;
+    // the push is over: a later start again may send again
+    drop(job);
+    let (agreement, counter_party) = transfer
+        .as_ref()
+        .map(|t| (t.agreement_id.as_str(), t.counter_party.as_str()))
+        .unwrap_or_default();
+    crate::push::audit(&pid, agreement, counter_party, &pushed);
+    let failure = match &pushed.sent {
+        crate::push::Sent::Done => None,
+        crate::push::Sent::Failed(reason) => Some(reason.as_str()),
+        crate::push::Sent::Cancelled => return,
+    };
+    provider.push_finished(&pid, failure).await;
 }
 
 /// `POST /transfers/{providerPid}/suspension`.

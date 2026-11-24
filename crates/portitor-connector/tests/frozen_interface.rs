@@ -65,8 +65,12 @@ fn config() -> Config {
     }
 }
 
+/// With object storage and a push bucket, so that the router has the
+/// receiving route of push transfers (1.1). Nothing calls the store.
 fn ports() -> Ports {
-    authenticating(common::ports(Arc::new(NoSender)), PROVIDER)
+    let mut ports = authenticating(common::ports(Arc::new(NoSender)), PROVIDER);
+    ports.object_storage = Some(Arc::new(common::fake_s3::client("http://127.0.0.1:9")));
+    ports
 }
 
 /// `request` as sent by the tests' consumer (the test verifier takes

@@ -309,8 +309,11 @@ pub struct StartTransfer {
     /// The transfer is requested from the provider of that negotiation.
     #[schema(example = "urn:uuid:agreement-1")]
     agreement_id: String,
-    /// A format of one of the dataset's distributions (default
-    /// `HttpData-PULL`, the only one this connector's data plane serves).
+    /// A format of one of the dataset's distributions: `HttpData-PULL`
+    /// (the default), or, since 1.1, `HttpData-PUSH`, where the provider
+    /// sends the data to this connector, which stores it in its push
+    /// bucket. `HttpData-PUSH` needs the object storage settings and
+    /// `PORTITOR_PUSH_BUCKET`; without them the request is refused (400).
     #[serde(default = "pull_format")]
     #[schema(example = "HttpData-PULL")]
     format: String,
@@ -347,6 +350,12 @@ pub struct TransferView {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<Object>)]
     data_address: Option<Value>,
+    /// A push transfer (`HttpData-PUSH`, since 1.1): the key of the object
+    /// in the push bucket (`PORTITOR_PUSH_BUCKET`) that holds the data,
+    /// once data has arrived. A push transfer never has a `dataAddress`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "urn:uuid:4f1c2d3e-0000-4000-8000-000000000001")]
+    object_key: Option<String>,
 }
 
 impl From<ConsumerTransfer> for TransferView {
@@ -363,7 +372,18 @@ impl From<ConsumerTransfer> for TransferView {
             counter_party_id: transfer.provider_id,
             agreement_id: transfer.agreement_id,
             format: transfer.format,
+            object_key: None,
         }
+    }
+}
+
+/// The view of `transfer`, with the key of the object its pushed data
+/// went into, if any.
+fn view(negotiator: &Negotiator, transfer: ConsumerTransfer) -> TransferView {
+    let object_key = negotiator.object_key(&transfer.consumer_pid);
+    TransferView {
+        object_key,
+        ..TransferView::from(transfer)
     }
 }
 
@@ -389,14 +409,16 @@ pub struct TransferPage {
 /// Request a transfer as consumer, under an agreement from one of our
 /// negotiations. The request is sent in the background; follow the
 /// transfer with `GET /v1/transfers/{consumerPid}` until it is `STARTED`
-/// and has a `dataAddress`.
+/// and has a `dataAddress` (pull), or until it has an `objectKey` (push).
+/// A push transfer is completed by the provider once the data is in the
+/// push bucket.
 #[utoipa::path(
     post,
     path = "/v1/transfers",
     request_body = StartTransfer,
     responses(
         (status = 201, description = "Requested (state REQUESTED)", body = TransferView),
-        (status = 400, description = "Invalid request, or no finalized negotiation holds the agreement", body = Problem, content_type = "application/problem+json"),
+        (status = 400, description = "Invalid request, no finalized negotiation holds the agreement, or HttpData-PUSH without object storage and a push bucket", body = Problem, content_type = "application/problem+json"),
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
         (status = 403, description = FORBIDDEN, body = Problem, content_type = "application/problem+json"),
     ),
@@ -412,7 +434,7 @@ async fn start_transfer(
         Err(e) => return problem(StatusCode::BAD_REQUEST, &e.body_text()),
     };
     match negotiator.request_transfer(&req.agreement_id, &req.format) {
-        Ok(transfer) => (StatusCode::CREATED, Json(TransferView::from(transfer))).into_response(),
+        Ok(transfer) => (StatusCode::CREATED, Json(view(&negotiator, transfer))).into_response(),
         Err(f) => transfer_failed(&f),
     }
 }
@@ -433,7 +455,7 @@ async fn start_transfer(
 )]
 async fn one_transfer(State(negotiator): State<Negotiator>, Path(cpid): Path<String>) -> Response {
     match negotiator.transfer(&cpid) {
-        Ok(transfer) => Json(TransferView::from(transfer)).into_response(),
+        Ok(transfer) => Json(view(&negotiator, transfer)).into_response(),
         Err(f) => transfer_failed(&f),
     }
 }
@@ -465,7 +487,7 @@ async fn list_transfers(
         Ok(found) => {
             let next = next_after(&found, limit, |transfer| &transfer.consumer_pid);
             Json(TransferPage {
-                transfers: found.into_iter().map(TransferView::from).collect(),
+                transfers: found.into_iter().map(|t| view(&negotiator, t)).collect(),
                 next,
             })
             .into_response()
@@ -526,7 +548,7 @@ fn act(
     decision: ConsumerTransferDecision,
 ) -> Response {
     match negotiator.act_on_transfer(consumer_pid, decision) {
-        Ok(transfer) => (StatusCode::ACCEPTED, Json(TransferView::from(transfer))).into_response(),
+        Ok(transfer) => (StatusCode::ACCEPTED, Json(view(negotiator, transfer))).into_response(),
         Err(f) => transfer_failed(&f),
     }
 }

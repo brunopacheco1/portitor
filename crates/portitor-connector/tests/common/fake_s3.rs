@@ -28,6 +28,23 @@ use axum::response::{IntoResponse, Response};
 pub const KEY_ID: &str = "test-only-key-id";
 /// The secret key the tests configure (the fake store cannot check it).
 pub const SECRET: &str = "test-only-secret-key";
+/// The push bucket of [`client`].
+pub const PUSH_BUCKET: &str = "received";
+
+/// The connector's object storage client for the store at `endpoint`,
+/// with the test keys and [`PUSH_BUCKET`].
+pub fn client(endpoint: &str) -> portitor_connector::object_storage::ObjectStorage {
+    portitor_connector::object_storage::ObjectStorage::new(
+        portitor_connector::object_storage::Settings {
+            endpoint: endpoint.to_owned(),
+            region: "us-east-1".to_owned(),
+            access_key_id: KEY_ID.to_owned(),
+            secret_access_key: SECRET.to_owned(),
+            push_bucket: Some(PUSH_BUCKET.to_owned()),
+        },
+    )
+    .unwrap()
+}
 
 /// One stored object.
 #[derive(Debug, Clone, PartialEq, Eq)]

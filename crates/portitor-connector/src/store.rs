@@ -21,6 +21,7 @@ use rusqlite::{Connection, Row, params};
 mod consumer_transfers;
 mod data_flows;
 mod harvest;
+mod push_receipts;
 mod transfers;
 use serde::{Deserialize, Serialize};
 pub use transfers::finalized_agreement;
@@ -164,6 +165,19 @@ const MIGRATIONS: &[&str] = &[
     // transfer under an agreement it holds (`store/consumer_transfers.rs`)
     "CREATE INDEX consumer_negotiation_agreement
         ON consumer_negotiation (json_extract(agreement, '$.\"@id\"'))",
+    // 1.1: push transfers (ADR 0027). As provider, the consumer's data
+    // address with its token, kept with the transfer and with its data
+    // flow until they end (the columns are emptied then). As consumer, the
+    // hash of the token our receiving route takes, and the key of the
+    // object the data went into once it arrived
+    "ALTER TABLE transfer ADD COLUMN data_address TEXT;
+     ALTER TABLE data_flow ADD COLUMN push_address TEXT;
+     CREATE TABLE push_receipt (
+        consumer_pid TEXT PRIMARY KEY,
+        token_hash   TEXT NOT NULL,
+        expires_at   INTEGER NOT NULL,
+        object_key   TEXT
+     )",
 ];
 
 /// Adapter: negotiations in a `SQLite` file.

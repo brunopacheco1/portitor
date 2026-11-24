@@ -19,6 +19,11 @@
 //! be used (STARTED or SUSPENDED) and dropped when the transfer ends, so an
 //! ended transfer keeps no token.
 //!
+//! A push transfer (`HttpData-PUSH`, ADR 0027) goes the other way: our
+//! request carries our own data address, where the provider sends the
+//! data, and the provider's start message carries none. The adapter makes
+//! that address and its token ([`ConsumerTransferService::start_push`]).
+//!
 //! As everywhere (ADR 0007): a message is saved as `pending` before it is
 //! sent, a provider message that fits only the state our pending message
 //! leads to proves that message arrived, and every write compares the
@@ -34,7 +39,7 @@ use super::{
     TransferProcess, TransferRequestMessage, TransferRequestMessageType, TransferStartMessage,
     TransferStartMessageType, TransferState, TransferSuspensionMessage,
     TransferSuspensionMessageType, TransferTerminationMessage, TransferTerminationMessageType,
-    Transition, TransitionError, next_state,
+    Transition, TransitionError, is_push_format, next_state,
 };
 pub use crate::process::{Environment, StoreError};
 
@@ -161,6 +166,20 @@ pub trait ConsumerTransferStore {
     fn list(&self, after: Option<&str>, limit: usize) -> Result<Vec<ConsumerTransfer>, StoreError>;
 }
 
+/// What a transfer request names: the provider (its DSP endpoint and
+/// participant id), the agreement and the format.
+#[derive(Debug, Clone, Copy)]
+pub struct Request<'a> {
+    /// The provider's DSP endpoint URL.
+    pub provider_address: &'a str,
+    /// The provider's participant id.
+    pub provider_id: &'a str,
+    /// The agreement the transfer is made under.
+    pub agreement_id: &'a str,
+    /// The format, for example `HttpData-PUSH`.
+    pub format: &'a str,
+}
+
 /// The most transfers [`ConsumerTransferService::list`] returns at once.
 pub const MAX_PAGE: usize = 100;
 
@@ -275,6 +294,47 @@ where
         agreement_id: &str,
         format: &str,
     ) -> Result<(ConsumerTransfer, Outgoing), Failure> {
+        let request = Request {
+            provider_address,
+            provider_id,
+            agreement_id,
+            format,
+        };
+        self.begin(&request, None)
+    }
+
+    /// Like [`ConsumerTransferService::start`], for a push transfer
+    /// (`format` must be a push format, ADR 0027): the request carries
+    /// `address_for(consumer_pid)`, our data address for the new
+    /// transfer, where the provider sends the data.
+    ///
+    /// # Errors
+    ///
+    /// As [`ConsumerTransferService::start`], or `format` is not a push
+    /// format.
+    pub fn start_push(
+        &self,
+        request: &Request<'_>,
+        address_for: &dyn Fn(&str) -> DataAddress,
+    ) -> Result<(ConsumerTransfer, Outgoing), Failure> {
+        if !is_push_format(request.format) {
+            return Err(bad("", "", "not a push format"));
+        }
+        self.begin(request, Some(address_for))
+    }
+
+    /// The request of `start` and `start_push`.
+    fn begin(
+        &self,
+        request: &Request<'_>,
+        address_for: Option<&dyn Fn(&str) -> DataAddress>,
+    ) -> Result<(ConsumerTransfer, Outgoing), Failure> {
+        let Request {
+            provider_address,
+            provider_id,
+            agreement_id,
+            format,
+        } = *request;
         if agreement_id.is_empty() || format.is_empty() {
             return Err(bad("", "", "agreementId and format are required"));
         }
@@ -292,14 +352,15 @@ where
             pending: None,
             version: 0,
         };
-        // pull only: no data address of ours (ADR 0013)
+        // pull: no data address of ours (ADR 0013); push: where to send
+        // the data (ADR 0027)
         let msg = TransferRequestMessage {
             context: Context::default(),
             kind: TransferRequestMessageType,
             consumer_pid: transfer.consumer_pid.clone(),
             agreement_id: transfer.agreement_id.clone(),
             format: transfer.format.clone(),
-            data_address: None,
+            data_address: address_for.map(|address_for| address_for(&transfer.consumer_pid)),
             callback_address: self.callback_address.clone(),
         };
         let out = Outgoing {
@@ -372,7 +433,8 @@ where
     /// `POST <callback>/transfers/:consumerPid/start`: the provider started
     /// the transfer, or started it again. A pull transfer needs the data
     /// address the first time (DSP 2025-1, "Transfer Start Message"); a
-    /// start again without one keeps the address we have.
+    /// start again without one keeps the address we have. A push transfer
+    /// needs none, and one sent anyway is not kept: the data comes to us.
     ///
     /// # Errors
     ///
@@ -381,7 +443,8 @@ where
     pub fn started(&self, consumer_pid: &str, msg: &TransferStartMessage) -> Handled {
         self.handle(consumer_pid, |transfer| {
             check_ids(transfer, &msg.provider_pid, &msg.consumer_pid)?;
-            if msg.data_address.is_none() && transfer.data_address.is_none() {
+            let push = is_push_format(&transfer.format);
+            if !push && msg.data_address.is_none() && transfer.data_address.is_none() {
                 return Err(bad(
                     &msg.provider_pid,
                     &transfer.consumer_pid,
@@ -389,7 +452,7 @@ where
                 ));
             }
             receive(transfer, Transition::Start)?;
-            if let Some(address) = &msg.data_address {
+            if let Some(address) = msg.data_address.as_ref().filter(|_| !push) {
                 transfer.data_address = Some(address.clone());
             }
             Ok(())
@@ -436,6 +499,22 @@ where
         consumer_pid: &str,
         decision: ConsumerTransferDecision,
     ) -> Result<Outgoing, Failure> {
+        self.act_with_address(consumer_pid, decision, None)
+    }
+
+    /// Like [`ConsumerTransferService::act`]; a start again of a push
+    /// transfer carries `address`, our data address with a new token
+    /// (ADR 0027), which replaces the one the provider has.
+    ///
+    /// # Errors
+    ///
+    /// As [`ConsumerTransferService::act`].
+    pub fn act_with_address(
+        &self,
+        consumer_pid: &str,
+        decision: ConsumerTransferDecision,
+        address: Option<&DataAddress>,
+    ) -> Result<Outgoing, Failure> {
         let saved = process::update(self, &Lookup::own(consumer_pid), |transfer| {
             if transfer.pending.is_some() {
                 return Err(bad(
@@ -444,14 +523,19 @@ where
                     "a message for this transfer is still on its way; try again",
                 ));
             }
-            let out =
-                message(transfer, decision, "terminated by the consumer").ok_or_else(|| {
-                    bad(
-                        transfer.provider_pid.as_deref().unwrap_or_default(),
-                        &transfer.consumer_pid,
-                        &format!("cannot {decision:?} a {:?} transfer", transfer.state),
-                    )
-                })?;
+            let out = message(
+                transfer,
+                decision,
+                "terminated by the consumer",
+                address.cloned(),
+            )
+            .ok_or_else(|| {
+                bad(
+                    transfer.provider_pid.as_deref().unwrap_or_default(),
+                    &transfer.consumer_pid,
+                    &format!("cannot {decision:?} a {:?} transfer", transfer.state),
+                )
+            })?;
             transfer.pending = Some(out);
             Ok(Write::Save)
         })?;
@@ -530,7 +614,8 @@ where
             if !process::can_abort(transfer, sent) {
                 return Ok(Write::Skip);
             }
-            let Some(out) = message(transfer, ConsumerTransferDecision::Terminate, reason) else {
+            let Some(out) = message(transfer, ConsumerTransferDecision::Terminate, reason, None)
+            else {
                 return Ok(Write::Skip);
             };
             transfer.pending = Some(out);
@@ -583,6 +668,7 @@ where
             transfer,
             self.decider.decide(transfer),
             "terminated by the consumer",
+            None,
         )
     }
 
@@ -631,11 +717,13 @@ where
 }
 
 /// The message for `decision` on `t`, if the state machine allows it and
-/// the provider pid is known.
+/// the provider pid is known. `address`: our new data address for a start
+/// again of a push transfer.
 fn message(
     transfer: &ConsumerTransfer,
     decision: ConsumerTransferDecision,
     reason: &str,
+    address: Option<DataAddress>,
 ) -> Option<Outgoing> {
     let provider_pid = transfer.provider_pid.clone()?;
     let consumer_pid = transfer.consumer_pid.clone();
@@ -650,7 +738,7 @@ fn message(
                 kind: TransferStartMessageType,
                 provider_pid,
                 consumer_pid,
-                data_address: None,
+                data_address: address,
             }),
         ),
         ConsumerTransferDecision::Suspend => (
