@@ -7,7 +7,8 @@ SPDX-License-Identifier: Apache-2.0
 # What 1.0 keeps stable
 
 Release 0.13 freezes the interface of Portitor. 1.0 is the 0.14 release
-candidate ([ROADMAP](ROADMAP.md#10-stable)). From 1.0 on, Portitor follows
+candidate, tried as 1.0.0-rc.1 and released as 1.0.0 on 2026-11-24
+([ROADMAP](ROADMAP.md#10-stable-released-2026-11-24-as-v100)). From 1.0 on, Portitor follows
 [Semantic Versioning](https://semver.org/): a 1.x release may add to what
 is listed here, and only 2.0 may remove or rename it.
 
@@ -17,8 +18,9 @@ a setting cannot leave the code while it is listed here, and a new one
 cannot be added to the code without a line here. What each name means is
 not repeated here; follow the links.
 
-Between 0.13 and 1.0 the lists can still change if the release candidate
-shows a mistake. The [CHANGELOG](../CHANGELOG.md) will say so.
+Between 0.13 and 1.0 the lists could still change if the release candidate
+showed a mistake. None did: the lists of 1.0.0 are those of 0.13.0 and
+0.14.0.
 
 ## Stable in 1.x
 

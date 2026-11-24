@@ -77,6 +77,7 @@ CI runs everything with Docker. The Podman runs are done by hand:
 | `scenarios/two-party/run.sh` | 2026-11-22, tag `v1.0.0-rc.1` (release images): rootless Podman 4.9.3 (netavark 1.4.0, aardvark-dns 1.4.0), Docker Compose 5.7.2, Pop!\_OS 24.04 LTS on amd64; about 7 seconds; 36 of 40 runs passed (the other 4: see below) |
 | `scenarios/two-party/run.sh` | 2026-11-20, commit `d857330` (0.13.0 before the tag): Podman 6.1.4 with machine 5.8.5 (libkrun, rootless, 6 CPUs, 8 GiB), Docker Compose 5.6.1, macOS 26.7.3 on Apple Silicon, bash 5.3, OpenSSL 3.5; 7 seconds, with the three `:ci` images as arguments |
 | `scenarios/gaiax-compliance/run.sh` | the same day and machine; 44 seconds |
+| `scenarios/gaiax-compliance/run.sh`, `scenarios/edc-interop/run.sh`, `scenarios/hdab-intermediary/run.sh`, `scenarios/data-permits/run.sh` and `scenarios/two-party/run.sh` | 2026-11-24, commit `461f6db` with the `v1.0.0-rc.1` release images, on the Pop!\_OS machine of the first row; each passed on its first run |
 | `scenarios/edc-interop/run.sh` | the same day and machine; 12 minutes, most of it the Gradle builds of EDC |
 
 **What Podman needs**
@@ -724,12 +725,11 @@ run time (shapes, ontology, contexts), hence the nightly run.
 | Date | Portitor | EDC | Compliance service | Where |
 |---|---|---|---|---|
 | 2026-11-20 | 0.13.0, release branch commit `4c8c6d0` (pull request 72, before the tag) | v1.0.0-RC8 (Connector, IdentityHub) | gx-compliance v2.16.0 | GitHub Actions with Docker, [run 44734964661](https://github.com/brunopacheco1/portitor/actions/runs/44734964661) |
-| not run yet | 0.14, with step 8 (EDC Issuer Service) | v1.0.0-RC8 (Connector, IdentityHub, Issuer Service) | gx-compliance v2.16.0 | not run yet |
+| 2026-11-24 | 1.0.0-rc.1, `main` at commit `5e61f1e`, with step 8 (EDC Issuer Service) | v1.0.0-RC8 (Connector, IdentityHub, Issuer Service) | gx-compliance v2.16.0 | GitHub Actions with Docker, nightly [run 45397817969](https://github.com/brunopacheco1/portitor/actions/runs/45397817969) |
+| 2026-11-24 | 1.0.0-rc.1 release images, `main` at commit `461f6db` | v1.0.0-RC8 (Connector, IdentityHub, Issuer Service) | gx-compliance v2.16.0 | by hand, rootless Podman 4.9.3, Pop!\_OS 24.04 LTS on amd64 |
 
-That run was before step 8 (the EDC Issuer Service, 0.14) existed.
-Step 8 in Compose: not run yet. It was run on localhost only, against
-the real EDC jars and Portitor binaries, without Vault, TLS, the bundle
-and the data plane: every check passed except the two data pulls.
+The 2026-11-20 run was before step 8 (the EDC Issuer Service, 0.14)
+existed.
 
 Before 0.13 (without the Gaia-X steps): the nightly run of 2026-11-20 on
 `main` (after 0.12.0), EDC v1.0.0-RC7, workflow `EDC interop` run 55.
@@ -1428,8 +1428,9 @@ the other, and, for `shared`, that a verifier of one dataspace
 receives both membership credentials. It needs curl, jq, openssl and
 python3, uses ports 19070 to 19511, and is not run by CI.
 
-Last run by hand that passed: 2026-11-20, both ways, on one machine
-over plain HTTP, without a reverse proxy, a bundle or Gaia-X.
+Last run by hand that passed: 2026-11-24, both ways, at commit
+`461f6db` (1.0.0-rc.1 code), on Pop!\_OS 24.04 LTS on amd64, over plain
+HTTP, without a reverse proxy, a bundle or Gaia-X.
 
 ### Observability stack (by hand)
 

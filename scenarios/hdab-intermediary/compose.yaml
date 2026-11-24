@@ -36,7 +36,7 @@
 name: portitor-hdab-intermediary
 
 x-identity: &identity
-  image: ${PORTITOR_IDENTITY_IMAGE:-ghcr.io/brunopacheco1/portitor-identity:1.0.0-rc.1}
+  image: ${PORTITOR_IDENTITY_IMAGE:-ghcr.io/brunopacheco1/portitor-identity:1.0.0}
   depends_on:
     authority:
       condition: service_healthy
@@ -46,7 +46,7 @@ x-identity: &identity
     timeout: 5s
     retries: 30
 x-connector: &connector
-  image: ${PORTITOR_IMAGE:-ghcr.io/brunopacheco1/portitor-connector:1.0.0-rc.1}
+  image: ${PORTITOR_IMAGE:-ghcr.io/brunopacheco1/portitor-connector:1.0.0}
   # should a start still fail, it is tried again
   restart: on-failure
 x-app: &app
@@ -57,7 +57,7 @@ services:
   # Digital Lux Trust: did:web:authority%3A8070, its issuer service and its
   # management API, where run.sh registers the participants
   authority:
-    image: ${PORTITOR_ISSUER_IMAGE:-ghcr.io/brunopacheco1/portitor-issuer:1.0.0-rc.1}
+    image: ${PORTITOR_ISSUER_IMAGE:-ghcr.io/brunopacheco1/portitor-issuer:1.0.0}
     environment:
       PORTITOR_PARTICIPANT_ID: did:web:authority%3A8070
       PORTITOR_ISSUER_SERVICE_URL: http://authority:8070/issuer
