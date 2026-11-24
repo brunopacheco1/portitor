@@ -20,6 +20,11 @@
 //!   ([`UpstreamSources`]), in any state, so transfers under agreements
 //!   already made keep working after the dataset is withdrawn.
 //!   The consumer's request headers are not passed on.
+//! - From 1.1 (ADR 0027): every request also checks the consumer's
+//!   membership again ([`MembershipGate`], refused with the same 401),
+//!   and a download that runs is cut when the flow is suspended or
+//!   terminated ([`RunningFlows`]) or when the membership check, run again
+//!   while it streams, fails (`download.rs`).
 
 #[cfg(test)]
 use std::collections::BTreeMap;
@@ -43,11 +48,16 @@ use portitor_dps::port::{DataPlane, SignalError};
 use portitor_dps::state::DataFlowState;
 use portitor_dsp::transfer::{DataAddress, DataAddressType, EndpointProperty};
 
+use crate::auth::Membership;
+use crate::flow_membership::{Access, MembershipGate, StoredMembership};
 use crate::http_client::{HttpsClient, bearer_token_in, https_client};
 use crate::ports::AnyFlowStore;
+use crate::running_flows::RunningFlows;
 use crate::system::{new_uuid, now_secs};
 use portitor_runtime::telemetry::http::{ClientCall, Peer};
 use tracing::Instrument as _;
+
+mod download;
 
 /// The `endpointType` of the data address sent over DSP. It is the value
 /// of the DSP 2025-1 examples, the DSP TCK and EDC's DSP tests (ADR 0013);
@@ -136,6 +146,23 @@ pub trait FlowStore {
         token_hash: &str,
         expires_at: u64,
     ) -> Result<bool, FlowStoreError>;
+
+    /// What is kept of the consumer of flow `id`: its memberships when it
+    /// asked for the transfer (ADR 0027, section 7.2).
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be read.
+    fn memberships(&self, id: &str) -> Result<StoredMembership, FlowStoreError>;
+
+    /// Keeps `memberships` for flow `id` (the transfer's provider pid),
+    /// unless something is kept for it already. Written before the flow
+    /// starts, or just after: its token is sent only later.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be written.
+    fn keep_memberships(&self, id: &str, memberships: &[Membership]) -> Result<(), FlowStoreError>;
 }
 
 /// SHA-256 of `token`, hex. Comparing two such hashes with `==` is safe:
@@ -163,6 +190,11 @@ pub struct HttpDataPlane {
     public_url: String,
     token_seconds: u64,
     client: HttpsClient,
+    /// The downloads that run now, by flow: cut on suspend and terminate.
+    running: Arc<RunningFlows>,
+    /// Checks the consumer's membership again; `None` checks the token
+    /// only, as 1.0 did (unit tests).
+    gate: Option<Arc<MembershipGate>>,
 }
 
 impl std::fmt::Debug for HttpDataPlane {
@@ -206,7 +238,38 @@ impl HttpDataPlane {
             public_url: public_url.trim_end_matches('/').to_owned(),
             token_seconds,
             client,
+            running: Arc::new(RunningFlows::new()),
+            gate: None,
         })
+    }
+
+    /// The same data plane, checking every request for data, and every
+    /// running download, with `gate` (ADR 0027, section 7.2).
+    #[must_use]
+    pub fn checking_membership_with(self, gate: Arc<MembershipGate>) -> Self {
+        Self {
+            gate: Some(gate),
+            ..self
+        }
+    }
+
+    /// What runs for each flow now. A push uses the same switches, so a
+    /// suspend or terminate cuts it too.
+    #[must_use]
+    pub fn running_flows(&self) -> Arc<RunningFlows> {
+        Arc::clone(&self.running)
+    }
+
+    /// Moves flow `id` away from STARTED (to `to`) and cuts every download
+    /// of it that runs (ADR 0027, section 5). Cut also when the move is
+    /// refused: stopping a download is always safe.
+    fn stop(&self, id: &str, to: DataFlowState) -> Result<(), SignalError> {
+        let moved = self.move_to(id, to);
+        let cut = self.running.cut(id);
+        if cut > 0 {
+            tracing::info!(flow = %id, downloads = cut, state = ?to, "running downloads cut");
+        }
+        moved
     }
 
     #[allow(clippy::needless_pass_by_value)] // used as map_err(Self::store_failed)
@@ -373,7 +436,7 @@ impl DataPlane for HttpDataPlane {
     }
 
     fn suspend(&self, id: &str, _: &DataFlowSuspendMessage) -> Result<(), SignalError> {
-        self.move_to(id, DataFlowState::Suspended)
+        self.stop(id, DataFlowState::Suspended)
     }
 
     fn resume(
@@ -387,7 +450,7 @@ impl DataPlane for HttpDataPlane {
     }
 
     fn terminate(&self, id: &str, _: &DataFlowTerminateMessage) -> Result<(), SignalError> {
-        self.move_to(id, DataFlowState::Terminated)
+        self.stop(id, DataFlowState::Terminated)
     }
 
     fn completed(&self, id: &str) -> Result<(), SignalError> {
@@ -408,8 +471,10 @@ fn unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, challenge).into_response()
 }
 
-/// `GET /data/{flowId}`: checks the token, then streams the upstream
-/// answer (status 2xx only; its `Content-Type` is kept).
+/// `GET /data/{flowId}`: checks the token and the consumer's
+/// membership, then streams the upstream answer (status 2xx only; its
+/// `Content-Type` is kept). The stream stops when the flow is suspended
+/// or terminated, or when the membership check fails while it runs.
 pub(crate) async fn serve(
     State(plane): State<Arc<HttpDataPlane>>,
     Path(id): Path<String>,
@@ -418,17 +483,49 @@ pub(crate) async fn serve(
     let Some(token) = bearer_token_in(&headers) else {
         return unauthorized();
     };
+    // watch first, check second: a suspend between the two still cuts
+    // this download (`running_flows` module doc)
+    let cut = plane.running.watch(&id);
     let source = match plane.authorize(&id, token, now_secs()) {
         Ok(url) => url,
         Err(Denied::Unauthorized) => return unauthorized(),
         Err(Denied::Store) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
+    if let Some(gate) = &plane.gate
+        && !member_may_download(gate, &id).await
+    {
+        return unauthorized();
+    }
     match fetch(&plane.client, &source).await {
-        Ok(response) => response,
+        Ok(response) => {
+            let watchdog = plane
+                .gate
+                .as_ref()
+                .map(|gate| download::watchdog(Arc::clone(gate), plane.running_flows(), &id));
+            download::cut_when_told(response, cut, watchdog)
+        }
         Err(error) => {
             // the upstream URL is private: log it, do not show it
             tracing::warn!(flow = %id, %error, "upstream fetch failed");
             StatusCode::BAD_GATEWAY.into_response()
+        }
+    }
+}
+
+/// Whether the consumer of flow `id` is still a member ([`MembershipGate`]).
+/// When it is not, its transfer is ended too; when the check could not
+/// finish, the request is refused and the transfer kept. The reason goes
+/// to the log, never to the caller.
+async fn member_may_download(gate: &MembershipGate, id: &str) -> bool {
+    match gate.check(id).await {
+        Access::Granted => true,
+        Access::Unchecked(reason) => {
+            tracing::warn!(flow = %id, %reason, "request for data refused: the consumer's membership could not be checked now");
+            false
+        }
+        Access::Revoked(reason) => {
+            gate.end_transfer(id, &reason);
+            false
         }
     }
 }

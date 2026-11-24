@@ -4,12 +4,13 @@
 
 //! The management API: what the operator's own systems use to read a
 //! provider's catalog, to start and follow negotiations and transfers as
-//! consumer, and to read the dataset harvest jobs (read only, ADR 0020). It is not part of DSP, so it is served
+//! consumer, to read and end the transfers it runs as provider (ADR
+//! 0027), and to read the dataset harvest jobs (read only, ADR 0020). It is not part of DSP, so it is served
 //! on its own port (`PORTITOR_MANAGEMENT_BIND`), never on the DSP port, and
 //! every call needs the API key (`Authorization: Bearer <key>`).
 //!
-//! The two catalog calls are in the module `catalog`; the others are
-//! below.
+//! The two catalog calls are in the module `catalog`, the transfers as
+//! provider (1.1) in `provided_transfers`; the others are below.
 //!
 //! Its `OpenAPI` description is generated from the handlers (utoipa)
 //! and served at `GET /v1/openapi.json`; `docs/api/management-openapi.json`
@@ -43,6 +44,7 @@ use portitor_runtime::api_key::{BearerKey, internal_error};
 use portitor_runtime::health;
 
 mod catalog;
+mod provided_transfers;
 
 /// The one value of `protocol` (or `profile`) the catalog calls take.
 pub use catalog::DSP_HTTP_2025_1;
@@ -777,7 +779,7 @@ fn next_after<T>(found: &[T], limit: usize, key: impl Fn(&T) -> &String) -> Opti
 #[openapi(
     info(
         title = "Portitor management API",
-        description = "Reads a provider's catalog, starts and follows contract negotiations and transfers in which this connector is the consumer, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only. The API key is opaque (see the api_key security scheme). HTTP 403 is reserved for tokens with limited rights in 1.x; 1.0 never answers it. Every route answers 503 with a problem document when the request took longer than 60 seconds; at most 4 catalog or dataset answers are read from providers at a time, and a further request waits within those 60 seconds. The data plane token (the authorization property of a transfer's dataAddress) is opaque too: send it as it is, do not parse it; a 1.x release may issue another form.",
+        description = "Reads a provider's catalog, starts and follows contract negotiations and transfers in which this connector is the consumer, reads and ends the transfers it runs as provider, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only. The API key is opaque (see the api_key security scheme). HTTP 403 is reserved for tokens with limited rights in 1.x; 1.0 never answers it. Every route answers 503 with a problem document when the request took longer than 60 seconds; at most 4 catalog or dataset answers are read from providers at a time, and a further request waits within those 60 seconds. The data plane token (the authorization property of a transfer's dataAddress) is opaque too: send it as it is, do not parse it; a 1.x release may issue another form.",
         license(name = "Apache-2.0", identifier = "Apache-2.0"),
     ),
     paths(
@@ -791,6 +793,9 @@ fn next_after<T>(found: &[T], limit: usize, key: impl Fn(&T) -> &String) -> Opti
         list_transfers,
         complete_transfer,
         terminate_transfer,
+        provided_transfers::list,
+        provided_transfers::one,
+        provided_transfers::terminate,
         list_harvest_jobs,
         one_harvest_job
     ),
@@ -803,6 +808,8 @@ fn next_after<T>(found: &[T], limit: usize, key: impl Fn(&T) -> &String) -> Opti
         StartTransfer,
         TransferView,
         TransferPage,
+        provided_transfers::ProvidedTransferView,
+        provided_transfers::ProvidedTransferPage,
         HarvestCountsView,
         HarvestJobView,
         HarvestErrorView,
@@ -815,6 +822,7 @@ fn next_after<T>(found: &[T], limit: usize, key: impl Fn(&T) -> &String) -> Opti
         (name = "Catalog", description = "A provider's catalog and datasets, read as consumer (DSP 2025-1). The request bodies are those of Eclipse EDC's management API v4."),
         (name = "Negotiations", description = "Contract negotiations as consumer (DSP 2025-1)"),
         (name = "Transfers", description = "Transfer processes as consumer (DSP 2025-1), pull only"),
+        (name = "Provided transfers", description = "Transfer processes as provider (DSP 2025-1): read them, and end one, which ends access at once (ADR 0027)"),
         (name = "Harvest", description = "Dataset harvest runs: datasets come from the source into the catalog (ADR 0020). Read only.")
     )
 )]
@@ -849,6 +857,15 @@ pub fn router(negotiator: Negotiator, key: ApiKey) -> Router {
         .route(
             "/v1/transfers/{consumerPid}/termination",
             post(terminate_transfer),
+        )
+        .route("/v1/provided-transfers", get(provided_transfers::list))
+        .route(
+            "/v1/provided-transfers/{providerPid}",
+            get(provided_transfers::one),
+        )
+        .route(
+            "/v1/provided-transfers/{providerPid}/termination",
+            post(provided_transfers::terminate),
         )
         .route("/v1/harvest-jobs", get(list_harvest_jobs))
         .route("/v1/harvest-jobs/{id}", get(one_harvest_job))

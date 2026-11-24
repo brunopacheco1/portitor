@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Portitor management API",
-    "description": "Reads a provider's catalog, starts and follows contract negotiations and transfers in which this connector is the consumer, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only. The API key is opaque (see the api_key security scheme). HTTP 403 is reserved for tokens with limited rights in 1.x; 1.0 never answers it. Every route answers 503 with a problem document when the request took longer than 60 seconds; at most 4 catalog or dataset answers are read from providers at a time, and a further request waits within those 60 seconds. The data plane token (the authorization property of a transfer's dataAddress) is opaque too: send it as it is, do not parse it; a 1.x release may issue another form.",
+    "description": "Reads a provider's catalog, starts and follows contract negotiations and transfers in which this connector is the consumer, reads and ends the transfers it runs as provider, and shows the dataset harvest jobs (read only). Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the DSP port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only. The API key is opaque (see the api_key security scheme). HTTP 403 is reserved for tokens with limited rights in 1.x; 1.0 never answers it. Every route answers 503 with a problem document when the request took longer than 60 seconds; at most 4 catalog or dataset answers are read from providers at a time, and a further request waits within those 60 seconds. The data plane token (the authorization property of a transfer's dataAddress) is opaque too: send it as it is, do not parse it; a 1.x release may issue another form.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
@@ -635,6 +635,227 @@
           },
           "404": {
             "description": "Unknown negotiation",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/provided-transfers": {
+      "get": {
+        "tags": [
+          "Provided transfers"
+        ],
+        "summary": "The transfers this connector runs as provider, a page at a time.",
+        "operationId": "list",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Return transfers whose provider pid sorts after this one.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many to return, 1 to 100 (default 100).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvidedTransferPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API key",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reserved for scoped access in 1.x (ADR 0025): the caller is known but may not make this call. Not returned today. The API key (PORTITOR_MANAGEMENT_API_KEY_FILE) keeps every right and never gets this answer.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/provided-transfers/{providerPid}": {
+      "get": {
+        "tags": [
+          "Provided transfers"
+        ],
+        "summary": "One transfer this connector runs as provider.",
+        "operationId": "one",
+        "parameters": [
+          {
+            "name": "providerPid",
+            "in": "path",
+            "description": "Our process id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The transfer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvidedTransferView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API key",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reserved for scoped access in 1.x (ADR 0025): the caller is known but may not make this call. Not returned today. The API key (PORTITOR_MANAGEMENT_API_KEY_FILE) keeps every right and never gets this answer.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown transfer",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/provided-transfers/{providerPid}/termination": {
+      "post": {
+        "tags": [
+          "Provided transfers"
+        ],
+        "summary": "End a transfer this connector runs as provider. Access ends at once:\nthe data flow is terminated and every download of it that runs is\ncut. The DSP termination is sent to the consumer in the background;\nthe state becomes `TERMINATED` once the consumer acknowledges it, or\nwhen it cannot be reached. Asked again while the termination is on\nits way, it answers the same and sends nothing more.",
+        "operationId": "terminate",
+        "parameters": [
+          {
+            "name": "providerPid",
+            "in": "path",
+            "description": "Our process id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Access ended; termination on its way",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvidedTransferView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The transfer has ended",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API key",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reserved for scoped access in 1.x (ADR 0025): the caller is known but may not make this call. Not returned today. The API key (PORTITOR_MANAGEMENT_API_KEY_FILE) keeps every right and never gets this answer.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown transfer",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1530,6 +1751,85 @@
           }
         }
       },
+      "ProvidedTransferPage": {
+        "type": "object",
+        "description": "One page of transfers as provider.",
+        "required": [
+          "transfers"
+        ],
+        "properties": {
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `after` to get the next page; absent on the last page."
+          },
+          "transfers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProvidedTransferView"
+            },
+            "description": "The transfers, in provider pid order."
+          }
+        }
+      },
+      "ProvidedTransferView": {
+        "type": "object",
+        "description": "A transfer this connector runs as provider.",
+        "required": [
+          "providerPid",
+          "consumerPid",
+          "state",
+          "counterPartyAddress",
+          "counterPartyId",
+          "agreementId",
+          "datasetId",
+          "format",
+          "messageOnItsWay"
+        ],
+        "properties": {
+          "agreementId": {
+            "type": "string",
+            "description": "The agreement the transfer is made under."
+          },
+          "consumerPid": {
+            "type": "string",
+            "description": "The consumer's process id."
+          },
+          "counterPartyAddress": {
+            "type": "string",
+            "description": "Where our messages to the consumer go (its `callbackAddress`)."
+          },
+          "counterPartyId": {
+            "type": "string",
+            "description": "The consumer's participant id (its DID), proven by its DCP token.",
+            "example": "did:web:consumer.example"
+          },
+          "datasetId": {
+            "type": "string",
+            "description": "The dataset whose data is transferred."
+          },
+          "format": {
+            "type": "string",
+            "description": "The format the consumer asked for.",
+            "example": "HttpData-PULL"
+          },
+          "messageOnItsWay": {
+            "type": "boolean",
+            "description": "Whether a message of ours is on its way to the consumer (for\nexample the termination, until the consumer acknowledges it)."
+          },
+          "providerPid": {
+            "type": "string",
+            "description": "Our process id; also the id of its data flow (`/data/{providerPid}`)."
+          },
+          "state": {
+            "type": "string",
+            "description": "The DSP state, for example `REQUESTED` or `STARTED`.",
+            "example": "STARTED"
+          }
+        }
+      },
       "StartNegotiation": {
         "type": "object",
         "description": "Start a negotiation as consumer.\n\nThe other party is named as in the catalog calls and as Eclipse EDC\nnames it: `counterPartyAddress` and `counterPartyId` (before 0.13:\n`providerAddress` and `providerId`, which are now refused as unknown\nmembers). EDC's `ContractRequest` and `TransferRequest` carry only\n`counterPartyAddress` (EDC v1.0.0-RC8, `ContractRequest.java`,\n`TransferRequest.java`); `counterPartyId` is the name of EDC's\n`CatalogRequest` and of its `ContractNegotiation` view, and Portitor\nrequires it here, because its token is made for that participant.",
@@ -1681,6 +1981,10 @@
     {
       "name": "Transfers",
       "description": "Transfer processes as consumer (DSP 2025-1), pull only"
+    },
+    {
+      "name": "Provided transfers",
+      "description": "Transfer processes as provider (DSP 2025-1): read them, and end one, which ends access at once (ADR 0027)"
     },
     {
       "name": "Harvest",

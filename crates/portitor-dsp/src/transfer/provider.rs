@@ -155,6 +155,14 @@ pub trait TransferStore {
     ///
     /// The store cannot be read.
     fn pending(&self) -> Result<Vec<Transfer>, StoreError>;
+
+    /// Up to `limit` transfers in provider pid order, those after `after`
+    /// when it is given: one page for the management API.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be read.
+    fn list(&self, after: Option<&str>, limit: usize) -> Result<Vec<Transfer>, StoreError>;
 }
 
 /// Port: the provider's agreements.
@@ -958,6 +966,9 @@ fn bad(pid: &str, cpid: &str, reason: &str) -> Failure {
 fn not_found(pid: &str, cpid: &str) -> Failure {
     Failure::NotFound(TransferError::new(pid, cpid, "404", "no such transfer"))
 }
+
+mod own_steps;
+pub use own_steps::MAX_PAGE;
 
 #[cfg(test)]
 mod tests;

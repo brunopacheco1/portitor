@@ -111,6 +111,9 @@ POST /v1/transfers
 GET /v1/transfers/{consumerPid}
 POST /v1/transfers/{consumerPid}/completion
 POST /v1/transfers/{consumerPid}/termination
+GET /v1/provided-transfers
+GET /v1/provided-transfers/{providerPid}
+POST /v1/provided-transfers/{providerPid}/termination
 GET /v1/harvest-jobs
 GET /v1/harvest-jobs/{id}
 POST /v1/catalog/request

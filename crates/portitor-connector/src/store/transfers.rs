@@ -178,6 +178,17 @@ impl TransferStore for SqliteNegotiations {
         );
         self.query(&sql, [], transfer_from_row)
     }
+
+    fn list(&self, after: Option<&str>, limit: usize) -> Result<Vec<Transfer>, StoreError> {
+        // the primary key is the order, so no index is needed
+        let sql = format!(
+            "SELECT {TRANSFER_COLUMNS} FROM transfer
+             WHERE ?1 IS NULL OR provider_pid > ?1
+             ORDER BY provider_pid LIMIT ?2"
+        );
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        self.query(&sql, params![after, limit], transfer_from_row)
+    }
 }
 
 impl Agreements for SqliteNegotiations {
