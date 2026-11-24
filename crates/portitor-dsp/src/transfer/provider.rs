@@ -807,16 +807,16 @@ where
     type Failure = Failure;
 
     fn read(&self, lookup: &Lookup<'_>) -> Result<Transfer, Failure> {
-        let not_found = || not_found(lookup.pid, lookup.named_pid);
+        let missing = || not_found(lookup.pid, lookup.named_pid);
         let Some(transfer) = self.store.get(lookup.pid).map_err(Failure::Store)? else {
-            return Err(not_found());
+            return Err(missing());
         };
         // another consumer's transfer looks like a missing one
         // (DSP: "if the client is not authorized ... MUST return 404")
         if let Some(caller) = lookup.caller
             && transfer.counter_party != caller
         {
-            return Err(not_found());
+            return Err(missing());
         }
         Ok(transfer)
     }
