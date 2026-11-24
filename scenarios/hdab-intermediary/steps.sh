@@ -5,12 +5,17 @@
 #
 # The hdab-intermediary scenario (README.md), against the data space that
 # run.sh started. Every call goes through a participant's own management
-# API; the data users' apps (lab-app, schuman-app) fetch the data. Exits
-# non-zero at the first failed check.
+# API. Lux Biobank pushes the lab's copy into the lab's bucket; Schuman's
+# app (schuman-app) fetches the counts. Exits non-zero at the first
+# failed check.
 #
 # 1. Lux Biomedicine Lab reads Lux Biobank's catalog, takes the offer for
-#    EU processors (its DataProcessorCredential) and pulls the genotypes
-#    into its plain folder. The offer for access bodies is refused to it.
+#    EU processors (its DataProcessorCredential) and asks for a push
+#    transfer (HttpData-PUSH, ADR 0027): Lux Biobank sends the genotypes
+#    to the lab connector's receiving route, which stores them in the
+#    lab's own object storage (RustFS, bucket lab-genotypes). The object
+#    must equal the original file. The offer for access bodies is refused
+#    to the lab.
 # 2. The HDAB takes the offer for access bodies (its MembershipCredential
 #    role). Nothing is pulled.
 # 3. Schuman Clinical Research is refused both of Lux Biobank's offers.
@@ -30,12 +35,14 @@
 #   DIR        scenarios/hdab-intermediary
 #   RUN        its run/ folder, with the management keys
 #   PILOT_END  when the HDAB's pilot offer ends
+#   LAB_S3_ACCESS_KEY, LAB_S3_SECRET_KEY
+#              the keys of the lab's object storage (lab-storage)
 
 set -euo pipefail
 # shellcheck source=scripts/require-bash.sh
 source "$(dirname "$0")/../../scripts/require-bash.sh"
 
-: "${DIR:?}" "${RUN:?}" "${PILOT_END:?}"
+: "${DIR:?}" "${RUN:?}" "${PILOT_END:?}" "${LAB_S3_ACCESS_KEY:?}" "${LAB_S3_SECRET_KEY:?}"
 # shellcheck source=scripts/container-engine.sh
 source scripts/container-engine.sh
 COMPOSE=("${ENGINE_COMPOSE[@]}" -f "$DIR/compose.yaml")
@@ -53,9 +60,18 @@ HDAB_ID=$(participant_did hdab)
 GENOTYPES=https://biobank.health-lu.example/datasets/genotypes
 CARRIERS=https://hdab.health-lu.example/datasets/variant-carriers
 ORIGINAL=examples/genotypes/genotypes.vcf
+LAB_S3=http://127.0.0.1:18114 # lab-storage, the lab's RustFS
+LAB_BUCKET=lab-genotypes      # the lab connector's PORTITOR_PUSH_BUCKET
 
 hdab_pulls() { # how many transfers the HDAB has asked Lux Biobank for
   api hdab GET /v1/transfers | jq '.transfers | length'
+}
+
+lab_s3() { # method path [curl flags]: a request to the lab's object storage, signed (SigV4)
+  local method=$1 path=$2
+  shift 2
+  curl -s -X "$method" "$LAB_S3$path" --aws-sigv4 "aws:amz:us-east-1:s3" \
+    --user "$LAB_S3_ACCESS_KEY:$LAB_S3_SECRET_KEY" "$@"
 }
 
 # --- 1 ------------------------------------------------------------------------
@@ -69,13 +85,40 @@ VIEW=$(negotiate lab "$BIOBANK" "$BIOBANK_ID" "$GENOTYPES" "$(offer "$CATALOG" "
 expect "the lab's agreement" "$VIEW" FINALIZED
 LAB_AGREEMENT=$(jq -r '.agreement["@id"]' <<<"$VIEW")
 
-step "1. The lab pulls the genotypes into its plain folder ($RUN/lab/storage)"
-TRANSFER=$(transfer lab "$LAB_AGREEMENT")
-expect "the lab's transfer" "$TRANSFER" STARTED
-app_fetch lab-app "$TRANSFER" /storage/genotypes.vcf
-complete lab "$TRANSFER"
-cmp -s "$RUN/lab/storage/genotypes.vcf" "$ORIGINAL" || fail "the lab's copy differs"
-echo "the lab has genotypes.vcf, $(wc -c <"$RUN/lab/storage/genotypes.vcf") bytes; transfer COMPLETED"
+step "1. The lab's object storage (RustFS): its bucket $LAB_BUCKET"
+for _ in $(seq 1 100); do
+  [[ $(curl -s -o /dev/null -w '%{http_code}' "$LAB_S3/") != 000 ]] && break
+  sleep 0.2
+done
+STATUS=$(lab_s3 PUT "/$LAB_BUCKET" -o /dev/null -w '%{http_code}')
+[[ $STATUS == 200 || $STATUS == 409 ]] || fail "create bucket $LAB_BUCKET: HTTP $STATUS"
+echo "bucket $LAB_BUCKET ready"
+
+step "1. The lab asks for a push: Lux Biobank sends the genotypes into the lab's bucket"
+PID=$(api lab POST /v1/transfers "$(jq -nc --arg a "$LAB_AGREEMENT" '{agreementId: $a, format: "HttpData-PUSH"}')" |
+  jq -r '.consumerPid') || fail "the lab: request a push transfer"
+# Lux Biobank's data plane POSTs the file to http://lab:8080/push/$PID with
+# the lab's token; the lab's connector stores it as object $PID, and Lux
+# Biobank completes the transfer
+VIEW=$(until_state lab "/v1/transfers/$PID" 'COMPLETED|TERMINATED')
+jq -c '{consumerPid, state, format, objectKey}' <<<"$VIEW"
+expect "the lab's push transfer" "$VIEW" COMPLETED
+[[ $(jq -r '.objectKey' <<<"$VIEW") == "$PID" ]] || fail "no objectKey: $VIEW"
+[[ $(jq -r '.dataAddress' <<<"$VIEW") == null ]] || fail "a push shows a data address: $VIEW"
+lab_s3 GET "/$LAB_BUCKET/$(uri "$PID")" -f -o "$RUN/lab/genotypes.vcf" || fail "read the pushed object"
+cmp -s "$RUN/lab/genotypes.vcf" "$ORIGINAL" || fail "the object in the lab's bucket differs from genotypes.vcf"
+echo "the lab's bucket holds $LAB_BUCKET/$PID, $(wc -c <"$RUN/lab/genotypes.vcf" | tr -d ' ') bytes, equal to genotypes.vcf; transfer COMPLETED"
+
+step "1. The lab's receiving route refuses anyone without its token: Schuman's app tries"
+STATUS=$("${COMPOSE[@]}" run --rm --no-deps -q schuman-app python -c '
+import sys, urllib.error, urllib.request
+try:
+    urllib.request.urlopen(urllib.request.Request(sys.argv[1], data=b"not Lux Biobank", method="POST"))
+    print(200)
+except urllib.error.HTTPError as e:
+    print(e.code)' "http://lab:8080/push/$(uri "$PID")") || fail "Schuman's app did not run"
+[[ $STATUS == 401 ]] || fail "the lab's receiving route answered $STATUS without a token, not 401"
+echo "refused: $STATUS"
 
 step "1. The lab asks for the offer for access bodies: refused, its role is data-user"
 VIEW=$(negotiate lab "$BIOBANK" "$BIOBANK_ID" "$GENOTYPES" "$(offer "$CATALOG" "$GENOTYPES" genotypes:offer:access-body)")
@@ -188,4 +231,4 @@ VIEW=$(until_state schuman "/v1/transfers/$PID" 'STARTED|TERMINATED')
 expect "Schuman's transfer" "$VIEW" TERMINATED
 echo "the HDAB's start message was refused; its termination was accepted, so the transfer ended without Schuman's operator"
 
-step "Done: two data users took the same genotypes by two roads, peer to peer and through the HDAB; the HDAB pulled only after Schuman's transfer started and kept nothing; roles, claims, an ended offer and a revoked access body were refused"
+step "Done: two data users took the same genotypes by two roads, peer to peer (pushed into the lab's bucket) and through the HDAB; the HDAB pulled only after Schuman's transfer started and kept nothing; roles, claims, an ended offer and a revoked access body were refused"

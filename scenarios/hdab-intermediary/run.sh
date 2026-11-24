@@ -9,8 +9,9 @@
 # (steps.sh) from this machine, then removes everything, volumes
 # included.
 #
-#  1. Keys and secrets, in run/; the HealthDCAT-AP bundle, built and
-#     signed with the issuer image (scripts/demo-bundle.sh) into
+#  1. Keys and secrets, in run/, and the keys of the lab's object
+#     storage (RustFS), for this run only; the HealthDCAT-AP bundle, built
+#     and signed with the issuer image (scripts/demo-bundle.sh) into
 #     run/authority/bundle/; the HDAB's datasets with its pilot offer,
 #     which ends PILOT_SECONDS from now.
 #  2. Docker Compose up.
@@ -20,6 +21,9 @@
 #
 # Usage: scenarios/hdab-intermediary/run.sh [connector image [identity image [issuer image]]]
 #   Without images it uses the compose file's defaults (the release images).
+#   Step 1 pushes into object storage (ADR 0027), so the connector image
+#   must be 1.1 or later: with a 1.0 image run.sh stops before it starts
+#   anything.
 # Environment:
 #   KEEP=1            leave the containers running, and run/, at the end
 #   PILOT_SECONDS=n   how long the HDAB's pilot offer lasts (default 150);
@@ -56,6 +60,14 @@ declare -A MANAGEMENT=([biobank]=http://127.0.0.1:18101 [lab]=http://127.0.0.1:1
 # shellcheck source=scripts/scenario-lib.sh
 source scripts/scenario-lib.sh
 
+# step 1 needs push (1.1): stop now with a 1.0 connector image, such as
+# the default that compose.yaml names until 1.1.0 is released
+DEFAULT_IMAGE=$(sed -n 's/^ *image: [$]{PORTITOR_IMAGE:-\([^}]*\)}.*/\1/p' "$DIR/compose.yaml")
+CONNECTOR_IMAGE=${PORTITOR_IMAGE:-$DEFAULT_IMAGE}
+if [[ $CONNECTOR_IMAGE == *:1.0 || $CONNECTOR_IMAGE == *:1.0.* ]]; then
+  fail "the connector image $CONNECTOR_IMAGE has no push transfers, which step 1 uses: pass a 1.1 image (README.md, \"Run it\")"
+fi
+
 # --- 1. keys, secrets, bundle, datasets ---------------------------------------
 
 step "Write the keys and the secrets into $RUN"
@@ -63,9 +75,17 @@ step "Write the keys and the secrets into $RUN"
 # old keys: remove them first, so this run starts clean
 "${COMPOSE[@]}" --profile apps down --volumes --remove-orphans >/dev/null 2>&1 || true
 rm -rf "$RUN"
-mkdir -p "$RUN/pipeline" "$RUN/lab/storage"
+mkdir -p "$RUN/pipeline"
 write_issuer_keys authority
 for participant in "${PARTICIPANTS[@]}"; do write_participant_keys "$participant"; done
+# the lab's object storage: its keys, for this run only; compose.yaml
+# passes them to RustFS and, as AWS_* settings, to the lab's connector
+LAB_S3_ACCESS_KEY=lab-$(openssl rand -hex 8)
+LAB_S3_SECRET_KEY=$(openssl rand -hex 32)
+export LAB_S3_ACCESS_KEY LAB_S3_SECRET_KEY
+# the same, for a look at the bucket with KEEP=1 (README.md)
+printf 'AWS_ENDPOINT_URL_S3=http://127.0.0.1:18114\nAWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' \
+  "$LAB_S3_ACCESS_KEY" "$LAB_S3_SECRET_KEY" >"$RUN/lab/s3.env"
 
 cleanup() {
   status=$?
@@ -90,10 +110,8 @@ jq --arg end "$PILOT_END" '.[0].hasPolicy += [.[0].hasPolicy[0]
   | .permission[0].constraint |= map(if .leftOperand == "dateTime" then .rightOperand = $end else . end)]' \
   "$DIR/datasets/hdab.json" >"$RUN/hdab/datasets.json"
 echo "pilot offer until $PILOT_END"
-# the images run as user 65532 and must read them; the lab's app writes
-# its folder
+# the images run as user 65532 and must read them
 chmod -R a+rX "$RUN"
-chmod a+w "$RUN/lab/storage"
 
 # --- 2. start ---------------------------------------------------------------
 

@@ -16,7 +16,10 @@
 #   biobank    Lux Biobank, the health data holder: offers synthetic
 #              genotypes (biobank-data serves examples/genotypes/)
 #   lab        Lux Biomedicine Lab, a data user that takes the genotypes
-#              peer to peer, into a plain folder (run/lab/storage)
+#              peer to peer: Lux Biobank pushes them to the lab's
+#              connector, which stores them in the lab's own object
+#              storage (lab-storage, RustFS, bucket lab-genotypes;
+#              ADR 0027, connector 1.1)
 #   hdab       the HDAB: takes the genotypes for the access body and
 #              offers counts made from them by its pipeline
 #   schuman    Schuman Clinical Research, a data user that takes the
@@ -24,9 +27,14 @@
 # Each participant is a connector and its identity component; the DID is
 # did:web:<participant>-identity%3A8090.
 #
-# lab-app and schuman-app are the two data users' own apps: they fetch
-# the data of a started transfer with its token. They run only when
-# steps.sh calls them (profile apps).
+# schuman-app is Schuman's own app: it fetches the counts of a started
+# transfer with its token. It runs only when steps.sh calls it (profile
+# apps).
+#
+# The lab's object storage keys are made by run.sh for each run and
+# passed as LAB_S3_ACCESS_KEY and LAB_S3_SECRET_KEY, to RustFS and to the
+# lab's connector (AWS_* settings, ADR 0027). Push needs connector images
+# from 1.1 on: the 1.0.0 default below does not have it.
 #
 # PORTITOR_IMAGE, PORTITOR_IDENTITY_IMAGE and PORTITOR_ISSUER_IMAGE pick
 # other images, for example local builds. Start order and health checks
@@ -190,6 +198,12 @@ services:
       PORTITOR_ALLOW_HTTP: "true"
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8081
       PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/lab-management-key
+      # its object storage, where pushed data lands (ADR 0027). A demo:
+      # in production the keys come from a secret store (docs/DEPLOYING.md)
+      AWS_ENDPOINT_URL_S3: http://lab-storage:9000
+      AWS_ACCESS_KEY_ID: ${LAB_S3_ACCESS_KEY:-}
+      AWS_SECRET_ACCESS_KEY: ${LAB_S3_SECRET_KEY:-}
+      PORTITOR_PUSH_BUCKET: lab-genotypes
     secrets:
       - lab-sts-secret
       - lab-management-key
@@ -200,12 +214,23 @@ services:
     depends_on:
       lab-identity:
         condition: service_healthy
+      lab-storage:
+        condition: service_started
 
-  # its app: fetches the genotypes into its plain folder, run/lab/storage
-  lab-app:
-    <<: *app
+  # its object storage: RustFS, S3 API on :9000. The lab's connector
+  # stores what Lux Biobank pushes in bucket lab-genotypes; steps.sh
+  # creates the bucket and reads the object back on 127.0.0.1:18114
+  lab-storage:
+    image: docker.io/rustfs/rustfs:1.0.6
+    environment:
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ACCESS_KEY: ${LAB_S3_ACCESS_KEY:-}
+      RUSTFS_SECRET_KEY: ${LAB_S3_SECRET_KEY:-}
     volumes:
-      - ./run/lab/storage:/storage
+      - lab-storage-data:/data
+    ports:
+      - 127.0.0.1:18114:9000 # S3 API, for the checks
 
   # --- the HDAB: the health data access body ---------------------------------
 
@@ -383,6 +408,7 @@ volumes:
   biobank-data:
   lab-identity-data:
   lab-data:
+  lab-storage-data:
   hdab-identity-data:
   hdab-data:
   schuman-identity-data:
