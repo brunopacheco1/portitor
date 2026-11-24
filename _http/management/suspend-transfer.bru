@@ -1,0 +1,27 @@
+meta {
+  name: Suspend transfer
+  type: http
+  seq: 18
+}
+
+post {
+  url: {{mgmtUrl}}/v1/transfers/{{mgmtTransferConsumerPid}}/suspension
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 202
+  res.body.consumerPid: isDefined
+}
+
+docs {
+  Suspends a STARTED transfer (added in 1.1): the provider's data plane refuses the
+  token until the transfer is started again. This is the management API, not the DSP
+  endpoint: it takes no body, and it answers 202 with the transfer as the connector sees
+  it (the same shape as "Get transfer"). The connector then sends the DSP
+  TransferSuspensionMessage to the provider in the background; the state becomes
+  SUSPENDED once the provider acknowledges it. The dataAddress is kept.
+  400 when the transfer is not STARTED or a message is still on its way; 404 for an
+  unknown consumerPid.
+}

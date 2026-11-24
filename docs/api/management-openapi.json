@@ -936,6 +936,160 @@
         ]
       }
     },
+    "/v1/transfers/{consumerPid}/start": {
+      "post": {
+        "tags": [
+          "Transfers"
+        ],
+        "summary": "Start a `SUSPENDED` transfer again, whichever party suspended it (DSP\n2025-1 lets either party start it again). The token in `dataAddress`\nstays the same and works again once the transfer is `STARTED`; the\nprovider sends no new address (ADR 0013). The start message is sent in\nthe background (added in 1.1).",
+        "operationId": "start_transfer_again",
+        "parameters": [
+          {
+            "name": "consumerPid",
+            "in": "path",
+            "description": "Our process id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Start message on its way; the state changes once the provider acknowledges it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The transfer is not SUSPENDED, or a message is still on its way",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API key",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reserved for scoped access in 1.x (ADR 0025): the caller is known but may not make this call. Not returned today. The API key (PORTITOR_MANAGEMENT_API_KEY_FILE) keeps every right and never gets this answer.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown transfer",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/transfers/{consumerPid}/suspension": {
+      "post": {
+        "tags": [
+          "Transfers"
+        ],
+        "summary": "Suspend a `STARTED` transfer: the provider's data plane refuses the\ntoken until the transfer is started again. The suspension is sent in\nthe background (added in 1.1).",
+        "operationId": "suspend_transfer",
+        "parameters": [
+          {
+            "name": "consumerPid",
+            "in": "path",
+            "description": "Our process id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Suspension on its way; the state changes once the provider acknowledges it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The transfer is not STARTED, or a message is still on its way",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API key",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reserved for scoped access in 1.x (ADR 0025): the caller is known but may not make this call. Not returned today. The API key (PORTITOR_MANAGEMENT_API_KEY_FILE) keeps every right and never gets this answer.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown transfer",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/transfers/{consumerPid}/termination": {
       "post": {
         "tags": [

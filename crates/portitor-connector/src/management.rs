@@ -520,6 +520,59 @@ async fn terminate_transfer(
     act(&negotiator, &cpid, ConsumerTransferDecision::Terminate)
 }
 
+/// Suspend a `STARTED` transfer: the provider's data plane refuses the
+/// token until the transfer is started again. The suspension is sent in
+/// the background (added in 1.1).
+#[utoipa::path(
+    post,
+    path = "/v1/transfers/{consumerPid}/suspension",
+    params(("consumerPid" = String, Path, description = "Our process id")),
+    responses(
+        (status = 202, description = "Suspension on its way; the state changes once the provider acknowledges it", body = TransferView),
+        (status = 400, description = "The transfer is not STARTED, or a message is still on its way", body = Problem, content_type = "application/problem+json"),
+        (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = FORBIDDEN, body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown transfer", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(("api_key" = [])),
+    tag = "Transfers"
+)]
+async fn suspend_transfer(
+    State(negotiator): State<Negotiator>,
+    Path(cpid): Path<String>,
+) -> Response {
+    act(&negotiator, &cpid, ConsumerTransferDecision::Suspend)
+}
+
+/// Start a `SUSPENDED` transfer again, whichever party suspended it (DSP
+/// 2025-1 lets either party start it again). The token in `dataAddress`
+/// stays the same and works again once the transfer is `STARTED`; the
+/// provider sends no new address (ADR 0013). The start message is sent in
+/// the background (added in 1.1).
+#[utoipa::path(
+    post,
+    path = "/v1/transfers/{consumerPid}/start",
+    params(("consumerPid" = String, Path, description = "Our process id")),
+    responses(
+        (status = 202, description = "Start message on its way; the state changes once the provider acknowledges it", body = TransferView),
+        (status = 400, description = "The transfer is not SUSPENDED, or a message is still on its way", body = Problem, content_type = "application/problem+json"),
+        (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = FORBIDDEN, body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Unknown transfer", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(("api_key" = [])),
+    tag = "Transfers"
+)]
+async fn start_transfer_again(
+    State(negotiator): State<Negotiator>,
+    Path(cpid): Path<String>,
+) -> Response {
+    act(&negotiator, &cpid, ConsumerTransferDecision::Start)
+}
+
+/// Our own step on a transfer: saved with its message (outbox, ADR 0007),
+/// which is sent in the background. Answers 202 with the transfer, or the
+/// refusal (400 wrong state or a message on its way, 404 unknown).
 fn act(
     negotiator: &Negotiator,
     consumer_pid: &str,
@@ -791,6 +844,8 @@ fn next_after<T>(found: &[T], limit: usize, key: impl Fn(&T) -> &String) -> Opti
         list_transfers,
         complete_transfer,
         terminate_transfer,
+        suspend_transfer,
+        start_transfer_again,
         list_harvest_jobs,
         one_harvest_job
     ),
@@ -849,6 +904,14 @@ pub fn router(negotiator: Negotiator, key: ApiKey) -> Router {
         .route(
             "/v1/transfers/{consumerPid}/termination",
             post(terminate_transfer),
+        )
+        .route(
+            "/v1/transfers/{consumerPid}/suspension",
+            post(suspend_transfer),
+        )
+        .route(
+            "/v1/transfers/{consumerPid}/start",
+            post(start_transfer_again),
         )
         .route("/v1/harvest-jobs", get(list_harvest_jobs))
         .route("/v1/harvest-jobs/{id}", get(one_harvest_job))

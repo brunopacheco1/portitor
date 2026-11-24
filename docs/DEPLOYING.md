@@ -1490,6 +1490,15 @@ curl -s -X POST localhost:8081/v1/transfers/urn:uuid:.../completion \
   -H "authorization: Bearer $(cat key)"
 ```
 
+To pause access without ending the transfer (since 1.1), suspend it
+with `POST /v1/transfers/{consumerPid}/suspension`; the provider's data
+plane refuses the token until you start it again with `POST
+/v1/transfers/{consumerPid}/start`. The token stays the same; the
+provider sends no new one. Either call answers 202 at once; the state
+changes once the provider acknowledges the message, and a call while
+another message is on its way gets 400. Start works whichever party
+suspended the transfer (DSP 2025-1).
+
 `format` defaults to `HttpData-PULL`. The two list calls
 (`GET /v1/negotiations`, `GET /v1/transfers`) return up to 100 entries
 at a time (`?after=`, `?limit=`).
@@ -1696,8 +1705,7 @@ known risk and technical debt, with its status and target release.
   already has ([TD-34](RISKS_AND_TECHNICAL_DEBTS.md#td-34)).
 - **Transfers as consumer.** Each `POST /v1/transfers` starts a new
   transfer. Your own system fetches the data with the data address; the
-  connector does not download it. The management API completes or
-  terminates a transfer; suspend and start again are not offered yet.
+  connector does not download it.
 - **Reading a provider's catalog** (`POST /v1/catalog/request` and
   `/v1/catalog/dataset/request`, [Management API](#management-api)). At
   most 16 MiB of answer are read, a fixed limit with no setting; a
