@@ -61,7 +61,7 @@ Out, on purpose:
 ## Run it
 
 ```sh
-SCENARIOS=hdab-intermediary scenarios/health-lu/run.sh
+scenarios/hdab-intermediary/run.sh
 ```
 
 [health-lu, "Run it"](../health-lu/README.md#run-it) says what it needs

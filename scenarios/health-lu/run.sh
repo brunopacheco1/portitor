@@ -107,7 +107,7 @@ cleanup() {
 trap cleanup EXIT
 
 step "Build and sign the HealthDCAT-AP bundle with the issuer image"
-# as scenarios/two-party/demo-compose.sh does
+# as scenarios/two-party/run.sh does
 cat >"$RUN/issuer-command" <<SCRIPT
 #!/bin/sh
 exec ${COMPOSE[*]} run --rm --no-deps -q --user "$(engine_bind_mount_user)" \\

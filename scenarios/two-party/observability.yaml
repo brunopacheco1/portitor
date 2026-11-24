@@ -6,7 +6,7 @@
 # section 6), for trying it out; started by hand, never in CI. Use it
 # together with compose.yaml:
 #
-#   EXTRA_COMPOSE=scenarios/two-party/observability.yaml KEEP=1 scenarios/two-party/demo-compose.sh
+#   EXTRA_COMPOSE=scenarios/two-party/observability.yaml KEEP=1 scenarios/two-party/run.sh
 #
 # or, once run/ is written, docker compose -f scenarios/two-party/compose.yaml
 # -f scenarios/two-party/observability.yaml up -d. Every Portitor component

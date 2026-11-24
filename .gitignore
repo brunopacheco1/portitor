@@ -20,7 +20,7 @@ __pycache__/
 !.vscode/extensions.json
 
 # the Compose demos' generated keys, secrets and authority site
-# (scenarios/two-party/demo-compose.sh and scenarios/health-lu/run.sh write them)
+# (scenarios/two-party/run.sh and scenarios/health-lu/run.sh write them)
 /scenarios/two-party/run/
 /scenarios/health-lu/run/
 

@@ -22,9 +22,9 @@ its parties, data, datasets and the script that starts it. health-lu is
 not a scenario itself.
 
 ```sh
-scenarios/two-party/demo-compose.sh
+scenarios/two-party/run.sh
 scenarios/health-lu/run.sh                              # both health scenarios
-SCENARIOS=data-permits scenarios/health-lu/run.sh       # one of them
+scenarios/data-permits/run.sh                           # one of them
 ```
 
 ## What each scenario folder holds
@@ -48,7 +48,12 @@ SCENARIOS=data-permits scenarios/health-lu/run.sh       # one of them
   what it shows or checks, newest first, with the date and the Portitor
   version it ran on. A change of Portitor alone (a new release that runs
   it unchanged) needs no entry.
-- The script that runs it.
+- `run.sh`, which starts the data space, runs the steps and removes
+  everything, and `steps.sh`, which holds the steps and their checks.
+  Both take the same arguments and settings in every scenario: images
+  as arguments (connector, identity, issuer), `KEEP=1`,
+  `CONTAINER_ENGINE`. A scenario may add `run-local.sh` for a run
+  without containers.
 
 The repository's [CHANGELOG](../CHANGELOG.md) names a new or removed
 scenario; the scenario's own changelog keeps the detail.

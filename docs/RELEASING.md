@@ -117,7 +117,7 @@ pull request, or record why it stays.
   none passed yet.
 - The website (`site/index.html`, published with the API pages by
   `pages.yml`) shows the release's features and the roadmap state.
-- The quickstart ("Try it" on the website, and `scenarios/two-party/demo-compose.sh`
+- The quickstart ("Try it" on the website, and `scenarios/two-party/run.sh`
   in TESTING) works with the release's images: its prerequisites, the
   `git clone --branch` tag, the commands and the ports it names.
 - [ROADMAP.md](ROADMAP.md) and the [CHANGELOG](../CHANGELOG.md) say what

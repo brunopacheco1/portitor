@@ -64,7 +64,7 @@ Out, on purpose:
 ## Run it
 
 ```sh
-SCENARIOS=data-permits scenarios/health-lu/run.sh
+scenarios/data-permits/run.sh
 ```
 
 [health-lu, "Run it"](../health-lu/README.md#run-it) says what it needs

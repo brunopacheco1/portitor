@@ -13,12 +13,12 @@
 # provider follows and checks its datasets (../../examples/healthdcat-datasets.json)
 # against.
 #
-#   scenarios/two-party/demo-compose.sh
+#   scenarios/two-party/run.sh
 #
 # writes the keys and secrets into run/, builds and signs the demo bundle
 # into run/issuer/bundle/ (with the issuer image), starts everything, registers both
 # participants at the issuer, has each identity ask it for its credentials
-# and runs the demo checks (scenarios/two-party/demo-steps.sh). KEEP=1 leaves it
+# and runs the demo checks (scenarios/two-party/steps.sh). KEEP=1 leaves it
 # running: then use the consumer's management API on
 # http://127.0.0.1:18091 (docs/DEPLOYING.md, "Management API"), with the key in
 # run/consumer/management.key, and negotiate with the provider at
@@ -57,7 +57,7 @@ x-connector: &connector
 services:
   # The dataspace's authority: did:web:issuer%3A8070, its issuer service
   # (credential requests, status lists) and its management API, where
-  # scenarios/two-party/demo-compose.sh registers the participants.
+  # scenarios/two-party/run.sh registers the participants.
   issuer:
     image: ${PORTITOR_ISSUER_IMAGE:-ghcr.io/brunopacheco1/portitor-issuer:1.0.0-rc.1}
     environment:
@@ -218,7 +218,7 @@ services:
       consumer-identity:
         condition: service_healthy
 
-# written by scenarios/two-party/demo-compose.sh; the images run as user 65532, which
+# written by scenarios/two-party/run.sh; the images run as user 65532, which
 # must read them
 secrets:
   issuer-key:

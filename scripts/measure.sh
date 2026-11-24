@@ -13,7 +13,7 @@
 # identity gives the load tool its tokens: the dsp-load example sends
 # catalog requests as a consumer connector does, each with a fresh token
 # from the consumer's STS (a DCP token may be used once). A portitor-issuer
-# gives both their MembershipCredential, as in scenarios/two-party/demo.sh; its binary
+# gives both their MembershipCredential, as in scenarios/two-party/run-local.sh; its binary
 # size and memory are measured too.
 #
 # Without DCP: with TCK_CONNECTOR, a connector built with the test-only

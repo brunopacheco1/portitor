@@ -13,7 +13,7 @@ version it ran on.
 
 - Moved to `scenarios/hdab-intermediary/`, with its own README and this
   changelog; the data space it runs on is `scenarios/health-lu/`. It
-  runs alone with `SCENARIOS=hdab-intermediary`. What it checks is
+  runs alone with its own `run.sh`. What it checks is
   unchanged.
 
 ## 2026-11-23, on 1.0.0-rc.1

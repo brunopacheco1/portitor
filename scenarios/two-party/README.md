@@ -56,8 +56,8 @@ Out, on purpose:
 ![Deployment: the Compose version](diagrams/deployment.drawio.svg)
 
 ```sh
-scenarios/two-party/demo-compose.sh          # Docker or Podman, the release images
-scenarios/two-party/demo.sh                  # binaries on this machine, built in debug
+scenarios/two-party/run.sh             # Docker or Podman, the release images
+scenarios/two-party/run-local.sh       # binaries on this machine, built in debug
 ```
 
 It takes a few seconds once the images are there. CI runs both on every
@@ -70,7 +70,7 @@ containers running (`KEEP=1`) and add the observability stack.
 
 ![The steps, as a C4 dynamic diagram](diagrams/scenario.drawio.svg)
 
-[demo-steps.sh](demo-steps.sh) checks, in this order:
+[steps.sh](steps.sh) checks, in this order:
 
 1. A catalog request without a token is refused (401).
 2. One made through the consumer's management API

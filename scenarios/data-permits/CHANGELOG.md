@@ -13,7 +13,7 @@ version it ran on.
 
 - Moved to `scenarios/data-permits/`, with its own README and this
   changelog; steps 7 to 11 of the health demo are now steps 1 to 5. It
-  runs alone with `SCENARIOS=data-permits`, so step 5 now has Digital
+  runs alone with its own `run.sh`, so step 5 now has Digital
   Lux Trust revoke the HDAB's membership itself.
 - First version, the same day: the HDAB's own issuer grants permits
   P-2026-001 and P-2026-002 as `DataPermitCredential`s (placeholder

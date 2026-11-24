@@ -164,7 +164,7 @@ Decisions about the plan itself that no ADR or changelog entry holds.
   1.0 does and does not do. The clean-machine run is one timed run by
   the maintainer ([RELEASING](RELEASING.md#releasing-a-version), step
   4). It gets no CI job of its own: `CI` already runs the Compose demo
-  (`scenarios/two-party/demo-compose.sh`) that the quickstart uses.
+  (`scenarios/two-party/run.sh`) that the quickstart uses.
 - Before 1.0: the trademark and domain check of the name
   ([R-25](RISKS_AND_TECHNICAL_DEBTS.md#r-25)). Done on 2026-11-21: no
   trademark conflict was found, and the maintainer accepted the

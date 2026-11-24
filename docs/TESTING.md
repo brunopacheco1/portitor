@@ -28,8 +28,8 @@ All commands run from the repository root. Deploying for real is in
 | Interoperability with EDC v1.0.0-RC8, with Gaia-X compliance | `scripts/edc-interop.sh`, see [below](#edc-interop-test) | PRs that touch `crates/`, `Cargo.toml`, `Cargo.lock`, the `Dockerfile`, `.dockerignore`, `interop/edc/`, `interop/gaiax/compose.yaml`, `examples/bundle/`, the scripts it uses or its workflow, and nightly (`EDC interop`) |
 | Gaia-X compliance between Portitor participants, against a local Gaia-X compliance service in test mode | `scripts/gaiax-e2e.sh`, see [below](#gaia-x-end-to-end-test) | PRs that touch `crates/`, `Cargo.toml`, `Cargo.lock`, the `Dockerfile`, `.dockerignore`, `examples/issuer-credentials.json`, `interop/gaiax/`, the scripts or the workflow, and nightly (`Gaia-X`) |
 | Fuzzing | see [below](#fuzzing) | PRs that touch `crates/`, `fuzz/`, `.clusterfuzzlite/`, `Cargo.toml` or `Cargo.lock` (short), weekly (long) |
-| Two participants authenticate with DCP, agree a contract and transfer a file | `scenarios/two-party/demo.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
-| The same in Docker Compose | `scenarios/two-party/demo-compose.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
+| Two participants authenticate with DCP, agree a contract and transfer a file | `scenarios/two-party/run-local.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
+| The same in Docker Compose | `scenarios/two-party/run.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
 | The health scenarios [hdab-intermediary](../scenarios/hdab-intermediary/README.md) (a chained transfer through an HDAB) and [data-permits](../scenarios/data-permits/README.md) (data permits as credentials) | `scenarios/health-lu/run.sh`, see [health-lu](../scenarios/health-lu/README.md) | no: by hand, a manual test (maintainer, 2026-11-15) |
 | The container scripts with Podman instead of Docker | `CONTAINER_ENGINE=podman` and the script, see [below](#docker-or-podman) | no: by hand, last run noted there |
 | Images build and start | `docker build --target portitor-connector` / `--target portitor-identity` / `--target portitor-issuer`; the connector and the issuer refuse to start without their settings, the identity serves its DID document | every PR that changes more than prose (`CI`) |
@@ -53,7 +53,7 @@ check` and `cargo vet --locked`.
 
 ## Docker or Podman
 
-The scripts that start containers (`scenarios/two-party/demo-compose.sh`,
+The scripts that start containers (`scenarios/two-party/run.sh`,
 `scripts/edc-interop.sh`, `scripts/gaiax-e2e.sh`) run with Docker or with
 Podman. `scripts/container-engine.sh` chooses, and only that file:
 
@@ -73,8 +73,8 @@ CI runs everything with Docker. The Podman runs are done by hand:
 
 | Script | Podman run that passed |
 |---|---|
-| `scenarios/two-party/demo-compose.sh` | 2026-11-22, tag `v1.0.0-rc.1` (release images): rootless Podman 4.9.3 (netavark 1.4.0, aardvark-dns 1.4.0), Docker Compose 5.7.2, Pop!\_OS 24.04 LTS on amd64; about 7 seconds; 36 of 40 runs passed (the other 4: see below) |
-| `scenarios/two-party/demo-compose.sh` | 2026-11-20, commit `d857330` (0.13.0 before the tag): Podman 6.1.4 with machine 5.8.5 (libkrun, rootless, 6 CPUs, 8 GiB), Docker Compose 5.6.1, macOS 26.7.3 on Apple Silicon, bash 5.3, OpenSSL 3.5; 7 seconds, with the three `:ci` images as arguments |
+| `scenarios/two-party/run.sh` | 2026-11-22, tag `v1.0.0-rc.1` (release images): rootless Podman 4.9.3 (netavark 1.4.0, aardvark-dns 1.4.0), Docker Compose 5.7.2, Pop!\_OS 24.04 LTS on amd64; about 7 seconds; 36 of 40 runs passed (the other 4: see below) |
+| `scenarios/two-party/run.sh` | 2026-11-20, commit `d857330` (0.13.0 before the tag): Podman 6.1.4 with machine 5.8.5 (libkrun, rootless, 6 CPUs, 8 GiB), Docker Compose 5.6.1, macOS 26.7.3 on Apple Silicon, bash 5.3, OpenSSL 3.5; 7 seconds, with the three `:ci` images as arguments |
 | `scripts/gaiax-e2e.sh` | the same day and machine; 44 seconds |
 | `scripts/edc-interop.sh` | the same day and machine; 12 minutes, most of it the Gradle builds of EDC |
 
@@ -1234,7 +1234,7 @@ context. Build and sign it with a new demo bundle key:
 ```sh
 scripts/demo-bundle.sh target/demo-bundle
 # AUTHORITY and VERSION change the defaults, which match
-# the issuer of scenarios/two-party/demo.sh (did:web:127.0.0.1%3A18060)
+# the issuer of scenarios/two-party/run-local.sh (did:web:127.0.0.1%3A18060)
 ```
 
 It writes `target/demo-bundle/bundles/<version>/` for
@@ -1323,12 +1323,12 @@ provider sends the `FINALIZED` event. `GET
 ### Two connectors
 
 The [two-party](../scenarios/two-party/README.md) scenario.
-`scenarios/two-party/demo.sh` runs a small dataspace on this machine, with DCP,
+`scenarios/two-party/run-local.sh` runs a small dataspace on this machine, with DCP,
 and checks the result. It needs `curl`, `jq`, `openssl` and Python 3.
 
 ```sh
-scenarios/two-party/demo.sh                      # builds the debug binaries
-scenarios/two-party/demo.sh <portitor-connector> [<portitor-identity> [<portitor-issuer>]]
+scenarios/two-party/run-local.sh                      # builds the debug binaries
+scenarios/two-party/run-local.sh <portitor-connector> [<portitor-identity> [<portitor-issuer>]]
 ```
 
 What it sets up:
@@ -1360,10 +1360,10 @@ What it sets up:
   set `0` too.
 
 What it checks, step by step, is in [the scenario's README](../scenarios/two-party/README.md#the-steps)
-(`scenarios/two-party/demo-steps.sh`).
+(`scenarios/two-party/steps.sh`).
 
 **The same in Docker Compose.**
-`scenarios/two-party/demo-compose.sh [connector image [identity image [issuer image]]]`
+`scenarios/two-party/run.sh [connector image [identity image [issuer image]]]`
 runs the same checks against the services in
 `scenarios/two-party/compose.yaml`: the issuer, a provider and a consumer
 (each a connector with its identity), and a small web server that holds
@@ -1388,7 +1388,7 @@ walks through it.
   which needs the image's `health` subcommand.
 - To try your own changes, [build the images](#building-the-images-locally)
   and name them:
-  `scenarios/two-party/demo-compose.sh portitor-connector:ci portitor-identity:ci portitor-issuer:ci`.
+  `scenarios/two-party/run.sh portitor-connector:ci portitor-identity:ci portitor-issuer:ci`.
 
 CI runs both scripts on every pull request, with the binaries and
 images it has just built.
@@ -1398,7 +1398,7 @@ consumer's management API. The provider is
 `http://provider:8080/dsp/2025-1`, `did:web:provider-identity%3A8090`:
 
 ```sh
-KEEP=1 scenarios/two-party/demo-compose.sh
+KEEP=1 scenarios/two-party/run.sh
 docker compose -f scenarios/two-party/compose.yaml down --volumes   # when done
 ```
 
@@ -1443,7 +1443,7 @@ does not run it. Stop a demo that is still running first, with the
 `docker compose ... down --volumes` command above.
 
 ```sh
-EXTRA_COMPOSE=scenarios/two-party/observability.yaml KEEP=1 scenarios/two-party/demo-compose.sh
+EXTRA_COMPOSE=scenarios/two-party/observability.yaml KEEP=1 scenarios/two-party/run.sh
 ```
 
 The components send metrics every 60 s by default
@@ -1485,7 +1485,7 @@ when VS Code asks. Then open Run and Debug, pick a configuration and press F5.
 
 Every connector needs its identity component, a credential and a
 trusted issuer (DCP, ADR 0016). The task **portitor: identities**
-(`scripts/dev-identities.sh`) provides them, as `scenarios/two-party/demo.sh` does:
+(`scripts/dev-identities.sh`) provides them, as `scenarios/two-party/run-local.sh` does:
 it starts a `portitor-issuer` on `127.0.0.1:9100` (management
 `127.0.0.1:9104`, key in `target/vscode-dcp/issuer/management.key`) and
 two `portitor-identity` processes, each with a `MembershipCredential` it
@@ -1573,7 +1573,7 @@ Fuzz targets need a nightly toolchain and are not in `launch.json`.
 against the targets in ADR 0002, and what DCP costs per DSP request
 (ADR 0016). It starts a provider (connector and identity) and a
 consumer identity, with credentials from a `portitor-issuer`, as
-`scenarios/two-party/demo.sh` does; it reports the issuer's binary size and memory
+`scenarios/two-party/run-local.sh` does; it reports the issuer's binary size and memory
 too.
 The load tool is the `dsp-load` example of the connector: it sends
 catalog requests from 50 clients, each with a fresh token from the

@@ -126,7 +126,7 @@ build.
 
 ```sh
 scenarios/health-lu/run.sh                               # the release images
-SCENARIOS=data-permits scenarios/health-lu/run.sh        # one scenario
+scenarios/data-permits/run.sh                            # one scenario
 CONTAINER_ENGINE=podman scenarios/health-lu/run.sh
 scenarios/health-lu/run.sh <connector image> <identity image> <issuer image>
 ```

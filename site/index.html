@@ -149,7 +149,7 @@ so visitors' browsers never contact third-party services.
         <h3>Run the demo</h3>
         <pre><code>git clone --branch v0.14.0 --depth 1 https://github.com/brunopacheco1/portitor
 cd portitor
-KEEP=1 scenarios/two-party/demo-compose.sh</code></pre>
+KEEP=1 scenarios/two-party/run.sh</code></pre>
         <p>The script writes new keys and secrets into <code>scenarios/two-party/run/</code>, builds and signs the dataspace's HealthDCAT-AP bundle, starts the containers and has the issuer give both participants their credentials. Then it runs the demo steps, one line starting with <code>==</code> each: the provider refuses a catalog request without a token, serves its catalog checked against the bundle, agrees a contract and refuses changed terms, checks credential claims, transfers a file, and refuses a credential the issuer has revoked. The last line starts with <code>== Done</code>. If a step fails, the script prints <code>FAILED</code> and the containers' last log lines.</p>
         <h3>Look around</h3>
         <p><code>KEEP=1</code> leaves everything running. The consumer's management API is on <code>127.0.0.1:18091</code>, the provider's, with its harvest jobs, on <code>127.0.0.1:18081</code>:</p>
@@ -161,7 +161,7 @@ curl -s -H "authorization: Bearer $PROVIDER_KEY" http://127.0.0.1:18081/v1/harve
         <p>To read the provider's catalog and negotiate yourself, send the consumer the requests in the <a href="https://github.com/brunopacheco1/portitor/blob/main/docs/DEPLOYING.md#management-api">DEPLOYING</a>, with the provider at <code>http://provider:8080/dsp/2025-1</code> (<code>did:web:provider-identity%3A8090</code>). The <a href="api/">HTTP interface</a> lists every call. The <a href="https://github.com/brunopacheco1/portitor/tree/main/_http">Bruno collection</a> in <code>_http/</code> has the requests ready; its environments are for the set-up without Docker in <a href="https://github.com/brunopacheco1/portitor/blob/main/docs/TESTING.md#debugging-in-vs-code">TESTING</a>.</p>
         <h3>Traces and metrics (optional)</h3>
         <p>Stop the first run (see below), then start it again with an OpenTelemetry Collector, Jaeger and Prometheus (about 220&nbsp;MB more images); then Jaeger is on <a href="http://127.0.0.1:16686">127.0.0.1:16686</a> and Prometheus on <a href="http://127.0.0.1:9090">127.0.0.1:9090</a>. Details in <a href="https://github.com/brunopacheco1/portitor/blob/main/docs/TESTING.md#observability-stack-by-hand">TESTING</a>.</p>
-        <pre><code>EXTRA_COMPOSE=scenarios/two-party/observability.yaml KEEP=1 scenarios/two-party/demo-compose.sh</code></pre>
+        <pre><code>EXTRA_COMPOSE=scenarios/two-party/observability.yaml KEEP=1 scenarios/two-party/run.sh</code></pre>
         <h3>Stop and clean up</h3>
         <p>Remove the containers and their data, then the keys (add <code>--rmi all</code> to remove the images too; with the observability stack, add <code>-f scenarios/two-party/observability.yaml</code>):</p>
         <pre><code>docker compose -f scenarios/two-party/compose.yaml down --volumes

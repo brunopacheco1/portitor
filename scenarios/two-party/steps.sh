@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # The demo's checks, against a provider and a consumer that already run.
-# scenarios/two-party/demo.sh runs them on this machine; scenarios/two-party/demo-compose.sh runs
+# scenarios/two-party/run-local.sh runs them on this machine; scenarios/two-party/run.sh runs
 # them in Docker Compose. Exits non-zero at the first failed check.
 #
 # The provider uses the data space's HealthDCAT-AP bundle (scripts/demo-bundle.sh)

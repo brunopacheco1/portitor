@@ -6,7 +6,7 @@
 # The demo in Docker Compose (scenarios/two-party/compose.yaml): a provider
 # and a consumer, each a connector with its identity component, the data
 # space's portitor-issuer and a data server, each in its own container.
-# Runs the checks of scenarios/two-party/demo-steps.sh from this machine, then removes
+# Runs the checks of scenarios/two-party/steps.sh from this machine, then removes
 # everything, volumes included.
 #
 #  1. Keys and secrets, in scenarios/two-party/run/; the HealthDCAT-AP demo
@@ -15,10 +15,10 @@
 #  2. Docker Compose up.
 #  3. The issuer registers both participants; each identity asks it for
 #     its credentials through its own management API and waits for the
-#     delivery (as scenarios/two-party/demo.sh).
+#     delivery (as scenarios/two-party/run-local.sh).
 #  4. The demo steps.
 #
-# Usage: scenarios/two-party/demo-compose.sh [connector image [identity image [issuer image]]]
+# Usage: scenarios/two-party/run.sh [connector image [identity image [issuer image]]]
 #   Without images it uses the compose file's defaults (the release images).
 # Environment:
 #   KEEP=1       leave the containers running, and run/, at the end
@@ -174,4 +174,4 @@ PROVIDER=http://provider:8080 HERE=http://127.0.0.1:18080 \
   MANAGEMENT=http://127.0.0.1:18091 KEY_FILE="$RUN/consumer/management.key" \
   CONSUMER_ID="$CONSUMER_ID" PROVIDER_ID="$PROVIDER_ID" \
   ISSUER_MANAGEMENT="$ISSUER_MANAGEMENT" ISSUER_KEY_FILE="$RUN/issuer/management.key" \
-  DATA=examples/data scenarios/two-party/demo-steps.sh
+  DATA=examples/data scenarios/two-party/steps.sh

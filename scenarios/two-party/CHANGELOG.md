@@ -13,7 +13,9 @@ the release notes these come from.
 ## 2026-11-24, on 1.0.0-rc.1
 
 - Moved to `scenarios/two-party/`, with a README, diagrams and this
-  changelog. What it checks is unchanged.
+  changelog. The scripts have the names every scenario uses:
+  `demo-compose.sh` is `run.sh`, `demo-steps.sh` is `steps.sh`, and
+  `demo.sh` is `run-local.sh`. What it checks is unchanged.
 
 ## 2026-11-23, on 1.0.0-rc.1
 

@@ -10,7 +10,7 @@
 # the footprint and the cost of DCP.
 #
 # Each part starts its own participants with empty databases, as
-# scenarios/two-party/demo.sh does (an issuer, a provider and a consumer, each a
+# scenarios/two-party/run-local.sh does (an issuer, a provider and a consumer, each a
 # connector and an identity), and a data source that makes its bytes up
 # (the `upstream` mode of the bench-load example). The consumer's
 # management API negotiates and starts the transfers; the bench-load

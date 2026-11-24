@@ -48,8 +48,10 @@ versions may change behaviour and configuration.
 
 - The demos are scenarios, in `scenarios/` at the root, one folder each.
   The two-party demo moved there: `scripts/demo.sh`,
-  `scripts/demo-compose.sh` and `scripts/demo-steps.sh` are now in
-  `scenarios/two-party/`, with `examples/compose/`'s files.
+  `scripts/demo-compose.sh` and `scripts/demo-steps.sh` are now
+  `scenarios/two-party/run-local.sh`, `run.sh` and `steps.sh`, with
+  `examples/compose/`'s files. Every scenario has a `run.sh` and a
+  `steps.sh`.
 
 ## [1.0.0-rc.1] - 2026-11-22
 
