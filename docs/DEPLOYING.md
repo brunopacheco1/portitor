@@ -1648,8 +1648,9 @@ consumer's DID (`counterPartyId`), never the data token or its hash.
   with a valid `MembershipCredential` from a DID in
   `PORTITOR_TRUSTED_ISSUERS` whose subject is the caller, not revoked or
   suspended (the status list must be signed by the same issuer). Only
-  `/.well-known/dspace-version`, `/health` and the data plane are open
-  (the data plane has its own tokens).
+  `/.well-known/dspace-version`, `/health`, the data plane and, since
+  1.1, the receiving route `/push` are open (they have their own
+  tokens).
   - One credential from a trusted issuer that fails its checks (revoked,
     expired, bad signature, status list not readable, about someone
     else) makes its presentation invalid and refuses the caller, even
@@ -1709,10 +1710,12 @@ consumer's DID (`counterPartyId`), never the data token or its hash.
   network apart from the authority's signed bundle, and no Portitor
   binary parses RDF/XML.
 - **Outbound calls.** The connector POSTs to the `callbackAddress` that the
-  partner chooses. Only `https://` is allowed, but internal addresses are
+  partner chooses and, since 1.1, sends pushes to the endpoint the
+  consumer chooses. Only `https://` is allowed, but internal addresses are
   not blocked yet. Put the connector in a network zone where it cannot
   reach internal services it should not call (egress firewall or network
-  policy).
+  policy). It also calls your object storage at `AWS_ENDPOINT_URL_S3`,
+  an address you choose ([R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17)).
 - **Management API.** It can read catalogs and start negotiations and
   transfers in your name (each call sends a request, with a token of
   yours, to the address the caller gives), and it shows the data access tokens of your transfers, so treat its
@@ -1736,7 +1739,11 @@ consumer's DID (`counterPartyId`), never the data token or its hash.
   ([Traces and metrics](OPERATING.md#traces-and-metrics)).
 - **The database file holds access tokens.** As consumer, the connector
   keeps the data address of each usable transfer, token included, in
-  `/data/portitor.db` until the transfer ends (ADR 0014). Protect the volume
+  `/data/portitor.db` until the transfer ends (ADR 0014). Since 1.1 it
+  also holds push tokens: as consumer, our push token in the transfer
+  request until the provider has it (then only its SHA-256); as
+  provider, the consumer's push token and endpoint until the transfer
+  ends ([R-19](RISKS_AND_TECHNICAL_DEBTS.md#r-19)). Protect the volume
   and its backups like the management key.
 - Do not set `PORTITOR_ALLOW_HTTP=true` outside development and tests.
 - Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
@@ -1891,7 +1898,7 @@ known risk and technical debt, with its status and target release.
   one to your data source); see [BENCHMARKS](BENCHMARKS.md#data-plane)
   before you plan for hundreds of pulls at once, and raise the open
   files limit (`ulimit -n`) above twice that number.
-- **Network.** Internal callback addresses are not blocked
+- **Network.** Internal callback and push addresses are not blocked
   ([Security](#security), "Outbound calls").
 - **Panics.** A panic (a bug) does not stop the process: the request
   gets HTTP 500 and a background task starts again

@@ -40,7 +40,8 @@ Status values:
 >    with EDC 1.0.0, the first reference counterpart, is not proven.
 > 5. [TD-05](#td-05) Private keys are PEM files.
 >
-> Next in line: [TD-31](#td-31) (no audit trail of data pulls),
+> Next in line: [TD-31](#td-31) (no audit trail of management
+> actions; each data transfer writes an audit line since 1.1),
 > [R-24](#r-24) (Simpl-Open is untested) and [R-25](#r-25) (other
 > projects and a company use the name Portitor).
 
@@ -93,7 +94,6 @@ of work with no release yet.
 | [R-29](#r-29) | DCP costs about 2 ms per request and 8 times fewer requests under load | Performance | Open | with TD-07 |
 | [R-36](#r-36) | The OpenTelemetry Rust crates are 0.x and change their API often | Dependency, upstream | Mitigated | none |
 | [R-37](#r-37) | Telemetry costs some throughput at saturation | Performance | Mitigated | none |
-| [R-38](#r-38) | No specification names an S3 data address | Interoperability | Open | 1.1 |
 | [R-39](#r-39) | No specification defines agreements that depend on an upstream agreement | Interoperability | Open | 1.3 |
 | [R-40](#r-40) | No shared list of EHDS purposes | Interoperability | Open | 1.2 |
 | [R-41](#r-41) | A key removed from a DID document is still trusted for up to 5 minutes | Security | Mitigated | none |
@@ -112,8 +112,8 @@ of work with no release yet.
 | [TD-07](#td-07) | STS tokens and presentations are not cached | Technical debt | Open | 1.4, if needed |
 | [TD-08](#td-08) | One replica per SQLite file; no PostgreSQL adapter | Technical debt | Accepted | Later |
 | [TD-09](#td-09) | Used token ids are kept in memory only | Technical debt | Accepted | with TD-08 |
-| [TD-10](#td-10) | Transfers: pull only, no token renewal, no push to object storage | Technical debt | Open | 1.1 |
-| [TD-11](#td-11) | Management API: no suspend or start again; consumer refuses offers with credential constraints | Technical debt | Open | 1.1 and 1.2 |
+| [TD-10](#td-10) | Transfers: no token renewal; whole sources and whole pushes only | Technical debt | Mitigated | none |
+| [TD-11](#td-11) | Consumer refuses offers with credential constraints; the provider cannot suspend from the management API | Technical debt | Open | 1.2 |
 | [TD-12](#td-12) | ODRL: few constraints; prohibitions and duties not enforced | Technical debt | Open | 1.2 (purpose) |
 | [TD-13](#td-13) | The catalog shows every offer to every member | Technical debt | Open | 1.2 |
 | [TD-14](#td-14) | Credential schemas, presentation definitions and issuance policies are not supported | Technical debt | Open | 1.4, if needed |
@@ -126,18 +126,17 @@ of work with no release yet.
 | [TD-22](#td-22) | Migrations run forward only; a rollback needs the backup | Technical debt | Accepted | none |
 | [TD-28](#td-28) | No trace across participants | Technical debt | Accepted | none |
 | [TD-29](#td-29) | No OTLP logs export, no gRPC, no compression | Technical debt | Open | Later |
-| [TD-31](#td-31) | No audit trail of data pulls and management actions | Technical debt | Open | 1.1 (data pulls); 1.5 |
+| [TD-31](#td-31) | No audit trail of management actions | Technical debt | Mitigated | 1.5 |
 | [TD-35](#td-35) | No negotiation started by the provider | Technical debt, interoperability | Open | after 1.0 |
 | [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | Mitigated | 1.x (Helm chart) |
 | [TD-40](#td-40) | Database calls block the async runtime | Technical debt | Accepted | measure each release |
-| [TD-42](#td-42) | Four near-copies of the negotiation and transfer logic | Technical debt | Open | 1.x (merge) |
 | [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | Open | none |
 | [TD-46](#td-46) | The issuer keeps one set of claims per participant | Technical debt | Open | 1.2 |
 | [TD-47](#td-47) | A transfer stays REQUESTED when its provider is revoked | Technical debt | Open | 1.1 |
 
-Counts on 2026-11-20: 36 risks and 28 technical debts are not closed
-(Open 31, Mitigated 19, Accepted 14); 11 risks and 17 technical debts
-are closed.
+Counts on 2026-11-24, on the 1.1 branch: 36 risks and 29 technical
+debts are not closed (Open 29, Mitigated 21, Accepted 15); 12 risks and
+18 technical debts are closed.
 
 ## Risks
 
@@ -231,10 +230,15 @@ are closed.
   Eclipse Data Plane Signaling v1.0-RC4, an incubating specification
   with no release
   ([ARCHITECTURE](ARCHITECTURE.md#data-plane-inside-the-connector-or-separate)).
+  Since 1.1, push follows the Signaling HTTP Transfer Profile, a draft
+  that is not tagged ([ADR 0027](adr/0027-push-transfers-and-object-storage.md)).
 - **Why it matters.** The final release may change messages or states.
+  A change to the HTTP Transfer Profile changes what other connectors
+  see of a push.
 - **Current state: Mitigated.** The data plane sits behind the ports of
   `portitor-dps`: function calls in one process, no wire format to
-  keep. Other connectors see only DSP and the data endpoint.
+  keep. Other connectors see only DSP, the data endpoint and, for a
+  push, the profile's `endpointType` and bearer token.
 - **Next.** Track the specification until 1.0 and record each update in
   the changelog; then split the data plane out (TD-17).
 
@@ -381,12 +385,24 @@ are closed.
   identity resolves the DID of any caller of its presentation API before
   it checks the caller's `aud` and access token
   ([SECURITY-ASSURANCE](SECURITY-ASSURANCE.md), findings F-01 and F-06).
+  Since 1.1 ([ADR 0027](adr/0027-push-transfers-and-object-storage.md)):
+  as provider, the data plane POSTs a push to the `endpoint` of the
+  consumer's `dataAddress` (`crates/portitor-connector/src/push.rs`),
+  with the dataset as the body. The connector also calls the object
+  storage at `AWS_ENDPOINT_URL_S3`
+  (`crates/portitor-connector/src/object_storage.rs`); the operator
+  chooses that address, not a partner.
 - **Why it matters.** A partner could make a component call an internal
-  service.
+  service. A push endpoint that points inside the provider's network
+  would receive the provider's data.
 - **Current state: Mitigated.** Only `https://` (unless
   `PORTITOR_ALLOW_HTTP`, for tests), no redirects, time and size
   limits, the callback's answer body is never read; DEPLOYING asks for
-  an egress firewall. Internal addresses are not blocked.
+  an egress firewall. The same holds for the push endpoint: it is
+  checked when the transfer request arrives (400 otherwise), redirects
+  are not followed and the answer's body is not read; a push has no
+  time limit, since a dataset can be large. Internal addresses are not
+  blocked.
 - **Next.** Block internal addresses with an operator allow list
   (F-01), and check `aud` and the access token before resolving a
   caller (F-06). No release is named. The 0.13 freeze passed without
@@ -398,14 +414,27 @@ are closed.
 
 - **What.** As consumer, the connector keeps each usable transfer's
   data address, token included, in its SQLite file, and shows it on the
-  management API ([ADR 0014](adr/0014-transfers-as-consumer.md)).
+  management API ([ADR 0014](adr/0014-transfers-as-consumer.md)). Push
+  transfers (1.1, [ADR 0027](adr/0027-push-transfers-and-object-storage.md))
+  add two more tokens to the file, never to the management API:
+  - as consumer, the push token our receiving route takes is in the
+    pending transfer request (or start message) in plain text, until
+    the provider has it (the outbox, `pending` of `consumer_transfer`);
+    after that only its SHA-256 is kept (`push_receipt`);
+  - as provider, the consumer's push token, with its endpoint, is kept
+    with the transfer and its data flow until the transfer ends
+    (`transfer.data_address`, `data_flow.push_address`), so that a
+    restart can still send the push.
 - **Why it matters.** Whoever reads the file or its backups, or holds
   the API key, can fetch the data until the transfer ends or the token
-  expires.
+  expires; with a push token, they can write into the consumer's push
+  bucket (as consumer) or into the consumer's endpoint (as provider).
 - **Current state: Mitigated.** The token is removed when the transfer
   ends; tokens expire (`PORTITOR_DATA_TOKEN_SECONDS`, default one
   hour); only an HMAC of the API key is kept; DEPLOYING ("Security")
-  says to protect the volume and the key alike.
+  says to protect the volume and the key alike. The provider empties
+  the push columns when the transfer ends; our push token works only
+  while the transfer is `REQUESTED` or `STARTED`.
 - **Next.** Encrypting the token in the file is later work (ADR 0014);
   no release named.
 
@@ -568,19 +597,6 @@ are closed.
 - **Next.** Measure again with the benchmarks
   ([BENCHMARKS](BENCHMARKS.md)); if the cost is real, look at what the
   spans cost when export is off.
-
-<a id="r-38"></a>
-### R-38 No specification names an S3 data address
-
-- **What.** DSP 2025-1 lets the consumer give a `dataAddress` in its
-  transfer request, and Data Plane Signaling v1.0-RC4 covers provider
-  push, but neither names an endpoint type or the properties for
-  S3-compatible storage (checked in their schemas, 2026-11-15).
-- **Why it matters.** Push to object storage (ROADMAP 1.1) works with
-  another connector only if both read the address the same way.
-- **Current state: Open.**
-- **Next.** ROADMAP 1.1: the ADR reuses the address EDC or Simpl-Open
-  uses; Portitor does not invent one.
 
 <a id="r-39"></a>
 ### R-39 No specification defines agreements that depend on an upstream agreement
@@ -776,11 +792,15 @@ are closed.
   data plane checks only the bearer token handed out when the transfer
   started ([ADR 0013](adr/0013-transfer-and-data-plane.md)): whoever
   holds the token gets the data until the transfer ends. No identity or
-  credential is checked on each data request (maintainer, 2026-11-15).
+  credential is presented on each data request (maintainer, 2026-11-15).
 - **Current state: Open.**
   [ADR 0025](adr/0025-users-and-roles.md) decides that the provider's
-  data plane does not identify persons in 1.x. What it checks again
-  about the participant on each pull is not decided.
+  data plane does not identify persons in 1.x. Since 1.1 the provider
+  checks again, on each data request and while a download runs, the
+  `MembershipCredential` the consumer presented when it asked for the
+  transfer (issuer still trusted, not expired, not revoked;
+  [ADR 0027](adr/0027-push-transfers-and-object-storage.md), section 7).
+  The caller itself still shows nothing but the token.
 - **Next.** Research, then an ADR; code in ROADMAP 1.5. To compare: a
   DCP token or a presentation per request, OpenID4VP, Simpl-Open's mTLS
   at its Tier 2 gateway, what the EDC data plane does; whether the
@@ -882,37 +902,48 @@ are closed.
 - **Next.** Revisit with TD-08.
 
 <a id="td-10"></a>
-### TD-10 Transfers: pull only, no token renewal, no push to object storage
+### TD-10 Transfers: no token renewal; whole sources and whole pushes only
 
-- **What.** HTTP pull only; the data token is not renewed (DSP 2025-1
-  has no message for it), the consumer asks for a new transfer; only
-  `GET` of the whole source
-  ([ADR 0013](adr/0013-transfer-and-data-plane.md)). The consumer side
-  has no data plane (ADR 0014).
+- **What.** The data token of a pull is not renewed (DSP 2025-1 has no
+  message for it): the consumer asks for a new transfer. A start again
+  by the consumer keeps the same token (ADR 0014). Only `GET` of the
+  whole source ([ADR 0013](adr/0013-transfer-and-data-plane.md)); a
+  push is sent whole, in one request, and again from the beginning
+  after a start again. No other way to move data, such as Kafka.
 - **Why it matters.** Long or large transfers, and dataspaces that use
-  push (Simpl-Open documents S3 push and Kafka).
-- **Current state: Open.** Measured in 0.12
+  other kinds of transfer (Simpl-Open documents S3 push and Kafka).
+- **Current state: Mitigated (1.1).** Push over HTTP into the
+  consumer's S3-compatible object storage, and pull from the provider's
+  object storage (`s3://` sources), are built
+  ([ADR 0027](adr/0027-push-transfers-and-object-storage.md)): push
+  follows the Data Plane Signaling HTTP Transfer Profile
+  (`HttpData-PUSH`, `push.rs`), and as consumer the connector receives
+  it at `/push/{consumerPid}` (`receiving.rs`), so the consumer side
+  now has a data plane when push is used. Measured in 0.12
   ([BENCHMARKS](BENCHMARKS.md), "Data plane"): a download still running
   when its token ends is not cut; a new request with the old token gets
   401. So a long pull works, and a pull that must start again after the
   token's life does not.
-- **Next.** ROADMAP 1.1: push as a second data plane behind the
-  Signaling port.
+- **Next.** No release named. Token renewal waits for a DSP or Signaling
+  message for it.
 
 <a id="td-11"></a>
-### TD-11 Management API: no suspend or start again; consumer refuses offers with credential constraints
+### TD-11 Consumer refuses offers with credential constraints; the provider cannot suspend from the management API
 
-- **What.** The consumer's management API completes or terminates a
-  transfer, but does not suspend or start it again; the provider cannot
-  suspend or complete from the management API (ADR 0013, ADR 0014). As
-  consumer, the connector does not accept a provider's offer (DSP
-  `OFFERED`) that has credential constraints (DEPLOYING, "Known
-  limits").
+- **What.** As consumer, the connector does not accept a provider's
+  offer (DSP `OFFERED`) that has credential constraints (DEPLOYING,
+  "Known limits"). As provider, the management API lists, reads and
+  terminates transfers (`/v1/provided-transfers`, 1.1), but does not
+  suspend, start again or complete them (ADR 0013; suspend left out of
+  1.1 by the maintainer, ADR 0027, section 7).
 - **Why it matters.** The domain supports these steps, but operators
   cannot use them.
-- **Current state: Open.**
-- **Next.** ROADMAP 1.1 (suspend and start again) and 1.2 (offers with
-  credential constraints).
+- **Current state: Open.** Done in 1.1: the consumer suspends a transfer
+  and starts it again from the management API
+  (`POST /v1/transfers/{consumerPid}/suspension` and `/start`,
+  [ADR 0014](adr/0014-transfers-as-consumer.md), amended in 1.1).
+- **Next.** ROADMAP 1.2 (offers with credential constraints). Suspend
+  as provider: no release named.
 
 <a id="td-12"></a>
 ### TD-12 ODRL: few constraints, prohibitions and duties not enforced
@@ -1084,26 +1115,31 @@ are closed.
 - **Next.** Later; no release named.
 
 <a id="td-31"></a>
-### TD-31 No audit trail of data pulls and management actions
+### TD-31 No audit trail of management actions
 
 - **What.** The connector logs every state change of a negotiation or
   transfer with its process ids
   (`crates/portitor-connector/src/state_events.rs`) and keeps each
-  agreement with the counter-party's DID. It does not log a successful
-  data pull, does not keep the caller's token or presentation with an
-  agreement, and does not log failed management key checks or some
-  management changes (for example the identity's
-  `DELETE /v1/credentials/{id}`). A management call has no person
-  behind it ([TD-04](#td-04); SECURITY-ASSURANCE, F-02).
+  agreement with the counter-party's DID. It does not keep the caller's
+  token or presentation with an agreement, and does not log failed
+  management key checks or some management changes (for example the
+  identity's `DELETE /v1/credentials/{id}`). A management call has no
+  person behind it ([TD-04](#td-04); SECURITY-ASSURANCE, F-02).
 - **Why it matters.** A provider cannot show who pulled which data and
   when. Health dataspaces are likely to require this (EHDS; not
   checked which article).
-- **Current state: Open.** DSP 2025-1 does not sign its messages, so
-  evidence between participants rests on the DCP tokens and on each
-  side's own records.
-- **Next.** [ADR 0025](adr/0025-users-and-roles.md) decides: a log line
-  for each data pull (flow, agreement, consumer DID, bytes) in ROADMAP
-  1.1; audit records that name a person in 1.5.
+- **Current state: Mitigated (1.1).** The first half of
+  [ADR 0025](adr/0025-users-and-roles.md)'s plan is built: each pull,
+  push sent and push received writes one INFO line, `data transfer
+  done` (target `portitor::audit`), with `flow`, `agreement`,
+  `counterParty`, `bytes` and `outcome`
+  (`crates/portitor-connector/src/audit.rs`;
+  [ADR 0027](adr/0027-push-transfers-and-object-storage.md), section 6;
+  [OPERATING](OPERATING.md#traces-and-metrics)). Portitor keeps no audit
+  store: the operator ships and keeps the log. DSP 2025-1 does not sign
+  its messages, so evidence between participants rests on the DCP
+  tokens and on each side's own records.
+- **Next.** Audit records that name a person, in ROADMAP 1.5 (ADR 0025).
 
 <a id="td-35"></a>
 ### TD-35 No negotiation started by the provider
@@ -1171,26 +1207,6 @@ are closed.
   negotiations (p99 92 ms at 260 per second), not pulls.
 - **Next.** Measure again in each release; look again if the p99 passes
   100 ms, or with [TD-08](#td-08).
-
-<a id="td-42"></a>
-### TD-42 Four near-copies of the negotiation and transfer logic
-
-- **What.** Negotiation and transfer, each as provider and as consumer,
-  have the same shape (receive, check, store, outbox, deliver, abort)
-  in four services of about 770 lines each
-  (`crates/portitor-dsp/src/negotiation/`,
-  `crates/portitor-dsp/src/transfer/`) and four adapters in the
-  connector. The in-memory stores live in production code
-  ([review](reviews/2026-11-18-specifications-and-code-quality.md),
-  Q5).
-- **Why it matters.** A fix in one may be needed in the other three.
-- **Current state: Open.**
-  [READING-THE-CODE](READING-THE-CODE.md#the-three-siblings) names the
-  four files side by side, and from 0.14 TESTING has the rule "changed
-  one, check the other three"
-  ([Unit and integration tests](TESTING.md#unit-and-integration-tests)).
-- **Next.** ROADMAP "Code quality in 1.x": one shared core, best
-  before 1.1 adds push; the in-memory stores move into the tests.
 
 <a id="td-45"></a>
 ### TD-45 Each running pull holds about 0.8 MB of memory
@@ -1268,6 +1284,7 @@ entries are in [CHANGELOG](../CHANGELOG.md) under the release named.
 | <a id="r-33"></a>R-33 | Any caller, or one participant, could exhaust the issuer | 0.6 | [ADR 0018](adr/0018-issuer-component.md), "Amended during the 0.6 review" |
 | <a id="r-34"></a>R-34 | Scorecard Branch-Protection and Fuzzing at 0 | 0.2 | The `main` ruleset targeted no branch (fixed); cargo-fuzz with ClusterFuzzLite; Scorecard 7.9 ([ROADMAP](ROADMAP.md#released), row 0.2) |
 | <a id="r-35"></a>R-35 | The DCP TCK uses VCDM 1.1, Gaia-X needs VCDM 2.0 | 0.5 | [ADR 0015](adr/0015-dcp-identity-component.md): both DCP profiles |
+| <a id="r-38"></a>R-38 | No specification names an S3 data address | 1.1 | [ADR 0027](adr/0027-push-transfers-and-object-storage.md): no S3 address crosses between participants. Push follows the Data Plane Signaling HTTP Transfer Profile (`endpointType` `https://w3id.org/dspace-sig/profile/http-push`, a bearer token, `HttpData-PUSH`); each participant reaches its own object storage with the AWS SDK settings |
 | <a id="td-06"></a>TD-06 | Status lists were not cached in the connector's DCP verifier | 0.11 | [ADR 0016](adr/0016-dsp-caller-authentication.md), amended; DEPLOYING, "Status list cache" |
 | <a id="td-18"></a>TD-18 | Operations: no metrics, traces or readiness check | 0.9 | [ADR 0023](adr/0023-observability.md) |
 | <a id="td-23"></a>TD-23 | ADRs 0021 and 0022 were built but still Proposed | 0.8 | Both accepted on 2026-11-15 ([ADR index](adr/README.md)) |
@@ -1283,6 +1300,7 @@ entries are in [CHANGELOG](../CHANGELOG.md) under the release named.
 | <a id="td-37"></a>TD-37 | DCP details: `token` claim required, presentations as JWT strings only, no `/.well-known/dspace-trust` | 0.12 | [ADR 0016](adr/0016-dsp-caller-authentication.md), amended 2026-11-18 |
 | <a id="td-38"></a>TD-38 | No management call to read a provider's catalog | 0.13; the `participantId` check in 0.14 | CHANGELOG 0.13.0 and 0.14.0; `docs/api/management-openapi.json`; [ARCHITECTURE](ARCHITECTURE.md#diagrams-c4-model) |
 | <a id="td-41"></a>TD-41 | A panic stopped the whole process (`panic = "abort"`) | 0.12 | [SECURITY-ASSURANCE](SECURITY-ASSURANCE.md), "What a panic does"; [ADR 0002](adr/0002-technology-stack.md), amended in 0.12 |
+| <a id="td-42"></a>TD-42 | Four near-copies of the negotiation and transfer logic | 1.1 | The shared process core, `crates/portitor-dsp/src/process.rs` (`Record`, `Records`, `receive`, `update`); the in-memory stores moved to `crates/portitor-connector/src/test_stores.rs`, compiled for tests only; [READING-THE-CODE](READING-THE-CODE.md#the-three-siblings) |
 | <a id="td-43"></a>TD-43 | The Gaia-X documents name several versions of the rules | 0.14 | [ARCHITECTURE](ARCHITECTURE.md#specification-versions) |
 | <a id="td-44"></a>TD-44 | A transfer request sent at once after the agreement could be refused | 0.13; the metric in 0.14 | [ADR 0007](adr/0007-outbox-and-proof-of-delivery.md), "Amendment for 0.13" and "Note added in 0.14"; CHANGELOG 0.14.0 |
 
@@ -1305,6 +1323,13 @@ plan.
   of the box. The definition was read from the W3C working group's
   repository; compare it with the copy at w3.org when it can be
   reached.
+- **R-38.** The HTTP Transfer Profile is a draft, not tagged, like Data
+  Plane Signaling itself ([R-06](#r-06)). Portitor as consumer cannot
+  receive a push from EDC, which has no production push data plane
+  (ADR 0027). Pull keeps the `endpointType`
+  `https://w3id.org/idsa/v4.1/HTTP`, although the profile now names
+  `.../http-pull`: changing it would break 1.0 clients; to look at again
+  for 2.0.
 - **TD-30.** The issuer's delivery outbox was not changed: since 0.6 it
   gives up at once on a 4xx other than 401, 408 and 429
   (`is_permanent` in `crates/portitor-issuer/src/delivery.rs`).
@@ -1346,6 +1371,10 @@ plan.
   pauses up to 5 minutes. Each try is logged and counted. A restart
   policy is still advised (DEPLOYING, "Known limits"). The release
   binaries are about 13% larger.
+- **TD-42.** The four services keep their own checks, deciders and
+  messages: a change to one service's own rules may still be needed in
+  its siblings ("check the other three",
+  [TESTING](TESTING.md#unit-and-integration-tests)).
 - **TD-43.** The ADRs keep the document versions they were written
   against; they are records. ARCHITECTURE is the place that says what
   was checked.

@@ -1997,7 +1997,7 @@
           "Data plane"
         ],
         "summary": "The data of a started transfer",
-        "description": "Open route with its own token: the bearer token from the transfer's data address (DSP dataAddress, endpointProperties \"authorization\"). Valid while the transfer is STARTED and for PORTITOR_DATA_TOKEN_SECONDS after the start. Streams the source's 2xx answer with its Content-Type; the source URL is never shown.",
+        "description": "Open route with its own token: the bearer token from the transfer's data address (DSP dataAddress, endpointProperties \"authorization\"). Valid while the transfer is STARTED and for PORTITOR_DATA_TOKEN_SECONDS after the start. Streams the source's 2xx answer with its Content-Type; the source URL is never shown. Since 1.1 (ADR 0027): the source may also be an object of the provider's object storage (s3://{bucket}/{key}); the consumer's MembershipCredential, kept from its transfer request, is checked again on each request and while the data streams. A membership that no longer holds gets 401 and ends the transfer; a running download is cut (the connection ends before the data does) when the membership fails or the transfer is suspended or terminated.",
         "operationId": "transferData",
         "parameters": [
           {
@@ -2014,13 +2014,13 @@
             "description": "The data, streamed from the dataset's source"
           },
           "401": {
-            "description": "No token, a wrong or expired token, or an unknown flow"
+            "description": "No token, a wrong or expired token, or an unknown flow; since 1.1 also a consumer whose membership no longer holds or could not be checked now"
           },
           "500": {
             "description": "The store could not be read (no body), or a bug in the handler (a problem document)"
           },
           "502": {
-            "description": "The source did not answer with 2xx"
+            "description": "The source did not answer with 2xx; for an s3:// source, also a connector without object storage"
           },
           "503": {
             "$ref": "#/components/responses/TookTooLong"
