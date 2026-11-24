@@ -6,14 +6,20 @@
 //! verifier that takes `Bearer <did>` at its word, and a prover that
 //! sends our own DID that way. Real DCP checks are tested in the
 //! connector's `auth::dcp` tests.
+//!
+//! Every caller the test verifier lets in holds one membership of
+//! [`ISSUER`], so the data plane, which checks it again (ADR 0027), serves
+//! it. [`Revocable`] lets a test revoke it.
 // each test binary uses only part of this module
 #![allow(dead_code)]
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::http::request::Builder;
 use portitor_connector::Ports;
-use portitor_connector::auth::{Caller, CallerVerifier, Prover, VerifyError};
+use portitor_connector::auth::{Caller, CallerVerifier, Membership, Prover, VerifyError};
 use portitor_connector::http_client::Sender;
 use portitor_connector::store::SqliteNegotiations;
 use portitor_dsp::policy::HeldCredential;
@@ -42,7 +48,29 @@ impl Sender for NoSender {
     }
 }
 
-/// Believes `Bearer <did>`: the caller is `<did>`.
+/// The issuer of every test caller's membership.
+pub const ISSUER: &str = "did:web:issuer.example";
+
+/// The membership every test caller holds.
+#[must_use]
+pub fn membership() -> Membership {
+    Membership {
+        issuer: ISSUER.to_owned(),
+        valid_until: None,
+        status: Vec::new(),
+    }
+}
+
+/// The caller `Bearer <did>` names, with [`membership`].
+fn named(authorization: Option<&str>) -> Result<Caller, VerifyError> {
+    let did = authorization.and_then(|value| value.strip_prefix("Bearer "));
+    match did {
+        Some(did) => Ok(Caller::new(did).with_memberships(vec![membership()])),
+        None => Err(VerifyError::from("no caller")),
+    }
+}
+
+/// Believes `Bearer <did>`: the caller is `<did>`, a member for good.
 pub struct NamedCaller;
 
 impl CallerVerifier for NamedCaller {
@@ -50,8 +78,7 @@ impl CallerVerifier for NamedCaller {
         &'a self,
         authorization: Option<&'a str>,
     ) -> BoxFuture<'a, Result<Caller, VerifyError>> {
-        let did = authorization.and_then(|value| value.strip_prefix("Bearer "));
-        let caller = did.map(Caller::new).ok_or(VerifyError::from("no caller"));
+        let caller = named(authorization);
         Box::pin(async move { caller })
     }
 
@@ -62,6 +89,76 @@ impl CallerVerifier for NamedCaller {
         _: &'a [String],
     ) -> BoxFuture<'a, Result<Vec<HeldCredential>, String>> {
         Box::pin(async move { Ok(caller.credentials.clone()) })
+    }
+
+    fn check_membership<'a>(&'a self, _: &'a Membership) -> BoxFuture<'a, Result<(), VerifyError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// Like [`NamedCaller`], but the membership can be revoked, and a running
+/// download checks it again every `recheck`. While revoked, a DSP request
+/// is refused as from a caller whose token is valid but whose credentials
+/// are not ([`VerifyError::NotAMember`], TD-47).
+pub struct Revocable {
+    pub revoked: Arc<AtomicBool>,
+    pub recheck: Duration,
+}
+
+impl Revocable {
+    /// A member, checked again every `recheck`; and the switch that
+    /// revokes it.
+    #[must_use]
+    pub fn new(recheck: Duration) -> (Self, Arc<AtomicBool>) {
+        let revoked = Arc::new(AtomicBool::new(false));
+        let verifier = Self {
+            revoked: Arc::clone(&revoked),
+            recheck,
+        };
+        (verifier, revoked)
+    }
+
+    fn is_revoked(&self) -> bool {
+        self.revoked.load(Ordering::SeqCst)
+    }
+}
+
+impl CallerVerifier for Revocable {
+    fn verify<'a>(
+        &'a self,
+        authorization: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<Caller, VerifyError>> {
+        let caller = match named(authorization) {
+            Ok(caller) if self.is_revoked() => Err(VerifyError::NotAMember {
+                caller: caller.id,
+                reason: "a credential is revoked or suspended (revocation)".to_owned(),
+            }),
+            other => other,
+        };
+        Box::pin(async move { caller })
+    }
+
+    fn credentials<'a>(
+        &'a self,
+        caller: &'a Caller,
+        _: &'a [String],
+    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, String>> {
+        Box::pin(async move { Ok(caller.credentials.clone()) })
+    }
+
+    fn check_membership<'a>(&'a self, _: &'a Membership) -> BoxFuture<'a, Result<(), VerifyError>> {
+        let answer = if self.is_revoked() {
+            Err(VerifyError::from(
+                "a credential is revoked or suspended (revocation)",
+            ))
+        } else {
+            Ok(())
+        };
+        Box::pin(async move { answer })
+    }
+
+    fn membership_recheck_interval(&self) -> Duration {
+        self.recheck
     }
 }
 

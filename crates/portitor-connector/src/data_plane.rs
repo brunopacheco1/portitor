@@ -27,9 +27,15 @@
 //!   The consumer's request headers are not passed on.
 //! - A push flow (profile `http-push`) keeps the consumer's data address
 //!   instead of a token of ours, until it ends. It has no token, so `/data`
-//!   never serves it.
-//! - Suspend, terminate and complete cut what is moving for the flow now
-//!   ([`RunningFlows`]).
+//!   never serves it. Its sender (`crate::push`) watches the flow's
+//!   [`RunningFlows`] switch, so suspend and terminate cut it too.
+//! - Each served request writes one audit line, `data transfer done`,
+//!   with the bytes sent and how it ended ([`crate::audit`]).
+//! - From 1.1 (ADR 0027): every request also checks the consumer's
+//!   membership again ([`MembershipGate`], refused with the same 401),
+//!   and a download that runs is cut when the flow is suspended or
+//!   terminated ([`RunningFlows`]) or when the membership check, run again
+//!   while it streams, fails (`download.rs`).
 
 #[cfg(test)]
 use std::collections::BTreeMap;
@@ -53,15 +59,21 @@ use portitor_dps::port::{DataPlane, SignalError};
 use portitor_dps::state::DataFlowState;
 use portitor_dsp::transfer::{DataAddress, DataAddressType, EndpointProperty, check_push_address};
 
+use crate::audit::{AuditedBody, Outcome, Parties, transfer_done};
+use crate::auth::Membership;
+use crate::flow_membership::{Access, MembershipGate, StoredMembership};
 use crate::http_client::{
     HttpsClient, StreamingHttpsClient, bearer_token_in, https_client, https_streaming_client,
 };
 use crate::object_storage::{ObjectStorage, parse_s3_uri};
-use crate::ports::AnyFlowStore;
-use crate::running_flows::{FlowGuard, RunningFlows};
+use crate::ports::{AnyFlowStore, AnyTransferStore};
+use crate::running_flows::{CutSignal, RunningFlows};
 use crate::system::{new_uuid, now_secs};
 use portitor_runtime::telemetry::http::{ClientCall, Peer};
 use tracing::Instrument as _;
+
+mod download;
+pub(crate) mod setup;
 
 /// The `endpointType` of the data address sent over DSP. It is the value
 /// of the DSP 2025-1 examples, the DSP TCK and EDC's DSP tests (ADR 0013);
@@ -178,6 +190,23 @@ pub trait FlowStore {
     ///
     /// The store cannot be read.
     fn started_pushes(&self) -> Result<Vec<String>, FlowStoreError>;
+
+    /// What is kept of the consumer of flow `id`: its memberships when it
+    /// asked for the transfer (ADR 0027, section 7.2).
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be read.
+    fn memberships(&self, id: &str) -> Result<StoredMembership, FlowStoreError>;
+
+    /// Keeps `memberships` for flow `id` (the transfer's provider pid),
+    /// unless something is kept for it already. Written before the flow
+    /// starts, or just after: its token is sent only later.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be written.
+    fn keep_memberships(&self, id: &str, memberships: &[Membership]) -> Result<(), FlowStoreError>;
 }
 
 /// SHA-256 of `token`, hex. Comparing two such hashes with `==` is safe:
@@ -210,8 +239,14 @@ pub struct HttpDataPlane {
     /// The client of pushes: to an address a partner chose, so plain
     /// `http://` only with `PORTITOR_ALLOW_HTTP`.
     push_client: StreamingHttpsClient,
-    /// What moves now, per flow: cut on suspend, terminate and complete.
-    running: RunningFlows,
+    /// The provider's transfers, to name the agreement and the consumer
+    /// in the audit line; without them the two fields are empty.
+    transfers: Option<AnyTransferStore>,
+    /// The downloads that run now, by flow: cut on suspend and terminate.
+    running: Arc<RunningFlows>,
+    /// Checks the consumer's membership again; `None` checks the token
+    /// only, as 1.0 did (unit tests).
+    gate: Option<Arc<MembershipGate>>,
 }
 
 impl std::fmt::Debug for HttpDataPlane {
@@ -257,7 +292,9 @@ impl HttpDataPlane {
             client,
             storage: None,
             push_client: https_streaming_client(false)?,
-            running: RunningFlows::new(),
+            transfers: None,
+            running: Arc::new(RunningFlows::new()),
+            gate: None,
         })
     }
 
@@ -279,15 +316,68 @@ impl HttpDataPlane {
         Ok(self)
     }
 
-    /// What moves now, per flow (shared: cloning it shares the registry).
-    #[must_use]
-    pub fn running(&self) -> &RunningFlows {
-        &self.running
-    }
-
     /// The client pushes are sent with.
     pub(crate) fn push_client(&self) -> &StreamingHttpsClient {
         &self.push_client
+    }
+
+    /// The same data plane, reading the agreement and the consumer of
+    /// each flow from `transfers` (the flow id is the transfer's provider
+    /// process id) for the audit line.
+    #[must_use]
+    pub fn with_transfers(mut self, transfers: AnyTransferStore) -> Self {
+        self.transfers = Some(transfers);
+        self
+    }
+
+    /// The agreement and the consumer of flow `id`, for the audit line:
+    /// one read of the transfer store per request. Empty when they cannot
+    /// be read; the data is served anyway.
+    pub fn parties(&self, id: &str) -> Parties {
+        use portitor_dsp::transfer::provider::TransferStore as _;
+        let Some(transfers) = &self.transfers else {
+            return Parties::default();
+        };
+        match transfers.get(id) {
+            Ok(Some(transfer)) => Parties {
+                agreement: transfer.agreement_id,
+                counter_party: transfer.counter_party,
+            },
+            Ok(None) => Parties::default(),
+            Err(error) => {
+                tracing::warn!(flow = %id, error = %error.0, "audit: transfer store failed");
+                Parties::default()
+            }
+        }
+    }
+
+    /// The same data plane, checking every request for data, and every
+    /// running download, with `gate` (ADR 0027, section 7.2).
+    #[must_use]
+    pub fn checking_membership_with(self, gate: Arc<MembershipGate>) -> Self {
+        Self {
+            gate: Some(gate),
+            ..self
+        }
+    }
+
+    /// What runs for each flow now. A push uses the same switches, so a
+    /// suspend or terminate cuts it too.
+    #[must_use]
+    pub fn running_flows(&self) -> Arc<RunningFlows> {
+        Arc::clone(&self.running)
+    }
+
+    /// Moves flow `id` away from STARTED (to `to`) and cuts every download
+    /// of it that runs (ADR 0027, section 5). Cut also when the move is
+    /// refused: stopping a download is always safe.
+    fn stop(&self, id: &str, to: DataFlowState) -> Result<(), SignalError> {
+        let moved = self.move_to(id, to);
+        let cut = self.running.cut(id);
+        if cut > 0 {
+            tracing::info!(flow = %id, downloads = cut, state = ?to, "running downloads cut");
+        }
+        moved
     }
 
     #[allow(clippy::needless_pass_by_value)] // used as map_err(Self::store_failed)
@@ -311,11 +401,6 @@ impl HttpDataPlane {
             .set_state(id, flow.state, to)
             .map_err(Self::store_failed)?;
         if moved {
-            if to != DataFlowState::Started {
-                // suspend, terminate or complete: cut what moves now
-                // (ADR 0027, sections 1 and 5)
-                self.running.cancel(id);
-            }
             Ok(())
         } else {
             Err(SignalError::Failed(format!(
@@ -490,8 +575,8 @@ pub struct PushJob {
     pub source: String,
     /// The consumer's data address. Never logged.
     pub address: DataAddress,
-    /// Held while the push runs; cancelled on suspend or terminate.
-    pub guard: FlowGuard,
+    /// Held while the push runs; fires on suspend or terminate.
+    pub cut: CutSignal,
 }
 
 /// A source's answer: its media type and its bytes as they come.
@@ -505,12 +590,19 @@ pub struct SourceData {
 impl HttpDataPlane {
     /// The push to send now for flow `id`, if it is a push flow that is
     /// STARTED and none of its pushes runs already. The caller sends it
-    /// (`crate::push`) and keeps the job's guard until it is done.
+    /// (`crate::push`) and keeps the job until it is done: its cut signal
+    /// tells the data plane a push of this flow runs.
     ///
     /// # Errors
     ///
     /// The store failed.
     pub fn push_job(&self, id: &str) -> Result<Option<PushJob>, SignalError> {
+        // watch first, check second, as a download does
+        // (`running_flows` module doc)
+        let Some(cut) = self.running.watch_if_idle(id) else {
+            // already being sent
+            return Ok(None);
+        };
         let flow = self.flow(id)?;
         let Some(address) = flow.push_address else {
             return Ok(None);
@@ -524,16 +616,40 @@ impl HttpDataPlane {
                 flow.dataset_id
             )));
         };
-        let Some(guard) = self.running.register_if_idle(id) else {
-            // already being sent
-            return Ok(None);
-        };
         Ok(Some(PushJob {
             flow_id: flow.id,
             source,
             address,
-            guard,
+            cut,
         }))
+    }
+
+    /// The membership check before a push of flow `id` (ADR 0027,
+    /// section 7.2): `Err(Cut)` when the membership was revoked (the
+    /// transfer is then ended), `Err(Failed)` when it could not be checked.
+    pub(crate) async fn push_membership(&self, id: &str) -> Result<(), Outcome> {
+        let Some(gate) = &self.gate else {
+            return Ok(());
+        };
+        match gate.check(id).await {
+            Access::Granted => Ok(()),
+            Access::Unchecked(reason) => {
+                tracing::warn!(flow = %id, %reason, "push not sent: the consumer's membership could not be checked now");
+                Err(Outcome::Failed)
+            }
+            Access::Revoked(reason) => {
+                gate.end_transfer(id, &reason);
+                Err(Outcome::Cut)
+            }
+        }
+    }
+
+    /// The membership checks of a running push of flow `id`, as for a
+    /// download; they stop when the value is dropped.
+    pub(crate) fn push_watchdog(&self, id: &str) -> Option<impl Send + use<>> {
+        self.gate
+            .as_ref()
+            .map(|gate| download::watchdog(Arc::clone(gate), self.running_flows(), id))
     }
 
     /// The push flows that are STARTED (after a restart, the pushes to
@@ -628,7 +744,7 @@ impl DataPlane for HttpDataPlane {
     }
 
     fn suspend(&self, id: &str, _: &DataFlowSuspendMessage) -> Result<(), SignalError> {
-        self.move_to(id, DataFlowState::Suspended)
+        self.stop(id, DataFlowState::Suspended)
     }
 
     fn resume(
@@ -646,7 +762,7 @@ impl DataPlane for HttpDataPlane {
     }
 
     fn terminate(&self, id: &str, _: &DataFlowTerminateMessage) -> Result<(), SignalError> {
-        self.move_to(id, DataFlowState::Terminated)
+        self.stop(id, DataFlowState::Terminated)
     }
 
     fn completed(&self, id: &str) -> Result<(), SignalError> {
@@ -667,8 +783,12 @@ pub(crate) fn unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, challenge).into_response()
 }
 
-/// `GET /data/{flowId}`: checks the token, then streams the upstream
-/// answer (status 2xx only; its `Content-Type` is kept).
+/// `GET /data/{flowId}`: checks the token and the consumer's
+/// membership, then streams the upstream answer (status 2xx only; its
+/// `Content-Type` is kept). The stream stops when the flow is suspended
+/// or terminated, or when the membership check fails while it runs.
+/// Once the answer has ended, was cut or failed, one audit line says so;
+/// a request that is refused (401) writes none.
 pub(crate) async fn serve(
     State(plane): State<Arc<HttpDataPlane>>,
     Path(id): Path<String>,
@@ -677,23 +797,59 @@ pub(crate) async fn serve(
     let Some(token) = bearer_token_in(&headers) else {
         return unauthorized();
     };
+    // watch first, check second: a suspend between the two still cuts
+    // this download (`running_flows` module doc)
+    let cut = plane.running.watch(&id);
     let source = match plane.authorize(&id, token, now_secs()) {
         Ok(url) => url,
         Err(Denied::Unauthorized) => return unauthorized(),
         Err(Denied::Store) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
+    if let Some(gate) = &plane.gate
+        && !member_may_download(gate, &id).await
+    {
+        return unauthorized();
+    }
+    let parties = plane.parties(&id);
     match plane.open_source(&source).await {
         Ok(data) => {
             let mut response = Response::new(data.body);
             if let Some(value) = data.content_type {
                 response.headers_mut().insert(header::CONTENT_TYPE, value);
             }
-            response
+            // the bytes are counted as they go to the consumer; the cut
+            // wraps the count, so a cut download is audited as `cut`
+            let response = response.map(|body| Body::new(AuditedBody::new(body, &id, parties)));
+            let watchdog = plane
+                .gate
+                .as_ref()
+                .map(|gate| download::watchdog(Arc::clone(gate), plane.running_flows(), &id));
+            download::cut_when_told(response, cut, watchdog)
         }
         Err(error) => {
             // the source is private: the log names the flow, not the URL
             tracing::warn!(flow = %id, %error, "upstream fetch failed");
+            let (agreement, consumer) = (&parties.agreement, &parties.counter_party);
+            transfer_done(&id, agreement, consumer, 0, Outcome::Failed);
             StatusCode::BAD_GATEWAY.into_response()
+        }
+    }
+}
+
+/// Whether the consumer of flow `id` is still a member ([`MembershipGate`]).
+/// When it is not, its transfer is ended too; when the check could not
+/// finish, the request is refused and the transfer kept. The reason goes
+/// to the log, never to the caller.
+async fn member_may_download(gate: &MembershipGate, id: &str) -> bool {
+    match gate.check(id).await {
+        Access::Granted => true,
+        Access::Unchecked(reason) => {
+            tracing::warn!(flow = %id, %reason, "request for data refused: the consumer's membership could not be checked now");
+            false
+        }
+        Access::Revoked(reason) => {
+            gate.end_transfer(id, &reason);
+            false
         }
     }
 }

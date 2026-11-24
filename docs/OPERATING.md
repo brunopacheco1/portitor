@@ -118,12 +118,23 @@ export on, `telemetry: exporting` (INFO).
 | A partner says a call got HTTP 404 `unauthorized`, or its side ended with `no such negotiation` although the process exists | The 404 for a caller that is not authenticated does not say why (DSP 2025-1; Eclipse EDC does the same) | Look in **your** log for the line above at that time. A 404 with reason `no such negotiation` or `no such transfer` and without that line means the process id is unknown, or belongs to another participant |
 | `counter-party not reachable; terminating` (WARN) with `HTTP 404` in `error` | The partner does not know the process, or it refused your credentials (a Portitor from 0.12 and Eclipse EDC answer 404 for both). The message is not sent again | Ask the partner for the reason in its log; check that your credential is valid and not revoked, and that the partner trusts its issuer |
 | `DSP request not checked: a service the check needs is unavailable; answered 503` (WARN) | A server the check fetches from (the partner's DID document or Credential Service, its issuer's DID document or status list, your STS) did not answer, or answered 408, 429 or 5xx; `reason` names it. The partner tries again | If it repeats: check your STS, then ask the partner about its services |
+| `DSP termination accepted from a partner without membership` (WARN, 1.1) | A partner whose DCP token is valid but whose membership no longer holds (revoked, expired, untrusted issuer, missing) ended a transfer it is the counter-party of; `process` and `caller` name them, `reason` says what failed. Every other message from it is refused (TD-47) | Nothing: the transfer ended as the partner asked. Check whether the partner is still meant to be in the data space |
+| `data flow ended: the consumer's membership no longer holds` (WARN, 1.1) | As provider: the consumer's `MembershipCredential` kept with the data flow failed its check again (`reason`); its request was refused with 401 or its download cut, and the transfer is terminated (the DSP termination goes to the consumer) | Nothing, unless the consumer should still be a member: then check its credential at the issuer |
+| `request for data refused: the consumer's membership could not be checked now` (WARN, 1.1) | A `/data` request got 401 because the membership check could not finish (`reason`: a status list or the issuer's DID document did not answer). The transfer is kept; the next request may pass | If it repeats: check the issuer's status list and DID document from the connector's network |
+| `running download cut: the consumer's membership could not be checked now` (WARN, 1.1) | The same, for a download that was running: it was cut, the transfer is kept | As above |
+| `running downloads cut` (INFO, 1.1) | A data flow was suspended or terminated while downloads of it ran (`downloads` counts them, `state` is the new state); they were stopped | Nothing |
+| `data flow started before 1.1: no membership kept; served until its token expires` (INFO, 1.1) | Once per flow and process: a transfer started before the upgrade has no membership to check again; it is served as in 1.0 until its token expires | Nothing; it stops once those tokens have expired (`PORTITOR_DATA_TOKEN_SECONDS`) |
+| `the consumer's memberships could not be kept; its requests for data will be refused` (ERROR, 1.1) | The database could not be written when the transfer was asked for; the transfer is refused at the data plane (fail closed) | Check disk space and the `/data` volume; the consumer asks for a new transfer |
+| `transfer terminated by the provider's operator` (INFO, 1.1) | `POST /v1/provided-transfers/{providerPid}/termination` was called: access ended and the termination is on its way | Nothing |
+| `transfer not ended again` (INFO, 1.1) | A transfer whose consumer is no longer a member had already ended, or its termination was on its way | Nothing |
 | `no token: ...` in a send failure (WARN) | The STS did not give a token for an outgoing DSP request | Check the identity component, `PORTITOR_STS_URL` and the shared secret |
 | `own identity checked: DID document and STS agree` (INFO, at start) | The connector's DID document resolves and the STS signs for it | Nothing |
 | `panic` (ERROR) | A bug: code stopped at `place` (file, line and column). One of the next two lines follows | Report it with `place` and the version |
 | `a request handler panicked; answered 500` (ERROR) | The request on `route` got HTTP 500; the other requests went on | Report it; if it repeats for one partner, its message triggers the bug |
 | `a background task panicked; it starts again` / `...; its message is sent again` / `...; its work is left as saved` (ERROR) | The task `task` stopped at a bug. A task that runs all the time starts again after a pause (`restart_in_seconds`): 5 seconds, twice as long after each further panic in a row, at most 5 minutes. A DSP message whose sending panicked (`outbox_delivery`) is sent again after the same pauses (`again_in_seconds`). A credential decision stays saved and is tried again on the issuer's next outbox round (at most a minute); the other requests and deliveries go on | Report it. A line that repeats for the same `pid` or `issuer_pid` is a message or request that meets the bug every time: it stays as it is until a fixed version runs |
 | `portitor-connector stopped` (ERROR) | The process could not start or stopped with an error; the message says why | Fix the cause; the container restarts |
+| `data transfer done` (INFO, target `portitor::audit`) | One per data response served at `/data/{flowId}` (since 1.1), when it ended: the audit line below | Ship and keep it as your audit trail |
+| `upstream fetch failed` (WARN) | The data source of a pull did not answer, or answered other than 2xx; the consumer got HTTP 502 and `error` says why. The audit line says `failed` | Check the dataset's `portitor:source` and that the source is up |
 | `harvesting datasets` (INFO, at start) | The datasets file and the interval in use | Nothing |
 | `no datasets file (PORTITOR_DATASETS_FILE): the catalog is empty` (INFO) | No datasets file is set | Set it, if you offer datasets |
 | `harvest run` (INFO) | One per run: `job`, `trigger`, `outcome` and the counts | Nothing |
@@ -299,6 +310,35 @@ state changed`, with `portitor.dsp.process`, `portitor.dsp.role`,
 `portitor.dsp.provider_pid`, `portitor.dsp.consumer_pid`,
 `portitor.dsp.previous_state` (none for a new process) and
 `portitor.dsp.state`.
+
+**Audit line of each data transfer** (since 1.1,
+[ADR 0027](adr/0027-push-transfers-and-object-storage.md) section 6,
+[TD-31](RISKS_AND_TECHNICAL_DEBTS.md#td-31) first half). Each response
+of the provider's data plane (`GET /data/{flowId}`) writes, once it has
+ended, one line at INFO with the message `data transfer done` and the
+target `portitor::audit`, with these fields:
+
+| Field | Value |
+|---|---|
+| `flow` | The data flow id: the provider's process id of the transfer (`portitor.dsp.provider_pid` in the state change lines) |
+| `agreement` | The agreement id |
+| `counterParty` | The consumer's DID |
+| `bytes` | The bytes of data actually sent to the consumer |
+| `outcome` | `complete` (all of it sent), `cut` (stopped before the end: the consumer closed the connection, or access was taken away while the data was flowing) or `failed` (the data source failed before or during the answer; `bytes` is then what was sent before) |
+
+For example:
+
+```json
+{"timestamp":"2026-11-24T10:00:00.000000Z","level":"INFO","fields":{"message":"data transfer done","flow":"urn:uuid:6f0c...","agreement":"urn:uuid:a1b2...","counterParty":"did:web:consumer.example","bytes":18,"outcome":"complete"},"target":"portitor::audit"}
+```
+
+A refused request (HTTP 401) writes no audit line. When the transfer
+cannot be read from the database, `agreement` and `counterParty` are
+empty, the data is served anyway, and a WARN line `audit: transfer
+store failed` comes first. The line never holds
+the token or the data source's URL. Portitor keeps no audit store: keep
+these lines as long as your rules require (ADR 0025, "Audit"). With
+`RUST_LOG` set, keep `portitor::audit=info` in it.
 
 **Metrics.** Names follow OpenTelemetry's
 [naming rules](https://opentelemetry.io/docs/specs/semconv/general/naming/);

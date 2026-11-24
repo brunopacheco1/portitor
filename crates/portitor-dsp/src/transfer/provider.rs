@@ -166,6 +166,14 @@ pub trait TransferStore {
     ///
     /// The store cannot be read.
     fn pending(&self) -> Result<Vec<Transfer>, StoreError>;
+
+    /// Up to `limit` transfers in provider pid order, those after `after`
+    /// when it is given: one page for the management API.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be read.
+    fn list(&self, after: Option<&str>, limit: usize) -> Result<Vec<Transfer>, StoreError>;
 }
 
 /// Port: the provider's agreements.
@@ -744,17 +752,6 @@ where
         Ok(process::pending_messages(transfers))
     }
 
-    /// The transfer `provider_pid` as stored, if there is one: for the
-    /// adapter's own use (which pushes to resume after a restart, and what
-    /// an audit line names), never for a caller.
-    ///
-    /// # Errors
-    ///
-    /// Store failure.
-    pub fn transfer(&self, provider_pid: &str) -> Result<Option<Transfer>, Failure> {
-        self.store.get(provider_pid).map_err(Failure::Store)
-    }
-
     /// Applies a consumer's message: checks the ids and the transition,
     /// tells the data plane, then saves the new state. `address`: the new
     /// push address a start message may carry.
@@ -963,6 +960,9 @@ fn bad(pid: &str, cpid: &str, reason: &str) -> Failure {
 fn not_found(pid: &str, cpid: &str) -> Failure {
     Failure::NotFound(TransferError::new(pid, cpid, "404", "no such transfer"))
 }
+
+mod own_steps;
+pub use own_steps::MAX_PAGE;
 
 #[cfg(test)]
 mod tests;

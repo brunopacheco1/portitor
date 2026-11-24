@@ -2,217 +2,117 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! Data that is moving right now, per data flow, so that it can be cut
-//! (ADR 0027, sections 1 and 5): suspend or terminate stops a push that
-//! is running, and a running download of a pull transfer.
+//! Everything that is running for a data flow right now, and the switch
+//! that stops it all at once (ADR 0027, section 5: "suspend or terminate
+//! cuts every download of that flow that is already running").
 //!
-//! One small mechanism for both:
+//! A piece of work that moves a flow's data (a `/data` download, and
+//! later a push) asks [`RunningFlows::watch`] for a [`CutSignal`] before
+//! it checks that the flow may still be served, and stops as soon as
+//! [`CutSignal::cut`] finishes. [`RunningFlows::cut`] stops every piece
+//! of work of one flow. It knows nothing of downloads or pushes: it only
+//! keeps one switch per flow.
 //!
-//! - whatever moves data for a flow (a push, a download) calls
-//!   [`RunningFlows::register`] first and keeps the [`FlowGuard`] it gets
-//!   until it is done. Dropping the guard says "done".
-//! - whoever ends access (the data plane on suspend or terminate) calls
-//!   [`RunningFlows::cancel`] with the flow id. Every guard of that flow
-//!   is told, and [`FlowGuard::cancelled`] returns; the mover stops.
+//! The order matters, and closes the gap between "checked" and "cut":
+//! the data plane changes the flow's state first and cuts second, and a
+//! download watches first and checks the state second. So a download
+//! that started its check before the change is cut, and one that started
+//! after it sees the new state and is refused.
 //!
-//! A guard taken after a cancel is new and not cancelled: cancelling
-//! cuts what runs now, it does not block a later start again. Whether a
-//! new transfer of data may start at all is the data plane's state
-//! check, not this registry's.
-//!
-//! Built on a `tokio::sync::watch` channel per flow (one sender here,
-//! one receiver in each guard), so no new crate is needed.
+//! How it works: each flow with running work has one
+//! `tokio::sync::watch` sender, and each piece of work holds a receiver.
+//! The sender never sends; cutting removes it from the map and drops it,
+//! and every receiver wakes up because its sender is gone. The next
+//! piece of work for that flow gets a new sender.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::collections::BTreeMap;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use tokio::sync::watch;
 
-/// One flow's entry: the channel that tells its guards to stop, and how
-/// many guards are out.
-struct Entry {
-    stop: watch::Sender<bool>,
-    guards: usize,
-    /// Which round of the flow this is: a new entry after a cancel gets
-    /// a new number, so a guard of the old round cannot count it out.
-    round: u64,
-}
-
-/// The registry of running data movements, shared (cheap to clone).
-#[derive(Clone, Default)]
+/// The switches of the flows that have work running.
+#[derive(Debug, Default)]
 pub struct RunningFlows {
-    flows: Arc<Mutex<Flows>>,
+    switches: Mutex<BTreeMap<String, watch::Sender<()>>>,
 }
 
-/// The entries, and the number of the next round.
-#[derive(Default)]
-struct Flows {
-    entries: HashMap<String, Entry>,
-    next_round: u64,
-}
+/// Held by one piece of work of one flow: tells it when to stop.
+#[derive(Debug)]
+pub struct CutSignal(watch::Receiver<()>);
 
-impl Flows {
-    /// A new entry for `flow_id` with no guard yet; replaces none.
-    fn new_entry(&mut self) -> Entry {
-        self.next_round = self.next_round.wrapping_add(1);
-        Entry {
-            stop: watch::channel(false).0,
-            guards: 0,
-            round: self.next_round,
-        }
+impl CutSignal {
+    /// Finishes when the work must stop: its flow was cut. Waits forever
+    /// otherwise.
+    pub async fn cut(&mut self) {
+        // the sender never sends, so this ends only when it is dropped,
+        // which is what `RunningFlows::cut` does
+        while self.0.changed().await.is_ok() {}
     }
-}
 
-impl std::fmt::Debug for RunningFlows {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RunningFlows")
-            .field("flows", &self.lock().entries.len())
-            .finish()
+    /// Whether the flow was cut already.
+    #[must_use]
+    pub fn is_cut(&self) -> bool {
+        self.0.has_changed().is_err()
     }
 }
 
 impl RunningFlows {
-    /// An empty registry.
+    /// No flow has work running.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// The map, even after a panic in another thread: every change below
-    /// is one step, so the map is never left half-changed.
-    fn lock(&self) -> MutexGuard<'_, Flows> {
-        self.flows.lock().unwrap_or_else(PoisonError::into_inner)
+    fn switches(&self) -> MutexGuard<'_, BTreeMap<String, watch::Sender<()>>> {
+        // the map stays usable after a panic elsewhere: at worst it keeps
+        // a switch nobody watches, which the next `watch` removes
+        self.switches.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Records that data of flow `flow_id` starts moving. Keep the guard
-    /// while it moves.
-    #[must_use]
-    pub fn register(&self, flow_id: &str) -> FlowGuard {
-        let mut flows = self.lock();
-        let mut entry = match flows.entries.remove(flow_id) {
-            Some(entry) => entry,
-            None => flows.new_entry(),
-        };
-        entry.guards += 1;
-        let guard = self.guard(flow_id, &entry);
-        flows.entries.insert(flow_id.to_owned(), entry);
-        guard
+    /// A signal for one more piece of work of flow `flow_id`. Call it
+    /// before checking that the flow may be served (module doc).
+    pub fn watch(&self, flow_id: &str) -> CutSignal {
+        let mut switches = self.switches();
+        // the switches of flows whose work has all ended are no longer
+        // needed: drop them, so the map holds only running flows
+        switches.retain(|_, switch| switch.receiver_count() > 0);
+        let switch = switches
+            .entry(flow_id.to_owned())
+            .or_insert_with(|| watch::channel(()).0);
+        CutSignal(switch.subscribe())
     }
 
-    /// Like [`RunningFlows::register`], but only when nothing of flow
-    /// `flow_id` is moving now; `None` otherwise. Checked and recorded in
-    /// one step, so two callers cannot both start (one push per flow).
-    #[must_use]
-    pub fn register_if_idle(&self, flow_id: &str) -> Option<FlowGuard> {
-        let mut flows = self.lock();
-        if flows.entries.contains_key(flow_id) {
+    /// Like [`RunningFlows::watch`], but only when no work of flow
+    /// `flow_id` runs: one push at a time per flow (ADR 0027, section 1).
+    pub fn watch_if_idle(&self, flow_id: &str) -> Option<CutSignal> {
+        let mut switches = self.switches();
+        switches.retain(|_, switch| switch.receiver_count() > 0);
+        if switches.contains_key(flow_id) {
             return None;
         }
-        let mut entry = flows.new_entry();
-        entry.guards = 1;
-        let guard = self.guard(flow_id, &entry);
-        flows.entries.insert(flow_id.to_owned(), entry);
-        Some(guard)
+        let switch = watch::channel(()).0;
+        let signal = CutSignal(switch.subscribe());
+        switches.insert(flow_id.to_owned(), switch);
+        Some(signal)
     }
 
-    /// Tells every guard of flow `flow_id` to stop. Returns how many were
-    /// running. A flow with nothing running is not an error (0).
-    #[allow(clippy::must_use_candidate)] // callers may ignore the count
-    pub fn cancel(&self, flow_id: &str) -> usize {
-        let Some(entry) = self.lock().entries.remove(flow_id) else {
-            return 0;
-        };
-        // the receivers keep the value after the sender is dropped
-        let _ = entry.stop.send_replace(true);
-        entry.guards
+    /// Stops every piece of work of flow `flow_id` that is running now.
+    /// Work started later is not affected. Returns how many were told.
+    pub fn cut(&self, flow_id: &str) -> usize {
+        let removed = self.switches().remove(flow_id);
+        match removed {
+            // dropping the sender wakes every receiver
+            Some(switch) => switch.receiver_count(),
+            None => 0,
+        }
     }
 
-    /// How many guards of flow `flow_id` are out now.
+    /// How many pieces of work of flow `flow_id` are running.
     #[must_use]
     pub fn running(&self, flow_id: &str) -> usize {
-        self.lock()
-            .entries
+        self.switches()
             .get(flow_id)
-            .map_or(0, |entry| entry.guards)
-    }
-
-    /// A guard of `entry`, the entry of `flow_id`.
-    fn guard(&self, flow_id: &str, entry: &Entry) -> FlowGuard {
-        FlowGuard {
-            stop: entry.stop.subscribe(),
-            flows: self.clone(),
-            flow_id: flow_id.to_owned(),
-            round: entry.round,
-        }
-    }
-
-    /// A guard of `flow_id`, round `round`, was dropped: count it out.
-    fn release(&self, flow_id: &str, round: u64) {
-        let mut flows = self.lock();
-        let Some(entry) = flows.entries.get_mut(flow_id) else {
-            // cancelled: the entry is gone already
-            return;
-        };
-        // a guard of an earlier, cancelled round must not count out a
-        // guard of the entry that replaced it
-        if entry.round != round {
-            return;
-        }
-        entry.guards = entry.guards.saturating_sub(1);
-        if entry.guards == 0 {
-            flows.entries.remove(flow_id);
-        }
-    }
-}
-
-/// Held while data of one flow moves; see the module comment. Dropping
-/// it says the movement is over.
-pub struct FlowGuard {
-    stop: watch::Receiver<bool>,
-    flows: RunningFlows,
-    flow_id: String,
-    round: u64,
-}
-
-impl std::fmt::Debug for FlowGuard {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FlowGuard")
-            .field("flow_id", &self.flow_id)
-            .field("cancelled", &self.is_cancelled())
-            .finish_non_exhaustive()
-    }
-}
-
-impl FlowGuard {
-    /// Whether the flow was cancelled since this guard was taken.
-    #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        *self.stop.borrow()
-    }
-
-    /// Waits until the flow is cancelled. Use it in a `tokio::select!`
-    /// next to the work, so the work is dropped (and stops) on cancel.
-    pub async fn cancelled(&self) {
-        let mut stop = self.stop.clone();
-        // `wait_for` looks at the current value first, so a cancel that
-        // came before this call is seen. It fails only when the sender is
-        // gone without a cancel, which `RunningFlows` never does while a
-        // guard is out; then this waits for ever, as nothing can cancel.
-        if stop.wait_for(|stopped| *stopped).await.is_err() {
-            std::future::pending::<()>().await;
-        }
-    }
-
-    /// The flow this guard belongs to.
-    #[must_use]
-    pub fn flow_id(&self) -> &str {
-        &self.flow_id
-    }
-}
-
-impl Drop for FlowGuard {
-    fn drop(&mut self) {
-        self.flows.release(&self.flow_id, self.round);
+            .map_or(0, watch::Sender::receiver_count)
     }
 }
 
@@ -224,56 +124,53 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn cancel_reaches_every_guard_of_the_flow_and_only_those() {
+    async fn a_cut_stops_all_work_of_that_flow_only() {
         let running = RunningFlows::new();
-        let first = running.register("f1");
-        let second = running.register("f1");
-        let other = running.register("f2");
+        let mut first = running.watch("f1");
+        let mut second = running.watch("f1");
+        let other = running.watch("f2");
         assert_eq!(running.running("f1"), 2);
-        assert_eq!(running.cancel("f1"), 2);
-        assert!(first.is_cancelled() && second.is_cancelled());
-        assert!(!other.is_cancelled());
-        // returns at once: the cancel came before the wait
-        tokio::time::timeout(Duration::from_secs(1), first.cancelled())
+        assert!(!first.is_cut());
+
+        assert_eq!(running.cut("f1"), 2);
+        tokio::time::timeout(Duration::from_secs(1), first.cut())
             .await
             .unwrap();
-        assert_eq!(running.running("f1"), 0);
-        assert_eq!(running.cancel("f1"), 0, "nothing runs any more");
+        tokio::time::timeout(Duration::from_secs(1), second.cut())
+            .await
+            .unwrap();
+        assert!(second.is_cut());
+        assert!(!other.is_cut(), "another flow goes on");
+        assert_eq!(running.cut("f1"), 0, "nothing left to cut");
     }
 
     #[tokio::test]
-    async fn a_waiting_guard_wakes_up_on_cancel() {
+    async fn work_started_after_a_cut_runs() {
         let running = RunningFlows::new();
-        let guard = running.register("f1");
-        let canceller = running.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            canceller.cancel("f1");
-        });
-        tokio::time::timeout(Duration::from_secs(5), guard.cancelled())
-            .await
-            .unwrap();
+        let old = running.watch("f1");
+        running.cut("f1");
+        let mut new = running.watch("f1");
+        assert!(old.is_cut());
+        assert!(!new.is_cut());
+        let waited = tokio::time::timeout(Duration::from_millis(50), new.cut()).await;
+        assert!(waited.is_err(), "not cut");
     }
 
     #[test]
-    fn dropping_guards_counts_them_out_and_a_new_round_is_not_cancelled() {
+    fn only_one_piece_of_work_when_idle() {
         let running = RunningFlows::new();
-        let old = running.register("f1");
-        running.cancel("f1");
-        let new = running.register("f1");
-        assert!(!new.is_cancelled(), "a guard after a cancel is new");
-        drop(old);
-        assert_eq!(running.running("f1"), 1, "the old guard counts nothing");
-        drop(new);
+        let first = running.watch_if_idle("f1").unwrap();
+        assert!(running.watch_if_idle("f1").is_none(), "one runs");
+        drop(first);
+        assert!(running.watch_if_idle("f1").is_some(), "it ended");
+    }
+
+    #[test]
+    fn ended_work_leaves_no_switch() {
+        let running = RunningFlows::new();
+        drop(running.watch("f1"));
+        let _f2 = running.watch("f2");
         assert_eq!(running.running("f1"), 0);
-    }
-
-    #[test]
-    fn only_one_guard_when_idle_is_asked_for() {
-        let running = RunningFlows::new();
-        let push = running.register_if_idle("f1").unwrap();
-        assert!(running.register_if_idle("f1").is_none());
-        drop(push);
-        assert!(running.register_if_idle("f1").is_some());
+        assert_eq!(running.switches().len(), 1, "only f2 is kept");
     }
 }

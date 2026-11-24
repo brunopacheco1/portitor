@@ -1475,7 +1475,9 @@ answer completes the transfer; any other answer, or none, terminates
 it, and the reason holds only the status code. Suspend or terminate, by
 either side, cuts a running push; a start again sends everything again.
 The consumer's endpoint and token are kept in the SQLite file until the
-transfer ends, and are never logged or shown.
+transfer ends, and are never logged or shown. The consumer's membership
+is checked before each push and while it runs, as for a download
+([Revocation and running transfers](#revocation-and-running-transfers)).
 
 - **The endpoint is an address the consumer chose** (R-17 in
   [RISKS_AND_TECHNICAL_DEBTS](RISKS_AND_TECHNICAL_DEBTS.md#r-17)), like
@@ -1502,6 +1504,40 @@ transfer.
   requests on `/push/` (for nginx, `client_max_body_size 0;` and a long
   `proxy_read_timeout` in that `location`), and limit them there if you
   need a bound.
+
+### Revocation and running transfers
+
+From 1.1 a provider checks the consumer's membership again for every
+use of the data, not only when the transfer is asked for (ADR 0027).
+When the consumer asks for a transfer, the provider keeps the issuer,
+the end of validity and the `credentialStatus` of each of its
+`MembershipCredential`s with the data flow. Then:
+
+- **On every `/data` request** it checks them again, without the
+  consumer: the issuer is still trusted, the credential has not
+  expired, no status bit is set. A revocation is therefore seen on the
+  next request after at most `PORTITOR_STATUS_LIST_CACHE_SECONDS` (the
+  same delay as for DSP requests). The request is refused with 401, the
+  transfer is ended (the provider sends the DSP termination) and the log
+  says why.
+- **While a download runs** it checks again every
+  `PORTITOR_STATUS_LIST_CACHE_SECONDS`, but at least every 60 seconds
+  and at most every 5. On a revocation the download is cut and the
+  transfer ended. So a running download can last up to the cache time
+  plus 60 seconds after a revocation, with the default cache 300 + 60.
+- **A check that cannot finish** (a status list or the issuer's DID
+  document does not answer) refuses the request, or cuts the download,
+  but keeps the transfer: the next request may pass.
+- **Transfers started before 1.1** have no membership kept. They are
+  served as in 1.0 until their token expires (at most
+  `PORTITOR_DATA_TOKEN_SECONDS`), and logged once per flow. A 1.1
+  transfer with no membership kept is refused.
+
+A partner whose membership was revoked can still end a transfer it
+shares with you: a `TransferTerminationMessage` is accepted from a
+caller with a valid DCP token who is the transfer's counter-party, and
+logged (TD-47, [ADR 0016](adr/0016-dsp-caller-authentication.md),
+amended in 1.1). Every other message from it is refused.
 
 ### Management API
 
@@ -1572,6 +1608,15 @@ curl -s -X POST localhost:8081/v1/transfers/urn:uuid:.../completion \
   -H "authorization: Bearer $(cat key)"
 ```
 
+To pause access without ending the transfer (since 1.1), suspend it
+with `POST /v1/transfers/{consumerPid}/suspension`; the provider's data
+plane refuses the token until you start it again with `POST
+/v1/transfers/{consumerPid}/start`. The token of a pull stays the same;
+the provider sends no new one (a push gets a new one). Either call
+answers 202 at once; the state changes once the provider acknowledges the message, and a call while
+another message is on its way gets 400. Start works whichever party
+suspended the transfer (DSP 2025-1).
+
 `format` defaults to `HttpData-PULL`. With `"format": "HttpData-PUSH"`
 (since 1.1) the provider sends the data to your connector, which stores
 it in your push bucket ([Object storage and push
@@ -1579,6 +1624,20 @@ transfers](#object-storage-and-push-transfers)): wait for `objectKey` in
 the transfer, then read that object from your bucket. The two list calls
 (`GET /v1/negotiations`, `GET /v1/transfers`) return up to 100 entries
 at a time (`?after=`, `?limit=`).
+
+As provider (1.1), you read the transfers your connector runs and end
+one on your own (ADR 0027):
+
+```sh
+curl -s localhost:8081/v1/provided-transfers -H "authorization: Bearer $(cat key)"
+curl -s -X POST localhost:8081/v1/provided-transfers/urn:uuid:.../termination \
+  -H "authorization: Bearer $(cat key)"
+```
+
+The termination answers 202: access ends at once (the data flow is
+terminated and every running download of it is cut), and the DSP
+termination goes to the consumer in the background. The view shows the
+consumer's DID (`counterPartyId`), never the data token or its hash.
 
 ## Security
 
@@ -1768,7 +1827,9 @@ known risk and technical debt, with its status and target release.
   checked: the issuer publishes each definition's `credentialSchema` URL
   and no component fetches it.
 - **Revocation** takes up to `PORTITOR_STATUS_LIST_CACHE_SECONDS` to be
-  seen ([Status list cache](#status-list-cache)).
+  seen ([Status list cache](#status-list-cache)); a running download up
+  to 60 seconds more
+  ([Revocation and running transfers](#revocation-and-running-transfers)).
 - **Policies.** Only `dateTime` and credential claims are understood,
   any other term is refused, and prohibitions and duties are carried
   into agreements but not enforced ([Policies](#policies)).
@@ -1786,8 +1847,7 @@ known risk and technical debt, with its status and target release.
 - **Transfers as consumer.** Each `POST /v1/transfers` starts a new
   transfer. Your own system fetches the data with the data address; the
   connector does not download it, except for a push, which it stores in
-  your push bucket. The management API completes or
-  terminates a transfer; suspend and start again are not offered yet.
+  your push bucket.
 - **Reading a provider's catalog** (`POST /v1/catalog/request` and
   `/v1/catalog/dataset/request`, [Management API](#management-api)). At
   most 16 MiB of answer are read, a fixed limit with no setting; a

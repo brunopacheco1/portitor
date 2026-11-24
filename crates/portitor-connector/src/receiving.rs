@@ -42,7 +42,7 @@ use portitor_dsp::transfer::{
 use portitor_runtime::http::bearer_token_in;
 
 use crate::Config;
-use crate::audit::{self, Outcome, TransferDone};
+use crate::audit::{self, Outcome};
 use crate::consumer_transfer::TransferConsumer;
 use crate::data_plane::{hash, new_token, unauthorized};
 use crate::object_storage::{ObjectStorage, StorageError};
@@ -290,26 +290,26 @@ pub(crate) async fn receive(
             .0
             .set_object_key(&consumer_pid, &consumer_pid)
         {
-            Ok(()) => (Outcome::Done, StatusCode::NO_CONTENT.into_response()),
+            Ok(()) => (Outcome::Complete, StatusCode::NO_CONTENT.into_response()),
             Err(_) => (
                 Outcome::Failed,
                 StatusCode::INTERNAL_SERVER_ERROR.into_response(),
             ),
         },
         // the sender's body broke off: nothing was stored
-        Err(StorageError::Body(_)) => (Outcome::Failed, StatusCode::BAD_REQUEST.into_response()),
+        Err(StorageError::Body(_)) => (Outcome::Cut, StatusCode::BAD_REQUEST.into_response()),
         Err(error) => {
             // the error names a status or a cause, never a key
             tracing::warn!(flow = %consumer_pid, %error, "push received: the object storage failed");
             (Outcome::Failed, StatusCode::BAD_GATEWAY.into_response())
         }
     };
-    audit::transfer_done(&TransferDone {
-        flow: &consumer_pid,
-        agreement: &transfer.agreement_id,
-        counter_party: &transfer.provider_id,
-        bytes: total.load(Ordering::Relaxed),
+    audit::transfer_done(
+        &consumer_pid,
+        &transfer.agreement_id,
+        &transfer.provider_id,
+        total.load(Ordering::Relaxed),
         outcome,
-    });
+    );
     response
 }

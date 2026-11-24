@@ -24,7 +24,9 @@ use portitor_dsp::transfer::consumer::{
     AgreementProvider, ConsumerTransfer, ConsumerTransferStore, HeldAgreements,
 };
 
+use crate::auth::Membership;
 use crate::data_plane::{Flow, FlowStore, FlowStoreError};
+use crate::flow_membership::StoredMembership;
 use crate::http_client::Sender;
 use crate::ports::Ports;
 use crate::store::SqliteNegotiations;
@@ -239,14 +241,28 @@ impl HeldAgreements for InMemoryConsumerNegotiations {
     }
 }
 
-/// Adapter: flows kept in memory (lost on restart; tests).
+/// Adapter: flows kept in memory (lost on restart; tests). `.1`: what is
+/// kept of each flow's consumer (ADR 0027).
 #[derive(Debug, Clone, Default)]
-pub(crate) struct InMemoryFlows(Arc<Mutex<BTreeMap<String, Flow>>>);
+pub(crate) struct InMemoryFlows(
+    Arc<Mutex<BTreeMap<String, Flow>>>,
+    Arc<Mutex<BTreeMap<String, StoredMembership>>>,
+);
 
 impl InMemoryFlows {
     fn map(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Flow>> {
         // every write is a single insert, so a panic cannot leave half a flow
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn members(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, StoredMembership>> {
+        self.1.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Marks flow `id` as one of 1.0, as the migration does.
+    pub(crate) fn started_before_1_1(&self, id: &str) {
+        self.members()
+            .insert(id.to_owned(), StoredMembership::StartedBefore1_1);
     }
 }
 
@@ -323,6 +339,17 @@ impl FlowStore for InMemoryFlows {
             .values()
             .filter(|f| f.state == DataFlowState::Started && f.push_address.is_some());
         Ok(started.map(|f| f.id.clone()).collect())
+    }
+
+    fn memberships(&self, id: &str) -> Result<StoredMembership, FlowStoreError> {
+        let found = self.members().get(id).cloned();
+        Ok(found.unwrap_or(StoredMembership::Missing))
+    }
+
+    fn keep_memberships(&self, id: &str, memberships: &[Membership]) -> Result<(), FlowStoreError> {
+        let kept = StoredMembership::Kept(memberships.to_vec());
+        self.members().entry(id.to_owned()).or_insert(kept);
+        Ok(())
     }
 }
 

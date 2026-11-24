@@ -133,5 +133,6 @@ PROVIDER=http://$PROVIDER MANAGEMENT=http://$CONSUMER_MANAGEMENT \
   KEY_FILE="$WORK/consumer/management.key" \
   CONSUMER_ID="$CONSUMER_ID" PROVIDER_ID="$PROVIDER_ID" \
   ISSUER_MANAGEMENT="http://$ISSUER_MANAGEMENT" ISSUER_KEY_FILE="$WORK/issuer/management.key" \
+  PROVIDER_LOG="$WORK/provider-connector.log" \
   DATA=examples/data TMPDIR="$WORK" scenarios/two-party/steps.sh ||
   fail "the demo steps"

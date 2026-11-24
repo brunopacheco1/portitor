@@ -268,7 +268,7 @@ async fn transfers_need_a_held_agreement() {
         (s, p["detail"].as_str()),
         (StatusCode::NOT_FOUND, Some("no such transfer"))
     );
-    for step in ["completion", "termination"] {
+    for step in ["completion", "termination", "suspension", "start"] {
         let req = authed(Request::post(format!("/v1/transfers/unknown/{step}")))
             .body(Body::empty())
             .unwrap();
@@ -340,6 +340,8 @@ fn published_description_is_current() {
         "/v1/transfers/{consumerPid}",
         "/v1/transfers/{consumerPid}/completion",
         "/v1/transfers/{consumerPid}/termination",
+        "/v1/transfers/{consumerPid}/suspension",
+        "/v1/transfers/{consumerPid}/start",
     ] {
         assert!(spec["paths"][path].is_object(), "{path}");
     }
@@ -523,6 +525,11 @@ fn every_call() -> Vec<Call> {
         Call::without_body("GET", "/v1/transfers/urn:uuid:1"),
         Call::without_body("POST", "/v1/transfers/urn:uuid:1/completion"),
         Call::without_body("POST", "/v1/transfers/urn:uuid:1/termination"),
+        Call::without_body("POST", "/v1/transfers/urn:uuid:1/suspension"),
+        Call::without_body("POST", "/v1/transfers/urn:uuid:1/start"),
+        Call::without_body("GET", "/v1/provided-transfers"),
+        Call::without_body("GET", "/v1/provided-transfers/urn:uuid:1"),
+        Call::without_body("POST", "/v1/provided-transfers/urn:uuid:1/termination"),
         Call::without_body("GET", "/v1/harvest-jobs"),
         Call::without_body("GET", "/v1/harvest-jobs/1"),
     ]
@@ -537,7 +544,7 @@ const OLD_NAMES: [(&str, &str); 2] = [
 #[tokio::test]
 async fn every_route_answers_401_without_the_key_and_never_403() {
     let answers = without_the_key(&app(), &every_call(), KEY).await;
-    assert_eq!(answers.len(), 12 * 6);
+    assert_eq!(answers.len(), 17 * 6);
     assert_eq!(statuses_other_than(&[401], &answers), "");
 }
 
@@ -567,7 +574,7 @@ async fn every_route_refuses_a_wrong_body_with_400() {
 #[tokio::test]
 async fn odd_paths_and_queries_are_never_an_error_of_the_server() {
     let answers = with_odd_paths_and_queries(&app(), &every_call(), KEY).await;
-    assert_eq!(answers.len(), 12 * 14);
+    assert_eq!(answers.len(), 17 * 14);
     assert_eq!(
         statuses_other_than(&[200, 201, 400, 404, 502], &answers),
         ""
@@ -580,4 +587,186 @@ async fn odd_paths_and_queries_are_never_an_error_of_the_server() {
     for call in catalog_calls {
         assert!(call.starts_with("POST /v1/catalog/"), "{call}");
     }
+}
+
+/// A provider for the suspend and start-again tests: records each
+/// message it gets and acknowledges it, except that a message whose URL
+/// ends with `hold` is never answered (it stays on its way).
+#[derive(Default)]
+struct RecordingProvider {
+    sent: std::sync::Mutex<Vec<(String, Value)>>,
+    hold: Option<&'static str>,
+}
+
+impl Sender for RecordingProvider {
+    fn post<'a>(&'a self, url: &'a str, body: &'a Value) -> BoxFuture<'a, Result<Value, String>> {
+        Box::pin(async move {
+            self.sent
+                .lock()
+                .unwrap()
+                .push((url.to_owned(), body.clone()));
+            if self.hold.is_some_and(|h| url.ends_with(h)) {
+                std::future::pending::<()>().await;
+            }
+            Ok(Value::Null)
+        })
+    }
+}
+
+const TRANSFER: &str = "urn:uuid:ct-1";
+
+/// The management API of a consumer that holds one transfer, `TRANSFER`,
+/// in `state`, with a data address, as if the provider had started it.
+fn app_with_transfer(
+    state: portitor_dsp::transfer::TransferState,
+    provider: &Arc<RecordingProvider>,
+) -> Router {
+    use portitor_dsp::transfer::consumer::{ConsumerTransfer, ConsumerTransferStore as _};
+    let ports = authenticating(
+        common::ports(Arc::clone(provider) as Arc<dyn Sender>),
+        CONSUMER,
+    );
+    let address = serde_json::from_value(json!({
+        "@type": "DataAddress",
+        "endpointType": "https://w3id.org/idsa/v4.1/HTTP",
+        "endpoint": "https://provider.example/data/urn:uuid:pt-1",
+        "endpointProperties": [
+            {"@type": "EndpointProperty", "name": "authorization", "value": "token-1"},
+            {"@type": "EndpointProperty", "name": "authType", "value": "bearer"}
+        ]
+    }))
+    .unwrap();
+    let transfer = ConsumerTransfer {
+        consumer_pid: TRANSFER.to_owned(),
+        provider_pid: Some("urn:uuid:pt-1".to_owned()),
+        state,
+        provider_address: "https://provider.example/dsp/2025-1".to_owned(),
+        provider_id: "did:web:provider.example".to_owned(),
+        agreement_id: "urn:uuid:agreement-1".to_owned(),
+        format: "HttpData-PULL".to_owned(),
+        data_address: Some(address),
+        pending: None,
+        version: 0,
+    };
+    ports.consumer_transfers.store.insert(&transfer).unwrap();
+    let config = Config {
+        participant_id: CONSUMER.into(),
+        public_url: "https://consumer.example".into(),
+        datasets_file: None,
+        harvest_interval_seconds: 0,
+        allow_http: false,
+        db_file: "unused.db".into(),
+        data_token_seconds: 3_600,
+        credential_types: portitor_dsp::policy::CredentialTypes::default(),
+    };
+    let (_, negotiator) = portitor_connector::build(&config, ports).unwrap();
+    router(negotiator, ApiKey::new(KEY).unwrap())
+}
+
+/// `POST /v1/transfers/{TRANSFER}/{step}` with the key.
+async fn step(app: &Router, step: &str) -> (StatusCode, Value) {
+    let req = authed(Request::post(format!("/v1/transfers/{TRANSFER}/{step}")))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = call(app, req).await;
+    (status, body)
+}
+
+/// Polls the transfer until it is in `state`, for up to two seconds.
+async fn wait_for_state(app: &Router, state: &str) -> Value {
+    for _ in 0..200 {
+        let (_, _, transfer) = call(app, get(&format!("/v1/transfers/{TRANSFER}"))).await;
+        if transfer["state"] == state {
+            return transfer;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("never {state}");
+}
+
+/// Suspend, then start again: each step is answered 202 at once, its
+/// message goes to the provider, and the state changes once the provider
+/// acknowledged it. The data address (with the same token) is kept.
+#[tokio::test]
+async fn a_transfer_is_suspended_and_started_again() {
+    use portitor_dsp::transfer::TransferState;
+    let provider = Arc::new(RecordingProvider::default());
+    let app = app_with_transfer(TransferState::Started, &provider);
+
+    // only a STARTED transfer can be suspended, only a SUSPENDED one started
+    let (s, p) = step(&app, "start").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{p}");
+
+    let (s, view) = step(&app, "suspension").await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{view}");
+    assert_eq!(view["consumerPid"], TRANSFER);
+    let suspended = wait_for_state(&app, "SUSPENDED").await;
+    let token = &suspended["dataAddress"]["endpointProperties"][0]["value"];
+    assert_eq!(token, "token-1");
+    {
+        let sent = provider.sent.lock().unwrap();
+        let (url, body) = sent.last().unwrap();
+        assert_eq!(
+            url,
+            "https://provider.example/dsp/2025-1/transfers/urn:uuid:pt-1/suspension"
+        );
+        assert_eq!(body["@type"], "TransferSuspensionMessage");
+        assert_eq!(body["consumerPid"], TRANSFER);
+    }
+
+    for wrong in ["suspension", "completion"] {
+        let (s, p) = step(&app, wrong).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{wrong}: {p}");
+        assert_eq!(p["status"], 400, "{wrong}: {p}");
+    }
+
+    let (s, view) = step(&app, "start").await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{view}");
+    let started = wait_for_state(&app, "STARTED").await;
+    assert_eq!(started["dataAddress"], suspended["dataAddress"]);
+    let sent = provider.sent.lock().unwrap().clone();
+    assert_eq!(sent.len(), 2);
+    let (url, body) = &sent[1];
+    assert!(url.ends_with("/transfers/urn:uuid:pt-1/start"), "{url}");
+    assert_eq!(body["@type"], "TransferStartMessage");
+    // a pull transfer started again by the consumer carries no address
+    assert!(body.get("dataAddress").is_none(), "{body}");
+}
+
+/// The provider suspended the transfer: the consumer may start it again
+/// (DSP 2025-1 lets either party do so).
+#[tokio::test]
+async fn a_transfer_the_provider_suspended_can_be_started_again() {
+    use portitor_dsp::transfer::TransferState;
+    let provider = Arc::new(RecordingProvider::default());
+    let app = app_with_transfer(TransferState::Suspended, &provider);
+    let (s, view) = step(&app, "start").await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{view}");
+    wait_for_state(&app, "STARTED").await;
+    let sent = provider.sent.lock().unwrap().clone();
+    assert!(sent[0].0.ends_with("/start"), "{sent:?}");
+}
+
+/// While our message is on its way, no other step is taken.
+#[tokio::test]
+async fn no_step_while_a_message_is_on_its_way() {
+    use portitor_dsp::transfer::TransferState;
+    let provider = Arc::new(RecordingProvider {
+        hold: Some("/suspension"),
+        ..RecordingProvider::default()
+    });
+    let app = app_with_transfer(TransferState::Started, &provider);
+    let (s, _) = step(&app, "suspension").await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    for next in ["suspension", "start", "completion", "termination"] {
+        let (s, p) = step(&app, next).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{next}: {p}");
+        assert!(
+            p["detail"].as_str().unwrap().contains("still on its way"),
+            "{next}: {p}"
+        );
+    }
+    // the provider never acknowledged: still STARTED
+    let (_, _, transfer) = call(&app, get(&format!("/v1/transfers/{TRANSFER}"))).await;
+    assert_eq!(transfer["state"], "STARTED");
 }

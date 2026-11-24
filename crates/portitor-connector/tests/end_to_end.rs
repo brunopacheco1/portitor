@@ -618,3 +618,55 @@ async fn a_finalization_that_never_arrives_and_was_not_settled_is_counted_as_giv
     assert_eq!(moment.provider_state().await, "TERMINATED");
     assert_eq!(given_up_by_the_provider_negotiation(), 1);
 }
+
+/// The consumer suspends a transfer and starts it again (TD-11): while
+/// it is suspended the provider's data plane refuses the token; started
+/// again, the same token works, and the provider sent no new address.
+/// A second step while one is on its way is refused.
+#[tokio::test]
+async fn the_consumer_suspends_and_starts_a_transfer_again() {
+    let network = Arc::new(Network::default());
+    let (provider, consumer) = connectors(&network).await;
+    let agreement_id = agree(&network, &consumer).await;
+    let t = consumer
+        .request_transfer(&agreement_id, "HttpData-PULL")
+        .unwrap();
+    let t = until(
+        || consumer.transfer(&t.consumer_pid).unwrap(),
+        |t| t.state == TransferState::Started,
+    )
+    .await;
+    assert_eq!(fetch(&provider.app, &t).await.0, StatusCode::OK);
+
+    consumer
+        .act_on_transfer(&t.consumer_pid, ConsumerTransferDecision::Suspend)
+        .unwrap();
+    // no await in between: the suspension has not been sent yet
+    assert!(
+        consumer
+            .act_on_transfer(&t.consumer_pid, ConsumerTransferDecision::Start)
+            .is_err(),
+        "a message is still on its way"
+    );
+    let suspended = until(
+        || consumer.transfer(&t.consumer_pid).unwrap(),
+        |t| t.state == TransferState::Suspended,
+    )
+    .await;
+    assert_eq!(fetch(&provider.app, &t).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(suspended.data_address, t.data_address, "kept");
+
+    consumer
+        .act_on_transfer(&t.consumer_pid, ConsumerTransferDecision::Start)
+        .unwrap();
+    let started = until(
+        || consumer.transfer(&t.consumer_pid).unwrap(),
+        |t| t.state == TransferState::Started,
+    )
+    .await;
+    assert_eq!(started.data_address, t.data_address, "the same token");
+    assert_eq!(
+        fetch(&provider.app, &t).await,
+        (StatusCode::OK, "day,celsius\nmon,12\n".to_owned())
+    );
+}

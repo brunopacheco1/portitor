@@ -639,7 +639,10 @@ async fn a_push_needs_object_storage_and_a_push_bucket() {
     );
     let (_, consumer) =
         portitor_connector::build(&config(CONSUMER_DID, CONSUMER, false), ports).unwrap();
-    assert!(!consumer.receiving_routes().has_routes(), "no receiving route");
+    assert!(
+        !consumer.receiving_routes().has_routes(),
+        "no receiving route"
+    );
     let refused = consumer
         .request_transfer("urn:uuid:agreement", "HttpData-PUSH")
         .unwrap_err();

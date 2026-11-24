@@ -1,0 +1,25 @@
+meta {
+  name: Terminate provided transfer
+  type: http
+  seq: 20
+}
+
+post {
+  url: {{mgmtUrl}}/v1/provided-transfers/{{mgmtProvidedTransferPid}}/termination
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 202
+  res.body.providerPid: isDefined
+}
+
+docs {
+  The provider ends a transfer on its own (1.1, ADR 0027). Access ends at once:
+  the data flow is terminated and every running download of it is cut. The DSP
+  TransferTerminationMessage goes to the consumer in the background; the state
+  becomes TERMINATED once the consumer acknowledges it, or cannot be reached.
+  Asked again while the termination is on its way, it answers the same.
+  400 once the transfer has ended; 404 for an unknown providerPid.
+}

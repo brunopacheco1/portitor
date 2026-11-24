@@ -12,6 +12,52 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Added
+
+- Management API: `POST /v1/transfers/{consumerPid}/suspension` and
+  `POST /v1/transfers/{consumerPid}/start` suspend a transfer as
+  consumer and start it again, with the rules of `/completion` and
+  `/termination` (TD-11, first half). The token stays the same.
+- Audit line for each data pull: the provider's data plane writes one
+  INFO line, `data transfer done` (target `portitor::audit`), with
+  `flow`, `agreement`, `counterParty`, `bytes` and `outcome`
+  (`complete`, `cut`, `failed`) for each `/data` answer
+  ([OPERATING](docs/OPERATING.md), TD-31, first half).
+- The provider can always end access (ADR 0027, section 7). Management
+  routes for the transfers a connector runs as provider:
+  `GET /v1/provided-transfers`, `GET /v1/provided-transfers/{providerPid}`
+  and `POST /v1/provided-transfers/{providerPid}/termination`. A
+  termination ends access at once and sends the DSP termination in the
+  background. The view never shows the data token or its hash.
+- Suspending or terminating a transfer as provider cuts every running
+  download of its data flow (ADR 0027, section 5).
+- The data plane checks the consumer's `MembershipCredential` again on
+  every `/data` request, and while a download runs: issuer still
+  trusted, not expired, status bit not set, with the status list cache.
+  A failed check refuses with 401, cuts running downloads and ends the
+  transfer; a check that cannot finish refuses but keeps the transfer.
+  [DEPLOYING, Revocation and running transfers](docs/DEPLOYING.md#revocation-and-running-transfers).
+
+### Fixed
+
+- A partner whose membership was revoked can still end a transfer it
+  shares with you: its `TransferTerminationMessage` is accepted when its
+  DCP token is valid and it is the transfer's counter-party, and logged
+  (`DSP termination accepted from a partner without membership`). Every
+  other message from it is refused as before. Before, such a transfer
+  stayed `REQUESTED` until the operator ended it
+  ([TD-47](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-47); ADR 0016, amended
+  in 1.1).
+
+### Upgrade notes
+
+- Database migration 12 (forward only) adds the table `flow_membership`.
+  Transfers that started before the upgrade have no membership kept:
+  they are served as in 1.0 until their token expires
+  (`PORTITOR_DATA_TOKEN_SECONDS`), with one INFO line per flow. Back up
+  `/data` first, as for every upgrade.
+- New log lines: [OPERATING, Health and logs](docs/OPERATING.md#health-and-logs).
+
 ## [1.0.0] - 2026-11-24
 
 Portitor 1.0, the first stable release. From now on, a 1.x release may

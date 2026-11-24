@@ -9,7 +9,9 @@ use portitor_dsp::transfer::DataAddress;
 use rusqlite::{Row, params};
 
 use super::{SqliteNegotiations, col};
+use crate::auth::Membership;
 use crate::data_plane::{Flow, FlowStore, FlowStoreError};
+use crate::flow_membership::StoredMembership;
 
 #[allow(clippy::needless_pass_by_value)] // used as map_err(failed)
 fn failed(e: rusqlite::Error) -> FlowStoreError {
@@ -153,6 +155,34 @@ impl FlowStore for SqliteNegotiations {
         })
         .map_err(store_error)
     }
+
+    fn memberships(&self, id: &str) -> Result<StoredMembership, FlowStoreError> {
+        // a row whose `memberships` is NULL: the migration's mark for a
+        // flow of 1.0 (migration 12)
+        let sql = "SELECT memberships FROM flow_membership WHERE flow_id = ?1";
+        let found = self
+            .query(sql, params![id], |row| col::<Option<String>>(row, 0))
+            .map_err(store_error)?;
+        match found.into_iter().next() {
+            None => Ok(StoredMembership::Missing),
+            Some(None) => Ok(StoredMembership::StartedBefore1_1),
+            Some(Some(text)) => serde_json::from_str(&text)
+                .map(StoredMembership::Kept)
+                .map_err(|e| FlowStoreError(format!("stored memberships: {e}"))),
+        }
+    }
+
+    fn keep_memberships(&self, id: &str, memberships: &[Membership]) -> Result<(), FlowStoreError> {
+        let text = serde_json::to_string(memberships)
+            .map_err(|e| FlowStoreError(format!("memberships: {e}")))?;
+        self.conn()
+            .execute(
+                "INSERT OR IGNORE INTO flow_membership (flow_id, memberships) VALUES (?1, ?2)",
+                params![id, text],
+            )
+            .map_err(failed)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -189,5 +219,29 @@ mod tests {
         assert!(store.set_token("f1", suspended, &new_hash, 9).unwrap());
         let renewed = store.get("f1").unwrap().unwrap();
         assert_eq!((renewed.token_hash, renewed.expires_at), (new_hash, 9));
+    }
+
+    #[test]
+    fn memberships_are_kept_once_per_flow() {
+        let db = SqliteNegotiations::in_memory().unwrap();
+        let store: &dyn FlowStore = &db;
+        assert_eq!(store.memberships("f1").unwrap(), StoredMembership::Missing);
+        let entry: portitor_dcp::status_list::StatusEntry = serde_json::from_value(
+            serde_json::json!({"type": "BitstringStatusListEntry", "statusPurpose": "revocation",
+                "statusListIndex": "5", "statusListCredential": "https://issuer.example/status/1"}),
+        )
+        .unwrap();
+        let kept = vec![Membership {
+            issuer: "did:web:issuer.example".to_owned(),
+            valid_until: Some(1_900_000_000),
+            status: vec![entry],
+        }];
+        store.keep_memberships("f1", &kept).unwrap();
+        store.keep_memberships("f1", &[]).unwrap();
+        assert_eq!(
+            store.memberships("f1").unwrap(),
+            StoredMembership::Kept(kept),
+            "the first is kept"
+        );
     }
 }

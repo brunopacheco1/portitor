@@ -40,7 +40,7 @@ use crate::ports::{
 };
 use crate::receiving::PushAddresses;
 use crate::system::SystemEnvironment;
-use crate::transfer::{bad_request, failed, reached_state};
+use crate::transfer::{bad_request, failed, log_termination_without_membership, reached_state};
 
 type Service = ConsumerTransferService<
     AnyConsumerTransferStore,
@@ -429,9 +429,11 @@ pub(crate) async fn termination(
             Err(refused) => return bad_request(*refused),
         };
     let ids = (msg.provider_pid.as_str(), msg.consumer_pid.as_str());
-    consumer.answer(
-        consumer
-            .service
-            .provider_step(&cpid, ids, Transition::Terminate),
-    )
+    let handled = consumer
+        .service
+        .provider_step(&cpid, ids, Transition::Terminate);
+    if handled.is_ok() {
+        log_termination_without_membership(&caller, &cpid);
+    }
+    consumer.answer(handled)
 }

@@ -11,10 +11,14 @@
 //! - A 2xx answer completes the transfer; any other answer, or none,
 //!   terminates it with the reason (the status code only: the URL and the
 //!   token are never logged or sent back).
-//! - Suspend or terminate cut a push that is running: the data plane
-//!   cancels the push's [`crate::running_flows::FlowGuard`], the request is
-//!   dropped, and the transfer is left as the suspension or termination
-//!   made it.
+//! - Suspend or terminate cut a push that is running: the data plane cuts
+//!   the flow ([`crate::running_flows::RunningFlows::cut`]), the push's
+//!   [`crate::running_flows::CutSignal`] fires, the request is dropped,
+//!   and the transfer is left as the suspension or termination made it.
+//! - The consumer's membership is checked before the push and again
+//!   while it runs, as for a download (ADR 0027, section 7.2): a revoked
+//!   membership ends the transfer; a check that cannot finish fails the
+//!   push, which terminates the transfer.
 //! - Each push writes the audit line `data transfer done`
 //!   ([`crate::audit`]).
 //!
@@ -33,7 +37,9 @@ use http_body_util::BodyExt as _;
 use portitor_runtime::telemetry::http::{ClientCall, Peer};
 use tracing::Instrument as _;
 
-use crate::audit::{self, Outcome, TransferDone};
+use portitor_dsp::transfer::DataAddress;
+
+use crate::audit::{self, Outcome};
 use crate::data_plane::{HttpDataPlane, PushJob};
 
 /// The media type sent when neither the source nor the consumer's address
@@ -65,23 +71,40 @@ impl Pushed {
     #[must_use]
     pub fn outcome(&self) -> Outcome {
         match self.sent {
-            Sent::Done => Outcome::Done,
+            Sent::Done => Outcome::Complete,
             Sent::Failed(_) => Outcome::Failed,
-            Sent::Cancelled => Outcome::Cancelled,
+            Sent::Cancelled => Outcome::Cut,
         }
     }
 }
 
-/// Sends `job` with `plane`'s client, until it is done or its guard is
-/// cancelled.
-pub async fn send(plane: &HttpDataPlane, job: &PushJob) -> Pushed {
+/// Sends `job` with `plane`'s client, until it is done or its flow is
+/// cut.
+pub async fn send(plane: &HttpDataPlane, job: &mut PushJob) -> Pushed {
+    if let Err(outcome) = plane.push_membership(&job.flow_id).await {
+        let sent = if outcome == Outcome::Cut {
+            // the membership was revoked: the transfer is being ended
+            Sent::Cancelled
+        } else {
+            Sent::Failed("the consumer's membership could not be checked".to_owned())
+        };
+        return Pushed { sent, bytes: 0 };
+    }
+    // checks the membership again while the push runs
+    let _watchdog = plane.push_watchdog(&job.flow_id);
     let counted = Arc::new(AtomicU64::new(0));
+    let PushJob {
+        flow_id,
+        source,
+        address,
+        cut,
+    } = job;
     let sent = tokio::select! {
-        result = post(plane, job, Arc::clone(&counted)) => match result {
+        result = post(plane, flow_id, source, address, Arc::clone(&counted)) => match result {
             Ok(()) => Sent::Done,
             Err(reason) => Sent::Failed(reason),
         },
-        () = job.guard.cancelled() => Sent::Cancelled,
+        () = cut.cut() => Sent::Cancelled,
     };
     Pushed {
         sent,
@@ -91,19 +114,25 @@ pub async fn send(plane: &HttpDataPlane, job: &PushJob) -> Pushed {
 
 /// Reads the source and `POST`s it to the consumer's endpoint; `counted`
 /// grows with each chunk of data sent.
-async fn post(plane: &HttpDataPlane, job: &PushJob, counted: Arc<AtomicU64>) -> Result<(), String> {
-    let data = match plane.open_source(&job.source).await {
+async fn post(
+    plane: &HttpDataPlane,
+    flow_id: &str,
+    source: &str,
+    address: &DataAddress,
+    counted: Arc<AtomicU64>,
+) -> Result<(), String> {
+    let data = match plane.open_source(source).await {
         Ok(data) => data,
         Err(error) => {
             // the source is private: the log names the flow, not the URL
-            tracing::warn!(flow = %job.flow_id, %error, "push: the source could not be read");
+            tracing::warn!(flow = %flow_id, %error, "push: the source could not be read");
             return Err("the source could not be read".to_owned());
         }
     };
-    let Some(endpoint) = job.address.endpoint.as_deref() else {
+    let Some(endpoint) = address.endpoint.as_deref() else {
         return Err("the dataAddress has no endpoint".to_owned());
     };
-    let content_type = match (&data.content_type, job.address.property("contentType")) {
+    let content_type = match (&data.content_type, address.property("contentType")) {
         (Some(value), _) => value.clone(),
         (None, Some(asked)) => {
             header::HeaderValue::from_str(asked).map_err(|_| "contentType is not a header value")?
@@ -117,7 +146,7 @@ async fn post(plane: &HttpDataPlane, job: &PushJob, counted: Arc<AtomicU64>) -> 
         frame
     });
     let mut builder = hyper::Request::post(endpoint).header(header::CONTENT_TYPE, content_type);
-    if let Some(token) = job.address.property("authorization") {
+    if let Some(token) = address.property("authorization") {
         builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
     }
     let mut request = builder
@@ -143,11 +172,11 @@ async fn post(plane: &HttpDataPlane, job: &PushJob, counted: Arc<AtomicU64>) -> 
 /// Writes the audit line of a push sent for transfer `flow` under
 /// `agreement` to `counter_party`.
 pub fn audit(flow: &str, agreement: &str, counter_party: &str, pushed: &Pushed) {
-    audit::transfer_done(&TransferDone {
+    audit::transfer_done(
         flow,
         agreement,
         counter_party,
-        bytes: pushed.bytes,
-        outcome: pushed.outcome(),
-    });
+        pushed.bytes,
+        pushed.outcome(),
+    );
 }

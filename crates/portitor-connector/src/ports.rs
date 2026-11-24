@@ -30,8 +30,9 @@ use portitor_dsp::transfer::provider::{
 };
 use portitor_dsp::transfer::{DataAddress, TransferState};
 
-use crate::auth::{CallerVerifier, NoTokens, Prover, RefuseAll};
+use crate::auth::{CallerVerifier, Membership, NoTokens, Prover, RefuseAll};
 use crate::data_plane::{Flow, FlowStore, FlowStoreError};
+use crate::flow_membership::StoredMembership;
 use crate::http_client::Sender;
 use crate::state_events::{self, Role};
 use crate::store::SqliteNegotiations;
@@ -446,6 +447,9 @@ impl TransferStore for AnyTransferStore {
     fn pending(&self) -> Result<Vec<Transfer>, StoreError> {
         self.0.pending()
     }
+    fn list(&self, after: Option<&str>, limit: usize) -> Result<Vec<Transfer>, StoreError> {
+        self.0.list(after, limit)
+    }
 }
 
 fn transfer_saved_as_provider(transfer: &Transfer, before: Option<TransferState>) {
@@ -621,5 +625,11 @@ impl FlowStore for AnyFlowStore {
     }
     fn started_pushes(&self) -> Result<Vec<String>, FlowStoreError> {
         self.0.started_pushes()
+    }
+    fn memberships(&self, id: &str) -> Result<StoredMembership, FlowStoreError> {
+        self.0.memberships(id)
+    }
+    fn keep_memberships(&self, id: &str, memberships: &[Membership]) -> Result<(), FlowStoreError> {
+        self.0.keep_memberships(id, memberships)
     }
 }
