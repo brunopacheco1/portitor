@@ -9,8 +9,8 @@ SPDX-License-Identifier: Apache-2.0
 - Status: **Proposed** (2026-11-24). The maintainer accepted the
   direction on 2026-11-24 (HTTP push by the Data Plane Signaling HTTP
   profile; data in the provider's object storage served through the
-  provider's own data plane; access always revocable). The open question
-  at the end needs an answer before the code.
+  provider's own data plane; access always revocable). Section 7 decided on
+  2026-11-24.
 - Date: 2026-11-24
 - Scope: release 1.1 ([ROADMAP](../ROADMAP.md#11-push-to-object-storage)).
   Answers [TD-10](../RISKS_AND_TECHNICAL_DEBTS.md#td-10) (push) and
@@ -160,30 +160,39 @@ INFO, `data transfer done`, with `flow`, `agreement`, `counterParty`
 no new format ([TD-31](../RISKS_AND_TECHNICAL_DEBTS.md#td-31), first
 half).
 
-## Open question for the maintainer
+### 7. The provider can always end access (maintainer, 2026-11-24)
 
-**The provider cannot end a transfer from the management API.** 1.0
-has management routes only for the consumer's transfers (TD-11), and
-`/data` checks only the flow's token. So when a consumer's membership is
-revoked, or the provider wants to stop a consumer now, the consumer can
-go on pulling with its token until it expires (`PORTITOR_DATA_TOKEN_SECONDS`,
-one hour by default). That breaks the rule "always able to revoke".
+The maintainer chose both of the following on 2026-11-24. In 1.0 the
+provider had no management route for its own transfers, and `/data`
+checked only the flow's token, so a consumer whose membership was
+revoked could go on pulling until the token expired (one hour by
+default).
 
-Options:
+1. **Provider management routes:** `GET /v1/provided-transfers`,
+   `GET /v1/provided-transfers/{providerPid}` and
+   `POST /v1/provided-transfers/{providerPid}/termination`. A termination
+   sends the DSP termination message and cuts running downloads and
+   pushes at once. Suspend stays out of 1.1 (maintainer, D5).
+2. **The data plane checks the consumer's membership on every
+   request.** When a flow starts, the provider keeps, with the flow, the
+   status entry (`credentialStatus`) and end of validity of the
+   `MembershipCredential` the consumer presented, and its issuer. Every
+   `/data` request, and every push, checks again that the issuer is
+   still in `PORTITOR_TRUSTED_ISSUERS`, the credential has not expired,
+   and its status bit is not set, with the status list cache of ADR 0016
+   (`PORTITOR_STATUS_LIST_CACHE_SECONDS`, default 300, `0` fetches the
+   list on every check). A running download or push is checked again at
+   the same interval and cut when the check fails; the flow is then
+   terminated with the reason. No DCP token is needed on `/data`, so the
+   consumer side does not change. A check that cannot finish (status
+   list unreachable) refuses, as ADR 0016 (amended in 0.11) does.
+   The worst-case delay between a revocation and the refusal is the
+   status list cache time.
 
-1. **Provider management routes** (recommended):
-   `GET /v1/provided-transfers`, `GET /v1/provided-transfers/{providerPid}`
-   and `POST /v1/provided-transfers/{providerPid}/termination`. The
-   operator, or a script watching the revocation, ends a transfer at
-   once; with the cut above the download stops too. Small and additive.
-2. Also have `/data` check the consumer's membership again on each
-   request. That is a DCP check on the data plane, which ADR 0025 and
-   TD-02 left to 1.5.
-3. Shorten `PORTITOR_DATA_TOKEN_SECONDS` only: no code, but it only
-   bounds the time.
-
-The maintainer chose "no provider-side suspend" for 1.1 (D5); this
-question is about terminate, which D5 did not cover.
+`PORTITOR_DATA_TOKEN_SECONDS` keeps its default of one hour, the same as
+Eclipse Siglet's default token life (`exp` = `iat` + 3600). With the two
+checks above, revocation no longer depends on it; it only limits how
+long a leaked token is of use.
 
 ## Consequences
 
