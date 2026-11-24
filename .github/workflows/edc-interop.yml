@@ -5,7 +5,8 @@
 # The EDC interop test (docs/TESTING.md): Portitor (connector and identity)
 # against EDC v1.0.0-RC8 (control plane, data plane, IdentityHub); both
 # ask portitor-issuer for their MembershipCredential. Catalog, negotiation
-# and pull transfer both ways, a dataset that asks for Gaia-X compliance
+# and pull transfer both ways, a push transfer from the Portitor provider
+# to the EDC consumer (ADR 0027), a dataset that asks for Gaia-X compliance
 # (gx-compliance, a test notary and a test CA, as in the Gaia-X test), a
 # second issuer (the EDC Issuer Service: a test credential issued to both,
 # required and checked both ways, then revoked), then revocation by
