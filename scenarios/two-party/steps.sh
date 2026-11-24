@@ -31,8 +31,12 @@
 #    TERMINATED.
 # 6. Request a transfer under the hospital-admissions agreement: STARTED,
 #    with a data address. Fetch the data with the token: it equals the
-#    expected file. Complete the transfer: COMPLETED, the token is gone and
-#    refused.
+#    expected file. Suspend the transfer through the consumer's management
+#    API: SUSPENDED, and the token is refused (401). Start it again:
+#    STARTED, the same token, and the data is fetched again. The
+#    provider's log has one audit line (data transfer done) for each of
+#    the two fetches, complete, with the bytes of the file. Complete the
+#    transfer: COMPLETED, the token is gone and refused.
 # 7. A transfer under the members' agreement of cancer-registry-extract:
 #    STARTED, and its data fetched.
 # 8. A second credential type (ADR 0019): the hospital-admissions offer
@@ -53,6 +57,8 @@
 #   DATA        the folder of the files the provider serves (examples/data)
 #   ISSUER_MANAGEMENT  the issuer's management API base URL
 #   ISSUER_KEY_FILE    the file holding the issuer's management API key
+#   PROVIDER_LOG       a file that receives the provider connector's log
+#                      (JSON lines, as it writes them)
 
 set -euo pipefail
 # shellcheck source=scripts/require-bash.sh
@@ -61,7 +67,7 @@ source "$(dirname "$0")/../../scripts/require-bash.sh"
 : "${PROVIDER:?}" "${MANAGEMENT:?}" "${KEY_FILE:?}" "${DATA:?}"
 : "${PROVIDER_MANAGEMENT:?}" "${PROVIDER_KEY_FILE:?}"
 : "${CONSUMER_ID:?}" "${PROVIDER_ID:?}"
-: "${ISSUER_MANAGEMENT:?}" "${ISSUER_KEY_FILE:?}"
+: "${ISSUER_MANAGEMENT:?}" "${ISSUER_KEY_FILE:?}" "${PROVIDER_LOG:?}"
 HERE=${HERE:-$PROVIDER}
 DSP=dsp/2025-1
 DSP_CONTEXT=https://w3id.org/dspace/2025/1/context.jsonld
@@ -264,6 +270,44 @@ TOKEN=$(jq -r '.dataAddress.endpointProperties[] | select(.name == "authorizatio
 step "Fetch the data with the token"
 fetch "$TRANSFER" "$DATA/hospital-admissions.csv"
 
+step "Suspend the transfer: the provider's data plane refuses the token"
+api POST "/v1/transfers/$TPID/suspension" >/dev/null || fail "suspend"
+SUSPENDED=$(until_state "/v1/transfers/$TPID" 'SUSPENDED|TERMINATED')
+[[ $(state_of "$SUSPENDED") == SUSPENDED ]] || fail "expected SUSPENDED: $SUSPENDED"
+STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$ENDPOINT" -H "authorization: Bearer $TOKEN")
+[[ $STATUS == 401 ]] || fail "while suspended the data plane answered $STATUS, not 401"
+echo "while SUSPENDED the data plane answered $STATUS"
+
+step "Start the transfer again: the same token works"
+api POST "/v1/transfers/$TPID/start" >/dev/null || fail "start again"
+STARTED=$(until_state "/v1/transfers/$TPID" 'STARTED|TERMINATED')
+[[ $(state_of "$STARTED") == STARTED ]] || fail "expected STARTED: $STARTED"
+[[ $(jq -r '.dataAddress.endpointProperties[] | select(.name == "authorization") | .value' \
+  <<<"$STARTED") == "$TOKEN" ]] || fail "the token changed"
+fetch "$STARTED" "$DATA/hospital-admissions.csv" >/dev/null
+echo "fetched again with the same token"
+
+step "The provider's log has an audit line for each of the two fetches"
+# the flow id is the provider's process id; the 401 answers wrote none.
+# Compose may prefix each line, so the JSON is read from its first {
+FLOW=$(jq -r '.providerPid' <<<"$STARTED")
+BYTES=$(wc -c <"$DATA/hospital-admissions.csv" | tr -d ' ')
+audit_lines() {
+  grep -F '"data transfer done"' "$PROVIDER_LOG" | sed 's/^[^{]*//' |
+    jq -c --arg flow "$FLOW" 'select(.fields.flow == $flow) | .fields' || true
+}
+for _ in $(seq 1 50); do
+  [[ $(audit_lines | wc -l) -ge 2 ]] && break
+  sleep 0.2
+done
+LINES=$(audit_lines)
+echo "$LINES"
+[[ $(wc -l <<<"$LINES") == 2 ]] || fail "expected 2 audit lines for flow $FLOW, got: $LINES"
+jq -se --arg agreement "$AGREEMENT" --arg consumer "$CONSUMER_ID" --argjson bytes "$BYTES" \
+  'all(.agreement == $agreement and .counterParty == $consumer and .bytes == $bytes
+       and .outcome == "complete")' <<<"$LINES" >/dev/null ||
+  fail "the audit lines do not name the agreement, the consumer, $BYTES bytes and complete"
+
 step "Complete the transfer: the token is dropped and refused"
 api POST "/v1/transfers/$TPID/completion" >/dev/null || fail "complete"
 DONE=$(until_state "/v1/transfers/$TPID" 'COMPLETED|TERMINATED')
@@ -305,4 +349,4 @@ TRANSFER=$(transfer "$PROCESSING_AGREEMENT")
 jq '{state}' <<<"$TRANSFER"
 [[ $(state_of "$TRANSFER") == TERMINATED ]] || fail "expected TERMINATED: $TRANSFER"
 
-step "Done: the consumer authenticated with DCP, the catalog checked against the data space's HealthDCAT-AP bundle, a contract agreed, changed terms refused, credential claims checked, data transferred, the transfer completed, and a revoked credential refused"
+step "Done: the consumer authenticated with DCP, the catalog checked against the data space's HealthDCAT-AP bundle, a contract agreed, changed terms refused, credential claims checked, data transferred, the transfer suspended and started again, each pull in the provider's audit log, the transfer completed, and a revoked credential refused"

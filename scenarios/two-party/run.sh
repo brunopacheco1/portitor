@@ -90,6 +90,7 @@ openssl rand -hex 32 >"$RUN/provider/management.key"
 
 cleanup() {
   status=$?
+  if [[ -n ${LOG_FOLLOWER:-} ]]; then kill "$LOG_FOLLOWER" 2>/dev/null || true; fi
   if [[ $status -ne 0 ]]; then "${COMPOSE[@]}" logs --no-color --tail 30 >&2 || true; fi
   if [[ ${KEEP:-} != 1 ]]; then
     "${COMPOSE[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -169,9 +170,14 @@ request_credentials consumer 18093 membership-vc20 data-processor-vc20
 
 # --- 4. the demo steps ------------------------------------------------------
 
+# the provider's log, followed into a file, for the audit line check
+"${COMPOSE[@]}" logs --no-color --no-log-prefix -f provider >"$RUN/provider.log" 2>&1 &
+LOG_FOLLOWER=$!
+
 PROVIDER=http://provider:8080 HERE=http://127.0.0.1:18080 \
   PROVIDER_MANAGEMENT=http://127.0.0.1:18081 PROVIDER_KEY_FILE="$RUN/provider/management.key" \
   MANAGEMENT=http://127.0.0.1:18091 KEY_FILE="$RUN/consumer/management.key" \
   CONSUMER_ID="$CONSUMER_ID" PROVIDER_ID="$PROVIDER_ID" \
   ISSUER_MANAGEMENT="$ISSUER_MANAGEMENT" ISSUER_KEY_FILE="$RUN/issuer/management.key" \
+  PROVIDER_LOG="$RUN/provider.log" \
   DATA=examples/data scenarios/two-party/steps.sh

@@ -10,6 +10,22 @@ How the scenario changed, newest first. Each entry names the Portitor
 version it ran on. The repository's [CHANGELOG](../../CHANGELOG.md) has
 the release notes these come from.
 
+## 2026-11-24, for 1.1.0
+
+- Step 5 suspends the first transfer through the consumer's management
+  API, checks that the token is refused while it is `SUSPENDED`, starts
+  it again and fetches the file again with the same token
+  ([TD-11](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-11)).
+- Step 5 also checks the provider's audit line, `data transfer done`,
+  for each of the two fetches
+  ([TD-31](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-31)). `steps.sh`
+  takes the provider's log file as `PROVIDER_LOG`: `run-local.sh` passes
+  the connector's log, `run.sh` follows `compose logs provider` into
+  `run/provider.log`.
+- These steps need 1.1.0 images: with the 1.0.0 images that
+  `compose.yaml` still names by default, `run.sh` fails at the
+  suspension. CI passes the images it builds.
+
 ## 2026-11-24, for 1.0.0
 
 - `compose.yaml` takes the 1.0.0 release images by default. The

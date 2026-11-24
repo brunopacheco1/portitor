@@ -1389,6 +1389,9 @@ walks through it.
 - Running it again after `KEEP=1` works: the script first removes the
   containers and volumes of the last run
   (`docker compose down --volumes --remove-orphans`), then `run/`.
+- It follows the provider's log into `scenarios/two-party/run/provider.log`
+  (`compose logs -f provider`), where the steps look for the audit line
+  of each pull. The suspension and audit steps need 1.1 images or later.
 - The images must be 0.9 or later: the Compose file starts each service
   once the ones it needs are healthy (`condition: service_healthy`),
   which needs the image's `health` subcommand.

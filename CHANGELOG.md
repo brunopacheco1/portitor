@@ -12,6 +12,18 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Added
+
+- Management API: `POST /v1/transfers/{consumerPid}/suspension` and
+  `POST /v1/transfers/{consumerPid}/start` suspend a transfer as
+  consumer and start it again, with the rules of `/completion` and
+  `/termination` (TD-11, first half). The token stays the same.
+- Audit line for each data pull: the provider's data plane writes one
+  INFO line, `data transfer done` (target `portitor::audit`), with
+  `flow`, `agreement`, `counterParty`, `bytes` and `outcome`
+  (`complete`, `cut`, `failed`) for each `/data` answer
+  ([OPERATING](docs/OPERATING.md), TD-31, first half).
+
 ## [1.0.0] - 2026-11-24
 
 Portitor 1.0, the first stable release. From now on, a 1.x release may
