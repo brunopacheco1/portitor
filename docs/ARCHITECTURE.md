@@ -92,6 +92,8 @@ specification and link here.
 | Dataspace Protocol (DSP) | 2025-1 | `VERSION` in `crates/portitor-dsp/src/lib.rs`; its JSON Schemas in `crates/portitor-dsp/tests/schemas` |
 | Decentralized Claims Protocol (DCP) | v1.0.1 | its JSON Schemas in `crates/portitor-dcp/tests/schemas` and the test that reads them, `crates/portitor-dcp/tests/spec.rs`; the code comments cite v1.0.1 sections |
 | Eclipse Data Plane Signaling | v1.0-RC4 (tag of 2026-08-27) | `crates/portitor-dps/src/lib.rs` |
+| Data Plane Signaling HTTP Transfer Profile (push, 1.1) | Draft, not tagged; last changed 2026-09-25, read on 2026-11-24 | `HTTP_PUSH_ENDPOINT_TYPE` in `crates/portitor-dsp/src/transfer.rs`; [ADR 0027](adr/0027-push-transfers-and-object-storage.md) |
+| AWS Signature Version 4 (object storage, 1.1) | The AWS test suite cases in the unit tests; RustFS 1.0.6 in the two-party scenario | `crates/portitor-connector/src/object_storage/sigv4.rs`; `scenarios/two-party/compose.yaml` |
 | DSP TCK | v1.0.2, built from a pinned commit | `DSP_TCK_REF` and `DSP_TCK_COMMIT` in `.github/workflows/tck.yml` |
 | DCP TCK | 1.2.1, the released jar, by SHA-256 | `DCP_TCK_JAR` and `DCP_TCK_SHA256` in the same file |
 | Eclipse EDC (Connector and IdentityHub), interop test | 1.0.0-RC8 | `edcVersion` in `scenarios/edc-interop/runtimes/gradle.properties` |
@@ -152,7 +154,11 @@ answer the health checks, without the API key, and each container sends
 its traces and metrics over OTLP/HTTP to the operator's observability
 backend (an OpenTelemetry collector) only when
 `OTEL_EXPORTER_OTLP_ENDPOINT` is set
-([ADR 0023](adr/0023-observability.md)).
+([ADR 0023](adr/0023-observability.md)). Since 1.1 the connector can
+use one S3-compatible object storage, drawn with the data source: it
+reads `s3://` sources there, and as consumer it stores the data a
+provider pushes to it; pushed data travels between connectors on port
+8080 ([ADR 0027](adr/0027-push-transfers-and-object-storage.md)).
 
 ![C2 Containers](diagrams/c2-containers.drawio.svg)
 
@@ -192,7 +198,10 @@ address the consumer's application uses at `/data/{flowId}` (ADRs
 [0013](adr/0013-transfer-and-data-plane.md),
 [0014](adr/0014-transfers-as-consumer.md),
 [0016](adr/0016-dsp-caller-authentication.md),
-[0019](adr/0019-credential-constraints.md)).
+[0019](adr/0019-credential-constraints.md)). Its footnote says what 1.1
+adds to this flow (the membership checked again, running downloads cut,
+the audit line, `s3://` sources); a push transfer is not drawn
+([ADR 0027](adr/0027-push-transfers-and-object-storage.md)).
 
 Two APIs carry this flow, and they have different callers. The
 **management API** (port 8081, API key, `/v1/...`) is for the operator
@@ -209,6 +218,9 @@ connector send one DSP message, so some paths look alike:
 | `POST /v1/transfers` | `POST /transfers/request` | 19, 20 |
 | `POST /v1/transfers/{consumerPid}/completion` | `POST /transfers/{providerPid}/completion` | 29, 30 |
 | `POST /v1/transfers/{consumerPid}/termination` | `POST /transfers/{providerPid}/termination` | not drawn |
+| `POST /v1/transfers/{consumerPid}/suspension` (1.1) | `POST /transfers/{providerPid}/suspension` | not drawn |
+| `POST /v1/transfers/{consumerPid}/start` (1.1) | `POST /transfers/{providerPid}/start` | not drawn |
+| `POST /v1/provided-transfers/{providerPid}/termination` (1.1, as provider) | `POST {callback}/transfers/{consumerPid}/termination` | not drawn |
 
 The management call takes no DSP message: the connector builds it,
 gets a token and, for a negotiation or a transfer, saves it before
@@ -229,7 +241,11 @@ provider checks it for an offer that requires it
 domain crates ([ADR 0004](adr/0004-hexagonal-architecture.md)). The
 shared `portitor-runtime` also holds the health checks (`health.rs`) and
 the traces and metrics (`telemetry.rs`) of all three
-([ADR 0023](adr/0023-observability.md)).
+([ADR 0023](adr/0023-observability.md)). The connector's row of 1.1
+components is drawn below its data plane: the push sender, the
+receiving route, the running flows and membership gate, the object
+storage client and the audit line
+([ADR 0027](adr/0027-push-transfers-and-object-storage.md)).
 
 ![C3 Components of portitor-connector](diagrams/c3-connector-components.drawio.svg)
 
@@ -258,7 +274,11 @@ The provider side of contract negotiation: `ProviderService` in
 The provider side of a transfer: `TransferService` checks the agreement,
 then starts the data flow through Data Plane Signaling (`portitor-dps`)
 on the built-in data plane, which gives the consumer a data address with
-a bearer token.
+a bearer token. Since 1.1 the data plane also holds a `PushJob` for a
+push flow, sent by `send` (`push.rs`); it reads `s3://` sources through
+`ObjectStorage`, cuts running downloads and pushes through
+`RunningFlows`, and checks the consumer's membership again through
+`MembershipGate` ([ADR 0027](adr/0027-push-transfers-and-object-storage.md)).
 
 ![C4 Code: provider transfer process](diagrams/c4-transfer-code.drawio.svg)
 
@@ -340,12 +360,14 @@ organisation (a legal person) that runs a connector, named by one DID
 
 Portitor does not identify the people or applications inside an
 organisation (user to system). The operator's management APIs are
-protected by an API key, and the data plane checks only the transfer's
-bearer token: whoever in the consumer's organisation holds it gets the
-data. This is decided for 1.x ([ADR 0025](adr/0025-users-and-roles.md),
+protected by an API key, and the data plane checks the transfer's
+bearer token and, since 1.1, that the consumer is still a member
+([ADR 0027](adr/0027-push-transfers-and-object-storage.md)): whoever in
+the consumer's organisation holds the token gets the data. This is
+decided for 1.x ([ADR 0025](adr/0025-users-and-roles.md),
 accepted 2026-11-20): users stop at the organisation's own reverse
-proxy, and the provider's data plane does not know persons. What the
-data plane checks again about the participant on each pull is open,
+proxy, and the provider's data plane does not know persons. Whether the
+data plane should check more about the caller on each pull is open,
 listed as technical debt in
 [RISKS_AND_TECHNICAL_DEBTS](RISKS_AND_TECHNICAL_DEBTS.md#td-02) ("Who
 calls the data plane, and with which credentials", TD-02; and TD-04, user
@@ -675,6 +697,10 @@ specification until its 1.0 release and record each update in the
 changelog ([R-06](RISKS_AND_TECHNICAL_DEBTS.md#r-06)). Interoperability
 with EDC and Simpl-Open is not affected either way: other connectors see
 only DSP and the data endpoint, never our internal split.
+
+Since 1.1 the built-in data plane also pushes over HTTP and reads
+S3-compatible object storage, still inside the connector's process
+([ADR 0027](adr/0027-push-transfers-and-object-storage.md)).
 
 **In code.** The domain crate `portitor-dps` holds the signaling
 messages, the data flow state machine and two ports: `DataPlane` (what the

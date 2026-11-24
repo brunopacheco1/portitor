@@ -234,6 +234,33 @@ CI job (maintainer, 2026-11-15).
 - Exit: a push transfer lands in RustFS; pull still passes the DSP TCK,
   the DCP TCK and the EDC interop test.
 - Main risk: no S3 data address shared by EDC and Simpl-Open.
+- Done on the 1.1 branch (2026-11-24; not released yet):
+  - Push, not as planned above: no S3 address crosses between
+    participants. The provider pushes over HTTP, as the Data Plane
+    Signaling HTTP Transfer Profile says (`HttpData-PUSH`), and the
+    consumer's connector streams the data into its own bucket
+    (`PORTITOR_PUSH_BUCKET`); a dataset may also live in the provider's
+    object storage (`s3://`), still pulled over `/data`
+    ([ADR 0027](adr/0027-push-transfers-and-object-storage.md);
+    [R-38](RISKS_AND_TECHNICAL_DEBTS.md#r-38) closed,
+    [TD-10](RISKS_AND_TECHNICAL_DEBTS.md#td-10) mitigated). The
+    two-party scenario pushes into RustFS, in CI.
+  - Suspend and start again as consumer
+    ([TD-11](RISKS_AND_TECHNICAL_DEBTS.md#td-11)).
+  - A termination from a revoked partner is accepted
+    ([TD-47](RISKS_AND_TECHNICAL_DEBTS.md#td-47)); the
+    hdab-intermediary scenario is not run on 1.1 yet.
+  - The audit line `data transfer done`, for each pull, push sent and
+    push received ([TD-31](RISKS_AND_TECHNICAL_DEBTS.md#td-31), first
+    half).
+  - Added by the maintainer on 2026-11-24 (ADR 0027, section 7): the
+    provider can always end access. Management routes for the
+    transfers it runs (`/v1/provided-transfers`), the consumer's
+    membership checked again on every `/data` request and while a
+    download runs, and running downloads cut on suspend and terminate.
+  - The shared process core of "Code quality in 1.x", done before push
+    as planned ([TD-42](RISKS_AND_TECHNICAL_DEBTS.md#td-42)).
+  - Not done yet: demo step 1.
 
 ### 1.2 Purpose and data permit in policies
 
@@ -346,7 +373,9 @@ code is written once.
 - One shared core for the negotiation and transfer logic, as provider
   and as consumer, in place of the four near-copies; the in-memory
   stores move out of the production code into the tests
-  ([TD-42](RISKS_AND_TECHNICAL_DEBTS.md#td-42)).
+  ([TD-42](RISKS_AND_TECHNICAL_DEBTS.md#td-42)). Done on the 1.1
+  branch: `crates/portitor-dsp/src/process.rs` and
+  `crates/portitor-connector/src/test_stores.rs`.
 - No source file above 1,000 lines, tests not counted: `auth/dcp.rs`,
   the issuer's and the identity's `store.rs`, `dcp/bundle.rs` and
   `runtime/http.rs` are split by topic ([R-01](RISKS_AND_TECHNICAL_DEBTS.md#r-01)).
@@ -377,7 +406,7 @@ rejects. It runs beside the releases.
 | Several dataspaces ([TD-03](RISKS_AND_TECHNICAL_DEBTS.md#td-03)) | Accepted in 0.13 ([ADR 0024](adr/0024-several-data-spaces.md)) |
 | Users and roles ([TD-04](RISKS_AND_TECHNICAL_DEBTS.md#td-04)) | Accepted in 0.13 ([ADR 0025](adr/0025-users-and-roles.md)); code in 1.5 |
 | Who calls the data plane ([TD-02](RISKS_AND_TECHNICAL_DEBTS.md#td-02)) | 1.5 |
-| S3 data address | 1.1 |
+| S3 data address | Answered in 1.1: none is needed ([ADR 0027](adr/0027-push-transfers-and-object-storage.md)) |
 | Agreements that depend on an upstream agreement | 1.3 |
 | Consent | 1.5 |
 | How schemas are published ([TD-01](RISKS_AND_TECHNICAL_DEBTS.md#td-01)) | with TD-03 |
