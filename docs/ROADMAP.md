@@ -260,7 +260,9 @@ CI job (maintainer, 2026-11-15).
     download runs, and running downloads cut on suspend and terminate.
   - The shared process core of "Code quality in 1.x", done before push
     as planned ([TD-42](RISKS_AND_TECHNICAL_DEBTS.md#td-42)).
-  - Not done yet: demo step 1.
+  - Demo step 1: in `scenarios/hdab-intermediary`, Lux Biobank pushes
+    the genotypes into the lab's own RustFS bucket. Written; to be run
+    by hand with 1.1 images.
 
 ### 1.2 Purpose and data permit in policies
 
