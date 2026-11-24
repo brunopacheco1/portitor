@@ -323,7 +323,10 @@ For example:
 {"timestamp":"2026-11-24T10:00:00.000000Z","level":"INFO","fields":{"message":"data transfer done","flow":"urn:uuid:6f0c...","agreement":"urn:uuid:a1b2...","counterParty":"did:web:consumer.example","bytes":18,"outcome":"complete"},"target":"portitor::audit"}
 ```
 
-A refused request (HTTP 401) writes no audit line. The line never holds
+A refused request (HTTP 401) writes no audit line. When the transfer
+cannot be read from the database, `agreement` and `counterParty` are
+empty, the data is served anyway, and a WARN line `audit: transfer
+store failed` comes first. The line never holds
 the token or the data source's URL. Portitor keeps no audit store: keep
 these lines as long as your rules require (ADR 0025, "Audit"). With
 `RUST_LOG` set, keep `portitor::audit=info` in it.

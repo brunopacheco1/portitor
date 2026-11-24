@@ -820,8 +820,8 @@ fn the_description_has_the_catalog_calls_and_403_on_every_protected_route() {
             assert!(description.contains("keeps every right"), "{method} {path}");
         }
     }
-    // 2 catalog, 3 negotiation, 5 transfer and 2 harvest calls
-    assert_eq!(protected, 12);
+    // 2 catalog, 3 negotiation, 7 transfer and 2 harvest calls
+    assert_eq!(protected, 14);
     // ADR 0025, point 3: `dataAddress` stays optional
     let transfer = &spec["components"]["schemas"]["TransferView"];
     let required = transfer["required"].as_array().unwrap();
