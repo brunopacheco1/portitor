@@ -30,7 +30,12 @@
 #  6. EDC consumer, Portitor provider: catalog (HealthDCAT-AP datasets
 #     checked against the bundle, with dct:conformsTo and full-IRI
 #     metadata), negotiation, PULL transfer, fetch through the EDC data
-#     plane.
+#     plane. Then a PUSH transfer under the same agreement (ADR 0027,
+#     section 1): EDC asks for HttpData-PUSH, its data plane names the
+#     receiving endpoint (endpointType
+#     https://w3id.org/dspace-sig/profile/http-push, a bearer token), and
+#     Portitor POSTs the dataset there and completes the transfer: COMPLETED
+#     on both sides, the bytes the EDC data plane received equal the file.
 #  7. Gaia-X compliance:
 #     a. Portitor's identity did its Gaia-X onboarding and holds a
 #        gx:ParticipantComplianceCredential from the compliance service.
@@ -411,10 +416,12 @@ cmp -s "$RUN/edc/served-chain.pem" "$RUN/edc/certificate-chain.pem" ||
 step "EDC control plane: the data plane, an asset and an offer"
 # EDC 1.0 data planes speak the Data Plane Signaling API; each side
 # registers the other (no authorization: test-only, see runtimes/; the
-# test data plane names every caller "controlplane")
+# test data plane names every caller "controlplane"). HttpData-PUSH: EDC
+# picks a data plane by the transfer type, also as consumer, and asks it
+# for the push address (step 6)
 edc_management PUT /v4/dataplanes '{
   "dataplaneId": "edc-dataplane", "endpoint": "http://edc-dataplane:8080/api/v1/dataflows",
-  "profiles": ["HttpData-PULL"], "labels": [], "authorization": {"type": "none"}}' \
+  "profiles": ["HttpData-PULL", "HttpData-PUSH"], "labels": [], "authorization": {"type": "none"}}' \
   >/dev/null || fail "register the data plane"
 curl -sS --fail-with-body -X PUT "$EDC_DATAPLANE/v1/controlplanes" \
   -H "$CONTENT_TYPE_JSON" -d '{
@@ -661,6 +668,44 @@ edc_pull() { # agreement published-file: EDC pulls the data; checks it equals th
 
 step "EDC pulls the data from the Portitor provider"
 edc_pull "$EDC_AGREEMENT" "$DIR/data/portitor-provider.csv"
+
+edc_push() { # agreement published-file: EDC asks Portitor to push; checks what arrived
+  # EDC v1.0.0-RC8's TransferRequest has no data destination: as consumer
+  # it asks its data plane to prepare the flow, and sends the address the
+  # data plane gives (runtimes/dataplane: endpointType
+  # https://w3id.org/dspace-sig/profile/http-push, its /push/<transfer id>,
+  # authorization and authType bearer) in the TransferRequestMessage
+  local agreement=$1 published=$2 transfer provided
+  transfer=$(edc_management POST /v4/transferprocesses "$(jq -nc --argjson c "$CONTEXT" \
+    --arg addr "$PORTITOR_DSP_INSIDE" --arg p "$EDC_PROTOCOL" --arg a "$agreement" '{
+    "@context": $c, "@type": "TransferRequest",
+    counterPartyAddress: $addr, protocol: $p, contractId: $a,
+    transferType: "HttpData-PUSH"}')" | jq -r '.["@id"]') || fail "start the EDC push transfer"
+  # Portitor starts the transfer, POSTs the data, and on a 2xx answer sends
+  # its completion
+  until_state edc_management "/v4/transferprocesses/$transfer" 'COMPLETED|TERMINATED' \
+    >"$RUN/edc-push-transfer.json"
+  [[ $(jq -r "$STATE_PATH" "$RUN/edc-push-transfer.json") == COMPLETED ]] ||
+    fail "expected COMPLETED: $(cat "$RUN/edc-push-transfer.json")"
+  # the EDC data plane kept what Portitor pushed (EDC's transfer id is its consumerPid)
+  rm -f "$RUN/pushed-by-portitor"
+  curl -sf "$EDC_DATAPLANE/consumer/$transfer/pushed" -o "$RUN/pushed-by-portitor" ||
+    fail "the EDC data plane received no push for $transfer"
+  cmp -s "$RUN/pushed-by-portitor" "$published" || fail "the data Portitor pushed differs from $published"
+  echo "received $(wc -c <"$RUN/pushed-by-portitor") bytes by push, as published"
+  # Portitor's side: the transfer it ran as provider is COMPLETED (it
+  # records that once EDC has acknowledged the completion)
+  for _ in $(seq 1 20); do
+    provided=$(portitor GET "/v1/provided-transfers?limit=100" | jq -c --arg c "$transfer" \
+      '.transfers[] | select(.consumerPid == $c)') || fail "read Portitor's provided transfers"
+    jq -e '.state == "COMPLETED" and .format == "HttpData-PUSH"' <<<"$provided" >/dev/null && return 0
+    sleep 0.5
+  done
+  fail "Portitor's transfer is not a COMPLETED HttpData-PUSH: ${provided:-none}"
+}
+
+step "EDC asks the Portitor provider for a push: Portitor sends the data to the EDC data plane"
+edc_push "$EDC_AGREEMENT" "$DIR/data/portitor-provider.csv"
 
 # --- 7. Gaia-X compliance ---------------------------------------------------------
 
@@ -1157,7 +1202,7 @@ VIEW=$(edc_negotiate "$PORTITOR_DATASET" "$PORTITOR_OFFER")
 jq -r '.errorDetail' <<<"$VIEW" | grep -q 'code=404' || fail "not refused with 404: $VIEW"
 echo "the negotiation ended TERMINATED: Portitor answered 404"
 
-step "Done: credentials issued and checked both ways, data transferred both ways, Gaia-X compliance required and met, a credential of the EDC Issuer Service required and met both ways, revocation honoured"
+step "Done: credentials issued and checked both ways, data transferred both ways (pull both ways, push from Portitor to EDC), Gaia-X compliance required and met, a credential of the EDC Issuer Service required and met both ways, revocation honoured"
 if [[ ${KEEP:-} == 1 ]]; then
   echo "KEEP=1: the data space keeps running; see docs/TESTING.md, \"The EDC interop run by hand\"."
   echo "Remove it with: ${COMPOSE[*]} down --volumes && rm -rf $RUN"

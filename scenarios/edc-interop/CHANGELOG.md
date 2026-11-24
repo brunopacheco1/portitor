@@ -11,6 +11,23 @@ version it ran on. Before 2026-11-24 it was `scripts/edc-interop.sh`
 with `interop/edc/`; the repository's [CHANGELOG](../../CHANGELOG.md)
 has those entries in full.
 
+## 2026-11-24, for 1.1.0
+
+- Step 6 adds a push transfer (`HttpData-PUSH`, ADR 0027 section 1),
+  EDC consumer, Portitor provider, under the step's agreement: EDC asks
+  its data plane for the receiving address and sends it in its transfer
+  request; Portitor `POST`s the dataset there and completes the
+  transfer. The run checks `COMPLETED` on both sides and that the bytes
+  received equal `data/portitor-provider.csv`.
+- The Portitor dataset `portitor-interop` gains an `HttpData-PUSH`
+  distribution. The EDC data plane is registered for `HttpData-PUSH`
+  too, and `runtimes/dataplane` names the push address (endpoint type
+  `https://w3id.org/dspace-sig/profile/http-push`, a bearer token),
+  keeps what arrives, and answers a push only once its control plane
+  has said the flow started (README, "Findings").
+- Needs 1.1.0 Portitor images: push came in 1.1.
+- Not yet run: written without a container engine.
+
 ## 2026-11-24, on 1.0.0-rc.1
 
 - Moved to `scenarios/edc-interop/`, with this README and changelog. It

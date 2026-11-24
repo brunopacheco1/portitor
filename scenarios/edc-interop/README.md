@@ -18,7 +18,8 @@ last run that passed, and what EDC needs.
 Portitor must work with EDC, the most used connector (ADR 0011). Here a
 Portitor participant and an EDC v1.0.0-RC8 participant get their
 memberships from Portitor's issuer, read each other's catalogs, agree
-contracts and pull data, both ways. Then each needs a credential of a
+contracts and pull data, both ways, and EDC asks Portitor to push data
+to it. Then each needs a credential of a
 second issuer, the EDC Issuer Service, and Portitor asks EDC for a Gaia-X
 compliance credential.
 
@@ -35,6 +36,9 @@ In:
   6.5), and by the EDC Issuer Service to both.
 - Catalog, negotiation and HTTP pull transfer, Portitor to EDC and EDC to
   Portitor.
+- HTTP push transfer (`HttpData-PUSH`, ADR 0027 section 1) with EDC as
+  consumer and Portitor as provider: Portitor sends the data to the
+  endpoint EDC names.
 - The HealthDCAT-AP bundle: EDC reads a Portitor catalog checked against
   it.
 - Gaia-X: an EDC participant holds and presents a Gaia-X compliance
@@ -49,8 +53,11 @@ Out, on purpose:
 - A real Gaia-X trust anchor: the compliance service runs in test mode,
   with a test CA and a test notary
   ([R-12](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#r-12)).
-- Push transfers (1.1) and the EDC Management API v4 beyond what the
-  steps call.
+- Push with Portitor as consumer and EDC as provider: EDC v1.0.0-RC8
+  ships no data plane, and the test one in `runtimes/dataplane` does not
+  send data. Push into object storage (ADR 0027, sections 2 to 4) is in
+  the two-party scenario.
+- The EDC Management API v4 beyond what the steps call.
 
 ## Components tested, and why
 
@@ -59,8 +66,8 @@ Out, on purpose:
 | `portitor-issuer` | The data space's authority: registers both participants, issues their `MembershipCredential`s, serves the HealthDCAT-AP bundle and its status list; revokes in step 9. |
 | `portitor-identity` | Asks both issuers for credentials, stores them, answers EDC's presentation queries; does its own Gaia-X onboarding. |
 | `portitor-connector` as consumer | Reads EDC's catalog, negotiates, pulls from the EDC data plane, through its management API. |
-| `portitor-connector` as provider | Serves a catalog EDC reads, checks EDC's credentials (membership, Gaia-X compliance, the EDC Issuer Service's test credential) and their status lists. |
-| EDC control plane, data plane, IdentityHub, Issuer Service (v1.0.0-RC8) | The other side: built from `runtimes/` with pinned versions, as EDC publishes no images. |
+| `portitor-connector` as provider | Serves a catalog EDC reads, checks EDC's credentials (membership, Gaia-X compliance, the EDC Issuer Service's test credential) and their status lists; pushes a dataset to the endpoint EDC names. |
+| EDC control plane, data plane, IdentityHub, Issuer Service (v1.0.0-RC8) | The other side: built from `runtimes/` with pinned versions, as EDC publishes no images. The test data plane (`runtimes/dataplane`) also receives the push and keeps what arrived. |
 | Gaia-X compliance service (gx-compliance v2.16.0, test mode) | Issues the compliance credentials ([examples/gaiax/compliance.yaml](../../examples/gaiax/compliance.yaml)). |
 
 ## Run it
@@ -98,6 +105,12 @@ of its header comment. Steps 1 and 2 make the keys and start everything.
    transfer, the bytes equal the original.
 6. **EDC consumer, Portitor provider.** EDC reads the HealthDCAT-AP
    datasets, checked against the bundle; negotiation, pull transfer.
+   Then, under the same agreement, EDC asks for `HttpData-PUSH`: its
+   data plane names the endpoint (`endpointType`
+   `https://w3id.org/dspace-sig/profile/http-push`, a bearer token),
+   Portitor `POST`s the dataset there and completes the transfer.
+   `COMPLETED` on both sides, and the bytes the EDC data plane received
+   equal the file.
 7. **Gaia-X.** Portitor's identity holds a compliance credential. The
    Portitor provider's offer for compliant participants refuses EDC,
    then admits it once EDC holds its own compliance credential.
@@ -109,6 +122,25 @@ of its header comment. Steps 1 and 2 make the keys and start everything.
    membership, the other refuses it, both ways.
 
 ## Findings
+
+- **EDC v1.0.0-RC8 asks for a push through its data plane.** Its
+  management API's `TransferRequest` has no data destination: as
+  consumer, the control plane asks a data plane registered for the
+  transfer type to prepare the flow, and sends the data address the data
+  plane returns, as it is, in the `TransferRequestMessage`. So the
+  `endpointType` and the token are the data plane's choice; the test data
+  plane uses the Data Plane Signaling HTTP profile's push type, which
+  Portitor requires.
+- **EDC acknowledges the start of a push before it is ready for the
+  end.** On the provider's `TransferStartMessage` EDC answers 200 but
+  stays in `STARTUP_REQUESTED`, shown as `REQUESTED` over DSP, until its
+  state machine (one pass a second by default) tells its data plane; a
+  `TransferCompletionMessage` before that gets 400, and Portitor then
+  terminates the transfer. A small dataset is pushed within that second.
+  So the test data plane answers a push only once its control plane has
+  told it the flow started. A consumer data plane that answers at once
+  would see such a transfer terminated whenever the push ends before
+  EDC's state machine has run.
 
 - **EDC as provider cannot ask for Gaia-X compliance** (out of scope
   above): EDC refuses a credential whose subject is not the presenter,
