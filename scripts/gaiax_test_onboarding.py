@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 """TEST ONLY: Gaia-X onboarding for a participant whose wallet has no
-Gaia-X support, for scripts/edc-interop.sh.
+Gaia-X support, for scenarios/edc-interop/run.sh.
 
 A Portitor identity does its Gaia-X onboarding itself (ADR 0021). The
 EDC IdentityHub (v1.0.0-RC8) has no Gaia-X onboarding, so in the EDC

@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: Portitor contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# A local Gaia-X compliance service in test mode, and its database, for
+# the scenarios that need one (scenarios/gaiax-compliance and
+# scenarios/edc-interop). Each extends these two services and mounts its
+# own keys (/keys) and test CA (/ca); docs/TESTING.md, "Gaia-X end-to-end
+# test", says what test mode accepts.
+
+services:
+  memgraph:
+    image: docker.io/memgraph/memgraph:3.9.0@sha256:50c64e0446d79b82999de87715dfd5d2abc35f8c8545d6f4cdf28948f2e17d5a
+
+  # did:web:compliance.gaiax.test (from BASE_URL); its key is RSA (PS256),
+  # its certificate from the test CA
+  compliance:
+    image: registry.gitlab.com/gaia-x/lab/compliance/gx-compliance:v2.16.0@sha256:63d1edcca8acc60b3e8df89fd5fa9a59468afb8342771c629bde26ca0e4581b8
+    # it takes its key and certificate chain as PEM text in X509_CERTIFICATE
+    # and PRIVATE_KEY; read them from /keys, which each scenario mounts with the files its run.sh writes (and the test CA in /ca)
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        export X509_CERTIFICATE="$$(cat /keys/certificate-chain.pem)"
+        PRIVATE_KEY="$$(cat /keys/private-key.pem)";
+        exec docker-entrypoint.sh node dist/src/main
+    environment:
+      BASE_URL: https://compliance.gaiax.test
+      PRIVATE_KEY_ALGORITHM: PS256
+      REGISTRY_URL: https://registry.lab.gaia-x.eu/v2
+      USE_OFFLINE_DOCUMENT_LOADER: "true"
+      DISABLE_SIGNATURE_CHECK: "true"
+      production: "false"
+      dburl: bolt://memgraph:7687
+      NODE_EXTRA_CA_CERTS: /ca/ca.pem
+    depends_on: [memgraph]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/.well-known/did.json"]
+      interval: 2s
+      timeout: 5s
+      retries: 90

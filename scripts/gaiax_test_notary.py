@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Portitor contributors
 #
 # SPDX-License-Identifier: Apache-2.0
-"""TEST ONLY: a stand-in for a Gaia-X notary, for scripts/gaiax-e2e.sh.
+"""TEST ONLY: a stand-in for a Gaia-X notary, for scenarios/gaiax-compliance/run.sh.
 
 A Gaia-X Digital Clearing House notary checks a legal registration
 number and signs a credential for it (gx:VatID, gx:LeiCode, ...). A

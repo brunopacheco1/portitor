@@ -19,16 +19,10 @@ __pycache__/
 !.vscode/tasks.json
 !.vscode/extensions.json
 
-# the Compose demo's generated keys, secrets and authority site
-# (scripts/demo-compose.sh writes them)
-/examples/compose/run/
+# what each scenario's run.sh writes into its run/: keys, secrets,
+# test CAs, credentials, the authority's bundle
+/scenarios/*/run/
 
-# the EDC interop test's generated keys, secrets and authority site
-# (scripts/edc-interop.sh writes them), and its Gradle outputs
-/interop/edc/run/
-/interop/edc/runtimes/**/build/
-/interop/edc/runtimes/.gradle/
-
-# the Gaia-X end-to-end test's generated test CA, keys and credentials
-# (scripts/gaiax-e2e.sh writes them)
-/interop/gaiax/run/
+# the EDC interop scenario's Gradle outputs
+/scenarios/edc-interop/runtimes/**/build/
+/scenarios/edc-interop/runtimes/.gradle/

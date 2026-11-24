@@ -25,11 +25,13 @@ All commands run from the repository root. Deploying for real is in
 | Documentation matches the code (C4 diagrams, OpenAPI versions) | `python3 scripts/check_docs.py` | every PR (`CI`) |
 | DSP conformance (TCK) | see [below](#dsp-conformance-tck) | every PR that changes more than prose (`TCK`) |
 | DCP conformance: identity component, connector as verifier, issuer (TCK) | see [below](#dcp-conformance-tck) | every PR that changes more than prose (`TCK`) |
-| Interoperability with EDC v1.0.0-RC8, with Gaia-X compliance | `scripts/edc-interop.sh`, see [below](#edc-interop-test) | PRs that touch `crates/`, `Cargo.toml`, `Cargo.lock`, the `Dockerfile`, `.dockerignore`, `interop/edc/`, `interop/gaiax/compose.yaml`, `examples/bundle/`, the scripts it uses or its workflow, and nightly (`EDC interop`) |
-| Gaia-X compliance between Portitor participants, against a local Gaia-X compliance service in test mode | `scripts/gaiax-e2e.sh`, see [below](#gaia-x-end-to-end-test) | PRs that touch `crates/`, `Cargo.toml`, `Cargo.lock`, the `Dockerfile`, `.dockerignore`, `examples/issuer-credentials.json`, `interop/gaiax/`, the scripts or the workflow, and nightly (`Gaia-X`) |
+| Interoperability with EDC v1.0.0-RC8, with Gaia-X compliance | `scenarios/edc-interop/run.sh`, see [below](#edc-interop-test) | PRs that touch `crates/`, `Cargo.toml`, `Cargo.lock`, the `Dockerfile`, `.dockerignore`, `scenarios/edc-interop/`, `examples/gaiax/`, `examples/bundle/`, the scripts it uses or its workflow, and nightly (`EDC interop`) |
+| Gaia-X compliance between Portitor participants, against a local Gaia-X compliance service in test mode | `scenarios/gaiax-compliance/run.sh`, see [below](#gaia-x-end-to-end-test) | PRs that touch `crates/`, `Cargo.toml`, `Cargo.lock`, the `Dockerfile`, `.dockerignore`, `examples/issuer-credentials.json`, `scenarios/gaiax-compliance/`, `examples/gaiax/`, the scripts or the workflow, and nightly (`Gaia-X`) |
 | Fuzzing | see [below](#fuzzing) | PRs that touch `crates/`, `fuzz/`, `.clusterfuzzlite/`, `Cargo.toml` or `Cargo.lock` (short), weekly (long) |
-| Two participants authenticate with DCP, agree a contract and transfer a file | `scripts/demo.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
-| The same in Docker Compose | `scripts/demo-compose.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
+| Two participants authenticate with DCP, agree a contract and transfer a file | `scenarios/two-party/run-local.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
+| The same in Docker Compose | `scenarios/two-party/run.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
+| The health scenario [hdab-intermediary](../scenarios/hdab-intermediary/README.md): a chained transfer through an HDAB | `scenarios/hdab-intermediary/run.sh` | no: by hand, a manual test (maintainer, 2026-11-15) |
+| The health scenario [data-permits](../scenarios/data-permits/README.md): data permits as credentials | `scenarios/data-permits/run.sh` | no: by hand, a manual test (maintainer, 2026-11-15) |
 | The container scripts with Podman instead of Docker | `CONTAINER_ENGINE=podman` and the script, see [below](#docker-or-podman) | no: by hand, last run noted there |
 | Images build and start | `docker build --target portitor-connector` / `--target portitor-identity` / `--target portitor-issuer`; the connector and the issuer refuse to start without their settings, the identity serves its DID document | every PR that changes more than prose (`CI`) |
 | Reproducible build: same binaries and image digests | see [RELEASING](RELEASING.md#reproducible-builds) | after each release (rebuild of the tag, compared with the release), weekly and when the build files change on `main`, and PRs that change the build files (built twice, compared) (`Reproducible build`) |
@@ -52,8 +54,8 @@ check` and `cargo vet --locked`.
 
 ## Docker or Podman
 
-The scripts that start containers (`scripts/demo-compose.sh`,
-`scripts/edc-interop.sh`, `scripts/gaiax-e2e.sh`) run with Docker or with
+The scripts that start containers (`scenarios/two-party/run.sh`,
+`scenarios/edc-interop/run.sh`, `scenarios/gaiax-compliance/run.sh`) run with Docker or with
 Podman. `scripts/container-engine.sh` chooses, and only that file:
 
 1. `CONTAINER_ENGINE=docker` or `CONTAINER_ENGINE=podman` in the
@@ -72,10 +74,10 @@ CI runs everything with Docker. The Podman runs are done by hand:
 
 | Script | Podman run that passed |
 |---|---|
-| `scripts/demo-compose.sh` | 2026-11-22, tag `v1.0.0-rc.1` (release images): rootless Podman 4.9.3 (netavark 1.4.0, aardvark-dns 1.4.0), Docker Compose 5.7.2, Pop!\_OS 24.04 LTS on amd64; about 7 seconds; 36 of 40 runs passed (the other 4: see below) |
-| `scripts/demo-compose.sh` | 2026-11-20, commit `d857330` (0.13.0 before the tag): Podman 6.1.4 with machine 5.8.5 (libkrun, rootless, 6 CPUs, 8 GiB), Docker Compose 5.6.1, macOS 26.7.3 on Apple Silicon, bash 5.3, OpenSSL 3.5; 7 seconds, with the three `:ci` images as arguments |
-| `scripts/gaiax-e2e.sh` | the same day and machine; 44 seconds |
-| `scripts/edc-interop.sh` | the same day and machine; 12 minutes, most of it the Gradle builds of EDC |
+| `scenarios/two-party/run.sh` | 2026-11-22, tag `v1.0.0-rc.1` (release images): rootless Podman 4.9.3 (netavark 1.4.0, aardvark-dns 1.4.0), Docker Compose 5.7.2, Pop!\_OS 24.04 LTS on amd64; about 7 seconds; 36 of 40 runs passed (the other 4: see below) |
+| `scenarios/two-party/run.sh` | 2026-11-20, commit `d857330` (0.13.0 before the tag): Podman 6.1.4 with machine 5.8.5 (libkrun, rootless, 6 CPUs, 8 GiB), Docker Compose 5.6.1, macOS 26.7.3 on Apple Silicon, bash 5.3, OpenSSL 3.5; 7 seconds, with the three `:ci` images as arguments |
+| `scenarios/gaiax-compliance/run.sh` | the same day and machine; 44 seconds |
+| `scenarios/edc-interop/run.sh` | the same day and machine; 12 minutes, most of it the Gradle builds of EDC |
 
 **What Podman needs**
 
@@ -161,11 +163,11 @@ CI runs everything with Docker. The Podman runs are done by hand:
 | Difference | Handled by |
 |---|---|
 | Podman needs the registry in an image name unless short names are configured ([containers-registries.conf(5)](https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md), "Short-Name Aliasing"). | Every pulled image is written in full (`docker.io/library/nginx:...`) in the Compose files and Dockerfiles. Images built here (`portitor-connector:ci`) are found locally. |
-| `podman build` writes images in OCI format, and Podman reads a health check only from an image in Docker format ([libimage `inspect.go`](https://github.com/containers/common/blob/main/libimage/inspect.go); `--format` in podman-build(1)). The same holds for a pulled image with an OCI manifest. | No script relies on an image's `HEALTHCHECK`: `examples/compose/compose.yaml` has its own `healthcheck:` for the services others wait for. To keep the image's check, build with `podman build --format docker`; for `podman run`, pass `--health-cmd '["/portitor-connector", "health"]'`. |
+| `podman build` writes images in OCI format, and Podman reads a health check only from an image in Docker format ([libimage `inspect.go`](https://github.com/containers/common/blob/main/libimage/inspect.go); `--format` in podman-build(1)). The same holds for a pulled image with an OCI manifest. | No script relies on an image's `HEALTHCHECK`: `scenarios/two-party/compose.yaml` has its own `healthcheck:` for the services others wait for. To keep the image's check, build with `podman build --format docker`; for `podman run`, pass `--health-cmd '["/portitor-connector", "health"]'`. |
 | Docker's name server inside a container is `127.0.0.11`; Podman's (aardvark-dns) listens on the network's gateway. | The `tls` web server of the two interop tests takes its `resolver` from the container's `/etc/resolv.conf` (the nginx image's `NGINX_ENTRYPOINT_LOCAL_RESOLVERS`). |
 | Rootless Podman (the default, also in a Podman machine): root in the container is the user who runs Podman; any other user id cannot write into that user's folders. | The demo bundle is built in a container as `0:0` with rootless Podman and as your user otherwise (`engine_bind_mount_user` in `scripts/container-engine.sh`). The scripts make the files they mount readable by all (`chmod a+rX`), as before: the images run as user 65532. |
 | `podman compose` prints a line about its provider on each call. | The scripts set `PODMAN_COMPOSE_WARNING_LOGS=false`. |
-| Docker Compose builds through Podman without BuildKit (`podman compose` sets `DOCKER_BUILDKIT=0`). | The Dockerfiles use no BuildKit-only syntax. If the build of the EDC images fails under Podman, build them with `podman build --target <controlplane, dataplane, identityhub or issuerservice> -t portitor-interop/edc-<target>:1.0.0-RC8 interop/edc/runtimes` and run `scripts/edc-interop.sh --no-build`. |
+| Docker Compose builds through Podman without BuildKit (`podman compose` sets `DOCKER_BUILDKIT=0`). | The Dockerfiles use no BuildKit-only syntax. If the build of the EDC images fails under Podman, build them with `podman build --target <controlplane, dataplane, identityhub or issuerservice> -t portitor-scenarios/edc-interop-<target>:1.0.0-RC8 scenarios/edc-interop/runtimes` and run `scenarios/edc-interop/run.sh --no-build`. |
 
 Not needed, so not used: `host.docker.internal` (no container calls the
 host), ports below 1024 on the host (all published ports are 18000 and
@@ -647,8 +649,8 @@ CI runs both.
 
 ## EDC interop test
 
-`scripts/edc-interop.sh` runs a small dataspace in Docker Compose
-(`interop/edc/compose.yaml`): a Portitor participant (`portitor-connector`
+`scenarios/edc-interop/run.sh` runs a small dataspace in Docker Compose
+(`scenarios/edc-interop/compose.yaml`): a Portitor participant (`portitor-connector`
 and `portitor-identity`, `did:web:portitor.gaiax.test`) and an Eclipse
 Dataspace Components participant (control plane, data plane, and
 IdentityHub with its STS, all v1.0.0-RC8, `did:web:edc.gaiax.test`), both
@@ -685,10 +687,10 @@ treats such a filter as "no filter" and answers with the whole catalog.
 
 ```sh
 # first build the Portitor images ("Building the images locally" above);
-# the EDC images are built from interop/edc/runtimes (Maven Central, no
+# the EDC images are built from scenarios/edc-interop/runtimes (Maven Central, no
 # EDC images are published); needs Docker or Podman, curl, jq, openssl
 # and python3 with `cryptography`
-scripts/edc-interop.sh            # KEEP=1 leaves it running; --no-build reuses the EDC images
+scenarios/edc-interop/run.sh            # KEEP=1 leaves it running; --no-build reuses the EDC images
 ```
 
 It ends with `== Done`. With `LOGS=FILE` a failed run writes every
@@ -704,12 +706,12 @@ software:
 
 | What | Version | Pinned by |
 |---|---|---|
-| EDC Connector and IdentityHub (with its Issuer Service) | v1.0.0-RC8 | `edcVersion` in `interop/edc/runtimes/gradle.properties`; the SHA-256 of every plugin and library in `gradle/verification-metadata.xml` |
+| EDC Connector and IdentityHub (with its Issuer Service) | v1.0.0-RC8 | `edcVersion` in `scenarios/edc-interop/runtimes/gradle.properties`; the SHA-256 of every plugin and library in `gradle/verification-metadata.xml` |
 | Eclipse Data Plane SDK (the test's data plane) | 1.2.1 | `dataplaneSdkVersion`, and the same file |
-| Build and runtime images of the EDC runtimes | `gradle:9.8.2-jdk21`, `eclipse-temurin:21.0.13_9-jre-noble` | digest, in `interop/edc/runtimes/Dockerfile` |
-| Gaia-X compliance service | gx-compliance v2.16.0 | digest, in `interop/gaiax/compose.yaml` (the EDC test's Compose file takes the service from there with `extends`) |
+| Build and runtime images of the EDC runtimes | `gradle:9.8.2-jdk21`, `eclipse-temurin:21.0.13_9-jre-noble` | digest, in `scenarios/edc-interop/runtimes/Dockerfile` |
+| Gaia-X compliance service | gx-compliance v2.16.0 | digest, in `examples/gaiax/compliance.yaml` (both the Gaia-X and the EDC test's Compose files take the service from there with `extends`) |
 | Its graph database | Memgraph 3.9.0 | digest, same file |
-| Vault | `hashicorp/vault:2.2.1` | digest, in `interop/edc/compose.yaml` |
+| Vault | `hashicorp/vault:2.2.1` | digest, in `scenarios/edc-interop/compose.yaml` |
 | Web servers (`tls`, `data`, `identity-api-jwks`) | `nginx:1.29-alpine` | digest, same file |
 | `fetch` | `curlimages/curl:8.11.1` | digest, same file |
 | Portitor | the commit under test | built from the checkout; a release is named with `PORTITOR_IMAGE`, `PORTITOR_IDENTITY_IMAGE` and `PORTITOR_ISSUER_IMAGE` |
@@ -764,19 +766,19 @@ sources, Connector and IdentityHub):
   without authorization (test-only).
 - **Dependency verification.** Gradle checks the SHA-256 of every
   plugin and library it downloads against
-  `interop/edc/runtimes/gradle/verification-metadata.xml` and stops on a
+  `scenarios/edc-interop/runtimes/gradle/verification-metadata.xml` and stops on a
   mismatch or an unknown file. After changing a version in
   `gradle.properties` or the build files, write it again with the same
   Gradle as the Dockerfile and review the diff:
 
   ```sh
-  docker run --rm -v "$PWD/interop/edc/runtimes:/src" -w /src \
+  docker run --rm -v "$PWD/scenarios/edc-interop/runtimes:/src" -w /src \
     docker.io/library/gradle:9.8.2-jdk21 gradle --no-daemon --write-verification-metadata sha256 shadowJar
   ```
 - **IdentityHub admin.** The Identity API (the IdentityHub's "oauth2"
   variant) takes a JWT checked against a key set. The script makes a
   test-only RSA key for each run, signs five-minute RS256 tokens with
-  `openssl` (`identity_api_token` in `scripts/edc-interop.sh`), and
+  `openssl` (`identity_api_token` in `scenarios/edc-interop/run.sh`), and
   serves the key set from the `identity-api-jwks` web server.
 - **Public names.** The Gaia-X compliance service resolves `did:web`
   over HTTPS only, so both participants have a public name answered by
@@ -839,10 +841,10 @@ What it does not show:
 
 ### A second issuer: the EDC Issuer Service
 
-Step 8 of `scripts/edc-interop.sh` adds a second issuer to the data
+Step 8 of `scenarios/edc-interop/run.sh` adds a second issuer to the data
 space: the Issuer Service of EDC IdentityHub v1.0.0-RC8
 (`did:web:edc-issuer.gaiax.test`, the fourth runtime in
-`interop/edc/runtimes`). It issues a plain test credential, the
+`scenarios/edc-interop/runtimes`). It issues a plain test credential, the
 `InteropTestCredential`, with one claim, `level`. The type is made up for
 this test; it is not a standard. Both sides trust the issuer
 (`PORTITOR_TRUSTED_ISSUERS`, `edc.iam.trustedissuer.edcissuer.id`), and
@@ -854,7 +856,7 @@ each offers data only with `InteropTestCredential.level` `eq` `basic`.
 | 8b | The offers: Portitor's third dataset (`.../portitor-interop-issuer`), and a second offer of the EDC asset | each catalog, as the other side read it, has the left operand `InteropTestCredential.level` |
 | 8c | Refused: before anyone holds the credential, each consumer negotiates the other's offer | both negotiations end `TERMINATED` (one still open after 60 seconds fails the step); EDC has no `FINALIZED` negotiation more than before |
 | 8d | Portitor's identity asks the Issuer Service (`POST /v1/credential-requests`); the EDC IdentityHub does the same (Identity API) | both requests `ISSUED`; each holds one `InteropTestCredential` from `did:web:edc-issuer.gaiax.test`; its status list bit is not set |
-| 8e | EDC negotiates Portitor's offer and pulls | `FINALIZED`; the connector's log has a new DEBUG line `status list fetched and verified` for the Issuer Service's list (`RUST_LOG` in `interop/edc/compose.yaml`); `STARTED`, the bytes equal `data/portitor-provider-issuer.csv` |
+| 8e | EDC negotiates Portitor's offer and pulls | `FINALIZED`; the connector's log has a new DEBUG line `status list fetched and verified` for the Issuer Service's list (`RUST_LOG` in `scenarios/edc-interop/compose.yaml`); `STARTED`, the bytes equal `data/portitor-provider-issuer.csv` |
 | 8f | Portitor negotiates EDC's offer and pulls | `FINALIZED`, the agreement has the constraint, EDC has one `FINALIZED` negotiation more than before, `STARTED`, the bytes equal `data/edc-provider.csv` |
 | 8g | The Issuer Service revokes the EDC participant's credential (`POST .../credentials/{id}/revoke`); EDC negotiates Portitor's offer again | the status list bit is set; the negotiation ends `TERMINATED` with no `code=`; and one of two: Portitor's log has a new `credential refused` line with the type and `revoked`, or (a warning, not a failure) the IdentityHub's record of the credential changed its `state`, so it presented none. With neither, the step fails |
 
@@ -909,8 +911,8 @@ Identity API paths are the same. What changed near the test:
 
 ### The EDC interop run by hand
 
-`KEEP=1 scripts/edc-interop.sh` leaves everything running, with the keys
-in `interop/edc/run/`. The run ends after the revocation step, so both
+`KEEP=1 scenarios/edc-interop/run.sh` leaves everything running, with the keys
+in `scenarios/edc-interop/run/`. The run ends after the revocation step, so both
 `MembershipCredential`s are revoked by then: reading works, a new
 negotiation is refused. To try negotiations by hand, stop the script
 before that step, or ask the issuer for new credentials (step 3 of the
@@ -919,13 +921,13 @@ table).
 | What | URL on the host | Key |
 |---|---|---|
 | Portitor connector, DSP | `http://127.0.0.1:18080/dsp/2025-1` | a DCP token |
-| Portitor connector, management API | `http://127.0.0.1:18081` | `interop/edc/run/portitor/connector-management.key` (Bearer) |
-| Portitor identity (DID document, STS, credential service) | `http://127.0.0.1:18190` | STS client secret: `interop/edc/run/portitor/sts-client-secret` |
-| Portitor identity, management API | `http://127.0.0.1:18191` | `interop/edc/run/portitor/identity-management.key` (Bearer) |
-| Issuer, management API | `http://127.0.0.1:18371` | `interop/edc/run/issuer/management.key` (Bearer) |
+| Portitor connector, management API | `http://127.0.0.1:18081` | `scenarios/edc-interop/run/portitor/connector-management.key` (Bearer) |
+| Portitor identity (DID document, STS, credential service) | `http://127.0.0.1:18190` | STS client secret: `scenarios/edc-interop/run/portitor/sts-client-secret` |
+| Portitor identity, management API | `http://127.0.0.1:18191` | `scenarios/edc-interop/run/portitor/identity-management.key` (Bearer) |
+| Issuer, management API | `http://127.0.0.1:18371` | `scenarios/edc-interop/run/issuer/management.key` (Bearer) |
 | Issuer (DID document, issuer service, status lists, bundle) | `http://127.0.0.1:18372` | none |
 | EDC control plane, management API | `http://127.0.0.1:18181/api/management` | header `x-api-key: edc-interop-test-key` |
-| EDC IdentityHub, Identity API | `http://127.0.0.1:18281/api/identity/v1` | a JWT signed with `interop/edc/run/identity-api-key.pem` (below) |
+| EDC IdentityHub, Identity API | `http://127.0.0.1:18281/api/identity/v1` | a JWT signed with `scenarios/edc-interop/run/identity-api-key.pem` (below) |
 | EDC data plane | `http://127.0.0.1:18180/api` | none |
 | EDC Issuer Service: Identity API, DCP issuer service, admin API, status lists | `http://127.0.0.1:18381`, `:18382`, `:18385`, `:18386` | Identity API as the IdentityHub's |
 
@@ -935,9 +937,9 @@ The public names (`portitor.gaiax.test`, `edc.gaiax.test`,
 Compose network; the `fetch` service reaches them and trusts the test CA.
 
 ```sh
-COMPOSE="docker compose -f interop/edc/compose.yaml" # or podman compose
-ID_KEY="authorization: Bearer $(cat interop/edc/run/portitor/identity-management.key)"
-CONN_KEY="authorization: Bearer $(cat interop/edc/run/portitor/connector-management.key)"
+COMPOSE="docker compose -f scenarios/edc-interop/compose.yaml" # or podman compose
+ID_KEY="authorization: Bearer $(cat scenarios/edc-interop/run/portitor/identity-management.key)"
+CONN_KEY="authorization: Bearer $(cat scenarios/edc-interop/run/portitor/connector-management.key)"
 EDC_KEY='x-api-key: edc-interop-test-key'
 EDC_CONTEXT='"@context": ["https://w3id.org/edc/connector/management/v2"]'
 
@@ -965,27 +967,27 @@ curl -s -X POST http://127.0.0.1:18181/api/management/v4/contractnegotiations/re
 
 # EDC IdentityHub: the credentials it holds. The Identity API takes a
 # five-minute RS256 token signed with the run's key (identity_api_token
-# in scripts/edc-interop.sh)
+# in scenarios/edc-interop/run.sh)
 b64() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 NOW=$(date +%s)
 INPUT="$(printf '{"alg":"RS256","typ":"JWT","kid":"edc-interop-admin-key"}' | b64).$(printf \
   '{"iss":"edc-interop-admin","sub":"admin","scope":"identity-api:admin","jti":"%s","iat":%s,"nbf":%s,"exp":%s}' \
   "$(openssl rand -hex 16)" "$NOW" "$NOW" "$((NOW + 300))" | b64)"
-TOKEN="$INPUT.$(printf '%s' "$INPUT" | openssl dgst -sha256 -sign interop/edc/run/identity-api-key.pem | b64)"
+TOKEN="$INPUT.$(printf '%s' "$INPUT" | openssl dgst -sha256 -sign scenarios/edc-interop/run/identity-api-key.pem | b64)"
 curl -s -H "authorization: Bearer $TOKEN" http://127.0.0.1:18281/api/identity/v1/participants/edc/credentials |
   jq '.[] | {type: .verifiableCredential.credential.type, issuer: .issuerId}'
 
 # the EDC participant's Gaia-X credentials, as the test wrote and received them
-cut -d. -f2 interop/edc/run/edc/www/credentials/gaiax/compliance | base64 -d 2>/dev/null | jq
+cut -d. -f2 scenarios/edc-interop/run/edc/www/credentials/gaiax/compliance | base64 -d 2>/dev/null | jq
 ```
 
 The [Bruno](https://www.usebruno.com/) collection in `_http/` has the
 environment `edc-interop` (`_http/environments/edc-interop.bru`) with
 these URLs for the Portitor participant and the issuer. Put
-`interop/edc/run/portitor/connector-management.key` in the secret
-`apiKey`, `interop/edc/run/portitor/sts-client-secret` in `stsSecret`,
-`interop/edc/run/portitor/identity-management.key` in `identityApiKey`
-and `interop/edc/run/issuer/management.key` in `issuerApiKey`. The
+`scenarios/edc-interop/run/portitor/connector-management.key` in the secret
+`apiKey`, `scenarios/edc-interop/run/portitor/sts-client-secret` in `stsSecret`,
+`scenarios/edc-interop/run/portitor/identity-management.key` in `identityApiKey`
+and `scenarios/edc-interop/run/issuer/management.key` in `issuerApiKey`. The
 `identity`, `issuer` and `auth` folders and the read requests of
 `management` fit this run. `management/Start negotiation`,
 `management/Request catalog` and `management/Request dataset` do not:
@@ -995,13 +997,13 @@ the Portitor provider with a token from the Portitor participant's own
 STS, so the participant calls itself; this was not tried. The collection
 has no requests for EDC's APIs.
 
-Clean up with `docker compose -f interop/edc/compose.yaml down --volumes`
-and `rm -rf interop/edc/run/`.
+Clean up with `docker compose -f scenarios/edc-interop/compose.yaml down --volumes`
+and `rm -rf scenarios/edc-interop/run/`.
 
 ## Gaia-X end-to-end test
 
-`scripts/gaiax-e2e.sh` runs a small dataspace in Docker Compose
-(`interop/gaiax/compose.yaml`) with a local Gaia-X compliance service:
+`scenarios/gaiax-compliance/run.sh` runs a small dataspace in Docker Compose
+(`scenarios/gaiax-compliance/compose.yaml`) with a local Gaia-X compliance service:
 gx-compliance v2.16.0 with Memgraph 3.9.0, both pinned by digest, in the
 test mode Gaia-X documents for local testing
 ([developer-and-local-testing.md](https://gitlab.com/gaia-x/lab/compliance/gx-compliance/-/blob/development/docs/developer-and-local-testing.md)).
@@ -1068,7 +1070,7 @@ without a change in Portitor, hence the nightly run.
 ```sh
 # first build the Portitor images ("Building the images locally" above);
 # needs Docker or Podman, curl, jq, openssl and python3 with `cryptography`
-scripts/gaiax-e2e.sh            # KEEP=1 leaves it running, with interop/gaiax/run/
+scenarios/gaiax-compliance/run.sh            # KEEP=1 leaves it running, with scenarios/gaiax-compliance/run/
 ```
 
 ## How to test Gaia-X compliance
@@ -1088,18 +1090,18 @@ cargo +nightly fuzz run gaiax_compliance -- -max_total_time=60   # see Fuzzing
 
 **2. The end-to-end test** (about 5 minutes; Docker, Internet):
 [build the Portitor images](#building-the-images-locally), then run
-`scripts/gaiax-e2e.sh`. It ends with `== Done` when the compliant consumer
+`scenarios/gaiax-compliance/run.sh`. It ends with `== Done` when the compliant consumer
 gets a contract (`FINALIZED`) and the outsider is refused (`TERMINATED`);
 see [Gaia-X end-to-end test](#gaia-x-end-to-end-test) for what it sets up.
 
-**3. By hand, on the running dataspace.** `KEEP=1 scripts/gaiax-e2e.sh`
-leaves everything running, with the keys in `interop/gaiax/run/`. From
+**3. By hand, on the running dataspace.** `KEEP=1 scenarios/gaiax-compliance/run.sh`
+leaves everything running, with the keys in `scenarios/gaiax-compliance/run/`. From
 the repository root:
 
 ```sh
 # the management API keys of the consumer's identity and connector
-ID_KEY="authorization: Bearer $(cat interop/gaiax/run/consumer/identity-management.key)"
-CONN_KEY="authorization: Bearer $(cat interop/gaiax/run/consumer/connector-management.key)"
+ID_KEY="authorization: Bearer $(cat scenarios/gaiax-compliance/run/consumer/identity-management.key)"
+CONN_KEY="authorization: Bearer $(cat scenarios/gaiax-compliance/run/consumer/connector-management.key)"
 
 # the onboarding runs (outcome, error with the service's reason) and a new one
 curl -s -H "$ID_KEY" http://127.0.0.1:18492/v1/gaiax/compliance | jq
@@ -1119,17 +1121,17 @@ curl -s -H "$CONN_KEY" http://127.0.0.1:18482/v1/negotiations | jq '.negotiation
 # the outsider's negotiation of the same offer: TERMINATED, as it holds no
 # compliance credential (the provider logs a refused credential only when
 # one fails its checks: `credential refused`)
-OUT_KEY="authorization: Bearer $(cat interop/gaiax/run/outsider/connector-management.key)"
+OUT_KEY="authorization: Bearer $(cat scenarios/gaiax-compliance/run/outsider/connector-management.key)"
 curl -s -H "$OUT_KEY" http://127.0.0.1:18483/v1/negotiations | jq '.negotiations[] | {consumerPid, state}'
 ```
 
 Things worth trying:
 
-- **A failed run.** `docker compose -f interop/gaiax/compose.yaml stop compliance`,
+- **A failed run.** `docker compose -f scenarios/gaiax-compliance/compose.yaml stop compliance`,
   start a run, and read the runs: it fails, the credentials of the last
   good run stay, and it is retried with growing delays. Start the service
   again and run once more.
-- **Another offer.** Edit `interop/gaiax/config/datasets.json` (for
+- **Another offer.** Edit `scenarios/gaiax-compliance/config/datasets.json` (for
   example `gx:labelLevel` `eq` `L1`) and restart `provider-connector`: the
   consumer's negotiation is now `TERMINATED`, as its label is `SC`.
 - **Another compliance service.** Set the provider's
@@ -1137,8 +1139,8 @@ Things worth trying:
   compliance credential is skipped and the consumer is refused for this
   offer, but still admitted to offers that need only membership.
 
-Clean up with `docker compose -f interop/gaiax/compose.yaml down -v` and
-`rm -rf interop/gaiax/run/`.
+Clean up with `docker compose -f scenarios/gaiax-compliance/compose.yaml down -v` and
+`rm -rf scenarios/gaiax-compliance/run/`.
 
 ## Fuzzing
 
@@ -1233,7 +1235,7 @@ context. Build and sign it with a new demo bundle key:
 ```sh
 scripts/demo-bundle.sh target/demo-bundle
 # AUTHORITY and VERSION change the defaults, which match
-# the issuer of scripts/demo.sh (did:web:127.0.0.1%3A18060)
+# the issuer of scenarios/two-party/run-local.sh (did:web:127.0.0.1%3A18060)
 ```
 
 It writes `target/demo-bundle/bundles/<version>/` for
@@ -1321,12 +1323,13 @@ provider sends the `FINALIZED` event. `GET
 
 ### Two connectors
 
-`scripts/demo.sh` runs a small dataspace on this machine, with DCP,
+The [two-party](../scenarios/two-party/README.md) scenario.
+`scenarios/two-party/run-local.sh` runs a small dataspace on this machine, with DCP,
 and checks the result. It needs `curl`, `jq`, `openssl` and Python 3.
 
 ```sh
-scripts/demo.sh                      # builds the debug binaries
-scripts/demo.sh <portitor-connector> [<portitor-identity> [<portitor-issuer>]]
+scenarios/two-party/run-local.sh                      # builds the debug binaries
+scenarios/two-party/run-local.sh <portitor-connector> [<portitor-identity> [<portitor-issuer>]]
 ```
 
 What it sets up:
@@ -1357,52 +1360,27 @@ What it sets up:
   sees a revocation at once. The EDC interop test and the DCP TCK run
   set `0` too.
 
-What it checks, in this order (`scripts/demo-steps.sh`):
-
-1. A catalog request without a token is refused (401).
-2. One made through the consumer's management API
-   (`POST /v1/catalog/request`, for which the connector gets a token
-   from its STS) is answered. Under the plain DSP `@context`, the two
-   valid datasets carry `dct:conformsTo` with the release 8 profile and
-   their metadata as full IRIs, and `bed-occupancy` is missing. The
-   provider's `GET /v1/harvest-jobs/{id}` shows it rejected by the
-   `shacl` check with its SHACL report.
-3. The `hospital-admissions` offer copied from the catalog negotiates to
-   `FINALIZED`; the same offer id without its constraint is
-   `TERMINATED`.
-4. The restricted `cancer-registry-extract` offer for members (the
-   `memberOf` claim of the demo `MembershipCredential`, ADR 0019) is
-   `FINALIZED`; its offer for auditors, a `role` claim the demo
-   credential does not have, is `TERMINATED`.
-5. A transfer under the first agreement: the script fetches the file
-   with the token, checks it equals
-   `examples/data/hospital-admissions.csv`, completes the transfer and
-   checks that the token is refused afterwards. Then it transfers the
-   restricted dataset under the members' agreement.
-6. A second credential type (ADR 0019): the `hospital-admissions` offer
-   for EU processors checks the consumer's `DataProcessorCredential`;
-   it negotiates to `FINALIZED` and a transfer starts. The issuer
-   revokes that credential (`POST /v1/credentials/{id}/revoke`), and a
-   new transfer request under the same agreement is `TERMINATED`.
+What it checks, step by step, is in [the scenario's README](../scenarios/two-party/README.md#the-steps)
+(`scenarios/two-party/steps.sh`).
 
 **The same in Docker Compose.**
-`scripts/demo-compose.sh [connector image [identity image [issuer image]]]`
+`scenarios/two-party/run.sh [connector image [identity image [issuer image]]]`
 runs the same checks against the services in
-`examples/compose/compose.yaml`: the issuer, a provider and a consumer
+`scenarios/two-party/compose.yaml`: the issuer, a provider and a consumer
 (each a connector with its identity), and a small web server that holds
 the provider's data. It uses the released images or the ones you name.
 The [quickstart](https://bruno.pacheco.lu/portitor/#try) on the website
 walks through it.
 
-- It writes the keys and secrets into `examples/compose/run/` first,
+- It writes the keys and secrets into `scenarios/two-party/run/` first,
   and builds the demo bundle with the issuer image into
-  `examples/compose/run/issuer/bundle/`.
+  `scenarios/two-party/run/issuer/bundle/`.
 - It stops everything at the end. `KEEP=1` leaves everything running:
   the consumer's management API is on `127.0.0.1:18091` (key in
-  `examples/compose/run/consumer/management.key`), the provider's, with
+  `scenarios/two-party/run/consumer/management.key`), the provider's, with
   the harvest jobs, on `127.0.0.1:18081` (key in
-  `examples/compose/run/provider/management.key`), the issuer's on
-  `127.0.0.1:18071` (key in `examples/compose/run/issuer/management.key`).
+  `scenarios/two-party/run/provider/management.key`), the issuer's on
+  `127.0.0.1:18071` (key in `scenarios/two-party/run/issuer/management.key`).
 - Running it again after `KEEP=1` works: the script first removes the
   containers and volumes of the last run
   (`docker compose down --volumes --remove-orphans`), then `run/`.
@@ -1411,7 +1389,7 @@ walks through it.
   which needs the image's `health` subcommand.
 - To try your own changes, [build the images](#building-the-images-locally)
   and name them:
-  `scripts/demo-compose.sh portitor-connector:ci portitor-identity:ci portitor-issuer:ci`.
+  `scenarios/two-party/run.sh portitor-connector:ci portitor-identity:ci portitor-issuer:ci`.
 
 CI runs both scripts on every pull request, with the binaries and
 images it has just built.
@@ -1421,8 +1399,8 @@ consumer's management API. The provider is
 `http://provider:8080/dsp/2025-1`, `did:web:provider-identity%3A8090`:
 
 ```sh
-KEEP=1 scripts/demo-compose.sh
-docker compose -f examples/compose/compose.yaml down --volumes   # when done
+KEEP=1 scenarios/two-party/run.sh
+docker compose -f scenarios/two-party/compose.yaml down --volumes   # when done
 ```
 
 Start a negotiation from the consumer's management API (the requests
@@ -1436,7 +1414,7 @@ data source, so it gets `STARTED` and a `dataAddress` to fetch from (on
 
 ### Two data spaces
 
-`scripts/two-data-spaces.sh shared` and `scripts/two-data-spaces.sh
+`scenarios/two-data-spaces/run.sh shared` and `scenarios/two-data-spaces/run.sh
 separate` run one organisation in two dataspaces on this machine, with
 one connector per dataspace
 ([DEPLOYING](DEPLOYING.md#two-data-spaces),
@@ -1455,18 +1433,18 @@ over plain HTTP, without a reverse proxy, a bundle or Gaia-X.
 
 ### Observability stack (by hand)
 
-`examples/compose/observability.yaml` adds an OpenTelemetry Collector,
+`scenarios/two-party/observability.yaml` adds an OpenTelemetry Collector,
 Jaeger and Prometheus to the Compose demo
 ([ADR 0023](adr/0023-observability.md), section 6). It sets
 `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318` on the issuer,
 both identities and both connectors; the collector
-(`examples/compose/otel-collector.yaml`) sends the traces to Jaeger and
+(`scenarios/two-party/otel-collector.yaml`) sends the traces to Jaeger and
 the metrics to Prometheus's OTLP endpoint. It is started by hand; CI
 does not run it. Stop a demo that is still running first, with the
 `docker compose ... down --volumes` command above.
 
 ```sh
-EXTRA_COMPOSE=examples/compose/observability.yaml KEEP=1 scripts/demo-compose.sh
+EXTRA_COMPOSE=scenarios/two-party/observability.yaml KEEP=1 scenarios/two-party/run.sh
 ```
 
 The components send metrics every 60 s by default
@@ -1494,7 +1472,7 @@ histogram_quantile(0.95, sum by (le, job, instance) (rate(http_server_request_du
 Stop and remove everything, volumes included:
 
 ```sh
-docker compose -f examples/compose/compose.yaml -f examples/compose/observability.yaml down --volumes
+docker compose -f scenarios/two-party/compose.yaml -f scenarios/two-party/observability.yaml down --volumes
 ```
 
 ## Debugging in VS Code
@@ -1508,7 +1486,7 @@ when VS Code asks. Then open Run and Debug, pick a configuration and press F5.
 
 Every connector needs its identity component, a credential and a
 trusted issuer (DCP, ADR 0016). The task **portitor: identities**
-(`scripts/dev-identities.sh`) provides them, as `scripts/demo.sh` does:
+(`scripts/dev-identities.sh`) provides them, as `scenarios/two-party/run-local.sh` does:
 it starts a `portitor-issuer` on `127.0.0.1:9100` (management
 `127.0.0.1:9104`, key in `target/vscode-dcp/issuer/management.key`) and
 two `portitor-identity` processes, each with a `MembershipCredential` it
@@ -1596,7 +1574,7 @@ Fuzz targets need a nightly toolchain and are not in `launch.json`.
 against the targets in ADR 0002, and what DCP costs per DSP request
 (ADR 0016). It starts a provider (connector and identity) and a
 consumer identity, with credentials from a `portitor-issuer`, as
-`scripts/demo.sh` does; it reports the issuer's binary size and memory
+`scenarios/two-party/run-local.sh` does; it reports the issuer's binary size and memory
 too.
 The load tool is the `dsp-load` example of the connector: it sends
 catalog requests from 50 clients, each with a fresh token from the

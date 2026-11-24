@@ -1337,7 +1337,7 @@ for example only data processors in the EU:
 
   (the key names are those of EDC v1.0.0-RC8,
   `DynamicDcpScopeConfigurationExtension`; the EDC interop run sets them
-  in `interop/edc/config/edc-controlplane.properties`. The Minimum Viable
+  in `scenarios/edc-interop/config/edc-controlplane.properties`. The Minimum Viable
   Dataspace, commit 17bb5b8, and EDC's own decision record write
   `prefix-mapping`: RC8 reads `prefix.mapping`).
 

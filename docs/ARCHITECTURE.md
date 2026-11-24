@@ -94,10 +94,10 @@ specification and link here.
 | Eclipse Data Plane Signaling | v1.0-RC4 (tag of 2026-08-27) | `crates/portitor-dps/src/lib.rs` |
 | DSP TCK | v1.0.2, built from a pinned commit | `DSP_TCK_REF` and `DSP_TCK_COMMIT` in `.github/workflows/tck.yml` |
 | DCP TCK | 1.2.1, the released jar, by SHA-256 | `DCP_TCK_JAR` and `DCP_TCK_SHA256` in the same file |
-| Eclipse EDC (Connector and IdentityHub), interop test | 1.0.0-RC8 | `edcVersion` in `interop/edc/runtimes/gradle.properties` |
+| Eclipse EDC (Connector and IdentityHub), interop test | 1.0.0-RC8 | `edcVersion` in `scenarios/edc-interop/runtimes/gradle.properties` |
 | Gaia-X Compliance Document | Written against 3.1.0. Compared with 4.0.0 (2026-10-01) on 2026-11-18: the participant criterion and the process steps Portitor uses did not change | [ADR 0021](adr/0021-gaia-x-onboarding.md), update of 2026-11-18 |
 | Gaia-X ICAM document (identity, credentials and access management) | 25.11 | [ADR 0021](adr/0021-gaia-x-onboarding.md); `crates/portitor-dcp/src/gaiax_sign.rs` |
-| Gaia-X compliance service (gx-compliance), the only one tested | v2.16.0, in test mode | image digest in `interop/gaiax/compose.yaml` |
+| Gaia-X compliance service (gx-compliance), the only one tested | v2.16.0, in test mode | image digest in `examples/gaiax/compliance.yaml` |
 | Gaia-X ontology context in the tests | `https://w3id.org/gaia-x/development#`, not a numbered release | `scripts/gaiax-lib.sh`; Portitor accepts any context under `https://w3id.org/gaia-x/` (`GAIAX_CONTEXT_PREFIX` in `crates/portitor-dcp/src/gaiax.rs`) |
 
 Notes:

@@ -103,6 +103,7 @@ of work with no release yet.
 | [R-45](#r-45) | No request limit per partner | Security | Open | not named |
 | [R-46](#r-46) | The EDC Issuer Service names a request status address that is not found | Interoperability, upstream | Open | report upstream; the next EDC release |
 | [R-47](#r-47) | The EDC Issuer Service's admin API may change with the next release candidate | Interoperability | Accepted | EDC 1.0.0 |
+| [R-48](#r-48) | An issuer trusted for data permits can also issue memberships | Security | Open | 1.2 |
 | [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | Open | research, with TD-03 |
 | [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | Open | research; code 1.5 |
 | [TD-03](#td-03) | A provider in several dataspaces, each with its own rules | Technical debt | Accepted | profiles in one connector: after 1.0 |
@@ -120,7 +121,7 @@ of work with no release yet.
 | [TD-16](#td-16) | One harvest source; no dataspace registry; other catalogs not checked; no bundle expiry or bundle key rotation | Technical debt | Open | Later |
 | [TD-17](#td-17) | The data plane runs inside the connector process | Technical debt | Accepted | after 1.0, when Signaling 1.0 is released |
 | [TD-19](#td-19) | No TLS inside the services | Technical debt | Accepted | none |
-| [TD-20](#td-20) | A holder must delete a revoked credential by hand after a reissue | Technical debt | Open | 1.4 |
+| [TD-20](#td-20) | A holder must delete a revoked credential by hand after a reissue | Technical debt | Open | 1.2 |
 | [TD-21](#td-21) | Gaia-X beyond 0.8 | Technical debt | Open | Later |
 | [TD-22](#td-22) | Migrations run forward only; a rollback needs the backup | Technical debt | Accepted | none |
 | [TD-28](#td-28) | No trace across participants | Technical debt | Accepted | none |
@@ -131,6 +132,8 @@ of work with no release yet.
 | [TD-40](#td-40) | Database calls block the async runtime | Technical debt | Accepted | measure each release |
 | [TD-42](#td-42) | Four near-copies of the negotiation and transfer logic | Technical debt | Open | 1.x (merge) |
 | [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | Open | none |
+| [TD-46](#td-46) | The issuer keeps one set of claims per participant | Technical debt | Open | 1.2 |
+| [TD-47](#td-47) | A transfer stays REQUESTED when its provider is revoked | Technical debt | Open | 1.1 |
 
 Counts on 2026-11-20: 36 risks and 28 technical debts are not closed
 (Open 31, Mitigated 19, Accepted 14); 11 risks and 17 technical debts
@@ -259,7 +262,7 @@ are closed.
 ### R-09 EDC is tested at a release candidate (1.0.0-RC8)
 
 - **What.** The EDC interop test runs EDC 1.0.0-RC8
-  (`interop/edc/runtimes/gradle.properties`). The IdentityHub Identity
+  (`scenarios/edc-interop/runtimes/gradle.properties`). The IdentityHub Identity
   API the test uses is in the package `v1.unstable` in RC8
   ([TESTING](TESTING.md#edc-interop-test)); for the Issuer Service's
   admin API see [R-47](#r-47). EDC's reading of a
@@ -315,7 +318,7 @@ are closed.
   in test mode: `DISABLE_SIGNATURE_CHECK=true` (certificate chains not
   checked against Gaia-X trust anchors) and `production=false` (any
   registration number issuer accepted), with a test CA and a test notary
-  (`interop/gaiax/compose.yaml`). A run against the Gaia-X Lab needs a
+  (`examples/gaiax/compliance.yaml`). A run against the Gaia-X Lab needs a
   public `did:web` and a CA certificate; Portitor runs only on the
   maintainer's laptop (maintainer, 2026-11-15).
 - **Why it matters.** The real trust chain and a real notary are not
@@ -582,9 +585,11 @@ are closed.
 <a id="r-39"></a>
 ### R-39 No specification defines agreements that depend on an upstream agreement
 
-- **What.** In the health dataspace demo, Cooper's offer to Marley
-  rests on Cooper's agreement with Alice and must not be wider than it.
-  DSP and ODRL have no link between two agreements.
+- **What.** In the health dataspace demo, the HDAB's offer to Schuman
+  Clinical Research rests on the HDAB's agreement with Lux Biobank and
+  must not be wider than it. DSP and ODRL have no link between two
+  agreements. Step 0 of the demo keeps the HDAB's end date inside its
+  agreement by hand ([scenarios/hdab-intermediary](../scenarios/hdab-intermediary/README.md)).
 - **Why it matters.** Portitor's design may differ from what EDC or
   Simpl-Open choose later.
 - **Current state: Open.**
@@ -711,10 +716,31 @@ are closed.
   script. Only the test is affected: Portitor's components speak DCP to
   an issuer and never call that API.
 - **Current state: Accepted.** The cost is a change to
-  `scripts/edc-interop.sh` when EDC is updated, as with the Identity API
+  `scenarios/edc-interop/run.sh` when EDC is updated, as with the Identity API
   ([R-09](#r-09); TESTING, "From RC7 to RC8").
 - **Next.** Read the admin API again at each EDC update. Suspension is
   not tested until EDC implements it.
+
+<a id="r-48"></a>
+### R-48 An issuer trusted for data permits can also issue memberships
+
+- **What.** `PORTITOR_TRUSTED_ISSUERS` is one list for every credential
+  type (threat model finding F-08, [TD-03](#td-03)). The health demo's
+  second scenario shows it inside one data space: Lux Biobank trusts the
+  HDAB's issuer for data permits, and the same issuer gives Schuman
+  Clinical Research a `MembershipCredential` with the role
+  `health-data-access-body`, which Lux Biobank accepts
+  ([data-permits, step 5](../scenarios/data-permits/README.md#the-steps)).
+  Revoking the HDAB's own membership does not change it.
+- **Why it matters.** Data permits need a second issuer next to the
+  authority (ROADMAP 1.2 and 1.3). With one list, that issuer can grant
+  any role, so the authority is no longer the only one who decides who
+  is a member. EDC limits each trusted issuer to its `supportedtypes`.
+- **Current state: Open.** Only an issuer's operator can misuse it, and
+  each holder chooses whom it trusts.
+- **Next.** Trusted issuers by credential type (TD-03 calls it
+  additive), in ROADMAP 1.2, with the data permit (maintainer,
+  2026-11-24).
 
 ## Technical debt
 
@@ -775,7 +801,7 @@ are closed.
   dataspace. One DID per dataspace is the documented default; a shared DID
   is allowed, and DEPLOYING names what it discloses
   ([Two data spaces](DEPLOYING.md#two-data-spaces);
-  `scripts/two-data-spaces.sh`).
+  `scenarios/two-data-spaces/run.sh`).
 - **Next.** After 1.0, no release named: one connector with several
   dataspace profiles, behind its own ADR; trusted issuers by
   credential type (threat model finding F-08), which is additive.
@@ -995,9 +1021,12 @@ are closed.
   status lists, so it keeps presenting a revoked credential next to its
   reissued one.
 - **Why it matters.** A participant is refused until its operator
-  deletes the revoked credential.
+  deletes the revoked credential. With data permits it is wider: a data
+  user shows every permit it holds, so one revoked permit blocks all its
+  other permits until it is deleted
+  ([data-permits, step 4](../scenarios/data-permits/README.md#the-steps)).
 - **Current state: Open.** Documented in DEPLOYING.
-- **Next.** ROADMAP 1.4.
+- **Next.** ROADMAP 1.2 (moved from 1.4 by the maintainer, 2026-11-24, because several data permits make it worse).
 
 <a id="td-21"></a>
 ### TD-21 Gaia-X beyond 0.8
@@ -1177,6 +1206,44 @@ are closed.
 - **Next.** Find where the memory goes (buffers of the proxy, of the
   HTTP client, of TLS) before changing anything; measure again in each
   release.
+
+<a id="td-46"></a>
+### TD-46 The issuer keeps one set of claims per participant
+
+- **What.** `portitor-issuer` copies a credential's claims from the
+  participant's registration (`subject_claims` in
+  `crates/portitor-issuer/src/issue.rs`), and a participant has one
+  registration, with no call to change it. A holder may hold several
+  credentials of one type (`PORTITOR_ISSUER_MAX_ACTIVE_PER_HOLDER`), and
+  a policy holds if any one of them matches, but each new value needs
+  the registration deleted and made again. The health demo does this for
+  a second data permit
+  ([data-permits, step 3](../scenarios/data-permits/README.md#the-steps)).
+- **Why it matters.** A data user may hold several data permits at once
+  (maintainer, 2026-11-24), each with its own id and purpose. Deleting
+  and registering again leaves a moment when the participant is not
+  registered, and a request it made then ends `REJECTED`.
+- **Current state: Open.**
+- **Next.** Claims per credential request, or per issued credential,
+  in ROADMAP 1.2, with the data permit (maintainer, 2026-11-24). Check first how EDC's
+  Issuer Service (attestations) and the EHDS permit template do it.
+
+<a id="td-47"></a>
+### TD-47 A transfer stays REQUESTED when its provider is revoked
+
+- **What.** Once a provider's `MembershipCredential` is revoked, the
+  consumer's connector refuses all its DSP messages, which is right for
+  new work. That includes the provider's termination of a transfer the
+  consumer just requested, so the transfer stays `REQUESTED` until the
+  consumer's operator ends it
+  ([hdab-intermediary, step 6](../scenarios/hdab-intermediary/README.md#the-steps)).
+- **Why it matters.** Transfers pile up that will never start, and the
+  operator learns why only from the logs.
+- **Current state: Open.**
+- **Next.** ROADMAP 1.1, with the transfer work: check what DSP 2025-1
+  says of messages from a party that is no longer trusted, then either
+  end a `REQUESTED` transfer after a time limit or accept a termination
+  from such a party. An ADR if it changes what callers are accepted.
 
 ## Closed
 

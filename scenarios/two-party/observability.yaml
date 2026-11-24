@@ -1,0 +1,85 @@
+# SPDX-FileCopyrightText: Portitor contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# An optional observability stack for the Compose demo (ADR 0023,
+# section 6), for trying it out; started by hand, never in CI. Use it
+# together with compose.yaml:
+#
+#   EXTRA_COMPOSE=scenarios/two-party/observability.yaml KEEP=1 scenarios/two-party/run.sh
+#
+# or, once run/ is written, docker compose -f scenarios/two-party/compose.yaml
+# -f scenarios/two-party/observability.yaml up -d. Every Portitor component
+# sends its traces and metrics (OTLP over HTTP) to the OpenTelemetry
+# Collector, which passes the traces to Jaeger and the metrics to
+# Prometheus. Then:
+#   Jaeger UI      http://127.0.0.1:16686
+#   Prometheus UI  http://127.0.0.1:9090
+# Data is kept in memory (Jaeger) or in the container (Prometheus) and is
+# gone with `docker compose ... down -v`. See docs/TESTING.md,
+# "Observability stack (by hand)".
+
+# Portitor exports only when OTEL_EXPORTER_OTLP_ENDPOINT is set
+# (OpenTelemetry's own variable). service.name is the component
+# (portitor-connector, portitor-identity, portitor-issuer);
+# service.instance.id tells the two participants apart.
+# Metrics are sent every 10 s instead of the default 60 s, so they show
+# up in Prometheus soon after the demo's calls.
+x-otel: &otel
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  OTEL_METRIC_EXPORT_INTERVAL: "10000"
+
+services:
+  issuer:
+    depends_on: [otel-collector]
+    environment:
+      <<: *otel
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=authority
+  provider-identity:
+    depends_on: [otel-collector]
+    environment:
+      <<: *otel
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=provider
+  provider:
+    depends_on: [otel-collector]
+    environment:
+      <<: *otel
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=provider
+  consumer-identity:
+    depends_on: [otel-collector]
+    environment:
+      <<: *otel
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=consumer
+  consumer:
+    depends_on: [otel-collector]
+    environment:
+      <<: *otel
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=consumer
+
+  # OpenTelemetry Collector, core distribution 0.165.0:
+  # OTLP receiver and OTLP/HTTP exporter, about half the size of the
+  # contrib image. Apache-2.0.
+  otel-collector:
+    image: docker.io/otel/opentelemetry-collector:0.165.0@sha256:34b24b740c3c88d3467740e8642a397c13898ef76d7295c5425164c482ed1b73
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    depends_on: [jaeger, prometheus]
+
+  # Jaeger 2.23.0: all in one, traces kept in memory; takes
+  # OTLP on 4317 (gRPC) and 4318 (HTTP). Apache-2.0.
+  jaeger:
+    image: docker.io/jaegertracing/jaeger:2.23.0@sha256:3823829974ccfc2485d2e48b165579091f32295022ae80ca49704e2f4834116e
+    ports:
+      - 127.0.0.1:16686:16686 # UI
+
+  # Prometheus 3.16.0, with its OTLP receiver on
+  # /api/v1/otlp/v1/metrics. Apache-2.0.
+  prometheus:
+    image: docker.io/prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
+    command:
+      # the image's own defaults, then the OTLP receiver
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-otlp-receiver
+    ports:
+      - 127.0.0.1:9090:9090 # UI and API

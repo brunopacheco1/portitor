@@ -117,7 +117,7 @@ pull request, or record why it stays.
   none passed yet.
 - The website (`site/index.html`, published with the API pages by
   `pages.yml`) shows the release's features and the roadmap state.
-- The quickstart ("Try it" on the website, and `scripts/demo-compose.sh`
+- The quickstart ("Try it" on the website, and `scenarios/two-party/run.sh`
   in TESTING) works with the release's images: its prerequisites, the
   `git clone --branch` tag, the commands and the ports it names.
 - [ROADMAP.md](ROADMAP.md) and the [CHANGELOG](../CHANGELOG.md) say what
@@ -144,7 +144,7 @@ pull request, or record why it stays.
    `docs/api/issuer-management-openapi.json`
    (`cargo test -p portitor-issuer --test issuer -- --ignored write_management_description`),
    update the fuzz lock file (`cargo update -w` in `fuzz/`),
-   set the default image tags in `examples/compose/compose.yaml` and the
+   set the default image tags in `scenarios/two-party/compose.yaml` and the
    `git clone --branch` tag in `site/index.html` to `X.Y.Z` (`vX.Y.Z`),
    and merge.
 2. Tag the commit that the merge put on `main` with your personal key
@@ -190,7 +190,7 @@ differences:
 
 - The GitHub release is marked as a pre-release, so it never becomes the
   "latest" release (the workflow does it when the version has a `-`).
-- `examples/compose/compose.yaml` takes the candidate's image tags, so a
+- `scenarios/two-party/compose.yaml` takes the candidate's image tags, so a
   clone of the candidate's tag runs its images, but the website's
   `git clone --branch` tag stays on the last stable release: the
   quickstart is for users. Run the quickstart of step 4 with the

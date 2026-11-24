@@ -4,7 +4,7 @@
 
 //! Mode `contracts`: negotiates agreements, and starts a transfer under
 //! each, through a consumer connector's management API, the way an
-//! operator's script does (`scripts/demo-steps.sh`). Both connectors do
+//! operator's script does (`scenarios/two-party/steps.sh`). Both connectors do
 //! the real work: every DSP message with DCP, every state saved.
 //!
 //! Settings (environment):

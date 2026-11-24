@@ -1,0 +1,274 @@
+# SPDX-FileCopyrightText: Portitor contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# The data-permits scenario (README.md): the health data space's
+# authority, the HDAB's own issuer, a data holder and a data user, each in
+# its own containers. run.sh writes the keys and secrets into run/, starts
+# everything, has each participant get its membership and runs steps.sh.
+# Not a production setup: plain HTTP between the containers
+# (PORTITOR_ALLOW_HTTP), all parties on one machine.
+#
+# Who is who (made-up organisations, modelled on real ones: README.md):
+#   authority    Digital Lux Trust, the data space authority: issues the
+#                memberships and the HealthDCAT-AP bundle
+#                (did:web:authority%3A8070)
+#   hdab-issuer  the HDAB's own issuer: issues data permits
+#                (DataPermitCredential; did:web:hdab-issuer%3A8070). The
+#                HDAB needs no connector here: it only grants permits
+#   biobank      Lux Biobank, the health data holder: offers synthetic
+#                genotypes (biobank-data serves examples/genotypes/), one
+#                offer per permit
+#   schuman      Schuman Clinical Research, a data user that holds the
+#                permits
+# Each participant is a connector and its identity component; the DID is
+# did:web:<participant>-identity%3A8090.
+#
+# schuman-app is Schuman's own app: it fetches the data of a started
+# transfer with its token. It runs only when steps.sh calls it (profile
+# apps).
+#
+# PORTITOR_IMAGE, PORTITOR_IDENTITY_IMAGE and PORTITOR_ISSUER_IMAGE pick
+# other images, for example local builds. Start order and health checks
+# as in ../two-party/compose.yaml. The host ports are those of
+# ../hdab-intermediary/compose.yaml: run one scenario at a time.
+
+name: portitor-data-permits
+
+x-identity: &identity
+  image: ${PORTITOR_IDENTITY_IMAGE:-ghcr.io/brunopacheco1/portitor-identity:1.0.0-rc.1}
+  depends_on:
+    authority:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "/portitor-identity", "health"]
+    interval: 2s
+    timeout: 5s
+    retries: 30
+x-connector: &connector
+  image: ${PORTITOR_IMAGE:-ghcr.io/brunopacheco1/portitor-connector:1.0.0-rc.1}
+  # should a start still fail, it is tried again
+  restart: on-failure
+x-app: &app
+  image: docker.io/library/python:3.13-alpine@sha256:9ef1a599f863231c3d91e941389bfdc4a2d6070557243d54df1a4e57015b960e
+  profiles: [apps]
+
+services:
+  # Digital Lux Trust: did:web:authority%3A8070, its issuer service and its
+  # management API, where run.sh registers the participants
+  authority:
+    image: ${PORTITOR_ISSUER_IMAGE:-ghcr.io/brunopacheco1/portitor-issuer:1.0.0-rc.1}
+    environment:
+      PORTITOR_PARTICIPANT_ID: did:web:authority%3A8070
+      PORTITOR_ISSUER_SERVICE_URL: http://authority:8070/issuer
+      PORTITOR_ISSUER_KEY_FILE: /run/secrets/authority-key
+      # MembershipCredential (claims memberOf, role) and
+      # DataProcessorCredential (claim processing)
+      PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE: /config/issuer-credentials.json
+      PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8071
+      PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/authority-management-key
+      PORTITOR_ALLOW_HTTP: "true"
+      # the HealthDCAT-AP bundle, as in ../two-party/compose.yaml
+      PORTITOR_ISSUER_BUNDLE_KEY_FILE: /config/bundle/bundle-key.jwk
+      PORTITOR_ISSUER_BUNDLE_DIR: /config/bundle/bundles
+    secrets:
+      - authority-key
+      - authority-management-key
+    volumes:
+      - ../../examples/issuer-credentials.json:/config/issuer-credentials.json:ro
+      - ./run/authority/bundle:/config/bundle:ro
+      - authority-data:/data
+    ports:
+      - 127.0.0.1:18071:8071 # management API
+    healthcheck:
+      test: ["CMD", "/portitor-issuer", "health"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # --- Lux Biobank: the health data holder -----------------------------------
+
+  # its data: a plain web server with examples/genotypes/ (genotypes.vcf)
+  biobank-data:
+    image: docker.io/library/nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+    volumes:
+      - ../../examples/genotypes:/usr/share/nginx/html:ro
+
+  biobank-identity:
+    <<: *identity
+    environment:
+      PORTITOR_PARTICIPANT_ID: did:web:biobank-identity%3A8090
+      PORTITOR_IDENTITY_KEY_FILE: /run/secrets/biobank-identity-key
+      PORTITOR_CREDENTIAL_SERVICE_URL: http://biobank-identity:8090/cs
+      PORTITOR_STS_CLIENT_SECRET_FILE: /run/secrets/biobank-sts-secret
+      PORTITOR_TRUSTED_ISSUERS: did:web:authority%3A8070
+      PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8091
+      PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/biobank-identity-management-key
+      PORTITOR_ALLOW_HTTP: "true"
+    secrets:
+      - biobank-identity-key
+      - biobank-sts-secret
+      - biobank-identity-management-key
+    volumes:
+      - biobank-identity-data:/data
+    ports:
+      - 127.0.0.1:18103:8091 # management API
+
+  biobank:
+    <<: *connector
+    environment:
+      PORTITOR_PARTICIPANT_ID: did:web:biobank-identity%3A8090
+      PORTITOR_STS_URL: http://biobank-identity:8090/sts/token
+      PORTITOR_STS_CLIENT_SECRET_FILE: /run/secrets/biobank-sts-secret
+      # the authority, and the HDAB's issuer for data permits
+      PORTITOR_TRUSTED_ISSUERS: did:web:authority%3A8070,did:web:hdab-issuer%3A8070
+      # status lists fetched on every check, so a revocation is seen at once
+      PORTITOR_STATUS_LIST_CACHE_SECONDS: "0"
+      # where data addresses point: the apps reach it in this network
+      PORTITOR_PUBLIC_URL: http://biobank:8080
+      # offers may check DataPermitCredential claims (ADR 0019)
+      PORTITOR_POLICY_CREDENTIALS: DataPermitCredential
+      PORTITOR_ALLOW_HTTP: "true"
+      PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8081
+      PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/biobank-management-key
+      # HealthDCAT-AP datasets, checked against the data space's bundle
+      PORTITOR_DATASETS_FILE: /config/datasets.json
+      PORTITOR_BUNDLE_URL: http://authority:8070/bundles/
+      PORTITOR_BUNDLE_AUTHORITY: did:web:authority%3A8070
+    secrets:
+      - biobank-sts-secret
+      - biobank-management-key
+    volumes:
+      - biobank-data:/data
+      - ./datasets/biobank.json:/config/datasets.json:ro
+    ports:
+      - 127.0.0.1:18101:8081 # management API
+    depends_on:
+      biobank-identity:
+        condition: service_healthy
+      # its issuer DID is resolved when a permit is checked
+      hdab-issuer:
+        condition: service_healthy
+      # the bundle is read at start
+      authority:
+        condition: service_healthy
+      biobank-data:
+        condition: service_started
+
+  # the HDAB's own issuer: data permits as credentials (steps.sh).
+  # Its definitions (hdab-issuer-credentials.json) also hold a
+  # MembershipCredential, on purpose: a trusted issuer is trusted for
+  # every credential type, and the scenario shows it
+  hdab-issuer:
+    image: ${PORTITOR_ISSUER_IMAGE:-ghcr.io/brunopacheco1/portitor-issuer:1.0.0-rc.1}
+    environment:
+      PORTITOR_PARTICIPANT_ID: did:web:hdab-issuer%3A8070
+      PORTITOR_ISSUER_SERVICE_URL: http://hdab-issuer:8070/issuer
+      PORTITOR_ISSUER_KEY_FILE: /run/secrets/hdab-issuer-key
+      PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE: /config/issuer-credentials.json
+      PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8071
+      PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/hdab-issuer-management-key
+      PORTITOR_ALLOW_HTTP: "true"
+    secrets:
+      - hdab-issuer-key
+      - hdab-issuer-management-key
+    volumes:
+      - ./hdab-issuer-credentials.json:/config/issuer-credentials.json:ro
+      - hdab-issuer-data:/data
+    ports:
+      - 127.0.0.1:18125:8071 # management API
+    healthcheck:
+      test: ["CMD", "/portitor-issuer", "health"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # --- Schuman Clinical Research: a data user, with data permits ------------
+
+  schuman-identity:
+    <<: *identity
+    environment:
+      PORTITOR_PARTICIPANT_ID: did:web:schuman-identity%3A8090
+      PORTITOR_IDENTITY_KEY_FILE: /run/secrets/schuman-identity-key
+      PORTITOR_CREDENTIAL_SERVICE_URL: http://schuman-identity:8090/cs
+      PORTITOR_STS_CLIENT_SECRET_FILE: /run/secrets/schuman-sts-secret
+      # the authority, and the HDAB's issuer, which delivers data permits
+      PORTITOR_TRUSTED_ISSUERS: did:web:authority%3A8070,did:web:hdab-issuer%3A8070
+      PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8091
+      PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/schuman-identity-management-key
+      PORTITOR_ALLOW_HTTP: "true"
+    secrets:
+      - schuman-identity-key
+      - schuman-sts-secret
+      - schuman-identity-management-key
+    volumes:
+      - schuman-identity-data:/data
+    ports:
+      - 127.0.0.1:18133:8091 # management API
+
+  schuman:
+    <<: *connector
+    environment:
+      PORTITOR_PARTICIPANT_ID: did:web:schuman-identity%3A8090
+      PORTITOR_STS_URL: http://schuman-identity:8090/sts/token
+      PORTITOR_STS_CLIENT_SECRET_FILE: /run/secrets/schuman-sts-secret
+      PORTITOR_TRUSTED_ISSUERS: did:web:authority%3A8070
+      # status lists fetched on every check, so a revocation is seen at once
+      PORTITOR_STATUS_LIST_CACHE_SECONDS: "0"
+      # where data addresses point: the apps reach it in this network
+      PORTITOR_PUBLIC_URL: http://schuman:8080
+      # offers may check DataPermitCredential claims, and Schuman shows
+      # them when asked (ADR 0019)
+      PORTITOR_POLICY_CREDENTIALS: DataPermitCredential
+      PORTITOR_ALLOW_HTTP: "true"
+      PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8081
+      PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/schuman-management-key
+    secrets:
+      - schuman-sts-secret
+      - schuman-management-key
+    volumes:
+      - schuman-data:/data
+    ports:
+      - 127.0.0.1:18131:8081 # management API
+    depends_on:
+      schuman-identity:
+        condition: service_healthy
+
+  # its app: fetches the genotypes
+  schuman-app:
+    <<: *app
+
+# written by run.sh; the images run as user 65532, which must read them
+secrets:
+  authority-key:
+    file: ./run/authority/issuer-key.pem
+  authority-management-key:
+    file: ./run/authority/management.key
+  biobank-identity-key:
+    file: ./run/biobank/identity-key.pem
+  biobank-sts-secret:
+    file: ./run/biobank/sts-client-secret
+  biobank-identity-management-key:
+    file: ./run/biobank/identity-management.key
+  biobank-management-key:
+    file: ./run/biobank/management.key
+  schuman-identity-key:
+    file: ./run/schuman/identity-key.pem
+  schuman-sts-secret:
+    file: ./run/schuman/sts-client-secret
+  schuman-identity-management-key:
+    file: ./run/schuman/identity-management.key
+  schuman-management-key:
+    file: ./run/schuman/management.key
+  hdab-issuer-key:
+    file: ./run/hdab-issuer/issuer-key.pem
+  hdab-issuer-management-key:
+    file: ./run/hdab-issuer/management.key
+
+volumes:
+  authority-data:
+  biobank-identity-data:
+  biobank-data:
+  schuman-identity-data:
+  schuman-data:
+  hdab-issuer-data:

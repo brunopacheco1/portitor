@@ -1,0 +1,251 @@
+# SPDX-FileCopyrightText: Portitor contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# The Gaia-X end-to-end test (docs/TESTING.md, ADRs 0021 and 0022): a local
+# Gaia-X compliance service (gx-compliance v2.16.0 with Memgraph, in the
+# test mode Gaia-X documents for local testing), a data space authority
+# (portitor-issuer), and three Portitor participants:
+#
+#   provider  did:web:provider.gaiax.test  Gaia-X on; offers a dataset to
+#             holders of a compliance credential with label level SC
+#   consumer  did:web:consumer.gaiax.test  Gaia-X on; gets its compliance
+#             credential, then negotiates the offer
+#   outsider  did:web:outsider-identity%3A8090  a member without Gaia-X;
+#             negotiates the same offer and is refused
+#
+# The "tls" service answers for the public names (*.gaiax.test) with a
+# certificate from a test CA made for each run; the compliance service
+# trusts that CA (NODE_EXTRA_CA_CERTS), and so do the Portitor
+# components (SSL_CERT_DIR, docs/DEPLOYING.md "Private CAs").
+#
+# Test-only: no real Gaia-X trust anchor. The compliance service does not
+# check certificate chains against the Gaia-X Registry
+# (DISABLE_SIGNATURE_CHECK) and accepts a registration number credential
+# from any issuer (production=false), here scripts/gaiax_test_notary.py.
+# It still needs the Gaia-X Registry (REGISTRY_URL) and w3id.org for its
+# shapes, ontology and JSON-LD contexts.
+#
+# scenarios/gaiax-compliance/run.sh writes run/ (keys, certificates, participant
+# files), starts this and runs the checks. PORTITOR_IMAGE,
+# PORTITOR_IDENTITY_IMAGE and PORTITOR_ISSUER_IMAGE pick the Portitor
+# images (default: the ones CI builds, portitor-connector:ci, ...).
+
+name: portitor-gaiax
+
+# what every Portitor component of this test shares
+x-portitor: &portitor
+  restart: on-failure
+x-portitor-environment: &portitor-environment
+  PORTITOR_TRUSTED_ISSUERS: did:web:issuer%3A8070
+  PORTITOR_ALLOW_HTTP: "true"
+  # only the run's test CA: the test reaches nothing else over HTTPS
+  SSL_CERT_DIR: /ca
+
+services:
+  # the local Gaia-X compliance service and its database
+  # (../../examples/gaiax/compliance.yaml); did:web:compliance.gaiax.test,
+  # its RSA key (PS256) and certificate from this run's test CA
+  memgraph:
+    extends:
+      file: ../../examples/gaiax/compliance.yaml
+      service: memgraph
+
+  compliance:
+    extends:
+      file: ../../examples/gaiax/compliance.yaml
+      service: compliance
+    volumes:
+      - ./run/compliance:/keys:ro
+      - ./run/ca:/ca:ro
+    depends_on: [memgraph]
+
+  # the public names, over HTTPS and HTTP (config/tls.conf)
+  tls:
+    image: docker.io/library/nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+    environment:
+      # the image's entrypoint puts the container's name servers
+      # (/etc/resolv.conf) in NGINX_LOCAL_RESOLVERS and fills them into
+      # tls.conf, a template: Docker's are at 127.0.0.11, Podman's are not
+      NGINX_ENTRYPOINT_LOCAL_RESOLVERS: "1"
+    volumes:
+      - ./config/tls.conf:/etc/nginx/templates/default.conf.template:ro
+      - ./run/tls:/tls:ro
+      - ./run/notary/www:/notary:ro
+    networks:
+      default:
+        aliases:
+          - provider.gaiax.test
+          - consumer.gaiax.test
+          - compliance.gaiax.test
+          - notary.gaiax.test
+
+  # the data space's authority: MembershipCredentials (claim memberOf)
+  issuer:
+    <<: *portitor
+    image: ${PORTITOR_ISSUER_IMAGE:-portitor-issuer:ci}
+    environment:
+      PORTITOR_PARTICIPANT_ID: did:web:issuer%3A8070
+      PORTITOR_ISSUER_SERVICE_URL: http://issuer:8070/issuer
+      PORTITOR_ISSUER_KEY_FILE: /config/issuer-key.pem
+      PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE: /credentials/issuer-credentials.json
+      PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8071
+      PORTITOR_MANAGEMENT_API_KEY_FILE: /config/management.key
+      PORTITOR_ALLOW_HTTP: "true"
+      # it delivers to the Gaia-X participants' credential services over HTTPS
+      SSL_CERT_DIR: /ca
+    volumes:
+      - ./run/issuer:/config:ro
+      - ./run/ca:/ca:ro
+      - ../../examples/issuer-credentials.json:/credentials/issuer-credentials.json:ro
+    ports:
+      - 127.0.0.1:18471:8071 # management API
+
+  # --- the provider ------------------------------------------------------------
+
+  provider-identity:
+    <<: *portitor
+    image: ${PORTITOR_IDENTITY_IMAGE:-portitor-identity:ci}
+    environment:
+      <<: *portitor-environment
+      PORTITOR_PARTICIPANT_ID: did:web:provider.gaiax.test
+      PORTITOR_IDENTITY_KEY_FILE: /config/identity-key.pem
+      PORTITOR_CREDENTIAL_SERVICE_URL: https://provider.gaiax.test/cs
+      PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8091
+      PORTITOR_MANAGEMENT_API_KEY_FILE: /config/identity-management.key
+      PORTITOR_STS_CLIENT_SECRET_FILE: /config/sts-client-secret
+      # Gaia-X (ADR 0021)
+      PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE: /config/certificate-chain.pem
+      PORTITOR_GAIAX_COMPLIANCE_URL: https://compliance.gaiax.test
+      PORTITOR_GAIAX_COMPLIANCE_DID: did:web:compliance.gaiax.test
+      PORTITOR_GAIAX_PARTICIPANT_FILE: /config/participant.json
+    volumes:
+      - ./run/provider:/config:ro
+      - ./run/ca:/ca:ro
+    ports:
+      - 127.0.0.1:18491:8091 # management API
+    depends_on:
+      tls: {condition: service_started}
+      issuer: {condition: service_started}
+      compliance: {condition: service_healthy}
+
+  provider-connector:
+    <<: *portitor
+    image: ${PORTITOR_IMAGE:-portitor-connector:ci}
+    environment:
+      <<: *portitor-environment
+      PORTITOR_PARTICIPANT_ID: did:web:provider.gaiax.test
+      PORTITOR_PUBLIC_URL: http://provider-connector:8080
+      PORTITOR_DATASETS_FILE: /datasets.json
+      PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8081
+      PORTITOR_MANAGEMENT_API_KEY_FILE: /config/connector-management.key
+      PORTITOR_STS_URL: http://provider-identity:8090/sts/token
+      PORTITOR_STS_CLIENT_SECRET_FILE: /config/sts-client-secret
+      # ADR 0022: the compliance services it trusts, and the credential
+      # type its offer constrains (ADR 0019)
+      PORTITOR_GAIAX_COMPLIANCE_ISSUERS: did:web:compliance.gaiax.test
+      PORTITOR_POLICY_CREDENTIALS: ParticipantComplianceCredential
+    volumes:
+      - ./run/provider:/config:ro
+      - ./run/ca:/ca:ro
+      - ./config/datasets.json:/datasets.json:ro
+    ports:
+      - 127.0.0.1:18480:8080 # DSP
+      - 127.0.0.1:18481:8081 # management API
+    depends_on: [provider-identity, tls]
+
+  # --- the consumer ------------------------------------------------------------
+
+  consumer-identity:
+    <<: *portitor
+    image: ${PORTITOR_IDENTITY_IMAGE:-portitor-identity:ci}
+    environment:
+      <<: *portitor-environment
+      PORTITOR_PARTICIPANT_ID: did:web:consumer.gaiax.test
+      PORTITOR_IDENTITY_KEY_FILE: /config/identity-key.pem
+      PORTITOR_CREDENTIAL_SERVICE_URL: https://consumer.gaiax.test/cs
+      PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8091
+      PORTITOR_MANAGEMENT_API_KEY_FILE: /config/identity-management.key
+      PORTITOR_STS_CLIENT_SECRET_FILE: /config/sts-client-secret
+      PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE: /config/certificate-chain.pem
+      PORTITOR_GAIAX_COMPLIANCE_URL: https://compliance.gaiax.test
+      PORTITOR_GAIAX_COMPLIANCE_DID: did:web:compliance.gaiax.test
+      PORTITOR_GAIAX_PARTICIPANT_FILE: /config/participant.json
+    volumes:
+      - ./run/consumer:/config:ro
+      - ./run/ca:/ca:ro
+    ports:
+      - 127.0.0.1:18490:8090 # DID document, STS, credential service
+      - 127.0.0.1:18492:8091 # management API
+    depends_on:
+      tls: {condition: service_started}
+      issuer: {condition: service_started}
+      compliance: {condition: service_healthy}
+
+  consumer-connector:
+    <<: *portitor
+    image: ${PORTITOR_IMAGE:-portitor-connector:ci}
+    environment:
+      <<: *portitor-environment
+      PORTITOR_PARTICIPANT_ID: did:web:consumer.gaiax.test
+      PORTITOR_PUBLIC_URL: http://consumer-connector:8080
+      PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8081
+      PORTITOR_MANAGEMENT_API_KEY_FILE: /config/connector-management.key
+      PORTITOR_STS_URL: http://consumer-identity:8090/sts/token
+      PORTITOR_STS_CLIENT_SECRET_FILE: /config/sts-client-secret
+      # as consumer, it adds the scopes of the offer's credential types
+      PORTITOR_POLICY_CREDENTIALS: ParticipantComplianceCredential
+    volumes:
+      - ./run/consumer:/config:ro
+      - ./run/ca:/ca:ro
+    ports:
+      - 127.0.0.1:18482:8081 # management API
+    depends_on: [consumer-identity, tls]
+
+  # --- the outsider: a member of the data space, without Gaia-X ----------------
+
+  outsider-identity:
+    <<: *portitor
+    image: ${PORTITOR_IDENTITY_IMAGE:-portitor-identity:ci}
+    environment:
+      <<: *portitor-environment
+      PORTITOR_PARTICIPANT_ID: did:web:outsider-identity%3A8090
+      PORTITOR_IDENTITY_KEY_FILE: /config/identity-key.pem
+      PORTITOR_CREDENTIAL_SERVICE_URL: http://outsider-identity:8090/cs
+      PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8091
+      PORTITOR_MANAGEMENT_API_KEY_FILE: /config/identity-management.key
+      PORTITOR_STS_CLIENT_SECRET_FILE: /config/sts-client-secret
+    volumes:
+      - ./run/outsider:/config:ro
+      - ./run/ca:/ca:ro
+    ports:
+      - 127.0.0.1:18493:8091 # management API
+    depends_on: [issuer]
+
+  outsider-connector:
+    <<: *portitor
+    image: ${PORTITOR_IMAGE:-portitor-connector:ci}
+    environment:
+      <<: *portitor-environment
+      PORTITOR_PARTICIPANT_ID: did:web:outsider-identity%3A8090
+      PORTITOR_PUBLIC_URL: http://outsider-connector:8080
+      PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8081
+      PORTITOR_MANAGEMENT_API_KEY_FILE: /config/connector-management.key
+      PORTITOR_STS_URL: http://outsider-identity:8090/sts/token
+      PORTITOR_STS_CLIENT_SECRET_FILE: /config/sts-client-secret
+      PORTITOR_POLICY_CREDENTIALS: ParticipantComplianceCredential
+    volumes:
+      - ./run/outsider:/config:ro
+      - ./run/ca:/ca:ro
+    ports:
+      - 127.0.0.1:18483:8081 # management API
+    depends_on: [outsider-identity]
+
+  # `docker compose run --rm fetch <url>` (or `podman compose`): fetches inside the network, where
+  # the *.gaiax.test names resolve, trusting the test CA
+  fetch:
+    image: docker.io/curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+    entrypoint: ["curl", "--cacert", "/ca/ca.pem"]
+    volumes:
+      - ./run/ca:/ca:ro
+    profiles: [tools]
