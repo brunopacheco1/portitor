@@ -131,19 +131,15 @@ Out, on purpose:
 ## Run it
 
 **It needs 1.1 images.** Step 1 is a push transfer, and step 6 needs
-the TD-47 fix; both are new in 1.1. Until 1.1.0 is released,
-`compose.yaml` still names the 1.0.0 images by default, and `run.sh`
-stops at once with a 1.0 connector image. Pass images built from the 1.1
-branch ([docs/TESTING.md, "Building the images locally"](../../docs/TESTING.md#building-the-images-locally);
+the TD-47 fix; both are new in 1.1. `compose.yaml` names the 1.1.0
+release images by default, and `run.sh` stops at once with a 1.0
+connector image. To try images built from source ([docs/TESTING.md, "Building the images locally"](../../docs/TESTING.md#building-the-images-locally);
 with Podman, `podman build --format docker`):
 
 ```sh
 scenarios/hdab-intermediary/run.sh portitor-connector:ci portitor-identity:ci portitor-issuer:ci
 CONTAINER_ENGINE=podman scenarios/hdab-intermediary/run.sh portitor-connector:ci portitor-identity:ci portitor-issuer:ci
 ```
-
-Once 1.1.0 is out and `compose.yaml` names it, `run.sh` without
-arguments takes the release images.
 
 It needs Docker or Podman with Docker Compose, bash 4.4 or later, curl
 7.75 or later (it signs the requests to the lab's bucket with

@@ -6,13 +6,13 @@ SPDX-License-Identifier: Apache-2.0
 
 # ADR 0027: Push transfers, object storage and revoking access
 
-- Status: **Proposed** (2026-11-24). The maintainer accepted the
+- Status: **Accepted** (2026-11-24). The maintainer accepted the
   direction on 2026-11-24 (HTTP push by the Data Plane Signaling HTTP
   profile; data in the provider's object storage served through the
   provider's own data plane; access always revocable). Section 7 decided on
   2026-11-24.
 - Date: 2026-11-24
-- Scope: release 1.1 ([ROADMAP](../ROADMAP.md#11-push-to-object-storage)).
+- Scope: release 1.1 ([ROADMAP](../ROADMAP.md#11-push-to-object-storage-released-2026-11-25-as-v110)).
   Answers [TD-10](../RISKS_AND_TECHNICAL_DEBTS.md#td-10) (push) and
   [R-38](../RISKS_AND_TECHNICAL_DEBTS.md#r-38) (no S3 data address).
   Amends ADR 0013 (a second format, a second kind of source) and
@@ -213,7 +213,7 @@ default).
    The worst-case delay between a revocation and the refusal is the
    status list cache time.
 
-**As built in 1.1 (2026-11-24), for review.** Details the text above
+**As built in 1.1 (2026-11-24).** Details the text above
 leaves open, decided while building it:
 
 - The memberships are kept in their own table (`flow_membership`,

@@ -185,7 +185,7 @@ on the value of `consumerPid`."
   none for that consumer and `consumerPid`), so two copies of a request
   that arrive together give one transfer.
 
-### Amended in 1.1: push, object storage sources, cutting running downloads (proposed 2026-11-24)
+### Amended in 1.1: push, object storage sources, cutting running downloads (accepted 2026-11-24)
 
 [ADR 0027](0027-push-transfers-and-object-storage.md) adds a second
 format, `HttpData-PUSH`, and a second kind of `portitor:source`, an

@@ -22,9 +22,9 @@ the release notes these come from.
   takes the provider's log file as `PROVIDER_LOG`: `run-local.sh` passes
   the connector's log, `run.sh` follows `compose logs provider` into
   `run/provider.log`.
-- These steps need 1.1.0 images: with the 1.0.0 images that
-  `compose.yaml` still names by default, `run.sh` fails at the
-  suspension. CI passes the images it builds.
+- These steps need 1.1.0 images; `compose.yaml` now names the 1.1.0
+  release images by default. CI passes the images it builds and runs
+  with `S3=1`.
 - Two steps at the end (ADR 0027): the provider ends the members'
   transfer through its new management route
   (`POST /v1/provided-transfers/{providerPid}/termination`) and the

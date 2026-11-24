@@ -110,7 +110,7 @@ no start message is sent back (ADR 0013).
   release build sends at once. The race is listed for an upstream report.
 Reported upstream: https://github.com/eclipse-dataspacetck/dsp-tck/issues/338
 
-### Amended in 1.1: push transfers into the consumer's object storage (proposed 2026-11-24)
+### Amended in 1.1: push transfers into the consumer's object storage (accepted 2026-11-24)
 
 [ADR 0027](0027-push-transfers-and-object-storage.md) adds push
 (`HttpData-PUSH`): the request carries a `dataAddress` built by the

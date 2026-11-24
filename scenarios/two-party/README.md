@@ -74,12 +74,12 @@ pull request, with the binaries and images it has just built.
 what each script sets up, how to use your own images, keep the
 containers running (`KEEP=1`) and add the observability stack.
 
-The object storage steps are off by default, because the 1.0.0 images
-that `compose.yaml` names do not have them. Turn them on with connector
-images from 1.1 on:
+The object storage steps are off by default: they start one more
+container, RustFS. Turn them on (connector images from 1.1 on; CI runs
+them):
 
 ```sh
-S3=1 scenarios/two-party/run.sh <images>         # starts the compose profile s3 (RustFS)
+S3=1 scenarios/two-party/run.sh                  # starts the compose profile s3 (RustFS)
 RUSTFS=/path/to/rustfs scenarios/two-party/run-local.sh   # a rustfs 1.0.6 binary
 ```
 

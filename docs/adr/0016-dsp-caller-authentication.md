@@ -300,7 +300,7 @@ gets HTTP 401" in "Which requests need a token" above:
   again ([R-08](../RISKS_AND_TECHNICAL_DEBTS.md#r-08)); for a refusal
   that only makes it give up a little later.
 
-### Amended in 1.1: a revoked partner may still end a shared transfer (proposed 2026-11-24)
+### Amended in 1.1: a revoked partner may still end a shared transfer (accepted 2026-11-24)
 
 Proposed for [TD-47](../RISKS_AND_TECHNICAL_DEBTS.md#td-47) (maintainer
 chose this option, D4, 2026-11-24). Once a partner's
@@ -323,7 +323,7 @@ termination only ends access, so accepting it gives the caller nothing.
 The log line says `DSP termination accepted from a partner without
 membership` with the process id and the DID.
 
-As built in 1.1 (2026-11-24), for review:
+As built in 1.1 (2026-11-24):
 
 - DSP 2025-1 has no route on which a transfer error arrives: a
   `TransferError` is only ever an answer body. So only the

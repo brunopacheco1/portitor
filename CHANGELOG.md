@@ -12,6 +12,21 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-25
+
+Portitor 1.1: push transfers, data in object storage, and a provider
+that can always end access. Every 1.0 route, setting and file format
+still works; this release only adds
+([STABILITY](docs/STABILITY.md)). Before the tag, CI ran the two-party
+scenario with RustFS (a push landed in the consumer's bucket, equal to
+the file) and the EDC interop test with EDC v1.0.0-RC8 asking Portitor
+to push. Upgrading from 1.0:
+[OPERATING, From 1.0 to 1.1](docs/OPERATING.md#from-10-to-11).
+
+- Version 1.1.0. The website quickstart clones `v1.1.0`, and the
+  scenarios that pull release images (two-party, hdab-intermediary,
+  data-permits) default to the 1.1.0 images.
+
 ### Added
 
 - Push transfers (`HttpData-PUSH`, ADR 0027, TD-10). As provider: a

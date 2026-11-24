@@ -37,6 +37,7 @@ and debts each release raised or closed are in
 | 0.13 | 2026-11-20 | v0.13.0 | API and configuration freeze ([STABILITY](STABILITY.md)); management call that reads a catalog; EDC test on 1.0.0-RC8 with Gaia-X; ADRs 0024, 0025 and 0026 accepted | [0.13.0](../CHANGELOG.md#0130---2026-11-20) |
 | 0.14 | 2026-11-21 | v0.14.0 | Release candidate for 1.0: shorter documentation with [OPERATING](OPERATING.md); Roman website; EDC Issuer Service in the EDC test; CI scope and gates; CodeQL gate; OpenSSF Baseline level 1 self-assessment | [0.14.0](../CHANGELOG.md#0140---2026-11-21) |
 | 1.0 | 2026-11-24 | v1.0.0 | Stable: the 0.14 release candidate, tried as v1.0.0-rc.1 on 2026-11-22; routes and settings kept until 2.0 ([STABILITY](STABILITY.md)); the demos as self-contained scenarios, with two health scenarios | [1.0.0](../CHANGELOG.md#100---2026-11-24) |
+| 1.1 | 2026-11-25 | v1.1.0 | Push transfers by the Data Plane Signaling HTTP profile into the consumer's object storage; `s3://` dataset sources; the provider can always end access (provider routes, membership checked on every request, running downloads cut); suspend and start as consumer; audit line per transfer; ADR 0027 | [1.1.0](../CHANGELOG.md#110---2026-11-25) |
 
 Older documents cite sections of this file that the table replaced, for
 example "ROADMAP 0.11, Decisions on the 0.11 plan". Their full text is in
@@ -209,7 +210,7 @@ CI job (maintainer, 2026-11-15).
   Linux with the candidate and `cosign verify` passed on its images
   (2026-11-24).
 
-### 1.1 Push to object storage
+### 1.1 Push to object storage (released 2026-11-25 as v1.1.0)
 
 - Provider push to S3-compatible object storage, a second data plane
   behind the Data Plane Signaling port
@@ -234,7 +235,7 @@ CI job (maintainer, 2026-11-15).
 - Exit: a push transfer lands in RustFS; pull still passes the DSP TCK,
   the DCP TCK and the EDC interop test.
 - Main risk: no S3 data address shared by EDC and Simpl-Open.
-- Done on the 1.1 branch (2026-11-24; not released yet):
+- Shipped in 1.1.0:
   - Push, not as planned above: no S3 address crosses between
     participants. The provider pushes over HTTP, as the Data Plane
     Signaling HTTP Transfer Profile says (`HttpData-PUSH`), and the
@@ -244,7 +245,8 @@ CI job (maintainer, 2026-11-15).
     ([ADR 0027](adr/0027-push-transfers-and-object-storage.md);
     [R-38](RISKS_AND_TECHNICAL_DEBTS.md#r-38) closed,
     [TD-10](RISKS_AND_TECHNICAL_DEBTS.md#td-10) mitigated). The
-    two-party scenario pushes into RustFS, in CI.
+    two-party scenario pushes into RustFS, and EDC v1.0.0-RC8 asks
+    Portitor to push in the EDC interop test, both in CI.
   - Suspend and start again as consumer
     ([TD-11](RISKS_AND_TECHNICAL_DEBTS.md#td-11)).
   - A termination from a revoked partner is accepted

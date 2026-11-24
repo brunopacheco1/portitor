@@ -25,10 +25,9 @@ version it ran on.
   `run/lab/storage` are gone. The diagrams show the push; the scenario
   diagram's messages after step 1 are renumbered, and its last message
   shows the TD-47 ending.
-- The scenario now needs 1.1 connector images. `compose.yaml` still
-  names 1.0.0 by default until 1.1.0 is released, so `run.sh` stops
-  before starting anything when the connector image is 1.0; pass the
-  images, as the README says.
+- The scenario now needs 1.1 connector images. `compose.yaml` names
+  the 1.1.0 release images by default; `run.sh` stops before starting
+  anything when the connector image is 1.0.
 - Not run yet: written without a container engine. Scripts checked with
   `bash -n`, `compose.yaml` parsed as YAML, the diagrams rendered.
 - Step 6: the HDAB's termination of Schuman's last transfer is now

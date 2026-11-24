@@ -111,7 +111,7 @@ so visitors' browsers never contact third-party services.
         <ol class="steps">
           <li><strong>Publish a catalog</strong> of datasets with usage policies (ODRL offers), harvested from where you keep them and checked against the dataspace's shapes (for example HealthDCAT-AP), and browse other participants' catalogs.</li>
           <li><strong>Negotiate a contract</strong> for a dataset, with the policy checked on both sides.</li>
-          <li><strong>Transfer the data</strong> over HTTP through the built-in data plane (the consumer pulls it; push to object storage comes in 1.1).</li>
+          <li><strong>Transfer the data</strong> over HTTP through the built-in data plane (the consumer pulls it, or the provider pushes it into the consumer's object storage).</li>
           <li><strong>Prove who you are</strong> with a <code>did:web</code> identity and verifiable credentials (DCP), and check the credentials of others.</li>
           <li><strong>Issue credentials</strong>, such as dataspace membership, when you run the dataspace.</li>
           <li><strong>Meet Gaia-X rules</strong>: hold and present Gaia-X compliance credentials.</li>
@@ -147,7 +147,7 @@ so visitors' browsers never contact third-party services.
         <h3>You need</h3>
         <p>Docker Engine 25 or later (Docker Desktop 4.27 or later) with the Compose plugin: the images' health check uses <code>HEALTHCHECK --start-interval</code>, which came with Engine 25. Podman works too, see <a href="https://github.com/brunopacheco1/portitor/blob/main/docs/TESTING.md#docker-or-podman">TESTING</a>. Also <code>git</code>, <code>bash</code>, <code>curl</code>, <code>jq</code> and <code>openssl</code>. The demo downloads about 40&nbsp;MB of images; after that it runs in about 10 seconds.</p>
         <h3>Run the demo</h3>
-        <pre><code>git clone --branch v1.0.0 --depth 1 https://github.com/brunopacheco1/portitor
+        <pre><code>git clone --branch v1.1.0 --depth 1 https://github.com/brunopacheco1/portitor
 cd portitor
 KEEP=1 scenarios/two-party/run.sh</code></pre>
         <p>The script writes new keys and secrets into <code>scenarios/two-party/run/</code>, builds and signs the dataspace's HealthDCAT-AP bundle, starts the containers and has the issuer give both participants their credentials. Then it runs the demo steps, one line starting with <code>==</code> each: the provider refuses a catalog request without a token, serves its catalog checked against the bundle, agrees a contract and refuses changed terms, checks credential claims, transfers a file, and refuses a credential the issuer has revoked. The last line starts with <code>== Done</code>. If a step fails, the script prints <code>FAILED</code> and the containers' last log lines.</p>
@@ -215,8 +215,8 @@ rm -rf scenarios/two-party/run</code></pre>
           <li class="done"><span>0.13</span> API and configuration freeze: reading a provider's catalog from the management API, the EDC test with Gaia-X compliance as a repeatable run, what 1.0 keeps stable</li>
           <li class="done"><span>0.14</span> Release candidate for 1.0: shorter documentation, a deployment guide for operations teams, OpenSSF silver, Baseline level 1 self-assessment</li>
           <li class="done"><span>1.0</span> Stable: the 0.14 release candidate, with no new features</li>
-          <li class="now"><span>1.1</span> Push to S3-compatible object storage; health dataspace demo, step 1</li>
-          <li><span>1.2</span> Purpose and data permit in policies; demo, step 2</li>
+          <li class="done"><span>1.1</span> Push to S3-compatible object storage; health dataspace demo, step 1</li>
+          <li class="now"><span>1.2</span> Purpose and data permit in policies; demo, step 2</li>
           <li><span>1.3</span> Data user and health data access body; the demo answers its four questions</li>
           <li><span>1.4</span> Keys in OpenBao; revoked credentials leave presentations by themselves</li>
           <li><span>1.5</span> Users and applications in the data plane; consent</li>
