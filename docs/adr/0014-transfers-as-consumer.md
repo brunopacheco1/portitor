@@ -110,6 +110,17 @@ no start message is sent back (ADR 0013).
   release build sends at once. The race is listed for an upstream report.
 Reported upstream: https://github.com/eclipse-dataspacetck/dsp-tck/issues/338
 
+### Amended in 1.1: push transfers into the consumer's object storage (proposed 2026-11-24)
+
+[ADR 0027](0027-push-transfers-and-object-storage.md) adds push
+(`HttpData-PUSH`): the request carries a `dataAddress` built by the
+connector, and a new public route `POST /push/{consumerPid}` receives
+the data and streams it into the consumer's own S3-compatible bucket.
+"Pull only" and "the consumer side has no data plane" below hold only
+for pull transfers. Suspend and start again are added to the management
+API (`POST /v1/transfers/{consumerPid}/suspension` and `/start`,
+[TD-11](../RISKS_AND_TECHNICAL_DEBTS.md#td-11)).
+
 ## Consequences
 
 - One shape for both sides and for negotiations: the domain decides, the

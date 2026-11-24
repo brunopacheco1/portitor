@@ -300,6 +300,29 @@ gets HTTP 401" in "Which requests need a token" above:
   again ([R-08](../RISKS_AND_TECHNICAL_DEBTS.md#r-08)); for a refusal
   that only makes it give up a little later.
 
+### Amended in 1.1: a revoked partner may still end a shared transfer (proposed 2026-11-24)
+
+Proposed for [TD-47](../RISKS_AND_TECHNICAL_DEBTS.md#td-47) (maintainer
+chose this option, D4, 2026-11-24). Once a partner's
+`MembershipCredential` is revoked, the connector refuses all its DSP
+messages. That includes the provider's termination of a transfer the
+consumer just requested, so the transfer stays `REQUESTED` until the
+consumer's operator ends it.
+
+DSP 2025-1 lets either party send a termination "at any point except a
+terminal state" and leaves the meaning of tokens to other
+specifications ("Transfer Process Protocol"; "Common Functionality",
+Authorization). So who may end a process is Portitor's choice.
+
+Change: a `TransferTerminationMessage` or a transfer error is accepted
+from a caller whose DCP token is valid and whose DID is the stored
+counter-party of that transfer, even when its `MembershipCredential` is
+revoked, missing or from an issuer no longer trusted. Every other
+message from such a caller is still refused as above (404). A
+termination only ends access, so accepting it gives the caller nothing.
+The log line says `DSP termination accepted from a partner without
+membership` with the process id and the DID.
+
 ## Consequences
 
 - Running a connector now needs an identity component (or a compatible
