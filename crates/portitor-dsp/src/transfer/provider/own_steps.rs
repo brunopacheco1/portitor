@@ -7,8 +7,10 @@
 //! data plane when a consumer's membership no longer holds (section 7.2).
 //!
 //! A termination by the provider follows ADR 0014, "The provider's own
-//! steps": the data plane is told first, so access ends at once, then the
-//! termination is kept as the pending message and the outbox sends it.
+//! steps": access ends at once, then the outbox sends the termination.
+//! The termination is saved as the pending message, with the data flow's
+//! termination as the step to run; the step runs right after that write,
+//! before the call returns, and the message waits for it (`flow_steps`).
 //! One difference from the consumer's own steps: a message of ours still
 //! on its way does not stop it. The termination replaces that message
 //! (as when a message cannot be delivered, `abort`), because ending
@@ -18,8 +20,9 @@
 use crate::process::{self, Lookup, Records, Write};
 
 use super::{
-    Agreements, CatalogDatasets, DataFlows, Environment, Failure, Outgoing, Transfer,
-    TransferDecider, TransferService, TransferStore, Transition, bad, termination,
+    Agreements, CatalogDatasets, DataFlows, Environment, Failure, FlowStep, IfRefused, Outgoing,
+    Transfer, TransferDecider, TransferService, TransferStore, Transition, bad, ready_to_send,
+    termination,
 };
 
 /// The most transfers one page of [`TransferService::list`] holds.
@@ -59,18 +62,21 @@ where
     /// flow is terminated (which stops every running download), and the
     /// termination becomes the message to send (module doc). Returns the
     /// transfer as saved, and the termination to send; `None` when a
-    /// termination of ours was already on its way.
+    /// termination of ours was already on its way. The data flow is
+    /// terminated then too: ending access must not depend on what came
+    /// before.
     ///
     /// # Errors
     ///
     /// Unknown transfer, a transfer that has ended (HTTP 400), data plane
-    /// or store failure.
+    /// or store failure. When the data plane refuses, the transfer stays
+    /// as it was.
     pub fn terminate_own(
         &self,
         provider_pid: &str,
         reason: &str,
     ) -> Result<(Transfer, Option<Outgoing>), Failure> {
-        let saved = process::update(self, &Lookup::own(provider_pid), |transfer| {
+        let saved = process::update_keeping_before(self, &Lookup::own(provider_pid), |transfer| {
             if transfer.state.is_terminal() {
                 return Err(bad(
                     provider_pid,
@@ -78,27 +84,30 @@ where
                     "the transfer has ended",
                 ));
             }
-            // the data plane first: access ends now, whatever follows
-            self.flows
-                .terminate(provider_pid)
-                .map_err(Failure::DataPlane)?;
+            // access ends right after this write, whatever follows
+            transfer.flow_step = Some(FlowStep::Terminate);
             let ending = transfer
                 .pending
                 .as_ref()
                 .is_some_and(|sent| sent.transition == Transition::Terminate);
-            if ending {
-                return Ok(Write::Skip);
+            if !ending {
+                transfer.pending = Some(termination(transfer, reason));
             }
-            transfer.pending = Some(termination(transfer, reason));
             Ok(Write::Save)
         })?;
-        match saved {
-            Some(transfer) => {
-                let out = transfer.pending.clone();
-                Ok((transfer, out))
-            }
-            // our termination was on its way already
-            None => Ok((self.transfer(provider_pid)?, None)),
-        }
+        // `update_keeping_before` skips only when the change says so, and
+        // this one never does; `None` is handled anyway
+        let Some((before, written)) = saved else {
+            return Ok((self.transfer(provider_pid)?, None));
+        };
+        let if_refused = IfRefused::TakeBack { before: &before };
+        let now = self.after_write(written.clone(), &if_refused)?;
+        // our termination was on its way already: it is not sent again
+        let ending = before
+            .pending
+            .as_ref()
+            .is_some_and(|sent| sent.transition == Transition::Terminate);
+        let out = if ending { None } else { ready_to_send(&now) };
+        Ok((written, out))
     }
 }

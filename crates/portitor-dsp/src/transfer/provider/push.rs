@@ -7,9 +7,9 @@
 //! the transfer.
 
 use super::{
-    Agreements, CatalogDatasets, DataFlows, Environment, Failure, Lookup, Outgoing,
-    TransferDecider, TransferService, TransferState, TransferStore, Write, completion, process,
-    termination,
+    Agreements, CatalogDatasets, DataFlows, Environment, Failure, FlowStep, IfRefused, Lookup,
+    Outgoing, TransferDecider, TransferService, TransferState, TransferStore, Write, completion,
+    process, ready_to_send, termination,
 };
 
 impl<S, A, F, D, C, E> TransferService<S, A, F, D, C, E>
@@ -32,35 +32,39 @@ where
     /// suspended or ended meanwhile) or a message of ours is still on its
     /// way.
     ///
+    /// The data flow is ended right after the transfer's write, before
+    /// the message is sent (`flow_steps`).
+    ///
     /// # Errors
     ///
-    /// Unknown transfer, data plane or store failure.
+    /// Unknown transfer, data plane or store failure. When the data plane
+    /// refuses, the transfer stays as it was.
     pub fn push_finished(
         &self,
         provider_pid: &str,
         failure: Option<&str>,
     ) -> Result<Option<Outgoing>, Failure> {
-        let saved = process::update(self, &Lookup::own(provider_pid), |transfer| {
+        let lookup = Lookup::own(provider_pid);
+        let saved = process::update_keeping_before(self, &lookup, |transfer| {
             if transfer.state != TransferState::Started || transfer.pending.is_some() {
                 return Ok(Write::Skip);
             }
-            let message = match failure {
-                None => {
-                    self.flows
-                        .complete(provider_pid)
-                        .map_err(Failure::DataPlane)?;
-                    completion(transfer)
-                }
-                Some(reason) => {
-                    self.flows
-                        .terminate(provider_pid)
-                        .map_err(Failure::DataPlane)?;
-                    termination(transfer, &format!("the push failed: {reason}"))
-                }
+            let (message, step) = match failure {
+                None => (completion(transfer), FlowStep::Complete),
+                Some(reason) => (
+                    termination(transfer, &format!("the push failed: {reason}")),
+                    FlowStep::Terminate,
+                ),
             };
             transfer.pending = Some(message);
+            transfer.flow_step = Some(step);
             Ok(Write::Save)
         })?;
-        Ok(saved.and_then(|transfer| transfer.pending))
+        let Some((before, written)) = saved else {
+            return Ok(None);
+        };
+        let if_refused = IfRefused::TakeBack { before: &before };
+        let now = self.after_write(written.clone(), &if_refused)?;
+        Ok(ready_to_send(&now))
     }
 }

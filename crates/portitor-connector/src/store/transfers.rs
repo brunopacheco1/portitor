@@ -7,7 +7,7 @@
 
 use portitor_dsp::negotiation::provider::{Negotiation, NegotiationStore};
 use portitor_dsp::negotiation::{Agreement, NegotiationState};
-use portitor_dsp::transfer::provider::{Agreements, Outgoing, Transfer, TransferStore};
+use portitor_dsp::transfer::provider::{Agreements, FlowStep, Outgoing, Transfer, TransferStore};
 use portitor_dsp::transfer::{TransferState, Transition};
 use rusqlite::{Row, params};
 
@@ -17,7 +17,23 @@ use super::{
 };
 
 const TRANSFER_COLUMNS: &str = "provider_pid, consumer_pid, state, callback_address, \
-     counter_party, agreement_id, dataset_id, format, pending, version, data_address";
+     counter_party, agreement_id, dataset_id, format, pending, version, data_address, flow_step";
+
+/// The data plane step not run yet, as stored: its name, for example
+/// `suspend` (migration 13).
+fn flow_step_text(transfer: &Transfer) -> Option<&'static str> {
+    transfer.flow_step.map(FlowStep::name)
+}
+
+fn parsed_flow_step(text: Option<String>) -> Result<Option<FlowStep>, StoreError> {
+    let Some(text) = text else {
+        return Ok(None);
+    };
+    match FlowStep::from_name(&text) {
+        Some(step) => Ok(Some(step)),
+        None => Err(StoreError(format!("stored data plane step {text}"))),
+    }
+}
 
 /// The consumer's push address as stored: its DSP JSON (ADR 0027).
 fn address_text(transfer: &Transfer) -> Result<Option<String>, StoreError> {
@@ -94,6 +110,7 @@ fn transfer_from_row(row: &Row<'_>) -> Result<Transfer, StoreError> {
         pending,
         version: parsed_version(col(row, 9)?)?,
         data_address,
+        flow_step: parsed_flow_step(col(row, 11)?)?,
         provider_pid,
     })
 }
@@ -134,7 +151,7 @@ impl TransferStore for SqliteNegotiations {
         // requests and must still open.
         let sql = format!(
             "INSERT INTO transfer ({TRANSFER_COLUMNS})
-             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
              WHERE NOT EXISTS (
                  SELECT 1 FROM transfer WHERE counter_party = ?5 AND consumer_pid = ?2
              )"
@@ -155,6 +172,7 @@ impl TransferStore for SqliteNegotiations {
                     pending_text(transfer.pending.as_ref())?,
                     version(transfer.version)?,
                     address_text(transfer)?,
+                    flow_step_text(transfer),
                 ],
             )
             .map_err(err)?;
@@ -168,7 +186,8 @@ impl TransferStore for SqliteNegotiations {
         let changed = self
             .conn()
             .execute(
-                "UPDATE transfer SET state = ?2, pending = ?3, version = ?4, data_address = ?6
+                "UPDATE transfer SET state = ?2, pending = ?3, version = ?4, data_address = ?6,
+                     flow_step = ?7
                  WHERE provider_pid = ?1 AND version = ?5",
                 params![
                     transfer.provider_pid,
@@ -177,6 +196,7 @@ impl TransferStore for SqliteNegotiations {
                     version(transfer.version)?,
                     version(expected)?,
                     address_text(transfer)?,
+                    flow_step_text(transfer),
                 ],
             )
             .map_err(err)?;
@@ -185,7 +205,8 @@ impl TransferStore for SqliteNegotiations {
 
     fn pending(&self) -> Result<Vec<Transfer>, StoreError> {
         let sql = format!(
-            "SELECT {TRANSFER_COLUMNS} FROM transfer WHERE pending IS NOT NULL
+            "SELECT {TRANSFER_COLUMNS} FROM transfer
+             WHERE pending IS NOT NULL OR flow_step IS NOT NULL
              ORDER BY provider_pid"
         );
         self.query(&sql, [], transfer_from_row)
@@ -266,6 +287,7 @@ mod tests {
             format: "HttpData-PULL".to_owned(),
             data_address: None,
             pending,
+            flow_step: None,
             version: 0,
         }
     }
@@ -298,6 +320,45 @@ mod tests {
         assert!(db.replace_if(&started, 0).unwrap());
         assert!(!db.replace_if(&started, 0).unwrap(), "version 0 is gone");
         assert_eq!(db.get("urn:uuid:p").unwrap(), Some(started));
+        assert!(db.pending().unwrap().is_empty());
+    }
+
+    /// The data plane step not run yet is kept with the transfer, and a
+    /// transfer that has one is taken up again after a restart, also
+    /// without a pending message (ADR 0028, decision 6; TD-48).
+    #[test]
+    fn a_recorded_data_plane_step_round_trips_and_is_taken_up_again() {
+        let file = SqliteNegotiations::in_memory().unwrap();
+        let db: &dyn TransferStore = &file;
+        let mut t = stored_transfer(None);
+        t.flow_step = Some(FlowStep::Start);
+        assert!(db.insert(&t).unwrap());
+        assert_eq!(db.get("urn:uuid:p").unwrap(), Some(t.clone()));
+        assert_eq!(db.pending().unwrap(), std::slice::from_ref(&t));
+
+        let all_steps = [
+            FlowStep::Restart,
+            FlowStep::Resume,
+            FlowStep::ResumeWithAddress,
+            FlowStep::Suspend,
+            FlowStep::Complete,
+            FlowStep::Terminate,
+        ];
+        for step in all_steps {
+            let mut next = db.get("urn:uuid:p").unwrap().unwrap();
+            let expected = next.version;
+            next.flow_step = Some(step);
+            next.version += 1;
+            assert!(db.replace_if(&next, expected).unwrap());
+            assert_eq!(db.get("urn:uuid:p").unwrap(), Some(next));
+        }
+
+        // the step ran: nothing to take up any more
+        let mut ran = db.get("urn:uuid:p").unwrap().unwrap();
+        let expected = ran.version;
+        ran.flow_step = None;
+        ran.version += 1;
+        assert!(db.replace_if(&ran, expected).unwrap());
         assert!(db.pending().unwrap().is_empty());
     }
 

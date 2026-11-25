@@ -66,7 +66,7 @@ impl TransferStore for &Store {
         let map = self.0.borrow();
         Ok(map
             .values()
-            .filter(|t| t.pending.is_some())
+            .filter(|t| t.pending.is_some() || t.flow_step.is_some())
             .cloned()
             .collect())
     }
@@ -551,15 +551,9 @@ fn two_copies_of_a_request_at_once_give_one_transfer() {
     assert_eq!(again.provider_pid, first.provider_pid);
     assert_eq!(out, None);
     assert_eq!(store.0.borrow().len(), 1);
-    // the data flow started for the late copy is ended again
-    assert_eq!(
-        flows.calls(),
-        [
-            "start urn:uuid:1",
-            "start urn:uuid:2",
-            "terminate urn:uuid:2"
-        ]
-    );
+    // the late copy was not saved, so no data flow started for it (before
+    // 1.2 one started and was ended again; TD-48)
+    assert_eq!(flows.calls(), ["start urn:uuid:1"]);
 }
 
 #[test]
@@ -642,8 +636,11 @@ fn a_refusing_data_plane_ends_the_transfer() {
     assert!(out.url.ends_with("/termination"));
 }
 
+/// The data flow starts after the transfer is saved (TD-48): a transfer
+/// that cannot be saved starts none (before 1.2 one started and was
+/// ended again).
 #[test]
-fn a_failed_save_ends_the_started_data_flow() {
+fn a_failed_save_starts_no_data_flow() {
     let (store, flows) = (Store::default(), Flows::default());
     store.1.set(true);
     let s = service(&store, &flows, TransferDecision::Start);
@@ -655,7 +652,7 @@ fn a_failed_save_ends_the_started_data_flow() {
         )
         .unwrap_err();
     assert!(matches!(failure, Failure::Store(_)));
-    assert_eq!(flows.calls(), ["start urn:uuid:1", "terminate urn:uuid:1"]);
+    assert!(flows.calls().is_empty(), "{:?}", flows.calls());
 }
 
 #[test]
@@ -1607,4 +1604,238 @@ fn the_provider_reads_and_lists_its_transfers() {
     let rest = s.list(Some(&page[0].provider_pid), 0).unwrap();
     assert_eq!(rest.len(), 1, "a limit of 0 counts as 1");
     assert_ne!(rest[0].provider_pid, page[0].provider_pid);
+}
+
+// ---- TD-48 (ADR 0028, decision 6): the data plane is told after the
+// ---- transfer's write, from what was written, once
+
+/// A write that loses to other writes every time tells the data plane
+/// nothing; one that loses twice and then wins tells it once.
+#[test]
+fn a_lost_write_tells_the_data_plane_nothing() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = started(&store, &flows);
+    let calls_before = flows.calls();
+
+    store.2.set(3);
+    let failure = s.terminate(PID, IDS, CONSUMER).unwrap_err();
+    assert!(reason(&failure).contains("concurrently"), "{failure:?}");
+    assert_eq!(flows.calls(), calls_before, "no signal for a lost write");
+    assert_eq!(store.0.borrow()[PID].flow_step, None);
+
+    store.2.set(2);
+    s.suspend(PID, IDS, CONSUMER).unwrap();
+    assert_eq!(flows.calls()[calls_before.len()..], ["suspend urn:uuid:1"]);
+    assert_eq!(state(&store), TransferState::Suspended);
+    assert_eq!(store.0.borrow()[PID].flow_step, None, "recorded as run");
+}
+
+/// The provider's own steps lose their write too: the push's end and the
+/// provider's termination tell the data plane nothing then.
+#[test]
+fn the_providers_own_steps_tell_nothing_when_their_write_loses() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = started(&store, &flows);
+    let calls_before = flows.calls();
+    store.2.set(3);
+    assert!(s.push_finished(PID, None).is_err());
+    store.2.set(3);
+    assert!(s.terminate_own(PID, "revoked").is_err());
+    assert_eq!(flows.calls(), calls_before);
+    assert_eq!(state(&store), TransferState::Started);
+}
+
+/// The transfer as the request wrote it, with its start recorded but not
+/// run: the process stopped between the write and the signal.
+fn stopped_before_the_start(store: &Store) {
+    let saved = Transfer {
+        provider_pid: PID.to_owned(),
+        consumer_pid: "urn:uuid:c".to_owned(),
+        state: TransferState::Requested,
+        callback_address: "https://consumer.example/cb".to_owned(),
+        counter_party: CONSUMER.to_owned(),
+        agreement_id: "a1".to_owned(),
+        dataset_id: "d1".to_owned(),
+        format: "HttpData-PULL".to_owned(),
+        data_address: None,
+        pending: None,
+        flow_step: Some(FlowStep::Start),
+        version: 1,
+    };
+    store.0.borrow_mut().insert(PID.to_owned(), saved);
+}
+
+/// A restart between the write and the signal: the step recorded with
+/// the write runs once at the restart, and the start message, which waits
+/// for it, then carries the address.
+#[test]
+fn a_step_recorded_before_a_restart_runs_at_the_restart() {
+    let (store, flows) = (Store::default(), Flows::default());
+    stopped_before_the_start(&store);
+    let s = service(&store, &flows, TransferDecision::Start);
+
+    let to_send = s.pending().unwrap();
+    assert_eq!(flows.calls(), ["start urn:uuid:1"]);
+    assert_eq!(to_send.len(), 1);
+    let sent: TransferStartMessage = serde_json::from_value(to_send[0].body.clone()).unwrap();
+    assert_eq!(
+        sent.data_address.unwrap().property("authorization"),
+        Some("t0ken")
+    );
+    let saved = store.0.borrow()[PID].clone();
+    assert_eq!(saved.flow_step, None);
+    assert_eq!(saved.pending.as_ref(), Some(&to_send[0]));
+
+    // a second restart sends the message again, and starts nothing
+    assert_eq!(s.pending().unwrap(), to_send);
+    assert_eq!(flows.calls(), ["start urn:uuid:1"]);
+}
+
+/// A consumer's suspension written just before a stop: its step runs at
+/// the restart, so access stops although the call never got to it.
+#[test]
+fn a_consumers_step_recorded_before_a_restart_runs_at_the_restart() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = started(&store, &flows);
+    {
+        let mut all = store.0.borrow_mut();
+        let saved = all.get_mut(PID).unwrap();
+        saved.state = TransferState::Suspended;
+        saved.flow_step = Some(FlowStep::Suspend);
+    }
+    assert!(s.pending().unwrap().is_empty(), "nothing to send");
+    assert_eq!(flows.calls().last().unwrap(), "suspend urn:uuid:1");
+    assert_eq!(store.0.borrow()[PID].flow_step, None);
+}
+
+/// A step refused after a restart cannot be taken back: the transfer
+/// ends, with a termination that gives the reason.
+#[test]
+fn a_step_refused_after_a_restart_ends_the_transfer() {
+    let (store, flows) = (Store::default(), Flows::default());
+    stopped_before_the_start(&store);
+    flows.1.set(true);
+    let s = service(&store, &flows, TransferDecision::Start);
+    let to_send = s.pending().unwrap();
+    assert_eq!(to_send.len(), 1);
+    assert_eq!(to_send[0].transition, Transition::Terminate);
+    assert!(format!("{}", to_send[0].body).contains("data plane refused"));
+    assert_eq!(
+        flows.calls(),
+        ["start urn:uuid:1", "terminate urn:uuid:1"],
+        "the flow is ended, best effort"
+    );
+}
+
+/// No message of ours goes out while its step has not run: the start
+/// message does not exist yet, and the other messages wait.
+#[test]
+fn a_message_waits_for_its_step() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = started(&store, &flows);
+    {
+        let mut all = store.0.borrow_mut();
+        let saved = all.get_mut(PID).unwrap();
+        saved.pending = Some(suspension(saved));
+        saved.flow_step = Some(FlowStep::Suspend);
+    }
+    let waiting = store.0.borrow()[PID].clone();
+    assert_eq!(ready_to_send(&waiting), None);
+    let to_send = s.pending().unwrap();
+    assert_eq!(to_send, [waiting.pending.unwrap()]);
+    assert_eq!(flows.calls().last().unwrap(), "suspend urn:uuid:1");
+}
+
+/// A refused step of the provider's own termination, of the end of a push
+/// or of an undeliverable message takes its write back: the transfer is
+/// as it was, nothing is to send, and the caller gets the failure.
+#[test]
+fn a_refused_step_takes_its_write_back() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = started(&store, &flows);
+    let before = store.0.borrow()[PID].clone();
+    flows.1.set(true);
+    let same_as_before = |store: &Store| {
+        let now = store.0.borrow()[PID].clone();
+        (now.state, now.pending, now.flow_step) == (before.state, before.pending.clone(), None)
+    };
+    assert!(matches!(
+        s.push_finished(PID, None),
+        Err(Failure::DataPlane(_))
+    ));
+    assert!(same_as_before(&store));
+    assert!(matches!(
+        s.push_finished(PID, Some("HTTP 500")),
+        Err(Failure::DataPlane(_))
+    ));
+    assert!(same_as_before(&store));
+    assert!(matches!(
+        s.terminate_own(PID, "revoked"),
+        Err(Failure::DataPlane(_))
+    ));
+    assert!(same_as_before(&store));
+}
+
+/// Starts a requested or suspended transfer, suspends a started one.
+struct ByState;
+
+impl TransferDecider for ByState {
+    fn decide(&self, transfer: &Transfer) -> TransferDecision {
+        match transfer.state {
+            TransferState::Requested | TransferState::Suspended => TransferDecision::Start,
+            TransferState::Started => TransferDecision::Suspend,
+            TransferState::Completed | TransferState::Terminated => TransferDecision::Wait,
+        }
+    }
+}
+
+/// The provider's start again gets a new token once, after the write
+/// that decided it, also when that write is tried again, and the start
+/// message carries it.
+#[test]
+fn a_start_again_makes_one_token_after_its_write() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = TransferService::new(&store, Agreed, &flows, ByState, Catalog, Env::default());
+    let none = CallerCredentials::default();
+    let (_, start) = s
+        .request(&request("a1", "HttpData-PULL"), CONSUMER, &none)
+        .unwrap();
+    let suspension = s.delivered(&start.unwrap()).unwrap().unwrap();
+    // the acknowledgement of the suspension is written after one lost try
+    store.2.set(1);
+    let again = s.delivered(&suspension).unwrap().unwrap();
+    assert_eq!(
+        again.body["dataAddress"]["endpointProperties"][0]["value"],
+        "t0ken-2"
+    );
+    let restarts = flows
+        .calls()
+        .iter()
+        .filter(|call| call.starts_with("restart"))
+        .count();
+    assert_eq!(restarts, 1);
+}
+
+/// The same for a message that could not be delivered: the message stays
+/// pending, so it is sent again after a restart, as before 1.2.
+#[test]
+fn a_refused_abort_keeps_the_message_pending() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = service(&store, &flows, TransferDecision::Start);
+    let (_, start) = s
+        .request(
+            &request("a1", "HttpData-PULL"),
+            CONSUMER,
+            &CallerCredentials::default(),
+        )
+        .unwrap();
+    let start = start.unwrap();
+    flows.1.set(true);
+    assert!(matches!(
+        s.abort(&start, "the consumer could not be reached"),
+        Err(Failure::DataPlane(_))
+    ));
+    let saved = store.0.borrow()[PID].clone();
+    assert_eq!(saved.pending, Some(start));
+    assert_eq!(saved.flow_step, None);
 }
