@@ -12,6 +12,18 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Changed
+
+- Scenarios: a failed management call in `scripts/scenario-lib.sh`
+  (`api`, used by hdab-intermediary and data-permits) now shows its
+  HTTP status and answer, or curl's error, instead of failing silently.
+
+### Documentation
+
+- TESTING: the 1.1.0 run of all six scenarios on Linux before the tag,
+  and how to build the images with Podman 4.9, whose Buildah does not
+  know `HEALTHCHECK --start-interval`.
+
 ## [1.1.0] - 2026-11-25
 
 Portitor 1.1: push transfers, data in object storage, and a provider
