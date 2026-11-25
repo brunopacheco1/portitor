@@ -290,7 +290,7 @@ not a CI job (maintainer, 2026-11-15).
 - Signals to the data plane go out after the transfer's write, through
   the outbox, never inside the retried update
   ([TD-48](RISKS_AND_TECHNICAL_DEBTS.md#td-48)).
-- `data_plane.rs` is split so no file is above 1,000 lines
+- The data plane code (1,114 lines in one file in 1.1) is split so no file is above 1,000 lines
   ([R-01](RISKS_AND_TECHNICAL_DEBTS.md#r-01)).
 - Exit: all tests, the DSP and DCP TCKs and the EDC interop test pass
   unchanged; `cargo tree` shows that the data plane crate does not
