@@ -41,7 +41,7 @@ mod source;
 pub use check::{
     BothChecks, CHECKS_VERSION, CheckKind, CheckedDataset, DatasetCheck, DspCheck, EntryFailure,
 };
-pub use copy::DatasetCopy;
+pub use copy::{DatasetCopy, UpstreamSources};
 pub use memory::InMemoryDatasetStore;
 pub(crate) use run::count;
 pub use run::{MAX_REPORT_RESULTS, MAX_STORED_ERRORS, SOURCE_KEY};

@@ -188,6 +188,14 @@ const MIGRATIONS: &[&str] = &[
         expires_at   INTEGER NOT NULL,
         object_key   TEXT
      )",
+    // 1.2: each data flow keeps its dataset's source, which the start
+    // message names from now on (ADR 0028, step 1; `store/data_flows.rs`).
+    // A flow of 1.1 gets the source its dataset has in the harvest's read
+    // copy (the `dataset` table of this file) now; a flow whose dataset
+    // has none there keeps NULL and is not served, as 1.1 did not serve it
+    "ALTER TABLE data_flow ADD COLUMN source TEXT;
+     UPDATE data_flow
+        SET source = (SELECT upstream FROM dataset WHERE dataset.id = data_flow.dataset_id)",
 ];
 
 /// Adapter: negotiations in a `SQLite` file.
@@ -1027,6 +1035,56 @@ mod tests {
             store.memberships("urn:uuid:new").unwrap(),
             StoredMembership::Missing
         );
+    }
+
+    /// A file written by 1.1 (13 migrations) with data flows: 1.2 gives
+    /// each the source its dataset has in the harvest's read copy
+    /// (migration 14). A flow whose dataset has no source there, or is
+    /// not there at all, keeps none and is not served.
+    #[test]
+    fn a_flow_from_1_1_gets_the_source_of_its_dataset() {
+        use portitor_dataplane::FlowStore;
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..13]).unwrap();
+        for (dataset, upstream) in [
+            ("d-url", Some("https://upstream.example/d")),
+            ("d-s3", Some("s3://datasets/d.csv")),
+            ("d-none", None),
+        ] {
+            conn.execute(
+                "INSERT INTO dataset (id, entry, content, upstream, content_sha256, state, \
+                 conforms_to, first_seen, last_changed, last_job) \
+                 VALUES (?1, '{}', '{}', ?2, 'ab', 'withdrawn', NULL, 1, 1, 1)",
+                params![dataset, upstream],
+            )
+            .unwrap();
+        }
+        for (flow, dataset) in [
+            ("urn:uuid:url", "d-url"),
+            ("urn:uuid:s3", "d-s3"),
+            ("urn:uuid:none", "d-none"),
+            ("urn:uuid:unknown", "d-unknown"),
+        ] {
+            conn.execute(
+                "INSERT INTO data_flow (id, state, dataset_id, token_hash, expires_at) \
+                 VALUES (?1, 'STARTED', ?2, 'ab', 1900000000)",
+                params![flow, dataset],
+            )
+            .unwrap();
+        }
+        let store = setup(conn).unwrap();
+        let source_of = |flow: &str| FlowStore::get(&store, flow).unwrap().unwrap().source;
+        assert_eq!(
+            source_of("urn:uuid:url").as_deref(),
+            Some("https://upstream.example/d")
+        );
+        assert_eq!(
+            source_of("urn:uuid:s3").as_deref(),
+            Some("s3://datasets/d.csv")
+        );
+        assert_eq!(source_of("urn:uuid:none"), None);
+        assert_eq!(source_of("urn:uuid:unknown"), None);
     }
 }
 

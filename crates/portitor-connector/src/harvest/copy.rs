@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The read copy in memory: what the DSP code ([`CatalogDatasets`]) and the
-//! data plane ([`UpstreamSources`]) read. The store keeps the copy; this
+//! transfers' signals to the data plane ([`UpstreamSources`]) read. The store keeps the copy; this
 //! is a snapshot of it, replaced as a whole after each run that changed
 //! it, so a request never sees half a run.
 
@@ -14,7 +14,24 @@ use portitor_dsp::Dataset;
 use portitor_dsp::catalog::CatalogDatasets;
 
 use super::{DatasetState, StoredDataset};
-use portitor_dataplane::UpstreamSources;
+
+/// Port: each dataset's source, as the harvest read it from the datasets
+/// file (`portitor:source`). The control plane offers transfers of the
+/// datasets that have one, and names it in the data flow's start message
+/// (`crate::data_flows`); the data plane keeps it from there (ADR 0028,
+/// step 1).
+pub trait UpstreamSources: Send + Sync {
+    /// The source of dataset `dataset_id`'s data, if it has one.
+    fn upstream_of(&self, dataset_id: &str) -> Option<String>;
+}
+
+/// A fixed map of dataset id to source (tests only, so not in the binary).
+#[cfg(test)]
+impl UpstreamSources for BTreeMap<String, String> {
+    fn upstream_of(&self, dataset_id: &str) -> Option<String> {
+        self.get(dataset_id).cloned()
+    }
+}
 
 /// One snapshot of the copy.
 #[derive(Debug, Default)]

@@ -11,19 +11,21 @@ use axum::Router;
 use axum::routing::get;
 
 use portitor_dataplane::audit::Parties;
-use portitor_dataplane::{DATA_PATH, FlowParties, HttpDataPlane, UpstreamSources, serve};
+use portitor_dataplane::{DATA_PATH, FlowParties, HttpDataPlane, serve};
 use portitor_dsp::transfer::provider::TransferStore as _;
 
 use crate::flow_membership::MembershipGate;
+use crate::harvest::{self, UpstreamSources};
 use crate::ports::{self, Ports};
-use crate::{Config, data_flows, harvest};
+use crate::{Config, data_flows};
 
 /// Builds the built-in HTTP data plane, if the `data-plane` feature is on
-/// and `ports` has a flow store, and makes transfers use it. It reads
-/// each dataset's source from the read copy `datasets` (`s3://` sources
-/// from `ports.object_storage`), and checks the consumer's membership with
-/// the caller verifier on every request (ADR 0027); the gate it returns
-/// still needs to know who ends transfers
+/// and `ports` has a flow store, and makes transfers use it. Transfers
+/// read each dataset's source from the read copy `datasets` and name it in
+/// the data flow's start message (`s3://` sources are read from
+/// `ports.object_storage`); the data plane checks the consumer's
+/// membership with the caller verifier on every request (ADR 0027); the
+/// gate it returns still needs to know who ends transfers
 /// ([`MembershipGate::ends_transfers_with`]).
 pub(crate) fn start(
     config: &Config,
@@ -41,7 +43,6 @@ pub(crate) fn start(
     ));
     let plane = HttpDataPlane::new(
         store.flows_only(),
-        Arc::clone(&sources),
         &config.public_url,
         config.data_token_seconds,
     )

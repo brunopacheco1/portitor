@@ -266,8 +266,6 @@ pub fn audit(flow: &str, agreement: &str, counter_party: &str, pushed: &Pushed) 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use portitor_dsp::transfer::{DataAddressType, HTTP_PUSH_ENDPOINT_TYPE};
 
     use super::*;
@@ -301,9 +299,8 @@ mod tests {
     #[tokio::test]
     async fn a_push_without_progress_fails() {
         let source = source().await;
-        let sources = BTreeMap::from([("d1".to_owned(), source.clone())]);
         let flows = Arc::new(crate::test_store::InMemoryFlows::default());
-        let plane = HttpDataPlane::new(flows, Arc::new(sources), "https://provider.example", 60)
+        let plane = HttpDataPlane::new(flows, "https://provider.example", 60)
             .unwrap()
             .with_push_over_http(true)
             .unwrap();

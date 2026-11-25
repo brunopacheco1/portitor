@@ -19,10 +19,12 @@ use portitor_dps::port::{DataPlane, SignalError};
 use portitor_dps::state::DataFlowState;
 use portitor_dsp::transfer::DataAddress;
 use portitor_dsp::transfer::provider::{DataFlows, Transfer};
+use serde_json::Value;
 
 use crate::flow_membership::{MembershipStore, StoredMembership};
+use crate::harvest::UpstreamSources;
 use crate::system::new_uuid;
-use portitor_dataplane::UpstreamSources;
+use portitor_dataplane::SOURCE_METADATA_KEY;
 
 /// The DSP formats the built-in data plane serves, with the Data Plane
 /// Signaling profile of each: pull since 0.4, push since 1.1 (ADR 0027).
@@ -63,8 +65,8 @@ pub struct SignalingDataFlows<P> {
     plane: P,
     participant_id: String,
     dataspace_context: String,
-    /// Where the data plane fetches each dataset's data: the datasets with
-    /// an upstream URL are the ones it can serve.
+    /// Where each dataset's data comes from: the datasets with a source
+    /// are the ones the data plane can serve. Each start message names it.
     sources: Arc<dyn UpstreamSources>,
     /// What the control plane kept of each flow's consumer: a flow of 1.0
     /// is not started again (ADR 0027, section 7). `None` in unit tests.
@@ -81,9 +83,9 @@ impl<P> std::fmt::Debug for SignalingDataFlows<P> {
 
 impl<P: DataPlane> SignalingDataFlows<P> {
     /// Signals `plane` on behalf of provider `participant_id`, in the
-    /// dataspace named `dataspace_context`. `sources`: where `plane` fetches
-    /// each dataset's data, read at each request; a request for a dataset
-    /// without an upstream URL is refused.
+    /// dataspace named `dataspace_context`. `sources`: each dataset's
+    /// source, read when a transfer starts and named in the start message;
+    /// a start for a dataset without one is refused.
     pub fn new(
         plane: P,
         participant_id: &str,
@@ -125,6 +127,17 @@ impl<P: DataPlane> SignalingDataFlows<P> {
             ));
         }
         Ok(())
+    }
+
+    /// The start message's `metadata`: the dataset's source, under
+    /// [`SOURCE_METADATA_KEY`] (maintainer's decision D2; Data Plane
+    /// Signaling v1.0-RC4 gives `metadata` no fixed shape). `None` when the
+    /// dataset has none: the data plane then refuses the start.
+    fn source_metadata(&self, dataset_id: &str) -> Option<serde_json::Map<String, Value>> {
+        let source = self.sources.upstream_of(dataset_id)?;
+        let mut metadata = serde_json::Map::new();
+        metadata.insert(SOURCE_METADATA_KEY.to_owned(), Value::String(source));
+        Some(metadata)
     }
 
     /// A reason message with a fresh id.
@@ -175,7 +188,7 @@ impl<P: DataPlane + NewAddress> DataFlows for SignalingDataFlows<P> {
                 profile: profile.to_owned(),
                 // the consumer's verified claims come with DCP (0.5)
                 claims: serde_json::Map::new(),
-                metadata: None,
+                metadata: self.source_metadata(&t.dataset_id),
                 labels: Vec::new(),
             },
             // pull: the data plane makes the address (the spec forbids one
@@ -255,11 +268,13 @@ mod tests {
     use super::*;
 
     /// A data plane that keeps the state of each flow and follows the
-    /// spec's state machine. `.1`: what `start` answers.
+    /// spec's state machine. `.1`: what `start` answers; `.2`: the last
+    /// start message it got.
     #[derive(Default)]
     struct Plane(
         RefCell<BTreeMap<String, DataFlowState>>,
         RefCell<Option<DataFlowState>>,
+        RefCell<Option<DataFlowStartMessage>>,
     );
 
     impl Plane {
@@ -284,6 +299,7 @@ mod tests {
             // a push start carries the consumer's address, a pull start none
             assert_eq!(m.flow.profile == HTTP_PUSH, m.data_address.is_some());
             let push = m.flow.profile == HTTP_PUSH;
+            *self.2.borrow_mut() = Some(m.clone());
             let state = self.1.borrow().unwrap_or(DataFlowState::Started);
             self.0
                 .borrow_mut()
@@ -457,6 +473,46 @@ mod tests {
                 .unwrap_err()
                 .contains("Starting")
         );
+    }
+
+    /// The start message names the dataset's source in its `metadata`
+    /// (ADR 0028, step 1; maintainer's decision D2), with the agreement
+    /// and the consumer the data plane writes in the audit line.
+    #[test]
+    fn the_start_message_names_the_source_and_the_parties() {
+        let plane = Plane::default();
+        let flows = flows_over(&plane);
+        for transfer in [transfer("HttpData-PULL"), push_transfer()] {
+            plane.0.borrow_mut().clear();
+            flows.start(&transfer).unwrap();
+            let sent = plane.2.borrow_mut().take().unwrap();
+            let metadata = serde_json::to_value(&sent.flow.metadata).unwrap();
+            assert_eq!(
+                metadata,
+                serde_json::json!({"portitor:source": "https://upstream.example/d"})
+            );
+            assert_eq!(sent.flow.agreement_id, "a");
+            assert_eq!(sent.flow.counter_party_id, "did:web:c");
+            // and on the wire, as Data Plane Signaling spells it
+            let json = serde_json::to_value(&sent).unwrap();
+            assert_eq!(
+                json["metadata"]["portitor:source"],
+                "https://upstream.example/d"
+            );
+        }
+    }
+
+    /// A dataset without a source gets a start message without one, which
+    /// the data plane refuses.
+    #[test]
+    fn a_dataset_without_a_source_is_named_with_none() {
+        let plane = Plane::default();
+        let flows = flows_over(&plane);
+        let mut other = transfer("HttpData-PULL");
+        other.dataset_id = "other".to_owned();
+        flows.start(&other).unwrap();
+        let sent = plane.2.borrow_mut().take().unwrap();
+        assert_eq!(sent.flow.metadata, None);
     }
 
     /// A flow of 1.0 is served without a membership check only until its

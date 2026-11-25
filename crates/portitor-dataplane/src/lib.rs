@@ -21,9 +21,11 @@
 //!   object in the connector's object storage (`s3://{bucket}/{key}`, ADR
 //!   0027, section 3), read with a signed `GET`. Either is streamed
 //!   through.
-//!   The URL is looked up in the harvest's read copy at each request
-//!   ([`UpstreamSources`]), in any state, so transfers under agreements
-//!   already made keep working after the dataset is withdrawn.
+//!   The control plane names the source in the start message's
+//!   `metadata`, under [`SOURCE_METADATA_KEY`] (from 1.2; ADR 0028, step
+//!   1), and the flow keeps it until it ends: a source changed later (a
+//!   new harvest) reaches only new transfers, and transfers under
+//!   agreements already made keep working after the dataset is withdrawn.
 //!   The consumer's request headers are not passed on.
 //! - A push flow (profile `http-push`) keeps the consumer's data address
 //!   instead of a token of ours, until it ends. It has no token, so `/data`
@@ -37,8 +39,6 @@
 //!   terminated ([`RunningFlows`]) or when the membership check, run again
 //!   while it streams, fails (`download.rs`).
 
-#[cfg(any(test, feature = "test-support"))]
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -50,7 +50,7 @@ use base64::Engine as _;
 use http_body_util::Full;
 use hyper::body::Bytes;
 use portitor_dps::message::{
-    DataFlowPrepareMessage, DataFlowResumeMessage, DataFlowStartMessage,
+    DataFlowBaseMessage, DataFlowPrepareMessage, DataFlowResumeMessage, DataFlowStartMessage,
     DataFlowStartedNotificationMessage, DataFlowStatusMessage, DataFlowStatusResponseMessage,
     DataFlowSuspendMessage, DataFlowTerminateMessage, HTTP_PULL, HTTP_PUSH,
 };
@@ -89,26 +89,18 @@ pub const DATA_PATH: &str = "/data";
 /// How long the upstream may take to send its answer's headers.
 const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Port: where the data plane fetches each dataset's data.
-pub trait UpstreamSources: Send + Sync {
-    /// The upstream URL of dataset `dataset_id`'s data, if it has one.
-    fn upstream_of(&self, dataset_id: &str) -> Option<String>;
-}
+/// The key, in the `metadata` of a Data Plane Signaling start message,
+/// whose value is the dataset's source: an `http://` or `https://` URL, or
+/// `s3://{bucket}/{key}`. It is the key operators write in the datasets
+/// file. Data Plane Signaling v1.0-RC4 gives `metadata` no fixed shape and
+/// names no key for this (maintainer's decision D2, 2026-11-25).
+pub const SOURCE_METADATA_KEY: &str = "portitor:source";
 
 /// Port: who the agreement and the consumer of a data flow are, for the
 /// audit line of each transfer.
 pub trait FlowParties: Send + Sync {
     /// The agreement and the consumer of flow `id`; empty when unknown.
     fn parties(&self, id: &str) -> Parties;
-}
-
-/// A fixed map of dataset id to upstream URL (tests only, so not in the
-/// binary).
-#[cfg(any(test, feature = "test-support"))]
-impl UpstreamSources for BTreeMap<String, String> {
-    fn upstream_of(&self, dataset_id: &str) -> Option<String> {
-        self.get(dataset_id).cloned()
-    }
 }
 
 /// One data flow as the data plane keeps it.
@@ -120,6 +112,12 @@ pub struct Flow {
     pub state: DataFlowState,
     /// The dataset whose data is served.
     pub dataset_id: String,
+    /// Where the data comes from: the dataset's source as the start
+    /// message named it ([`SOURCE_METADATA_KEY`]). `None` only for a flow
+    /// started before 1.2 whose dataset had no source in the harvest's
+    /// read copy when the database was migrated: such a flow is never
+    /// served, as 1.1 did not serve it either.
+    pub source: Option<String>,
     /// SHA-256 of the access token, hex. Empty for a push flow, which
     /// has no token of ours: no hash matches it.
     pub token_hash: String,
@@ -227,7 +225,6 @@ pub fn new_token() -> Result<String, SignalError> {
 #[derive(Clone)]
 pub struct HttpDataPlane {
     flows: Arc<dyn FlowStore + Send + Sync>,
-    sources: Arc<dyn UpstreamSources>,
     public_url: String,
     token_seconds: u64,
     client: HttpsClient,
@@ -266,24 +263,23 @@ pub enum Denied {
 }
 
 impl HttpDataPlane {
-    /// A data plane that serves the data of `sources` at
-    /// `{public_url}/data/{flowId}`, with tokens valid for
-    /// `token_seconds`. Upstream URLs are set by the operator, so plain
-    /// `http://` is allowed for them.
+    /// A data plane that keeps its flows in `flows` and serves their data
+    /// at `{public_url}/data/{flowId}`, with tokens valid for
+    /// `token_seconds`. Each flow's source comes with its start message;
+    /// upstream URLs are set by the operator, so plain `http://` is
+    /// allowed for them.
     ///
     /// # Errors
     ///
     /// The HTTP client cannot be built.
     pub fn new(
         flows: Arc<dyn FlowStore + Send + Sync>,
-        sources: Arc<dyn UpstreamSources>,
         public_url: &str,
         token_seconds: u64,
     ) -> Result<Self, String> {
         let (client, _) = https_client(true)?;
         Ok(Self {
             flows,
-            sources,
             public_url: public_url.trim_end_matches('/').to_owned(),
             token_seconds,
             client,
@@ -483,9 +479,9 @@ impl HttpDataPlane {
         if !allowed {
             return Err(Denied::Unauthorized);
         }
-        self.sources
-            .upstream_of(&flow.dataset_id)
-            .ok_or(Denied::Unauthorized)
+        // a flow of 1.1 whose source could not be filled in has none
+        // (`Flow::source`): it is refused like any other
+        flow.source.ok_or(Denied::Unauthorized)
     }
 }
 
@@ -503,11 +499,12 @@ impl HttpDataPlane {
             ));
         };
         check_push_address(address).map_err(SignalError::Invalid)?;
-        self.check_source(&request.dataset_id)?;
+        let source = self.source_in(request)?;
         let flow = Flow {
             id: request.data_flow_id.clone(),
             state: DataFlowState::Started,
             dataset_id: request.dataset_id.clone(),
+            source: Some(source),
             token_hash: String::new(),
             expires_at: 0,
             push_address: Some(address.clone()),
@@ -518,17 +515,37 @@ impl HttpDataPlane {
         Ok(Self::status_message(&flow.id, flow.state, None))
     }
 
-    /// The dataset has a source this data plane can read.
-    fn check_source(&self, dataset_id: &str) -> Result<(), SignalError> {
-        match self.sources.upstream_of(dataset_id) {
-            None => Err(SignalError::Invalid(format!(
+    /// The dataset's source that the start message `request` names in its
+    /// `metadata` ([`SOURCE_METADATA_KEY`]), if it is one this data plane
+    /// can read: an `http(s)` URL, or an `s3://` object when the
+    /// connector has object storage.
+    fn source_in(&self, request: &DataFlowBaseMessage) -> Result<String, SignalError> {
+        let dataset_id = &request.dataset_id;
+        let named = match &request.metadata {
+            Some(metadata) => metadata.get(SOURCE_METADATA_KEY),
+            None => None,
+        };
+        let Some(named) = named else {
+            return Err(SignalError::Invalid(format!(
                 "dataset {dataset_id} has no source"
-            ))),
-            Some(source) if !self.can_read(&source) => Err(SignalError::Invalid(format!(
+            )));
+        };
+        // the same forms the harvest accepts in the datasets file
+        let source = match named.as_str() {
+            Some(url) if url.starts_with("https://") || url.starts_with("http://") => url,
+            Some(uri) if parse_s3_uri(uri).is_some() => uri,
+            _ => {
+                return Err(SignalError::Invalid(format!(
+                    "dataset {dataset_id}: {SOURCE_METADATA_KEY} must be an http:// or https:// URL, or s3://{{bucket}}/{{key}}"
+                )));
+            }
+        };
+        if !self.can_read(source) {
+            return Err(SignalError::Invalid(format!(
                 "dataset {dataset_id} is in object storage, which this connector does not have"
-            ))),
-            Some(_) => Ok(()),
+            )));
         }
+        Ok(source.to_owned())
     }
 
     /// Replaces the consumer's address of push flow `id`, SUSPENDED.
@@ -598,7 +615,9 @@ impl HttpDataPlane {
         if flow.state != DataFlowState::Started {
             return Ok(None);
         }
-        let Some(source) = self.sources.upstream_of(&flow.dataset_id) else {
+        // a flow of 1.1 whose source could not be filled in has none
+        // (`Flow::source`)
+        let Some(source) = flow.source else {
             return Err(SignalError::Invalid(format!(
                 "dataset {} has no source",
                 flow.dataset_id
@@ -715,12 +734,13 @@ impl DataPlane for HttpDataPlane {
                 "a pull start carries no data address".to_owned(),
             ));
         }
-        self.check_source(&request.dataset_id)?;
+        let source = self.source_in(request)?;
         let token = new_token()?;
         let flow = Flow {
             id: request.data_flow_id.clone(),
             state: DataFlowState::Started,
             dataset_id: request.dataset_id.clone(),
+            source: Some(source),
             token_hash: hash(&token),
             expires_at: now_secs().saturating_add(self.token_seconds),
             push_address: None,
@@ -905,12 +925,25 @@ mod tests {
     use super::*;
 
     fn plane() -> HttpDataPlane {
-        let sources = BTreeMap::from([("d1".to_owned(), "http://upstream.example/d1".to_owned())]);
         let flows = Arc::new(crate::test_store::InMemoryFlows::default());
-        HttpDataPlane::new(flows, Arc::new(sources), "https://provider.example/", 60).unwrap()
+        HttpDataPlane::new(flows, "https://provider.example/", 60).unwrap()
     }
 
+    /// The `metadata` of a start message that names `source`.
+    fn naming(source: &str) -> serde_json::Map<String, serde_json::Value> {
+        let mut metadata = serde_json::Map::new();
+        metadata.insert(SOURCE_METADATA_KEY.to_owned(), source.into());
+        metadata
+    }
+
+    /// A start message for `dataset`, as the control plane sends it: only
+    /// dataset `d1` has a source, `http://upstream.example/d1`.
     fn start(dataset: &str, profile: &str) -> DataFlowStartMessage {
+        let metadata = if dataset == "d1" {
+            Some(naming("http://upstream.example/d1"))
+        } else {
+            None
+        };
         DataFlowStartMessage {
             flow: DataFlowBaseMessage {
                 message_id: "m".to_owned(),
@@ -922,7 +955,7 @@ mod tests {
                 dataset_id: dataset.to_owned(),
                 profile: profile.to_owned(),
                 claims: serde_json::Map::new(),
-                metadata: None,
+                metadata,
                 labels: vec![],
             },
             data_address: None,
@@ -1037,6 +1070,88 @@ mod tests {
         assert!(matches!(
             p.suspend("nope", &reason()),
             Err(SignalError::UnknownDataFlow(_))
+        ));
+    }
+
+    /// From 1.2 the source comes with the start message (ADR 0028, step
+    /// 1): the flow keeps it and serves from it.
+    #[test]
+    fn the_flow_serves_the_source_its_start_message_named() {
+        let p = plane();
+        let mut message = start("d1", HTTP_PULL);
+        message.flow.metadata = Some(naming("https://elsewhere.example/the-data"));
+        let token = token_of(&p.start(&message).unwrap());
+        let stored = p.flows.get("f1").unwrap().unwrap();
+        let source = Some("https://elsewhere.example/the-data".to_owned());
+        assert_eq!(stored.source, source);
+        assert_eq!(p.authorize("f1", &token, now_secs()).ok(), source);
+    }
+
+    /// A start whose metadata names no source this data plane can read is
+    /// refused, and no flow is kept.
+    #[test]
+    fn a_start_without_a_readable_source_is_refused() {
+        let p = plane();
+        let mut no_key = start("d1", HTTP_PULL);
+        no_key.flow.metadata = Some(serde_json::Map::new());
+        let mut not_text = start("d1", HTTP_PULL);
+        not_text.flow.metadata = Some(serde_json::Map::from_iter([(
+            SOURCE_METADATA_KEY.to_owned(),
+            serde_json::json!(42),
+        )]));
+        let mut file = start("d1", HTTP_PULL);
+        file.flow.metadata = Some(naming("file:///etc/passwd"));
+        let mut no_storage = start("d1", HTTP_PULL);
+        no_storage.flow.metadata = Some(naming("s3://datasets/d1.csv"));
+        let mut push_without = start("d1", HTTP_PUSH);
+        push_without.flow.metadata = None;
+        push_without.data_address = Some(DataAddress {
+            kind: DataAddressType,
+            endpoint_type: portitor_dsp::transfer::HTTP_PUSH_ENDPOINT_TYPE.to_owned(),
+            endpoint: Some("https://consumer.example/in".to_owned()),
+            endpoint_properties: vec![],
+        });
+        for message in [no_key, not_text, file, no_storage, push_without] {
+            let refused = p.start(&message);
+            assert!(
+                matches!(refused, Err(SignalError::Invalid(_))),
+                "{refused:?}"
+            );
+        }
+        assert_eq!(p.flows.get("f1").unwrap(), None);
+    }
+
+    /// A flow kept by 1.1 whose source the migration could not fill in
+    /// (`Flow::source`) is never served, and its push never sent.
+    #[test]
+    fn a_flow_without_a_source_is_not_served() {
+        let p = plane();
+        let token = new_token().unwrap();
+        let mut flow = Flow {
+            id: "old".to_owned(),
+            state: DataFlowState::Started,
+            dataset_id: "gone".to_owned(),
+            source: None,
+            token_hash: hash(&token),
+            expires_at: now_secs() + 60,
+            push_address: None,
+        };
+        p.flows.insert(&flow).unwrap();
+        assert_eq!(
+            p.authorize("old", &token, now_secs()),
+            Err(Denied::Unauthorized)
+        );
+        flow.id = "old-push".to_owned();
+        flow.push_address = Some(DataAddress {
+            kind: DataAddressType,
+            endpoint_type: portitor_dsp::transfer::HTTP_PUSH_ENDPOINT_TYPE.to_owned(),
+            endpoint: Some("https://consumer.example/in".to_owned()),
+            endpoint_properties: vec![],
+        });
+        p.flows.insert(&flow).unwrap();
+        assert!(matches!(
+            p.push_job("old-push"),
+            Err(SignalError::Invalid(_))
         ));
     }
 
