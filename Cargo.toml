@@ -17,7 +17,7 @@ rust-version = "1.89"
 axum = "0.8"
 # no default features: the default "simd-unsafe" feature (0.23) runs unsafe SIMD code we do not need
 base64 = { version = "0.23", default-features = false, features = ["std"] }
-jsonschema = { version = "0.61", default-features = false }
+jsonschema = { version = "0.63", default-features = false }
 # DEFLATE for DCP status lists; no unsafe code (forbid(unsafe_code)), and without its
 # "simd" feature (unsafe SIMD checksums), which flate2 would force on
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
