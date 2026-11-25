@@ -134,12 +134,11 @@ export on, `telemetry: exporting` (INFO).
 | `a background task panicked; it starts again` / `...; its message is sent again` / `...; its work is left as saved` (ERROR) | The task `task` stopped at a bug. A task that runs all the time starts again after a pause (`restart_in_seconds`): 5 seconds, twice as long after each further panic in a row, at most 5 minutes. A DSP message whose sending panicked (`outbox_delivery`) is sent again after the same pauses (`again_in_seconds`). A credential decision stays saved and is tried again on the issuer's next outbox round (at most a minute); the other requests and deliveries go on | Report it. A line that repeats for the same `pid` or `issuer_pid` is a message or request that meets the bug every time: it stays as it is until a fixed version runs |
 | `portitor-connector stopped` (ERROR) | The process could not start or stopped with an error; the message says why | Fix the cause; the container restarts |
 | `data transfer done` (INFO, target `portitor::audit`) | One per data response served at `/data/{flowId}`, per push sent and per push received (since 1.1), when it ended: the audit line below | Ship and keep it as your audit trail |
-| `audit: transfer store failed` (WARN, 1.1) | As provider: the transfer of a data flow (`flow`) could not be read for its audit line (`error`). The data is served anyway; in that audit line `agreement` and `counterParty` are empty | Check disk space and the `/data` volume |
-| `upstream fetch failed` (WARN) | The data source of a pull did not answer, or answered other than 2xx; the consumer got HTTP 502 and `error` says why. The audit line says `failed` | Check the dataset's `portitor:source` and that the source is up |
+| `upstream fetch failed` (WARN) | The data source of a pull did not answer, or answered other than 2xx; the consumer got HTTP 502 and `error` says why. The audit line says `failed` | Check the dataset's `portitor:source` and that the source is up. From 1.2 a transfer reads the source it started with: a corrected `portitor:source` reaches only new transfers |
 | `object storage` (INFO, at start, 1.1) | The connector has object storage: `endpoint` and `push_bucket` (`none` when it does not receive pushes); never the keys | Nothing |
-| `push: the source could not be read` (WARN, 1.1) | As provider: the source of a push did not answer, or answered other than 2xx (`error`); the push is not sent and the transfer is terminated | Check the dataset's `portitor:source` and that the source is up |
+| `push: the source could not be read` (WARN, 1.1) | As provider: the source of a push did not answer, or answered other than 2xx (`error`); the push is not sent and the transfer is terminated | Check the dataset's `portitor:source` and that the source is up. From 1.2 a corrected `portitor:source` reaches only new transfers |
 | `push not sent: the consumer's membership could not be checked now` (WARN, 1.1) | As provider: the membership check before or during a push could not finish (`reason`); the push fails and the transfer is terminated | Check the issuer's status list and DID document from the connector's network; the consumer asks for a new transfer |
-| `push: cannot start` (WARN, 1.1) | As provider: the dataset of a started push transfer has no source, or the database failed (`error`); nothing is sent | Check that the dataset is still in the datasets file, and the `/data` volume |
+| `push: cannot start; the transfer is terminated` (WARN, 1.1) | As provider: a started push transfer has no source kept (only one started under 1.1 whose dataset had no `portitor:source` at the upgrade to 1.2), or the database failed (`error`); nothing is sent and the transfer is terminated | Check the `/data` volume. For a missing source: the consumer asks for a new transfer |
 | `push: the end of the transfer could not be saved` / `push: the started pushes cannot be read` (ERROR, 1.1) | As provider: the database failed while a push ended, or at start while looking for pushes to send again | Check disk space and the `/data` volume |
 | `push received: the object storage failed` (WARN, 1.1) | As consumer: a push arrived but could not be stored (`error` names a status or a cause, never a key); the sender got HTTP 502. The audit line says `failed` | Check the object storage, the push bucket and the connector's key |
 | `object storage: an unfinished upload could not be aborted` (WARN, 1.1) | An upload into the push bucket failed, and its parts could not be removed | Remove unfinished multipart uploads with your storage's tools, or set a lifecycle rule for them |
@@ -360,10 +359,10 @@ The message, the target and these fields are stable in 1.x
 ([STABILITY, Audit line](STABILITY.md#audit-line)).
 
 A refused request (HTTP 401, on `/data` or `/push`) writes no audit
-line. When the transfer
-cannot be read from the database, `agreement` and `counterParty` are
-empty, the data is served anyway, and a WARN line `audit: transfer
-store failed` comes first. The line never holds
+line. As provider, `agreement` and `counterParty` are the ones the data
+flow keeps from its start message (from 1.2). A flow that started
+before 1.2 and has no transfer in the database has them empty, as in
+1.1. The line never holds
 the token or the data source's URL. Portitor keeps no audit store: keep
 these lines as long as your rules require (ADR 0025, "Audit"). With
 `RUST_LOG` set, keep `portitor::audit=info` in it.
@@ -495,6 +494,48 @@ after the backup is lost. This stays so in 1.x
 Messages the connector was sending when it stopped are saved and sent
 again at start (ADR 0007), so an upgrade does not leave negotiations
 waiting. A partner may receive such a message twice; that is handled.
+
+### From 1.1 to 1.2
+
+1.2 moves the built-in data plane into its own crate,
+`portitor-dataplane`. It still runs inside the connector, in the same
+image ([ADR 0028](adr/0028-separate-pluggable-data-plane.md), step 1).
+No setting or route was added, removed or renamed. Nothing has to
+change in your configuration.
+
+1. **Back up `/data` first.** Migrations 14, 15 and 16 run at start,
+   forward only. They add the columns `data_flow.source`,
+   `data_flow.agreement_id`, `data_flow.counter_party_id` and
+   `transfer.flow_step`. Migration 14 gives each existing data flow the
+   `portitor:source` its dataset has in the harvest's read copy.
+   Migration 15 gives it the agreement and the consumer of its
+   transfer. To go back to 1.1, restore the backup.
+2. **Behaviour change, provider: a transfer keeps the source it started
+   with.** The connector now sends the source to the data plane in the
+   start message, and the data flow keeps it until it ends. A
+   `portitor:source` you change in the datasets file reaches only
+   transfers that start after the next harvest run. A running transfer,
+   also one suspended and started again, still reads the old source. To
+   move it to the new source, end it
+   (`POST /v1/provided-transfers/{providerPid}/termination`); the
+   consumer asks for a new transfer.
+3. **Transfers started under 1.1 whose dataset had no `portitor:source`
+   at the upgrade** keep no source. 1.1 refused them too, and they stay
+   refused: a `/data` request gets 401, and a push transfer is
+   terminated at start (`push: cannot start; the transfer is
+   terminated`). Adding the source later does not help these
+   transfers. End a pull transfer of this kind with the termination
+   route above, so the consumer is told; it asks for a new transfer.
+4. **Fixed, provider: the data plane is told once, after the transfer
+   is saved**
+   ([TD-48](RISKS_AND_TECHNICAL_DEBTS.md#td-48)). Nothing to do.
+5. **Logs.** `audit: transfer store failed` is gone: the audit line now
+   takes the agreement and the consumer from the data flow. The audit
+   line itself (`data transfer done`, target `portitor::audit`) does
+   not change. The other lines of the data plane keep their text, but
+   their `target` field now starts with `portitor_dataplane::` instead
+   of `portitor_connector::`. If your `RUST_LOG` or your log shipping
+   selects lines by target, add `portitor_dataplane`.
 
 ### From 1.0 to 1.1
 
