@@ -539,6 +539,34 @@ async fn a_push_lands_in_the_consumers_bucket_and_completes_the_transfer() {
     );
 }
 
+/// The provider's audit line of a push names the agreement and the
+/// consumer that the data flow kept from its start message (ADR 0028,
+/// step 1).
+#[tokio::test]
+async fn a_sent_push_writes_its_agreement_and_consumer_in_the_audit_line() {
+    let p = parties(upstream().await, true).await;
+    let (log, _guard) = Log::start();
+    let agreement = p.agree().await;
+    p.aim_at_the_receiving_route();
+    let t = p
+        .consumer
+        .request_transfer(&agreement, "HttpData-PUSH")
+        .unwrap();
+    p.until_state(&t.consumer_pid, TransferState::Completed)
+        .await;
+    let sent: Vec<Value> = log
+        .with_message("data transfer done")
+        .into_iter()
+        .filter(|line| line["fields"]["direction"] == "sent")
+        .collect();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    let fields = &sent[0]["fields"];
+    assert_eq!(fields["agreement"], agreement.as_str());
+    assert_eq!(fields["counterParty"], CONSUMER_DID);
+    assert_eq!(fields["outcome"], "complete");
+    assert_eq!(fields["bytes"], DATA.len());
+}
+
 #[tokio::test]
 async fn the_receiving_route_takes_only_the_token_of_a_running_transfer() {
     // a push that never ends, to a fake endpoint: the transfer stays

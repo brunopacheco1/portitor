@@ -45,10 +45,15 @@ use portitor_runtime::telemetry::http::{ClientCall, Peer};
 use tokio::time::Instant;
 use tracing::Instrument as _;
 
+use portitor_dps::port::SignalError;
+use portitor_dps::state::DataFlowState;
 use portitor_dsp::transfer::DataAddress;
 
-use crate::audit::{self, Outcome};
-use crate::{HttpDataPlane, PushJob};
+use crate::access::Access;
+use crate::audit::{self, Outcome, Parties};
+use crate::download;
+use crate::plane::HttpDataPlane;
+use crate::running_flows::CutSignal;
 
 /// The media type sent when neither the source nor the consumer's address
 /// names one.
@@ -59,6 +64,108 @@ const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
 /// the object storage and a bundle download. The consumer's receiving
 /// route uses it too, for a body that stops coming.
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// A push to send: what [`HttpDataPlane::push_job`] hands to the sender.
+#[derive(Debug)]
+pub struct PushJob {
+    /// The data flow (the transfer's provider pid).
+    pub flow_id: String,
+    /// The dataset's source.
+    pub source: String,
+    /// The consumer's data address. Never logged.
+    pub address: DataAddress,
+    /// The agreement and the consumer, for the audit line.
+    pub parties: Parties,
+    /// Held while the push runs; fires on suspend or terminate.
+    pub cut: CutSignal,
+}
+
+impl HttpDataPlane {
+    /// The push to send now for flow `id`, if it is a push flow that is
+    /// STARTED and none of its pushes runs already. The caller sends it
+    /// (`crate::push`) and keeps the job until it is done: its cut signal
+    /// tells the data plane a push of this flow runs.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn push_job(&self, id: &str) -> Result<Option<PushJob>, SignalError> {
+        // watch first, check second, as a download does
+        // (`running_flows` module doc)
+        let Some(cut) = self.running.watch_if_idle(id) else {
+            // already being sent
+            return Ok(None);
+        };
+        let flow = self.flow(id)?;
+        let parties = flow.parties();
+        let Some(address) = flow.push_address else {
+            return Ok(None);
+        };
+        if flow.state != DataFlowState::Started {
+            return Ok(None);
+        }
+        // a flow of 1.1 whose source could not be filled in has none
+        // (`Flow::source`)
+        let Some(source) = flow.source else {
+            return Err(SignalError::Invalid(format!(
+                "dataset {} has no source",
+                flow.dataset_id
+            )));
+        };
+        Ok(Some(PushJob {
+            flow_id: flow.id,
+            source,
+            address,
+            parties,
+            cut,
+        }))
+    }
+
+    /// The membership check before a push of flow `id` (ADR 0027,
+    /// section 7.2): `Err(Cut)` when the membership was revoked (the
+    /// transfer is then ended), `Err(Failed)` when it could not be checked.
+    pub(crate) async fn push_membership(&self, id: &str) -> Result<(), Outcome> {
+        let Some(gate) = &self.gate else {
+            return Ok(());
+        };
+        match gate.check(id).await {
+            Access::Granted => Ok(()),
+            Access::Unchecked(reason) => {
+                tracing::warn!(flow = %id, %reason, "push not sent: the consumer's membership could not be checked now");
+                Err(Outcome::Failed)
+            }
+            Access::Revoked(reason) => {
+                gate.end_transfer(id, &reason);
+                Err(Outcome::Cut)
+            }
+        }
+    }
+
+    /// Whether flow `id` is still STARTED. A push that was cut while its
+    /// flow is still STARTED was not cut by a suspension or a termination
+    /// (they change the state first, then cut): see `crate::push`.
+    pub(crate) fn is_started(&self, id: &str) -> bool {
+        matches!(self.flows.get(id), Ok(Some(flow)) if flow.state == DataFlowState::Started)
+    }
+
+    /// The membership checks of a running push of flow `id`, as for a
+    /// download; they stop when the value is dropped.
+    pub(crate) fn push_watchdog(&self, id: &str) -> Option<impl Send + use<>> {
+        self.gate
+            .as_ref()
+            .map(|gate| download::watchdog(Arc::clone(gate), self.running_flows(), id))
+    }
+
+    /// The push flows that are STARTED (after a restart, the pushes to
+    /// send again).
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn started_pushes(&self) -> Result<Vec<String>, SignalError> {
+        self.flows.started_pushes().map_err(Self::store_failed)
+    }
+}
 
 /// How a push ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,11 +236,14 @@ async fn send_until_cut(plane: &HttpDataPlane, job: &mut PushJob, idle: Duration
     // checks the membership again while the push runs
     let _watchdog = plane.push_watchdog(&job.flow_id);
     let counted = Arc::new(AtomicU64::new(0));
+    // `..`: the job's parties are for the audit line, which the caller
+    // writes once the push is over
     let PushJob {
         flow_id,
         source,
         address,
         cut,
+        ..
     } = job;
     let sent = tokio::select! {
         result = post(plane, flow_id, source, address, Arc::clone(&counted), idle) => match result {
@@ -266,8 +376,6 @@ pub fn audit(flow: &str, agreement: &str, counter_party: &str, pushed: &Pushed) 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use portitor_dsp::transfer::{DataAddressType, HTTP_PUSH_ENDPOINT_TYPE};
 
     use super::*;
@@ -301,9 +409,8 @@ mod tests {
     #[tokio::test]
     async fn a_push_without_progress_fails() {
         let source = source().await;
-        let sources = BTreeMap::from([("d1".to_owned(), source.clone())]);
         let flows = Arc::new(crate::test_store::InMemoryFlows::default());
-        let plane = HttpDataPlane::new(flows, Arc::new(sources), "https://provider.example", 60)
+        let plane = HttpDataPlane::new(flows, "https://provider.example", 60)
             .unwrap()
             .with_push_over_http(true)
             .unwrap();

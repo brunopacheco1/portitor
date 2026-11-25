@@ -37,7 +37,7 @@ fn address_text(address: Option<&DataAddress>) -> Result<Option<String>, FlowSto
         .transpose()
 }
 
-const FLOW_COLUMNS: &str = "id, state, dataset_id, token_hash, expires_at, push_address";
+const FLOW_COLUMNS: &str = "id, state, dataset_id, token_hash, expires_at, push_address, source, agreement_id, counter_party_id";
 
 fn flow_from_row(row: &Row<'_>) -> Result<Flow, super::StoreError> {
     let state: String = col(row, 1)?;
@@ -57,6 +57,9 @@ fn flow_from_row(row: &Row<'_>) -> Result<Flow, super::StoreError> {
         token_hash: col(row, 3)?,
         expires_at: u64::try_from(expires_at).unwrap_or(0),
         push_address,
+        source: col(row, 6)?,
+        agreement_id: col(row, 7)?,
+        counter_party_id: col(row, 8)?,
     })
 }
 
@@ -76,7 +79,7 @@ impl FlowStore for SqliteNegotiations {
             .execute(
                 &format!(
                     "INSERT OR IGNORE INTO data_flow ({FLOW_COLUMNS})
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
                 ),
                 params![
                     f.id,
@@ -84,7 +87,10 @@ impl FlowStore for SqliteNegotiations {
                     f.dataset_id,
                     f.token_hash,
                     expires_at,
-                    address_text(f.push_address.as_ref())?
+                    address_text(f.push_address.as_ref())?,
+                    f.source,
+                    f.agreement_id,
+                    f.counter_party_id
                 ],
             )
             .map_err(failed)?;
@@ -202,6 +208,9 @@ mod tests {
             id: "f1".to_owned(),
             state: DataFlowState::Started,
             dataset_id: "d1".to_owned(),
+            source: Some("https://upstream.example/d1".to_owned()),
+            agreement_id: "urn:uuid:a".to_owned(),
+            counter_party_id: "did:web:c".to_owned(),
             token_hash: "ab".repeat(32),
             expires_at: 1_800_000_000,
             push_address: None,

@@ -10,20 +10,20 @@ use std::sync::Arc;
 use axum::Router;
 use axum::routing::get;
 
-use portitor_dataplane::audit::Parties;
-use portitor_dataplane::{DATA_PATH, FlowParties, HttpDataPlane, UpstreamSources, serve};
-use portitor_dsp::transfer::provider::TransferStore as _;
+use portitor_dataplane::{DATA_PATH, HttpDataPlane, serve};
 
 use crate::flow_membership::MembershipGate;
+use crate::harvest::{self, UpstreamSources};
 use crate::ports::{self, Ports};
-use crate::{Config, data_flows, harvest};
+use crate::{Config, data_flows};
 
 /// Builds the built-in HTTP data plane, if the `data-plane` feature is on
-/// and `ports` has a flow store, and makes transfers use it. It reads
-/// each dataset's source from the read copy `datasets` (`s3://` sources
-/// from `ports.object_storage`), and checks the consumer's membership with
-/// the caller verifier on every request (ADR 0027); the gate it returns
-/// still needs to know who ends transfers
+/// and `ports` has a flow store, and makes transfers use it. Transfers
+/// read each dataset's source from the read copy `datasets` and name it in
+/// the data flow's start message (`s3://` sources are read from
+/// `ports.object_storage`); the data plane checks the consumer's
+/// membership with the caller verifier on every request (ADR 0027); the
+/// gate it returns still needs to know who ends transfers
 /// ([`MembershipGate::ends_transfers_with`]).
 pub(crate) fn start(
     config: &Config,
@@ -41,7 +41,6 @@ pub(crate) fn start(
     ));
     let plane = HttpDataPlane::new(
         store.flows_only(),
-        Arc::clone(&sources),
         &config.public_url,
         config.data_token_seconds,
     )
@@ -49,9 +48,6 @@ pub(crate) fn start(
     .map(|plane| {
         plane
             .with_object_storage(ports.object_storage.clone())
-            // the transfers name the agreement and the consumer for the
-            // audit line of each pull and push
-            .with_parties(Arc::new(TransferParties(ports.transfers.store.clone())))
             .checking_membership_with(Arc::clone(&gate) as _)
     });
     let plane = match plane {
@@ -70,27 +66,6 @@ pub(crate) fn start(
     .with_memberships(Arc::new(store.clone()));
     ports.transfers.flows = ports::Shared(Arc::new(flows));
     Some((Arc::new(plane), gate))
-}
-
-/// Adapter: the agreement and the consumer of a flow, read from the
-/// provider's transfers (the flow id is the transfer's provider pid): one
-/// read of the transfer store per request.
-struct TransferParties(ports::AnyTransferStore);
-
-impl FlowParties for TransferParties {
-    fn parties(&self, id: &str) -> Parties {
-        match self.0.get(id) {
-            Ok(Some(transfer)) => Parties {
-                agreement: transfer.agreement_id,
-                counter_party: transfer.counter_party,
-            },
-            Ok(None) => Parties::default(),
-            Err(error) => {
-                tracing::warn!(flow = %id, error = %error.0, "audit: transfer store failed");
-                Parties::default()
-            }
-        }
-    }
 }
 
 /// The route of `/data/{flowId}`, when there is a data plane.
