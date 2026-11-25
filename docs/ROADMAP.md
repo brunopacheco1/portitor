@@ -636,14 +636,16 @@ Research first; code only if the ADR finds a hand-over worth building.
   of them, linked in by default and also an optional image
   `portitor-dataplane`. Spike done
   ([spike](spikes/1.x-separate-data-plane.md)); decision in
-  [ADR 0028](adr/0028-separate-pluggable-data-plane.md) (Proposed).
+  [ADR 0028](adr/0028-separate-pluggable-data-plane.md) (Accepted
+  2026-11-25).
   Four steps, each its own release: untie the built-in data plane
   inside the process (no change of behaviour, closes
   [TD-48](RISKS_AND_TECHNICAL_DEBTS.md#td-48)); signaling over HTTP and
   registration; the separate image; interop with an outside data plane
   and an EDC control plane. Closes
-  [TD-17](RISKS_AND_TECHNICAL_DEBTS.md#td-17). Release slots are set
-  when the ADR is accepted.
+  [TD-17](RISKS_AND_TECHNICAL_DEBTS.md#td-17). Step 1 goes in a 1.x release
+  when it fits; steps 2 to 4 later in 1.x, or after Data Plane
+  Signaling 1.0 is released (maintainer, 2026-11-25).
 - Revise agreements when the scope of the data changes, for example a
   data subject objects to a use, or the consumer asks to change the
   scope of the first agreement (maintainer, 2026-11-14). Until then an

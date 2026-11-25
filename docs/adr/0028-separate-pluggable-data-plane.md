@@ -6,10 +6,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # ADR 0028: A separate, pluggable data plane over Data Plane Signaling
 
-- Status: **Proposed** (2026-11-25)
+- Status: **Accepted** (2026-11-25, by the maintainer: all five open
+  decisions as recommended, listed below)
 - Date: 2026-11-25
 - Scope: a decision on paper. The research, numbers and sources are in
-  the [spike](../spikes/1.x-separate-data-plane.md). Would amend
+  the [spike](../spikes/1.x-separate-data-plane.md). Amends
   [ADR 0003](0003-component-split.md) (an optional fourth image) and
   [ADR 0027](0027-push-transfers-and-object-storage.md), section 7 (who
   re-checks membership). Answers [TD-17](../RISKS_AND_TECHNICAL_DEBTS.md#td-17)
@@ -39,7 +40,7 @@ DPS messages, as Rust calls inside one process.
 [STABILITY](../STABILITY.md) promises `/data` and `/push` on the
 connector's public port, and the `PORTITOR_*` settings, for all of 1.x.
 
-## Decision (proposed)
+## Decision
 
 1. **The control plane drives every data plane through DPS.** It serves
    the DPS control plane endpoints and calls data planes at their
@@ -85,7 +86,23 @@ connector's public port, and the `PORTITOR_*` settings, for all of 1.x.
 - We follow DPS release candidates (R-06): each change goes in the
   changelog.
 
-## Open questions
+## Decisions taken (maintainer, 2026-11-25)
 
-The five decisions listed at the end of the
-[spike](../spikes/1.x-separate-data-plane.md#open-decisions-for-the-maintainer).
+The five open decisions of the
+[spike](../spikes/1.x-separate-data-plane.md#open-decisions-for-the-maintainer),
+all as recommended:
+
+1. **Default in 1.x:** the built-in data plane stays linked into the
+   connector. `portitor-dataplane` is optional. Requiring it is a 2.0
+   question.
+2. **Registration:** both by configuration and by `PUT`/`DELETE
+   /dataplanes` on the management port.
+3. **Signaling security:** the `oauth2_client_credentials`
+   authorization profile is required. A registration without one is
+   refused, unless a development setting allows it.
+4. **Revocation with outside data planes:** accepted that ADR 0027,
+   section 7 holds only as far as an outside data plane honours
+   `terminate`. DEPLOYING says so.
+5. **When:** step 1 (untie inside the process, no change of behaviour)
+   when it fits in a 1.x release. Steps 2 to 4 later in 1.x, or after
+   DPS 1.0 is released.
