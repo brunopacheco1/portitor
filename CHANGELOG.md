@@ -23,6 +23,11 @@ versions may change behaviour and configuration.
 - TESTING: the 1.1.0 run of all six scenarios on Linux before the tag,
   and how to build the images with Podman 4.9, whose Buildah does not
   know `HEALTHCHECK --start-interval`.
+- Spike report `docs/spikes/1.x-negotiation-state-machine.md`: the
+  contract negotiation states and transitions in DSP 2025-1 terms, what
+  is stored for each, a comparison with EDC 1.0.0-RC8, and a check of
+  the stored records under every delivery order. Roadmap entry marked
+  done.
 
 ## [1.1.0] - 2026-11-25
 
