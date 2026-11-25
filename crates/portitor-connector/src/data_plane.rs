@@ -10,9 +10,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::routing::get;
 
-use portitor_dataplane::audit::Parties;
-use portitor_dataplane::{DATA_PATH, FlowParties, HttpDataPlane, serve};
-use portitor_dsp::transfer::provider::TransferStore as _;
+use portitor_dataplane::{DATA_PATH, HttpDataPlane, serve};
 
 use crate::flow_membership::MembershipGate;
 use crate::harvest::{self, UpstreamSources};
@@ -50,9 +48,6 @@ pub(crate) fn start(
     .map(|plane| {
         plane
             .with_object_storage(ports.object_storage.clone())
-            // the transfers name the agreement and the consumer for the
-            // audit line of each pull and push
-            .with_parties(Arc::new(TransferParties(ports.transfers.store.clone())))
             .checking_membership_with(Arc::clone(&gate) as _)
     });
     let plane = match plane {
@@ -71,27 +66,6 @@ pub(crate) fn start(
     .with_memberships(Arc::new(store.clone()));
     ports.transfers.flows = ports::Shared(Arc::new(flows));
     Some((Arc::new(plane), gate))
-}
-
-/// Adapter: the agreement and the consumer of a flow, read from the
-/// provider's transfers (the flow id is the transfer's provider pid): one
-/// read of the transfer store per request.
-struct TransferParties(ports::AnyTransferStore);
-
-impl FlowParties for TransferParties {
-    fn parties(&self, id: &str) -> Parties {
-        match self.0.get(id) {
-            Ok(Some(transfer)) => Parties {
-                agreement: transfer.agreement_id,
-                counter_party: transfer.counter_party,
-            },
-            Ok(None) => Parties::default(),
-            Err(error) => {
-                tracing::warn!(flow = %id, error = %error.0, "audit: transfer store failed");
-                Parties::default()
-            }
-        }
-    }
 }
 
 /// The route of `/data/{flowId}`, when there is a data plane.

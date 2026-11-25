@@ -96,13 +96,6 @@ const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(30);
 /// names no key for this (maintainer's decision D2, 2026-11-25).
 pub const SOURCE_METADATA_KEY: &str = "portitor:source";
 
-/// Port: who the agreement and the consumer of a data flow are, for the
-/// audit line of each transfer.
-pub trait FlowParties: Send + Sync {
-    /// The agreement and the consumer of flow `id`; empty when unknown.
-    fn parties(&self, id: &str) -> Parties;
-}
-
 /// One data flow as the data plane keeps it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Flow {
@@ -118,6 +111,13 @@ pub struct Flow {
     /// read copy when the database was migrated: such a flow is never
     /// served, as 1.1 did not serve it either.
     pub source: Option<String>,
+    /// The agreement the transfer is made under, as the start message
+    /// named it (`agreementId`). Empty only for a flow started before 1.2
+    /// whose transfer could not be found when the database was migrated.
+    pub agreement_id: String,
+    /// The consumer's participant id, as the start message named it
+    /// (`counterPartyId`). Empty in the same case as `agreement_id`.
+    pub counter_party_id: String,
     /// SHA-256 of the access token, hex. Empty for a push flow, which
     /// has no token of ours: no hash matches it.
     pub token_hash: String,
@@ -127,6 +127,17 @@ pub struct Flow {
     /// with its token (ADR 0027). `None` for a pull flow, and once the
     /// flow has ended. Never logged.
     pub push_address: Option<DataAddress>,
+}
+
+impl Flow {
+    /// The agreement and the consumer of this flow, for the audit line.
+    #[must_use]
+    pub fn parties(&self) -> Parties {
+        Parties {
+            agreement: self.agreement_id.clone(),
+            counter_party: self.counter_party_id.clone(),
+        }
+    }
 }
 
 /// A flow store failure.
@@ -233,9 +244,6 @@ pub struct HttpDataPlane {
     /// The client of pushes: to an address a partner chose, so plain
     /// `http://` only with `PORTITOR_ALLOW_HTTP`.
     push_client: StreamingHttpsClient,
-    /// Names the agreement and the consumer of each flow in the audit
-    /// line; without it the two fields are empty.
-    parties: Option<Arc<dyn FlowParties>>,
     /// The downloads that run now, by flow: cut on suspend and terminate.
     running: Arc<RunningFlows>,
     /// Checks the consumer's membership again; `None` checks the token
@@ -250,6 +258,14 @@ impl std::fmt::Debug for HttpDataPlane {
             .field("token_seconds", &self.token_seconds)
             .finish_non_exhaustive()
     }
+}
+
+/// A request for data that may be served.
+struct Authorized {
+    /// Where its data comes from.
+    source: String,
+    /// The agreement and the consumer, for the audit line.
+    parties: Parties,
 }
 
 /// Why a request for data is refused.
@@ -285,7 +301,6 @@ impl HttpDataPlane {
             client,
             storage: None,
             push_client: https_streaming_client(false)?,
-            parties: None,
             running: Arc::new(RunningFlows::new()),
             gate: None,
         })
@@ -312,24 +327,6 @@ impl HttpDataPlane {
     /// The client pushes are sent with.
     pub(crate) fn push_client(&self) -> &StreamingHttpsClient {
         &self.push_client
-    }
-
-    /// The same data plane, naming the agreement and the consumer of each
-    /// flow in the audit line with `parties`.
-    #[must_use]
-    pub fn with_parties(mut self, parties: Arc<dyn FlowParties>) -> Self {
-        self.parties = Some(parties);
-        self
-    }
-
-    /// The agreement and the consumer of flow `id`, for the audit line.
-    /// Empty when they cannot be read; the data is served anyway.
-    #[must_use]
-    pub fn parties(&self, id: &str) -> Parties {
-        match &self.parties {
-            Some(parties) => parties.parties(id),
-            None => Parties::default(),
-        }
     }
 
     /// The same data plane, checking every request for data, and every
@@ -467,6 +464,12 @@ impl HttpDataPlane {
     ///
     /// See [`Denied`].
     pub fn authorize(&self, id: &str, token: &str, now: u64) -> Result<String, Denied> {
+        let allowed = self.authorized(id, token, now)?;
+        Ok(allowed.source)
+    }
+
+    /// [`HttpDataPlane::authorize`], with who the data goes to.
+    fn authorized(&self, id: &str, token: &str, now: u64) -> Result<Authorized, Denied> {
         let flow = self
             .flows
             .get(id)
@@ -479,9 +482,13 @@ impl HttpDataPlane {
         if !allowed {
             return Err(Denied::Unauthorized);
         }
+        let parties = flow.parties();
         // a flow of 1.1 whose source could not be filled in has none
         // (`Flow::source`): it is refused like any other
-        flow.source.ok_or(Denied::Unauthorized)
+        let Some(source) = flow.source else {
+            return Err(Denied::Unauthorized);
+        };
+        Ok(Authorized { source, parties })
     }
 }
 
@@ -505,6 +512,8 @@ impl HttpDataPlane {
             state: DataFlowState::Started,
             dataset_id: request.dataset_id.clone(),
             source: Some(source),
+            agreement_id: request.agreement_id.clone(),
+            counter_party_id: request.counter_party_id.clone(),
             token_hash: String::new(),
             expires_at: 0,
             push_address: Some(address.clone()),
@@ -580,6 +589,8 @@ pub struct PushJob {
     pub source: String,
     /// The consumer's data address. Never logged.
     pub address: DataAddress,
+    /// The agreement and the consumer, for the audit line.
+    pub parties: Parties,
     /// Held while the push runs; fires on suspend or terminate.
     pub cut: CutSignal,
 }
@@ -609,6 +620,7 @@ impl HttpDataPlane {
             return Ok(None);
         };
         let flow = self.flow(id)?;
+        let parties = flow.parties();
         let Some(address) = flow.push_address else {
             return Ok(None);
         };
@@ -627,6 +639,7 @@ impl HttpDataPlane {
             flow_id: flow.id,
             source,
             address,
+            parties,
             cut,
         }))
     }
@@ -741,6 +754,8 @@ impl DataPlane for HttpDataPlane {
             state: DataFlowState::Started,
             dataset_id: request.dataset_id.clone(),
             source: Some(source),
+            agreement_id: request.agreement_id.clone(),
+            counter_party_id: request.counter_party_id.clone(),
             token_hash: hash(&token),
             expires_at: now_secs().saturating_add(self.token_seconds),
             push_address: None,
@@ -818,8 +833,8 @@ pub async fn serve(
     // watch first, check second: a suspend between the two still cuts
     // this download (`running_flows` module doc)
     let cut = plane.running.watch(&id);
-    let source = match plane.authorize(&id, token, now_secs()) {
-        Ok(url) => url,
+    let Authorized { source, parties } = match plane.authorized(&id, token, now_secs()) {
+        Ok(allowed) => allowed,
         Err(Denied::Unauthorized) => return unauthorized(),
         Err(Denied::Store) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -828,7 +843,6 @@ pub async fn serve(
     {
         return unauthorized();
     }
-    let parties = plane.parties(&id);
     match plane.open_source(&source).await {
         Ok(data) => {
             let mut response = Response::new(data.body);
@@ -1132,6 +1146,8 @@ mod tests {
             state: DataFlowState::Started,
             dataset_id: "gone".to_owned(),
             source: None,
+            agreement_id: String::new(),
+            counter_party_id: String::new(),
             token_hash: hash(&token),
             expires_at: now_secs() + 60,
             push_address: None,
@@ -1153,6 +1169,33 @@ mod tests {
             p.push_job("old-push"),
             Err(SignalError::Invalid(_))
         ));
+    }
+
+    /// The flow keeps the agreement and the consumer its start message
+    /// names, for the audit line of each pull and push.
+    #[test]
+    fn the_flow_keeps_the_parties_of_its_start_message() {
+        let p = plane();
+        let token = token_of(&p.start(&start("d1", HTTP_PULL)).unwrap());
+        let allowed = p.authorized("f1", &token, now_secs()).unwrap();
+        let parties = Parties {
+            agreement: "a".to_owned(),
+            counter_party: "did:web:c".to_owned(),
+        };
+        assert_eq!(allowed.parties, parties);
+
+        let mut push = start("d1", HTTP_PUSH);
+        push.flow.data_flow_id = "f2".to_owned();
+        push.data_address = Some(DataAddress {
+            kind: DataAddressType,
+            endpoint_type: portitor_dsp::transfer::HTTP_PUSH_ENDPOINT_TYPE.to_owned(),
+            endpoint: Some("https://consumer.example/in".to_owned()),
+            endpoint_properties: vec![],
+        });
+        p.start(&push).unwrap();
+        let job = p.push_job("f2").unwrap().unwrap();
+        assert_eq!(job.parties, parties);
+        assert_eq!(job.source, "http://upstream.example/d1");
     }
 
     #[test]

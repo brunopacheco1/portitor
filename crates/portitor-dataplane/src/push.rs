@@ -129,11 +129,14 @@ async fn send_until_cut(plane: &HttpDataPlane, job: &mut PushJob, idle: Duration
     // checks the membership again while the push runs
     let _watchdog = plane.push_watchdog(&job.flow_id);
     let counted = Arc::new(AtomicU64::new(0));
+    // `..`: the job's parties are for the audit line, which the caller
+    // writes once the push is over
     let PushJob {
         flow_id,
         source,
         address,
         cut,
+        ..
     } = job;
     let sent = tokio::select! {
         result = post(plane, flow_id, source, address, Arc::clone(&counted), idle) => match result {

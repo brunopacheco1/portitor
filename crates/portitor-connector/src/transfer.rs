@@ -521,16 +521,12 @@ async fn until_consumer_started(link: &Link, status_url: &str, audience: &str) {
 /// ([`portitor_dataplane::push::send`]).
 async fn run_push(provider: Arc<TransferProvider>, plane: Arc<HttpDataPlane>, mut job: PushJob) {
     let pid = job.flow_id.clone();
-    let transfer = provider.service.transfer(&pid).ok();
+    // the agreement and the consumer the flow kept from its start message
+    let parties = job.parties.clone();
     let pushed = portitor_dataplane::push::send(&plane, &mut job).await;
     // the push is over: a later start again may send again
     drop(job);
-    let (agreement, counter_party) = match &transfer {
-        Some(t) => (t.agreement_id.as_str(), t.counter_party.as_str()),
-        // the transfer could not be read: the audit line names no one
-        None => ("", ""),
-    };
-    portitor_dataplane::push::audit(&pid, agreement, counter_party, &pushed);
+    portitor_dataplane::push::audit(&pid, &parties.agreement, &parties.counter_party, &pushed);
     let failure = match &pushed.sent {
         portitor_dataplane::push::Sent::Done => None,
         portitor_dataplane::push::Sent::Failed(reason) => Some(reason.as_str()),
