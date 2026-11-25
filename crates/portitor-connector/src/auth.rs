@@ -23,9 +23,22 @@
 //!
 //! [`AuthSettings`] reads the configuration and [`dcp_adapters`] builds
 //! both adapters.
+//!
+//! Two additions of 1.1:
+//!
+//! - The check keeps the caller's `MembershipCredential`s
+//!   ([`Membership`]: issuer, end of validity, status entries), so the
+//!   data plane can check them again on every `/data` request
+//!   ([`CallerVerifier::check_membership`]; ADR 0027, section 7.2).
+//! - A caller whose token is valid but whose credentials no longer pass
+//!   ([`VerifyError::NotAMember`]) may still end a transfer it shares
+//!   with us: [`require_caller`] lets it reach the transfer termination
+//!   routes only, marked [`Caller::without_membership`] (TD-47; ADR 0016,
+//!   amended in 1.1).
 
 use std::ffi::OsString;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Json;
 use axum::extract::{Request, State};
@@ -34,6 +47,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use portitor_dcp::gaiax::{COMPLIANCE_SCOPE_TYPE, LEGAL_PERSON_SCOPE_TYPE};
 use portitor_dcp::scope::{Scope, VC_ID, merge_scopes};
+use portitor_dcp::status_list::StatusEntry;
 use portitor_dsp::CatalogError;
 use portitor_dsp::negotiation::ContractNegotiationError;
 use portitor_dsp::policy::{CallerCredentials, CredentialTypes, HeldCredential, MEMBERSHIP};
@@ -43,6 +57,7 @@ use portitor_runtime::api_key::problem;
 use portitor_runtime::did::{CACHE_SETTING as DID_CACHE_SETTING, ResolveError};
 use portitor_runtime::settings::{self, bounded_number, comma_list};
 use portitor_runtime::telemetry::metrics::{self, Refusal};
+use serde::{Deserialize, Serialize};
 
 pub mod dcp;
 pub mod sts;
@@ -61,10 +76,42 @@ pub struct Caller {
     /// about the caller, valid now, not revoked): those of the configured
     /// scopes.
     pub credentials: Vec<HeldCredential>,
+    /// The caller's `MembershipCredential`s that the check verified, as
+    /// the data plane checks them again (ADR 0027, section 7.2). Empty
+    /// for a caller [`Caller::without_membership`], and for adapters that
+    /// do not read credentials.
+    pub memberships: Vec<Membership>,
     /// The access token from the caller's ID token, which lets us query its
     /// Credential Service again (ADR 0019); `None` when there is none.
     access_token: Option<String>,
+    /// Why the caller's credentials did not pass, when its token did
+    /// (TD-47): such a caller reaches only the transfer termination
+    /// routes. `None` for a caller that passed every check.
+    refused_membership: Option<String>,
 }
+
+/// One `MembershipCredential` of a caller, as the check verified it:
+/// enough to check it again later without the caller (ADR 0027, section
+/// 7.2). Kept with the data flow of each transfer the caller asks for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Membership {
+    /// The issuer's DID; it must stay in `PORTITOR_TRUSTED_ISSUERS`.
+    pub issuer: String,
+    /// When it stops being valid, in seconds since 1970; `None` when it
+    /// states no end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_until: Option<i64>,
+    /// Its `credentialStatus` entries: where its revocation and
+    /// suspension bits are.
+    #[serde(default)]
+    pub status: Vec<StatusEntry>,
+}
+
+/// How often a running download is checked again by default: once a
+/// minute (ADR 0027, section 7.2;
+/// [`CallerVerifier::membership_recheck_interval`]).
+pub const DEFAULT_RECHECK: Duration = Duration::from_secs(60);
 
 impl Caller {
     /// A caller known by `id` only, with no credentials and no access
@@ -81,8 +128,39 @@ impl Caller {
         Self {
             id: id.to_owned(),
             credentials,
+            memberships: Vec::new(),
             access_token: None,
+            refused_membership: None,
         }
+    }
+
+    /// The same caller, holding `memberships` (for adapters other than
+    /// [`dcp::DcpVerifier`], and tests).
+    #[must_use]
+    pub fn with_memberships(self, memberships: Vec<Membership>) -> Self {
+        Self {
+            memberships,
+            ..self
+        }
+    }
+
+    /// A caller whose token is valid, so `id` is proven, but whose
+    /// credentials did not pass, for `reason` (TD-47). It has no
+    /// credentials, and [`require_caller`] lets it reach the transfer
+    /// termination routes only.
+    #[must_use]
+    pub fn refused_membership(id: &str, reason: &str) -> Self {
+        Self {
+            refused_membership: Some(reason.to_owned()),
+            ..Self::new(id)
+        }
+    }
+
+    /// Why the caller's credentials did not pass, if they did not: see
+    /// [`Caller::refused_membership`]. `None` for a member.
+    #[must_use]
+    pub fn without_membership(&self) -> Option<&str> {
+        self.refused_membership.as_deref()
     }
 
     /// The same caller, with `access_token` for its Credential Service
@@ -108,6 +186,8 @@ impl std::fmt::Debug for Caller {
         f.debug_struct("Caller")
             .field("id", &self.id)
             .field("credentials", &self.credentials.len())
+            .field("memberships", &self.memberships.len())
+            .field("refused_membership", &self.refused_membership)
             .finish_non_exhaustive()
     }
 }
@@ -127,6 +207,18 @@ pub enum VerifyError {
     /// 5xx. The caller may be fine. [`require_caller`] answers HTTP 503,
     /// so the caller can try again later.
     Unavailable(String),
+    /// The caller's token is valid, so its DID `caller` is proven, but its
+    /// credentials did not pass (`reason`): no `MembershipCredential` from
+    /// a trusted issuer, a revoked or expired one, an invalid
+    /// presentation, or a Credential Service that refused. Refused like
+    /// [`VerifyError::Rejected`], except on the transfer termination
+    /// routes (TD-47, [`require_caller`]).
+    NotAMember {
+        /// The proven DID.
+        caller: String,
+        /// Why its credentials did not pass.
+        reason: String,
+    },
 }
 
 impl VerifyError {
@@ -145,7 +237,7 @@ impl VerifyError {
     #[must_use]
     pub fn is_temporary(&self) -> bool {
         match self {
-            Self::Rejected(_) => false,
+            Self::Rejected(_) | Self::NotAMember { .. } => false,
             Self::Unavailable(_) => true,
         }
     }
@@ -154,7 +246,9 @@ impl VerifyError {
     #[must_use]
     pub fn reason(&self) -> &str {
         match self {
-            Self::Rejected(reason) | Self::Unavailable(reason) => reason,
+            Self::Rejected(reason)
+            | Self::Unavailable(reason)
+            | Self::NotAMember { reason, .. } => reason,
         }
     }
 }
@@ -220,6 +314,34 @@ pub trait CallerVerifier: Send + Sync {
         caller: &'a Caller,
         scopes: &'a [String],
     ) -> BoxFuture<'a, Result<Vec<HeldCredential>, String>>;
+
+    /// Checks `membership` again, without the caller: its issuer is
+    /// still trusted, it has not expired, and no status bit is set (ADR
+    /// 0027, section 7.2). The data plane calls it on every `/data`
+    /// request, while a download runs, and before and while a push runs.
+    /// The default refuses: an adapter that cannot check lets no data flow.
+    ///
+    /// # Errors
+    ///
+    /// The membership no longer holds ([`VerifyError::Rejected`]), or the
+    /// check could not finish ([`VerifyError::Unavailable`]).
+    fn check_membership<'a>(
+        &'a self,
+        membership: &'a Membership,
+    ) -> BoxFuture<'a, Result<(), VerifyError>> {
+        let _ = membership;
+        Box::pin(async {
+            Err(VerifyError::from(
+                "this caller verifier cannot check a membership again",
+            ))
+        })
+    }
+
+    /// How often a running download is checked again with
+    /// [`CallerVerifier::check_membership`]. Default [`DEFAULT_RECHECK`].
+    fn membership_recheck_interval(&self) -> Duration {
+        DEFAULT_RECHECK
+    }
 }
 
 /// Port: how we authenticate ourselves on a DSP request.
@@ -319,6 +441,14 @@ pub type AnyVerifier = Arc<dyn CallerVerifier>;
 ///   final (ADR 0007), so a short outage at its issuer does not end a
 ///   negotiation.
 ///
+/// One exception (TD-47; ADR 0016, amended in 1.1): a caller whose token
+/// is valid but whose credentials did not pass
+/// ([`VerifyError::NotAMember`]) reaches a transfer termination route,
+/// as provider or consumer ([`is_transfer_termination`]), marked
+/// [`Caller::without_membership`]. The handler accepts the termination
+/// only when that DID is the transfer's counter-party; otherwise it
+/// answers 404 as for any unknown transfer.
+///
 /// The reason goes to the log only (WARN), never the token.
 pub async fn require_caller(
     State(verifier): State<AnyVerifier>,
@@ -340,6 +470,14 @@ pub async fn require_caller(
             tracing::warn!(%path, %reason, "DSP request not checked: a service the check needs is unavailable; answered 503");
             check_unavailable()
         }
+        Err(VerifyError::NotAMember { caller, reason })
+            if is_transfer_termination(request.uri().path()) =>
+        {
+            // the handler decides, and logs when it accepts (TD-47)
+            let caller = Caller::refused_membership(&caller, &reason);
+            request.extensions_mut().insert(caller);
+            next.run(request).await
+        }
         Err(error) => {
             let path = request.uri().path();
             let reason = error.reason();
@@ -352,6 +490,13 @@ pub async fn require_caller(
             unauthorized(protocol)
         }
     }
+}
+
+/// Whether `path` is a transfer termination route: the provider's
+/// `/dsp/2025-1/transfers/{pid}/termination` or the consumer's
+/// `/dsp/2025-1/callback/transfers/{pid}/termination` (TD-47).
+fn is_transfer_termination(path: &str) -> bool {
+    protocol_of(path) == Protocol::Transfer && path.ends_with("/termination")
 }
 
 /// HTTP 503 with a problem body: the caller could not be checked now.

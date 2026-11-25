@@ -946,6 +946,11 @@ Besides the [settings of every component](#settings-of-every-component):
 | `PORTITOR_BUNDLE_REFRESH_SECONDS` | `3600` | Seconds between two looks at `latest.json`, `0` (only at start) to `31536000`; not used with a fixed version |
 | `PORTITOR_BUNDLE_CACHE_DIR` | `bundle-cache` next to `PORTITOR_DB_FILE` (`/data/bundle-cache` in the image) | Where the verified bundle and the version in use are kept |
 | `PORTITOR_BUNDLE_DIR` | none | A local bundles folder instead of the URL, not together with `PORTITOR_BUNDLE_URL`; development and tests only |
+| `AWS_ENDPOINT_URL_S3` | AWS S3 of `AWS_REGION` | Since 1.1. Base URL of your S3-compatible object storage, for example `http://rustfs:9000` ([Object storage and push](#object-storage-and-push-transfers)) |
+| `AWS_REGION` | `us-east-1` | Since 1.1. Region in the request signature |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | none (no object storage) | Since 1.1. The object storage keys; both or neither. Checked only with `PORTITOR_PUSH_BUCKET` set |
+| `AWS_SESSION_TOKEN` | none | Since 1.1. The session token of temporary keys (AWS STS), sent and signed as `x-amz-security-token` |
+| `PORTITOR_PUSH_BUCKET` | none (push transfers as consumer refused) | Since 1.1. Bucket where data pushed to you lands; needs the keys |
 
 - `PORTITOR_PUBLIC_URL` has no query or fragment. The DSP endpoint is
   this plus `/dsp/2025-1`, the consumer callback address this plus
@@ -1037,7 +1042,7 @@ port) and [api/management-openapi.json](api/management-openapi.json)
   message did not arrive, it terminates the negotiation or transfer. A
   partner's message that arrives before its acknowledgement of ours is
   recorded proves ours arrived, so it is accepted at once.
-- **Transfers are pull only** (`HttpData-PULL`,
+- **Pull transfers** (`HttpData-PULL`,
   [ADR 0013](adr/0013-transfer-and-data-plane.md)). The connector
   accepts a transfer request under a finalized agreement held by the
   caller, starts it at once and sends the consumer a data address:
@@ -1049,6 +1054,11 @@ port) and [api/management-openapi.json](api/management-openapi.json)
   source is refused. A transfer request sent again by the same consumer
   with the same `consumerPid` starts nothing new: the answer is the
   transfer it already has.
+- **Push transfers** (`HttpData-PUSH`, since 1.1,
+  [ADR 0027](adr/0027-push-transfers-and-object-storage.md)). The
+  connector sends the data itself, as provider, or receives it into its
+  object storage, as consumer. See
+  [Object storage and push transfers](#object-storage-and-push-transfers).
 
 ### Datasets file
 
@@ -1070,6 +1080,14 @@ the catalog serves them, without `@context`. See
   ```json
   { "@id": "weather-stations", "@type": "Dataset", "portitor:source": "https://data.internal.example/weather.csv", ... }
   ```
+- Since 1.1 `portitor:source` may also be an object in your own object
+  storage, written `s3://{bucket}/{key}` (bucket in lower case, the key
+  as stored). The connector reads it with its own keys
+  ([Object storage and push transfers](#object-storage-and-push-transfers));
+  the consumer sees an ordinary pull, and the keys never leave your
+  connector.
+- A dataset offers push when one of its distributions has the format
+  `HttpData-PUSH`, next to (or instead of) `HttpData-PULL`.
 - An offer in the datasets file has no `target`, `assigner` or
   `assignee`.
 
@@ -1421,6 +1439,136 @@ by the list's URL, in memory.
 - The cache is per process: a restart empties it. Presentations and
   tokens are not cached; they are checked on every request (ADR 0016).
 
+### Object storage and push transfers
+
+Since 1.1 ([ADR 0027](adr/0027-push-transfers-and-object-storage.md)).
+One S3-compatible object storage per connector, for two uses: datasets
+whose `portitor:source` is `s3://{bucket}/{key}`, and, as consumer, the
+bucket where data pushed to you lands. Tested with RustFS
+(`scenarios/two-party`); the connector uses path-style addresses
+(`{endpoint}/{bucket}/{key}`) and AWS Signature Version 4, which RustFS,
+MinIO and AWS S3 accept.
+
+- **Settings.** `AWS_ENDPOINT_URL_S3`, `AWS_REGION`,
+  `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`
+  (the AWS SDK names) and `PORTITOR_PUSH_BUCKET`. Without the keys the
+  connector has no object storage: `s3://` sources answer 502 and push
+  transfers as consumer are refused. The log line `object storage`
+  names the endpoint and the push bucket, never the keys.
+- **Checked only with a push bucket.** With `PORTITOR_PUSH_BUCKET` set,
+  a start with only one of the two keys, or an `AWS_ENDPOINT_URL_S3`
+  that is not an `http(s)` URL, stops. Without it, such `AWS_*`
+  variables (perhaps set for another tool, as a 1.0 connector allowed)
+  are ignored: one INFO line, `no object storage`, and no object
+  storage. If you use `s3://` sources without a push bucket, look for
+  that line.
+- **Temporary keys.** With keys from AWS STS (an assumed role, for
+  example), also set `AWS_SESSION_TOKEN`; it is sent and signed as
+  `x-amz-security-token`. The connector reads it once at start, so
+  restart it with fresh keys before they expire.
+- **The keys.** They follow the AWS rule, not Portitor's `_FILE` rule
+  for secrets: inject `AWS_SECRET_ACCESS_KEY` into the container's
+  environment from your secret store (Docker or Kubernetes secrets,
+  Vault), never write it in a compose file or a shell history. Give the
+  connector a key of its own, limited to reading the source buckets and
+  writing the push bucket.
+- **Create the push bucket first.** The connector does not create
+  buckets. Each pushed transfer becomes the object `{consumerPid}` in
+  it; a second push for the same transfer replaces it. Uploads go in
+  parts of 8 MiB (multipart upload, aborted if anything fails, and when
+  the request is cut half-way).
+- **Add a lifecycle rule to the push bucket** that aborts incomplete
+  multipart uploads after a day (`AbortIncompleteMultipartUpload`, for
+  example `DaysAfterInitiation` 1; RustFS and MinIO support it too). An
+  upload under way when the connector stops cannot be aborted by it,
+  and its parts would otherwise stay in the bucket, and be billed.
+
+**As provider**, nothing else is needed: list `HttpData-PUSH` in the
+dataset's distributions. The consumer's transfer request carries its
+endpoint (`endpointType`
+`https://w3id.org/dspace-sig/profile/http-push`) and a token; once the
+transfer is started, the connector sends the data as one `POST` with
+`Authorization: Bearer <token>` and the source's `Content-Type`. A 2xx
+answer completes the transfer; any other answer, or none, terminates
+it, and the reason holds only the status code. The connection to the
+endpoint must open within 10 seconds, and the push fails when the
+endpoint takes no data and gives no answer for 120 seconds. Suspend or
+terminate, by either side, cuts a running push; a start again sends
+everything again. A push cut because the membership check could not
+finish terminates the transfer.
+The consumer's endpoint and token are kept in the SQLite file until the
+transfer ends, and are never logged or shown. The consumer's membership
+is checked before each push and while it runs, as for a download
+([Revocation and running transfers](#revocation-and-running-transfers)).
+
+- **The endpoint is an address the consumer chose** (R-17 in
+  [RISKS_AND_TECHNICAL_DEBTS](RISKS_AND_TECHNICAL_DEBTS.md#r-17)), like
+  the `callbackAddress`: it must be `https://` unless
+  `PORTITOR_ALLOW_HTTP` is `true`; redirects are not followed, and the
+  answer's body is not read. Internal addresses are not blocked, so
+  keep the egress firewall of [Security](#security): it now also guards
+  the data you push.
+
+**As consumer**, set `PORTITOR_PUSH_BUCKET` with the keys, then request
+a transfer with `"format": "HttpData-PUSH"`. The connector gives the
+provider the address `{PORTITOR_PUBLIC_URL}/push/{consumerPid}` and a
+token of 32 random bytes, of which it keeps only the SHA-256 once the
+provider has it. The token works for `PORTITOR_DATA_TOKEN_SECONDS` and
+only while the transfer is `REQUESTED` or `STARTED`; a start again
+gives a new one. Its life counts from your request (or start again),
+not from the provider's start: a provider that starts late leaves less
+time for the push, so give `PORTITOR_DATA_TOKEN_SECONDS` room for the
+provider's delay and the size of the data. The transfer
+view shows `objectKey` once data has arrived; the provider completes the
+transfer.
+
+- **The receiving route** (`POST` or `PUT /push/{consumerPid}`) is open,
+  like `/data`, and checks its own token before it reads the body; every
+  refusal is the same 401. It is not subject to
+  `PORTITOR_MAX_REQUEST_BYTES` nor to the request time limit, since a
+  dataset can be large: let your reverse proxy pass large, long
+  requests on `/push/` (for nginx, `client_max_body_size 0;` and a long
+  `proxy_read_timeout` in that `location`), and limit them there if you
+  need a bound. It has limits of its own: one upload at a time per
+  transfer (a second one gets 409), at most 8 at once in all (one more
+  gets 503; each holds up to 8 MiB in memory), and a body that sends
+  nothing for 120 seconds is cut: the upload is aborted, the answer is
+  400, and the audit line says `cut`.
+
+### Revocation and running transfers
+
+From 1.1 a provider checks the consumer's membership again for every
+use of the data, not only when the transfer is asked for (ADR 0027).
+When the consumer asks for a transfer, the provider keeps the issuer,
+the end of validity and the `credentialStatus` of each of its
+`MembershipCredential`s with the data flow. Then:
+
+- **On every `/data` request** it checks them again, without the
+  consumer: the issuer is still trusted, the credential has not
+  expired, no status bit is set. A revocation is therefore seen on the
+  next request after at most `PORTITOR_STATUS_LIST_CACHE_SECONDS` (the
+  same delay as for DSP requests). The request is refused with 401, the
+  transfer is ended (the provider sends the DSP termination) and the log
+  says why.
+- **While a download runs** it checks again every
+  `PORTITOR_STATUS_LIST_CACHE_SECONDS`, but at least every 60 seconds
+  and at most every 5. On a revocation the download is cut and the
+  transfer ended. So a running download can last up to the cache time
+  plus 60 seconds after a revocation, with the default cache 300 + 60.
+- **A check that cannot finish** (a status list or the issuer's DID
+  document does not answer) refuses the request, or cuts the download,
+  but keeps the transfer: the next request may pass.
+- **Transfers started before 1.1** have no membership kept. They are
+  served as in 1.0 until their token expires (at most
+  `PORTITOR_DATA_TOKEN_SECONDS`), and logged once per flow. A 1.1
+  transfer with no membership kept is refused.
+
+A partner whose membership was revoked can still end a transfer it
+shares with you: a `TransferTerminationMessage` is accepted from a
+caller with a valid DCP token who is the transfer's counter-party, and
+logged (TD-47, [ADR 0016](adr/0016-dsp-caller-authentication.md),
+amended in 1.1). Every other message from it is refused.
+
 ### Management API
 
 Through the management API you read the harvest jobs
@@ -1490,9 +1638,36 @@ curl -s -X POST localhost:8081/v1/transfers/urn:uuid:.../completion \
   -H "authorization: Bearer $(cat key)"
 ```
 
-`format` defaults to `HttpData-PULL`. The two list calls
+To pause access without ending the transfer (since 1.1), suspend it
+with `POST /v1/transfers/{consumerPid}/suspension`; the provider's data
+plane refuses the token until you start it again with `POST
+/v1/transfers/{consumerPid}/start`. The token of a pull stays the same;
+the provider sends no new one (a push gets a new one). Either call
+answers 202 at once; the state changes once the provider acknowledges the message, and a call while
+another message is on its way gets 400. Start works whichever party
+suspended the transfer (DSP 2025-1).
+
+`format` defaults to `HttpData-PULL`. With `"format": "HttpData-PUSH"`
+(since 1.1) the provider sends the data to your connector, which stores
+it in your push bucket ([Object storage and push
+transfers](#object-storage-and-push-transfers)): wait for `objectKey` in
+the transfer, then read that object from your bucket. The two list calls
 (`GET /v1/negotiations`, `GET /v1/transfers`) return up to 100 entries
 at a time (`?after=`, `?limit=`).
+
+As provider (1.1), you read the transfers your connector runs and end
+one on your own (ADR 0027):
+
+```sh
+curl -s localhost:8081/v1/provided-transfers -H "authorization: Bearer $(cat key)"
+curl -s -X POST localhost:8081/v1/provided-transfers/urn:uuid:.../termination \
+  -H "authorization: Bearer $(cat key)"
+```
+
+The termination answers 202: access ends at once (the data flow is
+terminated and every running download of it is cut), and the DSP
+termination goes to the consumer in the background. The view shows the
+consumer's DID (`counterPartyId`), never the data token or its hash.
 
 ## Security
 
@@ -1503,8 +1678,9 @@ at a time (`?after=`, `?limit=`).
   with a valid `MembershipCredential` from a DID in
   `PORTITOR_TRUSTED_ISSUERS` whose subject is the caller, not revoked or
   suspended (the status list must be signed by the same issuer). Only
-  `/.well-known/dspace-version`, `/health` and the data plane are open
-  (the data plane has its own tokens).
+  `/.well-known/dspace-version`, `/health`, the data plane and, since
+  1.1, the receiving route `/push` are open (they have their own
+  tokens).
   - One credential from a trusted issuer that fails its checks (revoked,
     expired, bad signature, status list not readable, about someone
     else) makes its presentation invalid and refuses the caller, even
@@ -1564,10 +1740,12 @@ at a time (`?after=`, `?limit=`).
   network apart from the authority's signed bundle, and no Portitor
   binary parses RDF/XML.
 - **Outbound calls.** The connector POSTs to the `callbackAddress` that the
-  partner chooses. Only `https://` is allowed, but internal addresses are
+  partner chooses and, since 1.1, sends pushes to the endpoint the
+  consumer chooses. Only `https://` is allowed, but internal addresses are
   not blocked yet. Put the connector in a network zone where it cannot
   reach internal services it should not call (egress firewall or network
-  policy).
+  policy). It also calls your object storage at `AWS_ENDPOINT_URL_S3`,
+  an address you choose ([R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17)).
 - **Management API.** It can read catalogs and start negotiations and
   transfers in your name (each call sends a request, with a token of
   yours, to the address the caller gives), and it shows the data access tokens of your transfers, so treat its
@@ -1591,7 +1769,11 @@ at a time (`?after=`, `?limit=`).
   ([Traces and metrics](OPERATING.md#traces-and-metrics)).
 - **The database file holds access tokens.** As consumer, the connector
   keeps the data address of each usable transfer, token included, in
-  `/data/portitor.db` until the transfer ends (ADR 0014). Protect the volume
+  `/data/portitor.db` until the transfer ends (ADR 0014). Since 1.1 it
+  also holds push tokens: as consumer, our push token in the transfer
+  request until the provider has it (then only its SHA-256); as
+  provider, the consumer's push token and endpoint until the transfer
+  ends ([R-19](RISKS_AND_TECHNICAL_DEBTS.md#r-19)). Protect the volume
   and its backups like the management key.
 - Do not set `PORTITOR_ALLOW_HTTP=true` outside development and tests.
 - Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
@@ -1682,13 +1864,18 @@ known risk and technical debt, with its status and target release.
   checked: the issuer publishes each definition's `credentialSchema` URL
   and no component fetches it.
 - **Revocation** takes up to `PORTITOR_STATUS_LIST_CACHE_SECONDS` to be
-  seen ([Status list cache](#status-list-cache)).
+  seen ([Status list cache](#status-list-cache)); a running download up
+  to 60 seconds more
+  ([Revocation and running transfers](#revocation-and-running-transfers)).
 - **Policies.** Only `dateTime` and credential claims are understood,
   any other term is refused, and prohibitions and duties are carried
   into agreements but not enforced ([Policies](#policies)).
 - **Negotiations** start from the consumer only; a provider cannot start
   one with an offer ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)).
-- **Transfers.** Pull only. A data access token ends
+- **Transfers.** Pull, and since 1.1 push over HTTP into S3-compatible
+  object storage; no other way to move data. A push token is the
+  consumer's, and a push is sent whole, in one request, from the
+  beginning each time. A data access token ends
   `PORTITOR_DATA_TOKEN_SECONDS` after the transfer starts and is not
   renewed; the consumer then asks for a new transfer. Only `GET` of the
   whole source; no credentials are sent to it. As provider, a transfer
@@ -1696,8 +1883,8 @@ known risk and technical debt, with its status and target release.
   already has ([TD-34](RISKS_AND_TECHNICAL_DEBTS.md#td-34)).
 - **Transfers as consumer.** Each `POST /v1/transfers` starts a new
   transfer. Your own system fetches the data with the data address; the
-  connector does not download it. The management API completes or
-  terminates a transfer; suspend and start again are not offered yet.
+  connector does not download it, except for a push, which it stores in
+  your push bucket.
 - **Reading a provider's catalog** (`POST /v1/catalog/request` and
   `/v1/catalog/dataset/request`, [Management API](#management-api)). At
   most 16 MiB of answer are read, a fixed limit with no setting; a
@@ -1741,7 +1928,7 @@ known risk and technical debt, with its status and target release.
   one to your data source); see [BENCHMARKS](BENCHMARKS.md#data-plane)
   before you plan for hundreds of pulls at once, and raise the open
   files limit (`ulimit -n`) above twice that number.
-- **Network.** Internal callback addresses are not blocked
+- **Network.** Internal callback and push addresses are not blocked
   ([Security](#security), "Outbound calls").
 - **Panics.** A panic (a bug) does not stop the process: the request
   gets HTTP 500 and a background task starts again

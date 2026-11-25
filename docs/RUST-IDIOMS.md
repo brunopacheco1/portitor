@@ -323,7 +323,7 @@ The service is *generic*. `S` is "some type that implements
 
 `dyn NegotiationStore` is "a value of some type that implements
 `NegotiationStore`, decided while the program runs". The connector picks
-its adapters at start (in memory for tests, SQLite for real use), so it
+its adapters at start (SQLite for real use, a fake in a test), so it
 keeps each one as `Shared<dyn Port + Send + Sync>`. `Shared` wraps an
 `Arc` pointer. See `ports.rs`, which explains why the wrapper exists and
 holds all the `Any...` names.
@@ -339,6 +339,59 @@ trait may write its own version or keep the default. The connector's
 `Outbox` trait answers "no extra scopes" by default; the consumer's
 outboxes write their own (`outbox.rs`, `consumer.rs`). A name starting
 with `_` says the default does not use that argument.
+
+```rust
+pub(crate) trait Record: Clone {
+    type State: ProcessState;
+    type Outgoing: Clone + PartialEq + Message<<Self::State as ProcessState>::Transition>;
+    const PARTY: Role;
+    fn parts(&self) -> (Self::State, Option<&Self::Outgoing>, u64);
+    fn parts_mut(&mut self) -> (&mut Self::State, &mut Option<Self::Outgoing>, &mut u64);
+    fn state(&self) -> Self::State {
+        self.parts().0
+    }
+    /* ... */
+    fn apply_sent(&mut self, sent: &Self::Outgoing) -> Result<(), TransitionErrorOf<Self>> {
+        apply_sent(self, sent)
+    }
+}
+
+impl Record for Negotiation {
+    type State = NegotiationState;
+    type Outgoing = Outgoing;
+    const PARTY: Role = Role::Provider;
+    /* ... */
+}
+```
+
+A trait can leave types and constants to each type that implements it:
+`type State` and `const PARTY` are *associated* items. Each of the four
+process records names its own (`portitor-dsp/src/process.rs`, and the
+`impl Record for ...` in each service file). Inside the trait,
+`Self::State` is "the state type of whichever record this is". This is
+what lets one function serve all four:
+`fn receive<R: Record>(record: &mut R, transition: TransitionOf<R>)`
+works on a `Negotiation` as on a `ConsumerTransfer`, and
+`R::State::next_state(...)` calls the state machine of that record's
+process (`ProcessState`, implemented by `NegotiationState` and
+`TransferState`).
+
+`type TransitionOf<R> = <<R as Record>::State as ProcessState>::Transition;`
+is read from the inside out: the record's `State`, then that state's
+`Transition`. The alias exists so that the long form is written once.
+
+Each record writes only `parts` and `parts_mut`, which hand out its
+three shared fields (state, message on its way, version) as a tuple,
+read-only or to change. The getters and setters (`state`, `set_state`,
+`pending`, ...) are defaults built on them, so they are written once,
+not four times. `*self.parts_mut().0 = state` reads: take the first of
+the three mutable references and write through it (`*`).
+
+`apply_sent` has a default body that only calls the free function
+`process::apply_sent`. Rust has no way for an override to call the
+default it replaces, so the shared step is a plain function: the
+provider's `Negotiation` overrides `apply_sent`, calls
+`process::apply_sent` and then keeps the agreement or offer it sent.
 
 ```rust
 fn from_json<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, StoreError>
@@ -432,8 +485,16 @@ on the heap", one type that holds either (`portitor-shacl/src/graph.rs`).
 
 - `AtomicBool` is a `bool` that threads can share without a lock:
   `store(true, Ordering::SeqCst)` sets it, `load(Ordering::SeqCst)` reads
-  it. `SeqCst` is the simplest and strictest ordering; Portitor uses no
-  other (`started` in `DatasetHarvester`, `portitor-connector/src/harvest.rs`).
+  it. `SeqCst` is the simplest and strictest ordering, and Portitor's
+  default (`started` in `DatasetHarvester`, `portitor-connector/src/harvest.rs`).
+- `AtomicU64` is the same for a number. The push sender and the
+  receiving route count the bytes of a body as it passes:
+  `body.map_frame(...)` sees each frame, and the closure adds its length
+  with `fetch_add(n, Ordering::Relaxed)` (`post` in
+  `portitor-connector/src/push.rs`, `receive` in `receiving.rs`). The
+  total is read once, after the body has ended, for the audit line.
+  `Relaxed` is enough for a counter that nothing else depends on; use
+  `SeqCst` everywhere else.
 
 ### A snapshot swapped as a whole: `RwLock<Arc<View>>`
 
@@ -902,6 +963,66 @@ return type `impl Listener<Addr = SocketAddr>` is "some listener whose
 addresses are socket addresses"; the real type is long and of no
 interest (`serve.rs`).
 
+### Cutting running tasks: a dropped `watch::Sender`
+
+```rust
+switches: Mutex<BTreeMap<String, watch::Sender<()>>>
+// cut: remove the sender; every receiver wakes up
+let removed = self.switches().remove(flow_id);
+```
+
+`RunningFlows` (`portitor-connector/src/running_flows.rs`) stops every
+download of one data flow at once. Each download holds a
+`watch::Receiver` (in a `CutSignal`); `cut` removes the flow's
+`watch::Sender` from the map, and dropping it is the signal: every
+receiver's `changed().await` returns an error, so each download learns
+that it must stop. No value is ever sent (the channel carries `()`).
+The order matters and is written in the file's comment: a download
+watches first and checks the flow's state second; the data plane
+changes the state first and cuts second. Then no download can start
+between the two and miss the cut.
+
+### A response body written by hand: `impl Body`
+
+```rust
+impl hyper::body::Body for CutBody {
+    fn poll_frame(self: Pin<&mut Self>, cx: &mut Context<'_>)
+        -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> { ... }
+}
+```
+
+A response body is a stream of frames that the server asks for one at
+a time with `poll_frame`. `CutBody` (`data_plane/download.rs`) wraps the
+upstream's body: on each call it first looks at the cut signal, and if
+the flow was cut it answers with an error, which makes the server drop
+the connection. Otherwise it passes the upstream's frame on.
+`Poll::Pending` means "not yet, I will wake you". `Pin<&mut Self>`
+says the value may not move in memory while it is polled; most code
+only needs `self.get_mut()` or a pinned box (`Pin<Box<dyn Future>>`) to
+poll a future it holds.
+
+The download's membership check runs as a background task next to the
+body (`watchdog`). `AbortOnDrop` holds its `JoinHandle` and calls
+`abort()` in `Drop`, so the task ends when the body ends, however it
+ends.
+
+### Set once, later: `OnceLock` and `Weak`
+
+```rust
+ender: OnceLock<Arc<dyn EndsTransfers>>,
+...
+let ender = transfer::EndsThroughProvider(Arc::downgrade(&transfers));
+gate.ends_transfers_with(Arc::new(ender));
+```
+
+The data plane is built before the provider's transfer service, but
+must call it to end a transfer. `OnceLock` is a slot written once
+after construction (`set`; a second `set` changes nothing) and read
+without a lock (`get`). `Arc::downgrade` gives a `Weak`: a reference
+that does not keep the service alive, so the two do not hold each other
+forever; `upgrade()` gives an `Arc` back while the service exists
+(`flow_membership.rs`, `transfer.rs`).
+
 ## Lifetimes: `'a`
 
 `fn post<'a>(&'a self, url: &'a str, ...) -> BoxFuture<'a, ...>` says "the
@@ -1179,6 +1300,13 @@ port's size limit and its own (`portitor-runtime/src/request_size.rs`).
   before it records the metrics).
 - `impl Trait` in an argument (`var: impl Fn(&str) -> Option<OsString>`)
   means "any type that implements `Trait`".
+- `impl Trait` as a return type means "some type that implements
+  `Trait`; the caller needs to know no more". `-> Option<impl Send +
+  use<>>` (`push_watchdog` in `portitor-connector/src/data_plane.rs`)
+  returns a value the caller only keeps and drops (dropping it stops
+  the background checks), so its real type stays private. `use<>` says
+  the value borrows nothing from the arguments (not `&self`, not `id`),
+  so the caller may keep it after they are gone.
 - `pub(crate)` is visible inside this crate only.
 - `Self` is the type the `impl` is for.
 - `x.wrapping_add(1)` adds one and wraps around at the maximum instead of

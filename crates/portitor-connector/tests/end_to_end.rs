@@ -22,7 +22,7 @@ use axum::http::{Request, StatusCode, header};
 use portitor_connector::harvest::{DatasetSource, Snapshot, SourceError};
 use portitor_connector::http_client::Sender;
 use portitor_connector::ports::Retry;
-use portitor_connector::{Config, Negotiator, Ports};
+use portitor_connector::{Config, Negotiator};
 use portitor_dsp::negotiation::NegotiationState;
 use portitor_dsp::transfer::TransferState;
 use portitor_dsp::transfer::consumer::{ConsumerTransfer, ConsumerTransferDecision};
@@ -115,7 +115,7 @@ async fn connectors_where_the_provider_sends_through(
         "portitor:source": upstream().await
     })]);
     let sender = Arc::clone(network) as Arc<dyn Sender>;
-    let mut provider_ports = authenticating(Ports::new(provider_sender), PROVIDER_DID);
+    let mut provider_ports = authenticating(common::ports(provider_sender), PROVIDER_DID);
     // a second try at once, so that a test with a lost answer is quick
     provider_ports.retry = Retry {
         attempts: 2,
@@ -125,7 +125,7 @@ async fn connectors_where_the_provider_sends_through(
     let (provider_app, provider_negotiator) =
         portitor_connector::build(&provider, provider_ports).unwrap();
     let consumer = config(CONSUMER_DID, CONSUMER);
-    let consumer_ports = authenticating(Ports::new(sender), CONSUMER_DID);
+    let consumer_ports = authenticating(common::ports(sender), CONSUMER_DID);
     let (consumer_app, negotiator) = portitor_connector::build(&consumer, consumer_ports).unwrap();
     network.join(PROVIDER, provider_app.clone());
     network.join(CONSUMER, consumer_app);
@@ -617,4 +617,56 @@ async fn a_finalization_that_never_arrives_and_was_not_settled_is_counted_as_giv
     moment.let_the_event_go_on(2).await;
     assert_eq!(moment.provider_state().await, "TERMINATED");
     assert_eq!(given_up_by_the_provider_negotiation(), 1);
+}
+
+/// The consumer suspends a transfer and starts it again (TD-11): while
+/// it is suspended the provider's data plane refuses the token; started
+/// again, the same token works, and the provider sent no new address.
+/// A second step while one is on its way is refused.
+#[tokio::test]
+async fn the_consumer_suspends_and_starts_a_transfer_again() {
+    let network = Arc::new(Network::default());
+    let (provider, consumer) = connectors(&network).await;
+    let agreement_id = agree(&network, &consumer).await;
+    let t = consumer
+        .request_transfer(&agreement_id, "HttpData-PULL")
+        .unwrap();
+    let t = until(
+        || consumer.transfer(&t.consumer_pid).unwrap(),
+        |t| t.state == TransferState::Started,
+    )
+    .await;
+    assert_eq!(fetch(&provider.app, &t).await.0, StatusCode::OK);
+
+    consumer
+        .act_on_transfer(&t.consumer_pid, ConsumerTransferDecision::Suspend)
+        .unwrap();
+    // no await in between: the suspension has not been sent yet
+    assert!(
+        consumer
+            .act_on_transfer(&t.consumer_pid, ConsumerTransferDecision::Start)
+            .is_err(),
+        "a message is still on its way"
+    );
+    let suspended = until(
+        || consumer.transfer(&t.consumer_pid).unwrap(),
+        |t| t.state == TransferState::Suspended,
+    )
+    .await;
+    assert_eq!(fetch(&provider.app, &t).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(suspended.data_address, t.data_address, "kept");
+
+    consumer
+        .act_on_transfer(&t.consumer_pid, ConsumerTransferDecision::Start)
+        .unwrap();
+    let started = until(
+        || consumer.transfer(&t.consumer_pid).unwrap(),
+        |t| t.state == TransferState::Started,
+    )
+    .await;
+    assert_eq!(started.data_address, t.data_address, "the same token");
+    assert_eq!(
+        fetch(&provider.app, &t).await,
+        (StatusCode::OK, "day,celsius\nmon,12\n".to_owned())
+    );
 }

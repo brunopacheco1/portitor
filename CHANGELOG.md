@@ -12,6 +12,129 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-25
+
+Portitor 1.1: push transfers, data in object storage, and a provider
+that can always end access. Every 1.0 route, setting and file format
+still works; this release only adds
+([STABILITY](docs/STABILITY.md)). Before the tag, CI ran the two-party
+scenario with RustFS (a push landed in the consumer's bucket, equal to
+the file) and the EDC interop test with EDC v1.0.0-RC8 asking Portitor
+to push. Upgrading from 1.0:
+[OPERATING, From 1.0 to 1.1](docs/OPERATING.md#from-10-to-11).
+
+- Version 1.1.0. The website quickstart clones `v1.1.0`, and the
+  scenarios that pull release images (two-party, hdab-intermediary,
+  data-permits) default to the 1.1.0 images.
+
+### Added
+
+- Push transfers (`HttpData-PUSH`, ADR 0027, TD-10). As provider: a
+  dataset offers push with a distribution in that format; the transfer
+  request must carry an `http-push` data address
+  (`https://w3id.org/dspace-sig/profile/http-push`, an `https://`
+  endpoint unless `PORTITOR_ALLOW_HTTP`, `authType` `bearer`), else 400.
+  Once started, and once the consumer no longer reports `REQUESTED` (at
+  most 30 seconds: Eclipse EDC applies a start after it acknowledges
+  it), the data plane sends the dataset as one `POST` with the
+  consumer's bearer token and the source's `Content-Type`; 2xx completes
+  the transfer, anything else terminates it with the status code as the
+  reason. Suspend and terminate cut a running push; a start again sends
+  it again from the beginning and may carry a new address.
+- As consumer: `POST /v1/transfers` takes `"format": "HttpData-PUSH"`
+  when object storage and `PORTITOR_PUSH_BUCKET` are set (else 400). The
+  connector gives `{PORTITOR_PUBLIC_URL}/push/{consumerPid}` with a
+  random bearer token (only its SHA-256 is kept). New open routes
+  `POST /push/{consumerPid}` and `PUT /push/{consumerPid}` stream the
+  data into the push bucket as the object `{consumerPid}` (multipart
+  upload); every refusal is the same 401. The transfer view gains
+  `objectKey`.
+- Pull from the provider's object storage: `portitor:source` may be
+  `s3://{bucket}/{key}`, read with a signed `GET` (AWS Signature Version
+  4, path-style), with the same 401 and 502 answers as an HTTP source.
+- Object storage settings, the AWS SDK names: `AWS_ENDPOINT_URL_S3`,
+  `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+  `AWS_SESSION_TOKEN` (temporary keys, sent and signed as
+  `x-amz-security-token`), and `PORTITOR_PUSH_BUCKET`
+  ([DEPLOYING, Object storage and push transfers](docs/DEPLOYING.md#object-storage-and-push-transfers)).
+- The audit line `data transfer done` is also written for each push sent
+  and each push received.
+
+- Management API: `POST /v1/transfers/{consumerPid}/suspension` and
+  `POST /v1/transfers/{consumerPid}/start` suspend a transfer as
+  consumer and start it again, with the rules of `/completion` and
+  `/termination` (TD-11, first half). The token of a pull transfer
+  stays the same; a push transfer gets a new token for the receiving
+  route.
+- Audit line for each data pull: the provider's data plane writes one
+  INFO line, `data transfer done` (target `portitor::audit`), with
+  `flow`, `agreement`, `counterParty`, `direction` (`sent`,
+  `received`), `bytes` and `outcome` (`complete`, `cut`, `failed`) for
+  each `/data` answer ([OPERATING](docs/OPERATING.md), TD-31, first
+  half). `flow` is the transfer's `providerPid` on both sides. The
+  message, the target and these fields are stable in 1.x
+  ([STABILITY, Audit line](docs/STABILITY.md#audit-line); maintainer,
+  2026-11-25).
+- The provider can always end access (ADR 0027, section 7). Management
+  routes for the transfers a connector runs as provider:
+  `GET /v1/provided-transfers`, `GET /v1/provided-transfers/{providerPid}`
+  and `POST /v1/provided-transfers/{providerPid}/termination`. A
+  termination ends access at once and sends the DSP termination in the
+  background. The view never shows the data token or its hash.
+- Suspending or terminating a transfer as provider cuts every running
+  download of its data flow (ADR 0027, section 5).
+- The data plane checks the consumer's `MembershipCredential` again on
+  every `/data` request, and while a download runs: issuer still
+  trusted, not expired, status bit not set, with the status list cache.
+  A failed check refuses with 401, cuts running downloads and ends the
+  transfer; a check that cannot finish refuses but keeps the transfer.
+  [DEPLOYING, Revocation and running transfers](docs/DEPLOYING.md#revocation-and-running-transfers).
+
+### Fixed
+
+Found in the review of the 1.1 branch, before its release:
+
+- A push cut because the consumer's membership could not be checked,
+  or one that could not begin, terminates the transfer; before, the
+  transfer stayed `STARTED` with nothing sending.
+- A push has time limits: the connection must open within 10 seconds,
+  and the push fails after 120 seconds in which the endpoint takes no
+  data and gives no answer.
+- The receiving route `/push/{consumerPid}` takes one upload at a time
+  per transfer (a second one gets 409) and at most 8 at once (503), and
+  cuts a body that sends nothing for 120 seconds (400, upload aborted).
+- A multipart upload cut half-way is aborted, so the store keeps no
+  parts. DEPLOYING now recommends a lifecycle rule
+  (`AbortIncompleteMultipartUpload`) on the push bucket.
+- A transfer that started before 1.1 gets no new token when the
+  provider starts it again (only a scripted provider policy does), so
+  it is no longer exempt from the membership check for good; the
+  transfer is terminated instead.
+- `AWS_*` variables are checked only when `PORTITOR_PUSH_BUCKET` is
+  set: a 1.0 configuration with, say, only `AWS_ACCESS_KEY_ID` set for
+  another tool starts again, without object storage.
+- A partner whose membership was revoked can still end a transfer it
+  shares with you: its `TransferTerminationMessage` is accepted when its
+  DCP token is valid and it is the transfer's counter-party, and logged
+  (`DSP termination accepted from a partner without membership`). Every
+  other message from it is refused as before. Before, such a transfer
+  stayed `REQUESTED` until the operator ended it
+  ([TD-47](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-47); ADR 0016, amended
+  in 1.1).
+
+### Upgrade notes
+
+- Database migration 13 (forward only) adds the columns
+  `transfer.data_address` and `data_flow.push_address` (the consumer's
+  push address, emptied when the transfer ends) and the table
+  `push_receipt` (our push tokens' hashes and object keys).
+- Database migration 12 (forward only) adds the table `flow_membership`.
+  Transfers that started before the upgrade have no membership kept:
+  they are served as in 1.0 until their token expires
+  (`PORTITOR_DATA_TOKEN_SECONDS`), with one INFO line per flow. Back up
+  `/data` first, as for every upgrade.
+- New log lines: [OPERATING, Health and logs](docs/OPERATING.md#health-and-logs).
+
 ## [1.0.0] - 2026-11-24
 
 Portitor 1.0, the first stable release. From now on, a 1.x release may

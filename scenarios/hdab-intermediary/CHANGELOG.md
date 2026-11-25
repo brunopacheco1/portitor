@@ -9,6 +9,33 @@ SPDX-License-Identifier: Apache-2.0
 How the scenario changed, newest first. Each entry names the Portitor
 version it ran on.
 
+## 2026-11-24, for 1.1.0
+
+- Step 1 by push (ADR 0027), the way `scenarios/two-party` does with
+  `S3=1`: the lab runs its own object storage, `lab-storage`
+  (`rustfs/rustfs:1.0.6`, S3 API on 127.0.0.1:18114), and its connector
+  gets `AWS_ENDPOINT_URL_S3`, `AWS_ACCESS_KEY_ID`,
+  `AWS_SECRET_ACCESS_KEY` and `PORTITOR_PUSH_BUCKET=lab-genotypes`.
+  `run.sh` makes the keys for each run (`run/lab/s3.env`). Lux Biobank's
+  genotypes also offer `HttpData-PUSH`. `steps.sh` creates the bucket,
+  asks for a push transfer, waits for `COMPLETED` with `objectKey` and
+  no data address, reads the object back and compares it with
+  `genotypes.vcf`, and checks that the lab's receiving route refuses a
+  request without the token (401, from Schuman's app). `lab-app` and
+  `run/lab/storage` are gone. The diagrams show the push; the scenario
+  diagram's messages after step 1 are renumbered, and its last message
+  shows the TD-47 ending.
+- The scenario now needs 1.1 connector images. `compose.yaml` names
+  the 1.1.0 release images by default; `run.sh` stops before starting
+  anything when the connector image is 1.0.
+- Not run yet: written without a container engine. Scripts checked with
+  `bash -n`, `compose.yaml` parsed as YAML, the diagrams rendered.
+- Step 6: the HDAB's termination of Schuman's last transfer is now
+  accepted (TD-47, fixed in 1.1), so `steps.sh` waits for `TERMINATED`
+  instead of finding the transfer `REQUESTED` and ending it from
+  Schuman's side. Not run yet on 1.1: the change follows the connector's
+  tests of TD-47.
+
 ## 2026-11-24, for 1.0.0
 
 - `compose.yaml` takes the 1.0.0 release images by default. The
@@ -38,6 +65,5 @@ version it ran on.
 
 ## Next
 
-- 1.1: push transfers into object storage for the lab.
 - 1.2: purpose and data permit; step 5's gap closes.
 - 1.3: the HDAB's offers tied to its own agreement (R-39).

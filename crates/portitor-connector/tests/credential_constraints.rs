@@ -217,7 +217,7 @@ fn ports(network: &Arc<Network>, did: &str, wallets: &Wallets, queries: &Queries
 }
 
 fn fake_ports(network: &Arc<Network>, did: &str, fakes: &Fakes) -> Ports {
-    let mut ports = Ports::new(Arc::clone(network) as Arc<dyn Sender>);
+    let mut ports = common::ports(Arc::clone(network) as Arc<dyn Sender>);
     ports.verifier = Arc::new(FakeCredentialService {
         wallets: Arc::clone(&fakes.wallets),
         queries: Arc::clone(&fakes.queries),
@@ -821,7 +821,7 @@ fn verified_connectors(network: &Arc<Network>, dataspace: &LocalDataspace) -> Ne
         status_list_cache_seconds: 0,
         did_cache_seconds: 300,
     };
-    let mut provider_ports = Ports::new(Arc::clone(network) as Arc<dyn Sender>);
+    let mut provider_ports = common::ports(Arc::clone(network) as Arc<dyn Sender>);
     provider_ports.verifier = Arc::new(DcpVerifier::new(&settings, Arc::new(ProviderSts)).unwrap());
     provider_ports.prover = Arc::new(common::NameSelf {
         did: PROVIDER_DID.to_owned(),
@@ -841,7 +841,7 @@ fn verified_connectors(network: &Arc<Network>, dataspace: &LocalDataspace) -> Ne
     })])));
     let (provider_app, _) = portitor_connector::build(&provider, provider_ports).unwrap();
 
-    let mut consumer_ports = Ports::new(Arc::clone(network) as Arc<dyn Sender>);
+    let mut consumer_ports = common::ports(Arc::clone(network) as Arc<dyn Sender>);
     consumer_ports.verifier = Arc::new(common::NamedCaller);
     consumer_ports.prover = Arc::new(ConsumerSts(Arc::clone(&dataspace.consumer)));
     consumer_ports.retry = Retry {

@@ -13,12 +13,12 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, header};
+use portitor_connector::Config;
 use portitor_connector::auth::dcp::DcpVerifier;
 use portitor_connector::auth::sts::{SecureTokenService, StsClient, TokenRequest};
 use portitor_connector::auth::{AuthSettings, CallerVerifier as _};
 use portitor_connector::health::OwnIdentityCheck;
 use portitor_connector::management::{ApiKey, router};
-use portitor_connector::{Config, Ports};
 use portitor_runtime::health::Check as _;
 use portitor_runtime::telemetry::testing::{
     Recorded, recorded, trace_on_this_thread, traceparent_recorder,
@@ -83,7 +83,7 @@ async fn the_outbox_sends_no_trace_context() {
     };
     // the sender `main` gives the outbox
     let sender = portitor_connector::dsp_sender(true).unwrap();
-    let ports = authenticating(Ports::new(Arc::new(sender)), CONSUMER);
+    let ports = authenticating(common::ports(Arc::new(sender)), CONSUMER);
     let (_, negotiator) = portitor_connector::build(&config, ports).unwrap();
     let app = router(negotiator, ApiKey::new(KEY).unwrap());
     let body = json!({

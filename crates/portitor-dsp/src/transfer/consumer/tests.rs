@@ -350,3 +350,80 @@ fn only_the_provider_it_was_requested_from_may_answer() {
         .unwrap();
     assert_eq!(out.counter_party, "did:web:q");
 }
+
+/// Our address for a push transfer, as the adapter makes it.
+fn our_push_address(cpid: &str, token: &str) -> DataAddress {
+    DataAddress {
+        kind: DataAddressType,
+        endpoint_type: crate::transfer::HTTP_PUSH_ENDPOINT_TYPE.to_owned(),
+        endpoint: Some(format!("https://c.example/push/{cpid}")),
+        endpoint_properties: vec![
+            EndpointProperty::new("authorization", token),
+            EndpointProperty::new("authType", "bearer"),
+        ],
+    }
+}
+
+fn push_request<'a>(store: &'a Store, steps: &'a Steps) -> Service<'a> {
+    let s = service(store, steps);
+    let request = Request {
+        provider_address: "https://p.example/dsp",
+        provider_id: "did:web:p",
+        agreement_id: "a1",
+        format: "HttpData-PUSH",
+    };
+    let (t, out) = s
+        .start_push(&request, &|cpid| our_push_address(cpid, "k1"))
+        .unwrap();
+    assert_eq!(t.consumer_pid, CPID);
+    let sent: TransferRequestMessage = serde_json::from_value(out.body.clone()).unwrap();
+    assert_eq!(sent.data_address, Some(our_push_address(CPID, "k1")));
+    assert_eq!(t.data_address, None, "our own token is not kept here");
+    s.delivered(&out, Some(&acknowledgement())).unwrap();
+    s
+}
+
+#[test]
+fn a_push_request_carries_our_address_and_starts_without_one() {
+    let (store, steps) = (Store::default(), Steps::default());
+    let s = push_request(&store, &steps);
+    // DSP: no dataAddress in a push transfer's start message
+    let (ack, _) = s.started(CPID, &start(None)).unwrap();
+    assert_eq!(ack.state, TransferState::Started);
+    assert_eq!(token(&store), None);
+
+    let pull = Request {
+        provider_address: "https://p.example/dsp",
+        provider_id: "did:web:p",
+        agreement_id: "a1",
+        format: "HttpData-PULL",
+    };
+    assert!(
+        s.start_push(&pull, &|cpid| our_push_address(cpid, "k"))
+            .is_err(),
+        "only a push format"
+    );
+}
+
+#[test]
+fn an_address_the_provider_sends_for_a_push_is_not_kept() {
+    let (store, steps) = (Store::default(), Steps::default());
+    let s = push_request(&store, &steps);
+    s.started(CPID, &start(Some(address("theirs")))).unwrap();
+    assert_eq!(token(&store), None);
+}
+
+#[test]
+fn a_push_started_again_carries_a_new_address() {
+    use ConsumerTransferDecision::{Start, Suspend};
+    let (store, steps) = (Store::default(), Steps::default());
+    let s = push_request(&store, &steps);
+    s.started(CPID, &start(None)).unwrap();
+    let out = s.act(CPID, Suspend).unwrap();
+    s.delivered(&out, None).unwrap();
+    let out = s
+        .act_with_address(CPID, Start, Some(&our_push_address(CPID, "k2")))
+        .unwrap();
+    let sent: TransferStartMessage = serde_json::from_value(out.body).unwrap();
+    assert_eq!(sent.data_address, Some(our_push_address(CPID, "k2")));
+}

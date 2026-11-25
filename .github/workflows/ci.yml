@@ -136,7 +136,9 @@ jobs:
             echo "::error::the issuer started without its settings"; exit 1
           fi
           cat issuer-smoke.log
-      - name: The same in Docker Compose
+      - name: The same in Docker Compose, with object storage (RustFS)
+        env:
+          S3: "1" # push into the consumer's bucket, an s3:// source (ADR 0027)
         run: scenarios/two-party/run.sh portitor-connector:ci portitor-identity:ci portitor-issuer:ci
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

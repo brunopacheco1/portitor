@@ -45,8 +45,8 @@ finding F-01 in [SECURITY-ASSURANCE](SECURITY-ASSURANCE.md),
 [R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17)). 1.0 does not refuse them.
 
 Each service needs its own host name (or its own port): the connector
-serves `/dsp/2025-1`, `/data` and `/.well-known/dspace-version` at the
-root of its host. The path of `PORTITOR_PUBLIC_URL` is not used for
+serves `/dsp/2025-1`, `/data`, `/push` (since 1.1) and
+`/.well-known/dspace-version` at the root of its host. The path of `PORTITOR_PUBLIC_URL` is not used for
 routing; it is only put in front of the addresses the connector gives
 to partners.
 
@@ -71,6 +71,8 @@ the three `*management-openapi.json` files there.
 GET /.well-known/dspace-version
 GET /health
 GET /data/{flowId}
+POST /push/{consumerPid}
+PUT /push/{consumerPid}
 POST /dsp/2025-1/catalog/request
 GET /dsp/2025-1/catalog/datasets/{id}
 POST /dsp/2025-1/negotiations/request
@@ -111,6 +113,11 @@ POST /v1/transfers
 GET /v1/transfers/{consumerPid}
 POST /v1/transfers/{consumerPid}/completion
 POST /v1/transfers/{consumerPid}/termination
+POST /v1/transfers/{consumerPid}/suspension
+POST /v1/transfers/{consumerPid}/start
+GET /v1/provided-transfers
+GET /v1/provided-transfers/{providerPid}
+POST /v1/provided-transfers/{providerPid}/termination
 GET /v1/harvest-jobs
 GET /v1/harvest-jobs/{id}
 POST /v1/catalog/request
@@ -251,6 +258,12 @@ PORTITOR_BUNDLE_VERSION
 PORTITOR_BUNDLE_REFRESH_SECONDS
 PORTITOR_BUNDLE_AUTHORITY
 PORTITOR_BUNDLE_CACHE_DIR
+PORTITOR_PUSH_BUCKET
+AWS_ENDPOINT_URL_S3
+AWS_REGION
+AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY
+AWS_SESSION_TOKEN
 ```
 
 ### Settings of portitor-identity
@@ -296,7 +309,7 @@ named in the CHANGELOG.
 
 | File | Set with | Format |
 |---|---|---|
-| Datasets file | `PORTITOR_DATASETS_FILE` | A JSON list of DCAT datasets with their ODRL offers and `portitor:source` ([ADR 0020](adr/0020-dataset-harvest.md), [DEPLOYING](DEPLOYING.md#dataset-harvest)). Policies are read strictly ([ADR 0009](adr/0009-minimal-odrl-policies.md)); a 1.x release may understand more terms |
+| Datasets file | `PORTITOR_DATASETS_FILE` | A JSON list of DCAT datasets with their ODRL offers and `portitor:source` ([ADR 0020](adr/0020-dataset-harvest.md), [DEPLOYING](DEPLOYING.md#dataset-harvest)). `portitor:source` is an `http://` or `https://` URL, or, since 1.1, an object of the connector's object storage written `s3://{bucket}/{key}` ([ADR 0027](adr/0027-push-transfers-and-object-storage.md)). Policies are read strictly ([ADR 0009](adr/0009-minimal-odrl-policies.md)); a 1.x release may understand more terms |
 | Credential definitions | `PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE` | A JSON list ([DEPLOYING, credential definitions file](DEPLOYING.md#credential-definitions-file), `examples/issuer-credentials.json`) |
 | Bundle | `PORTITOR_BUNDLE_URL`, `portitor-issuer bundle build` | A folder per version with `manifest.json` and `manifest.jws`, and `latest.json` ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)); the manifest follows [bundle-manifest.schema.json](schemas/bundle-manifest.schema.json) |
 | Gaia-X participant file | `PORTITOR_GAIAX_PARTICIPANT_FILE` | JSON ([DEPLOYING, Gaia-X onboarding](DEPLOYING.md#gaia-x-onboarding-optional)) |
@@ -319,13 +332,26 @@ confirmed this for 1.x at the freeze (2026-11-20,
 [TD-22](RISKS_AND_TECHNICAL_DEBTS.md#td-22);
 [OPERATING, upgrade and rollback](OPERATING.md#upgrade-and-rollback)).
 
+## Audit line
+
+Since 1.1 (maintainer, 2026-11-25). Each data transfer writes one log
+line at INFO with the message `data transfer done` and the target
+`portitor::audit`
+([OPERATING, Audit line](OPERATING.md#health-and-logs)). In 1.x the
+message, the target, and these fields keep their names and meaning:
+`flow` (the transfer's `providerPid`), `agreement`, `counterParty`,
+`direction` (`sent` or `received`), `bytes` and `outcome` (`complete`,
+`cut` or `failed`). A 1.x release may add fields and add values to
+`outcome`; a reader must ignore fields it does not know.
+
 ## Not part of the stable interface
 
 - **Metric, span and log names.** [ADR 0023](adr/0023-observability.md)
   promises none of them. The metric names, their attributes, the span
   names, and the texts and fields of log lines can change in a 1.x
   release. Each change is named in the CHANGELOG, so check your alerts
-  and dashboards when you upgrade. The two HTTP histograms follow
+  and dashboards when you upgrade. One exception: the audit line
+  (below). The two HTTP histograms follow
   OpenTelemetry's semantic conventions and change only with them.
 - **The Rust crates.** They are not published as libraries
   (`publish = false` in every `Cargo.toml`); their APIs change without
@@ -351,8 +377,10 @@ confirmed this for 1.x at the freeze (2026-11-20,
 
 ## What 1.0 does not do
 
-- **Pull transfers only** (`HttpData-PULL`). No push
-  ([ADR 0013](adr/0013-transfer-and-data-plane.md)).
+- **Pull transfers only** (`HttpData-PULL`) in 1.0. Push
+  (`HttpData-PUSH`) exists since 1.1, as provider and as consumer, with
+  S3-compatible object storage
+  ([ADR 0027](adr/0027-push-transfers-and-object-storage.md)).
 - **No negotiation started by the provider.** The consumer starts
   ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)). It can be added in 1.x.
 - **No Data Plane Signaling over HTTP.** The data plane runs inside the

@@ -39,11 +39,15 @@ cd "$(dirname "$0")/../.."
 if [[ $# -gt 0 ]]; then export PORTITOR_IMAGE=$1; fi
 if [[ $# -gt 1 ]]; then export PORTITOR_IDENTITY_IMAGE=$2; fi
 if [[ $# -gt 2 ]]; then export PORTITOR_ISSUER_IMAGE=$3; fi
+# S3=1: object storage too (RustFS, the push and s3:// source steps; ADR
+# 0027). Needs connector images from 1.1 on.
+S3=${S3:-0}
 # ENGINE_COMPOSE: `docker compose` or `podman compose`
 # shellcheck source=scripts/container-engine.sh
 source scripts/container-engine.sh
 COMPOSE=("${ENGINE_COMPOSE[@]}" -f scenarios/two-party/compose.yaml)
 if [[ -n ${EXTRA_COMPOSE:-} ]]; then COMPOSE+=(-f "$EXTRA_COMPOSE"); fi
+if [[ $S3 == 1 ]]; then COMPOSE+=(--profile s3); fi
 RUN=scenarios/two-party/run
 
 # who is who (compose.yaml)
@@ -87,9 +91,22 @@ for participant in provider consumer; do
 done
 openssl rand -hex 32 >"$RUN/consumer/management.key"
 openssl rand -hex 32 >"$RUN/provider/management.key"
+# the provider's datasets; with S3=1 one of them from its bucket, and
+# one that also offers push
+if [[ $S3 == 1 ]]; then
+  jq -f scenarios/two-party/s3-datasets.jq examples/healthdcat-datasets.json >"$RUN/datasets.json"
+  # the object store's keys, for this run only; compose.yaml passes them
+  # on as the connectors' AWS_* settings
+  DEMO_S3_ACCESS_KEY=demo-$(openssl rand -hex 8)
+  DEMO_S3_SECRET_KEY=$(openssl rand -hex 32)
+  export DEMO_S3_ACCESS_KEY DEMO_S3_SECRET_KEY DEMO_PUSH_BUCKET=consumer-push
+else
+  cp examples/healthdcat-datasets.json "$RUN/datasets.json"
+fi
 
 cleanup() {
   status=$?
+  if [[ -n ${LOG_FOLLOWER:-} ]]; then kill "$LOG_FOLLOWER" 2>/dev/null || true; fi
   if [[ $status -ne 0 ]]; then "${COMPOSE[@]}" logs --no-color --tail 30 >&2 || true; fi
   if [[ ${KEEP:-} != 1 ]]; then
     "${COMPOSE[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -169,9 +186,19 @@ request_credentials consumer 18093 membership-vc20 data-processor-vc20
 
 # --- 4. the demo steps ------------------------------------------------------
 
+# the provider's log, followed into a file, for the audit line check
+"${COMPOSE[@]}" logs --no-color --no-log-prefix -f provider >"$RUN/provider.log" 2>&1 &
+LOG_FOLLOWER=$!
+
+if [[ $S3 == 1 ]]; then
+  export S3_ENDPOINT=http://127.0.0.1:18100 S3_ACCESS_KEY=$DEMO_S3_ACCESS_KEY \
+    CONSUMER_PUBLIC=http://127.0.0.1:18090 \
+    S3_SECRET_KEY=$DEMO_S3_SECRET_KEY
+fi
 PROVIDER=http://provider:8080 HERE=http://127.0.0.1:18080 \
   PROVIDER_MANAGEMENT=http://127.0.0.1:18081 PROVIDER_KEY_FILE="$RUN/provider/management.key" \
   MANAGEMENT=http://127.0.0.1:18091 KEY_FILE="$RUN/consumer/management.key" \
   CONSUMER_ID="$CONSUMER_ID" PROVIDER_ID="$PROVIDER_ID" \
   ISSUER_MANAGEMENT="$ISSUER_MANAGEMENT" ISSUER_KEY_FILE="$RUN/issuer/management.key" \
+  PROVIDER_LOG="$RUN/provider.log" \
   DATA=examples/data scenarios/two-party/steps.sh

@@ -4,10 +4,13 @@
 
 package portitor.interop.edc;
 
+import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.HeaderParam;
+import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
+import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import org.eclipse.dataplane.Dataplane;
 import org.eclipse.dataplane.domain.DataAddress;
@@ -40,16 +43,31 @@ import java.util.concurrent.ConcurrentHashMap;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 /**
- * Test only: the smallest EDC data plane for "HttpData-PULL" transfers.
+ * Test only: the smallest EDC data plane for "HttpData-PULL" transfers,
+ * and for receiving "HttpData-PUSH" transfers as consumer.
  *
  * <ul>
  * <li>As provider, a started data flow gets a random token and the data
  * address {@code <public url>/public/<flow id>}; a GET there with the
  * token returns the file at {@code interop.dataplane.source.url}.</li>
- * <li>As consumer, it keeps the data address the provider sent, and
- * {@code GET <public url>/consumer/<flow id>/data} fetches the data with
- * it, so the test can read what an EDC consumer received.</li>
+ * <li>As consumer of a pull, it keeps the data address the provider sent,
+ * and {@code GET <public url>/consumer/<flow id>/data} fetches the data
+ * with it, so the test can read what an EDC consumer received.</li>
+ * <li>As consumer of a push, it names where the provider sends the data:
+ * when the control plane prepares the flow, the data address
+ * {@code <public url>/push/<flow id>} with endpoint type
+ * {@value #HTTP_PUSH_ENDPOINT_TYPE} (the Data Plane Signaling HTTP
+ * profile), a random token ({@code authorization}) and {@code authType}
+ * {@code bearer}. EDC v1.0.0-RC8 sends this address, as the data plane
+ * gave it, in its TransferRequestMessage. A POST there with the token is
+ * kept, and {@code GET <public url>/consumer/<flow id>/pushed} returns
+ * it, so the test can compare it with the provider's file.</li>
  * </ul>
+ *
+ * A push is taken at once. EDC acknowledges the provider's
+ * TransferStartMessage before its state machine has signalled this data
+ * plane, and refuses a TransferCompletionMessage until then (400): the
+ * provider must wait until EDC reports STARTED (Portitor does, ADR 0027).
  *
  * Signaling with the control plane uses no authentication (profile type
  * "none"), see the control plane's NoneSignalingAuthorizationExtension.
@@ -57,6 +75,9 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 public class TestDataPlaneExtension implements ServiceExtension {
 
     private static final String HTTP_PULL = "HttpData-PULL";
+    private static final String HTTP_PUSH = "HttpData-PUSH";
+    /** The push endpoint type of the Data Plane Signaling HTTP transfer profile. */
+    static final String HTTP_PUSH_ENDPOINT_TYPE = "https://w3id.org/dspace-sig/profile/http-push";
     private static final String AUTHORIZATION = "authorization";
 
     @Setting(key = "dataplane.id", description = "Id of this data plane, as registered at the control plane")
@@ -76,6 +97,10 @@ public class TestDataPlaneExtension implements ServiceExtension {
     private final Map<String, String> tokens = new ConcurrentHashMap<>();
     /** Consumer side: flow id to the data address the provider sent. */
     private final Map<String, DataAddress> received = new ConcurrentHashMap<>();
+    /** Consumer side of a push: flow id to the token the provider must present. */
+    private final Map<String, String> pushTokens = new ConcurrentHashMap<>();
+    /** Consumer side of a push: flow id to the data the provider pushed (kept after the flow ends). */
+    private final Map<String, byte[]> pushed = new ConcurrentHashMap<>();
 
     @Override
     public String name() {
@@ -89,7 +114,8 @@ public class TestDataPlaneExtension implements ServiceExtension {
                 .endpoint(URI.create(publicUrl + "/v1/dataflows"))
                 .registerAuthorization(new NoneAuthorization())
                 .profile(HTTP_PULL)
-                .onPrepare(Result::success)
+                .profile(HTTP_PUSH)
+                .onPrepare(this::prepare)
                 .onStart(this::start)
                 .onStarted(this::started)
                 .onSuspend(Result::success)
@@ -101,6 +127,21 @@ public class TestDataPlaneExtension implements ServiceExtension {
         webService.registerResource(new DataPlaneRegistrationApiController(dataplane));
         webService.registerResource(new PublicApi(this));
         webService.registerResource(new ConsumerApi(this));
+        webService.registerResource(new PushApi(this));
+    }
+
+    /** Consumer: a pull needs nothing; a push gets the address the provider sends the data to. */
+    private Result<DataFlow> prepare(DataFlow flow) {
+        if (!HTTP_PUSH.equals(flow.getProfile())) {
+            return Result.success(flow);
+        }
+        var token = UUID.randomUUID().toString();
+        pushTokens.put(flow.getId(), token);
+        flow.setDataAddress(new DataAddress(HTTP_PUSH_ENDPOINT_TYPE, publicUrl + "/push/" + flow.getId(), List.of(
+                new DataAddress.EndpointProperty("string", AUTHORIZATION, token),
+                new DataAddress.EndpointProperty("string", "authType", "bearer"))));
+        monitor.info("data flow %s prepared for a push".formatted(flow.getId()));
+        return Result.success(flow);
     }
 
     /** Provider: open the data to the holder of a new token. */
@@ -117,9 +158,10 @@ public class TestDataPlaneExtension implements ServiceExtension {
         return Result.success(flow);
     }
 
-    /** Consumer: keep the provider's data address. */
+    /** Consumer: keep the provider's data address (pull), or let the push in (push). */
     private Result<DataFlow> started(DataFlow flow) {
-        if (flow.getDataAddress() != null) {
+        // a push's address here is our own, sent back by the control plane
+        if (!HTTP_PUSH.equals(flow.getProfile()) && flow.getDataAddress() != null) {
             received.put(flow.getId(), flow.getDataAddress());
         }
         monitor.info("data flow %s started as consumer".formatted(flow.getId()));
@@ -129,6 +171,7 @@ public class TestDataPlaneExtension implements ServiceExtension {
     private Result<DataFlow> forget(DataFlow flow) {
         tokens.remove(flow.getId());
         received.remove(flow.getId());
+        pushTokens.remove(flow.getId());
         return Result.success(flow);
     }
 
@@ -197,6 +240,41 @@ public class TestDataPlaneExtension implements ServiceExtension {
                     .map(DataAddress.EndpointProperty::value)
                     .findFirst();
             return dataPlane.fetch(address.endpoint(), token);
+        }
+
+        @GET
+        @Path("/{flowId}/pushed")
+        public Response pushed(@PathParam("flowId") String flowId) {
+            var data = dataPlane.pushed.get(flowId);
+            if (data == null) {
+                return Response.status(Response.Status.NOT_FOUND).build();
+            }
+            return Response.ok(data, MediaType.APPLICATION_OCTET_STREAM_TYPE).build();
+        }
+    }
+
+    /** Where a provider pushes the data of a push flow. */
+    @Path("/push")
+    public static class PushApi {
+        private final TestDataPlaneExtension dataPlane;
+
+        PushApi(TestDataPlaneExtension dataPlane) {
+            this.dataPlane = dataPlane;
+        }
+
+        @POST
+        @Path("/{flowId}")
+        @Consumes(MediaType.WILDCARD)
+        public Response receive(@PathParam("flowId") String flowId, @HeaderParam("Authorization") String header,
+                                byte[] body) {
+            var expected = dataPlane.pushTokens.get(flowId);
+            if (expected == null || header == null || !same(withoutBearer(header), expected)) {
+                return Response.status(Response.Status.UNAUTHORIZED).build();
+            }
+            dataPlane.pushed.put(flowId, body == null ? new byte[0] : body);
+            dataPlane.monitor.info("data flow %s: received %d bytes by push".formatted(flowId,
+                    dataPlane.pushed.get(flowId).length));
+            return Response.ok().build();
         }
     }
 

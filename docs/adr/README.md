@@ -44,6 +44,7 @@ first, then here.
 | [0024](0024-several-data-spaces.md) | A provider in several data spaces | Accepted (2026-11-20) | For 1.0, one connector per data space; data space profiles in one connector after 1.0 |
 | [0025](0025-users-and-roles.md) | Users and roles | Accepted (2026-11-20) | 1.0 stays system to system and users stop at the organisation's reverse proxy; identity provider tokens on the management APIs in 1.5 |
 | [0026](0026-tls-termination.md) | TLS ends at the operator's reverse proxy | Accepted (2026-11-20) | The services speak plain HTTP; the operator ends TLS at a proxy and keeps the management ports private |
+| [0027](0027-push-transfers-and-object-storage.md) | Push transfers, object storage and revoking access | Accepted (2026-11-24) | Push by the Data Plane Signaling HTTP profile into a receiving route of the consumer; provider data may sit in its own object storage behind `/data`; suspend and terminate cut running downloads; no storage keys cross between participants |
 | [0028](0028-separate-pluggable-data-plane.md) | A separate, pluggable data plane over Data Plane Signaling | Proposed (2026-11-25) | Operators register their own data planes over DPS; the built-in data plane becomes one of them, linked in by default and also an optional image |
 
 ## Adding an ADR

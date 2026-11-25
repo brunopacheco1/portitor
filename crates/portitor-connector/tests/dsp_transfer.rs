@@ -110,9 +110,9 @@ impl DataFlows for FakeFlows {
     fn supports(&self, _: &str, format: &str) -> bool {
         format == "HttpData-PULL"
     }
-    fn start(&self, t: &Transfer) -> Result<DataAddress, String> {
+    fn start(&self, t: &Transfer) -> Result<Option<DataAddress>, String> {
         self.record(format!("start {}", t.dataset_id));
-        Ok(DataAddress {
+        Ok(Some(DataAddress {
             kind: DataAddressType,
             endpoint_type: "https://w3id.org/idsa/v4.1/HTTP".to_owned(),
             endpoint: Some("https://provider.example/data".to_owned()),
@@ -120,9 +120,9 @@ impl DataFlows for FakeFlows {
                 EndpointProperty::new("authorization", "t0ken"),
                 EndpointProperty::new("authType", "bearer"),
             ],
-        })
+        }))
     }
-    fn restart(&self, _: &str) -> Result<DataAddress, String> {
+    fn restart(&self, _: &Transfer) -> Result<Option<DataAddress>, String> {
         self.record("restart".to_owned());
         Err("the fake provider never starts a transfer again".to_owned())
     }
@@ -130,7 +130,7 @@ impl DataFlows for FakeFlows {
         self.record("suspend".to_owned());
         Ok(())
     }
-    fn resume(&self, _: &str) -> Result<(), String> {
+    fn resume(&self, _: &str, _: Option<&DataAddress>) -> Result<(), String> {
         self.record("resume".to_owned());
         Ok(())
     }
@@ -164,7 +164,10 @@ fn ports(sender: &Arc<FakeSender>, flows: &Arc<FakeFlows>) -> Ports {
 
 /// Like [`ports`], and the audience of each token the provider sends.
 fn recorded_ports(sender: &Arc<FakeSender>, flows: &Arc<FakeFlows>) -> (Ports, Audiences) {
-    let (mut p, audiences) = recording(Ports::new(Arc::clone(sender) as Arc<dyn Sender>), PROVIDER);
+    let (mut p, audiences) = recording(
+        common::ports(Arc::clone(sender) as Arc<dyn Sender>),
+        PROVIDER,
+    );
     p.retry = Retry {
         attempts: 2,
         first_delay: Duration::from_millis(1),
@@ -822,7 +825,10 @@ async fn an_unreachable_consumer_ends_the_transfer_and_its_data_flow() {
 #[tokio::test]
 async fn without_a_data_plane_every_request_is_refused() {
     let sender = Arc::new(FakeSender::default());
-    let mut p = authenticating(Ports::new(Arc::clone(&sender) as Arc<dyn Sender>), PROVIDER);
+    let mut p = authenticating(
+        common::ports(Arc::clone(&sender) as Arc<dyn Sender>),
+        PROVIDER,
+    );
     p.transfers.agreements = Shared(Arc::new(OneAgreement));
     p.flow_store = None;
     let app = portitor_connector::router(&config(), p).unwrap();
@@ -1292,7 +1298,10 @@ fn built_in(sender: &Arc<FakeSender>, source: Option<&str>) -> Router {
             fields.insert("portitor:source".to_owned(), json!(url));
         }
     }
-    let mut p = authenticating(Ports::new(Arc::clone(sender) as Arc<dyn Sender>), PROVIDER);
+    let mut p = authenticating(
+        common::ports(Arc::clone(sender) as Arc<dyn Sender>),
+        PROVIDER,
+    );
     p.transfers.agreements = Shared(Arc::new(OneAgreement));
     p.harvest.source = Some(Arc::new(FixedSource::new(entries)));
     portitor_connector::router(&config(), p).unwrap()
@@ -1400,4 +1409,181 @@ async fn a_stranger_cannot_change_a_transfer() {
         assert_eq!(state(&app, &pid).await, "STARTED", "{path}");
     }
     assert_eq!(flows.calls(), ["start CAT0101"]);
+}
+
+#[cfg(feature = "data-plane")]
+impl Log {
+    /// The fields of every `data transfer done` line so far.
+    fn audit_lines(&self) -> Vec<Value> {
+        let text = String::from_utf8(self.0.lock().unwrap().clone()).unwrap();
+        text.lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|line| line["fields"]["message"] == "data transfer done")
+            .map(|line| line["fields"].clone())
+            .collect()
+    }
+
+    /// Waits up to two seconds for the `n`th audit line.
+    async fn audit_line(&self, n: usize) -> Value {
+        for _ in 0..200 {
+            if let Some(line) = self.audit_lines().get(n - 1) {
+                return line.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("no audit line {n}: {:?}", self.audit_lines());
+    }
+}
+
+/// A data source that sends `hello` every 10 ms, without end, as one
+/// chunked HTTP answer; returns its URL.
+#[cfg(feature = "data-plane")]
+async fn endless_upstream() -> String {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/endless", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut request = [0u8; 4096];
+                let _ = socket.read(&mut request).await;
+                let head = "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ntransfer-encoding: chunked\r\n\r\n";
+                if socket.write_all(head.as_bytes()).await.is_err() {
+                    return;
+                }
+                while socket.write_all(b"5\r\nhello\r\n").await.is_ok() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            });
+        }
+    });
+    url
+}
+
+/// Starts a transfer of `CAT0101` with data from `source` on a provider
+/// served on a real local port. Returns the port's address, the data path
+/// and the token.
+#[cfg(feature = "data-plane")]
+async fn served_transfer(source: &str) -> (std::net::SocketAddr, String, String) {
+    let sender = Arc::new(FakeSender::default());
+    let app = built_in(&sender, Some(source));
+    let (status, ack) = call(&app, post(&format!("{BASE}/request"), &request("a1"))).await;
+    assert_eq!(status, StatusCode::CREATED, "{ack}");
+    let pid = ack["providerPid"].as_str().unwrap().to_owned();
+    let address = sent(&sender, 1).await[0].1["dataAddress"].clone();
+    let token = address["endpointProperties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "authorization")
+        .unwrap()["value"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    wait_for(&app, &pid, "STARTED").await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (addr, format!("/data/{pid}"), token)
+}
+
+/// Sends `GET path` with `token` over a new connection to `addr`, and
+/// returns the connection after the request was written.
+#[cfg(feature = "data-plane")]
+async fn get_over_tcp(
+    addr: std::net::SocketAddr,
+    path: &str,
+    token: &str,
+) -> tokio::net::TcpStream {
+    use tokio::io::AsyncWriteExt as _;
+    let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nhost: provider.example\r\nauthorization: Bearer {token}\r\nconnection: close\r\n\r\n"
+    );
+    socket.write_all(request.as_bytes()).await.unwrap();
+    socket
+}
+
+/// A pull read to its end writes one audit line: complete, with the
+/// bytes sent, the agreement and the consumer (ADR 0027, section 6).
+#[cfg(feature = "data-plane")]
+#[tokio::test]
+async fn a_finished_pull_writes_one_audit_line() {
+    use tokio::io::AsyncReadExt as _;
+    let (log, _guard) = Log::start();
+    let (addr, path, token) = served_transfer(&upstream().await).await;
+
+    let mut socket = get_over_tcp(addr, &path, &token).await;
+    let mut answer = String::new();
+    socket.read_to_string(&mut answer).await.unwrap();
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    assert!(answer.ends_with("hello"), "{answer}");
+
+    let line = log.audit_line(1).await;
+    let flow = path.strip_prefix("/data/").unwrap();
+    assert_eq!(line["flow"], flow);
+    assert_eq!(line["agreement"], "a1");
+    assert_eq!(line["counterParty"], CONSUMER);
+    assert_eq!(line["direction"], "sent");
+    assert_eq!(line["bytes"], 5);
+    assert_eq!(line["outcome"], "complete");
+    assert!(!line.to_string().contains(&token), "never the token");
+
+    // a refused request writes none
+    let mut socket = get_over_tcp(addr, &path, "wrong").await;
+    let mut answer = String::new();
+    socket.read_to_string(&mut answer).await.unwrap();
+    assert!(answer.starts_with("HTTP/1.1 401"), "{answer}");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(log.audit_lines().len(), 1);
+}
+
+/// The consumer closes the connection in the middle of the data: the
+/// audit line says `cut`, with the bytes sent until then.
+#[cfg(feature = "data-plane")]
+#[tokio::test]
+async fn a_pull_the_consumer_stops_is_cut() {
+    use tokio::io::AsyncReadExt as _;
+    let (log, _guard) = Log::start();
+    let (addr, path, token) = served_transfer(&endless_upstream().await).await;
+
+    let mut socket = get_over_tcp(addr, &path, &token).await;
+    let mut received = Vec::new();
+    let mut buffer = [0u8; 1024];
+    // the answer is chunked: wait for two chunks of data
+    while String::from_utf8_lossy(&received).matches("hello").count() < 2 {
+        let n = socket.read(&mut buffer).await.unwrap();
+        assert!(n > 0, "the answer ended early");
+        received.extend_from_slice(&buffer[..n]);
+    }
+    drop(socket);
+
+    let line = log.audit_line(1).await;
+    assert_eq!(line["outcome"], "cut", "{line}");
+    assert_eq!(line["agreement"], "a1");
+    let bytes = line["bytes"].as_u64().unwrap();
+    assert!(bytes >= 10, "{line}");
+    assert_eq!(bytes % 5, 0, "whole chunks: {line}");
+}
+
+/// The data source does not answer: no data, and the audit line says
+/// `failed`.
+#[cfg(feature = "data-plane")]
+#[tokio::test]
+async fn a_pull_whose_source_is_down_failed() {
+    use tokio::io::AsyncReadExt as _;
+    let (log, _guard) = Log::start();
+    // a free port that nothing listens on
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let down = format!("http://{}/file", listener.local_addr().unwrap());
+    drop(listener);
+    let (addr, path, token) = served_transfer(&down).await;
+
+    let mut socket = get_over_tcp(addr, &path, &token).await;
+    let mut answer = String::new();
+    socket.read_to_string(&mut answer).await.unwrap();
+    assert!(answer.starts_with("HTTP/1.1 502"), "{answer}");
+    let line = log.audit_line(1).await;
+    assert_eq!(line["outcome"], "failed");
+    assert_eq!(line["bytes"], 0);
 }

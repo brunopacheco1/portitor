@@ -28,6 +28,9 @@
 # Usage: scenarios/two-party/run-local.sh [portitor-connector [portitor-identity [portitor-issuer]]]
 #   Without paths it builds the debug binaries. The identity and issuer
 #   binaries default to the ones next to the connector.
+#   RUSTFS=<path of a rustfs 1.0.6 binary> also runs the object storage
+#   steps (push, and a source in the provider's bucket; ADR 0027), as
+#   run.sh does with S3=1. Without it they are left out.
 # Needs curl, jq, openssl and python3. Exits non-zero if a step fails, so
 # CI runs it.
 
@@ -55,6 +58,7 @@ CONSUMER=127.0.0.1:18090
 CONSUMER_MANAGEMENT=127.0.0.1:18091
 CONSUMER_IDENTITY=127.0.0.1:18092
 CONSUMER_IDENTITY_MANAGEMENT=127.0.0.1:18093
+OBJECT_STORAGE=127.0.0.1:18100   # RustFS, with RUSTFS set
 
 WORK=$(mktemp -d)
 PIDS=()
@@ -88,6 +92,29 @@ serve data "$DATA" examples/data
 jq --arg data "http://$DATA/" 'map(.["portitor:source"] |= sub("^http://data/"; $data))' \
   examples/healthdcat-datasets.json >"$WORK/datasets.json"
 
+# object storage (with RUSTFS): one store for both participants, keys for
+# this run only; the provider reads a source from it, the consumer
+# receives pushes into it
+S3_SETTINGS=()
+PROVIDER_S3=()
+if [[ -n ${RUSTFS:-} ]]; then
+  step "Start RustFS on $OBJECT_STORAGE"
+  S3_ACCESS_KEY=demo-$(openssl rand -hex 8)
+  S3_SECRET_KEY=$(openssl rand -hex 32)
+  mkdir -p "$WORK/rustfs"
+  env RUSTFS_ADDRESS="$OBJECT_STORAGE" RUSTFS_VOLUMES="$WORK/rustfs" \
+    RUSTFS_ACCESS_KEY="$S3_ACCESS_KEY" RUSTFS_SECRET_KEY="$S3_SECRET_KEY" \
+    "$RUSTFS" >"$WORK/rustfs.log" 2>&1 &
+  PIDS+=($!)
+  jq -f scenarios/two-party/s3-datasets.jq "$WORK/datasets.json" >"$WORK/datasets-s3.json"
+  mv "$WORK/datasets-s3.json" "$WORK/datasets.json"
+  PROVIDER_S3=(AWS_ENDPOINT_URL_S3="http://$OBJECT_STORAGE" AWS_ACCESS_KEY_ID="$S3_ACCESS_KEY"
+    AWS_SECRET_ACCESS_KEY="$S3_SECRET_KEY")
+  S3_SETTINGS=(S3_ENDPOINT="http://$OBJECT_STORAGE" S3_ACCESS_KEY="$S3_ACCESS_KEY"
+    CONSUMER_PUBLIC="http://$CONSUMER"
+    S3_SECRET_KEY="$S3_SECRET_KEY")
+fi
+
 # --- 2. the identity components ---------------------------------------------
 
 step "Start the identities: provider $PROVIDER_ID, consumer $CONSUMER_ID"
@@ -114,12 +141,14 @@ openssl rand -hex 32 >"$WORK/provider/management.key"
 # and fetch status lists on every check, so the revocation step is seen at once;
 # the provider follows the newest bundle the issuer serves (ADR 0005)
 start_connector provider "$PROVIDER_ID" "$PROVIDER" "$PROVIDER_IDENTITY" \
+  "${PROVIDER_S3[@]}" \
   PORTITOR_STATUS_LIST_CACHE_SECONDS=0 \
   PORTITOR_DATASETS_FILE="$WORK/datasets.json" PORTITOR_POLICY_CREDENTIALS=DataProcessorCredential \
   PORTITOR_BUNDLE_URL="http://$ISSUER_ADDRESS/bundles/" PORTITOR_BUNDLE_AUTHORITY="$AUTHORITY" \
   PORTITOR_MANAGEMENT_BIND="$PROVIDER_MANAGEMENT" \
   PORTITOR_MANAGEMENT_API_KEY_FILE="$WORK/provider/management.key"
 start_connector consumer "$CONSUMER_ID" "$CONSUMER" "$CONSUMER_IDENTITY" \
+  "${PROVIDER_S3[@]}" ${RUSTFS:+PORTITOR_PUSH_BUCKET=consumer-push} \
   PORTITOR_STATUS_LIST_CACHE_SECONDS=0 \
   PORTITOR_POLICY_CREDENTIALS=DataProcessorCredential \
   PORTITOR_MANAGEMENT_BIND="$CONSUMER_MANAGEMENT" \
@@ -128,10 +157,12 @@ wait_for "http://$DATA/hospital-admissions.csv"
 wait_for "http://$PROVIDER/health"
 wait_for "http://$CONSUMER/health"
 
-PROVIDER=http://$PROVIDER MANAGEMENT=http://$CONSUMER_MANAGEMENT \
+env "${S3_SETTINGS[@]}" \
+  PROVIDER=http://$PROVIDER MANAGEMENT=http://$CONSUMER_MANAGEMENT \
   PROVIDER_MANAGEMENT="http://$PROVIDER_MANAGEMENT" PROVIDER_KEY_FILE="$WORK/provider/management.key" \
   KEY_FILE="$WORK/consumer/management.key" \
   CONSUMER_ID="$CONSUMER_ID" PROVIDER_ID="$PROVIDER_ID" \
   ISSUER_MANAGEMENT="http://$ISSUER_MANAGEMENT" ISSUER_KEY_FILE="$WORK/issuer/management.key" \
+  PROVIDER_LOG="$WORK/provider-connector.log" \
   DATA=examples/data TMPDIR="$WORK" scenarios/two-party/steps.sh ||
   fail "the demo steps"

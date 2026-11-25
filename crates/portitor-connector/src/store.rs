@@ -21,6 +21,7 @@ use rusqlite::{Connection, Row, params};
 mod consumer_transfers;
 mod data_flows;
 mod harvest;
+mod push_receipts;
 mod transfers;
 use serde::{Deserialize, Serialize};
 pub use transfers::finalized_agreement;
@@ -164,6 +165,29 @@ const MIGRATIONS: &[&str] = &[
     // transfer under an agreement it holds (`store/consumer_transfers.rs`)
     "CREATE INDEX consumer_negotiation_agreement
         ON consumer_negotiation (json_extract(agreement, '$.\"@id\"'))",
+    // 1.1: the consumer's memberships, kept with each data flow, so the
+    // data plane can check them again on every request (ADR 0027, section
+    // 7.2; `store/data_flows.rs`). `memberships` is their JSON list. Every
+    // flow of 1.0 gets a row with NULL: it started before memberships
+    // were kept, and is served until its token expires.
+    "CREATE TABLE flow_membership (
+        flow_id     TEXT PRIMARY KEY,
+        memberships TEXT
+    );
+    INSERT INTO flow_membership (flow_id, memberships) SELECT id, NULL FROM data_flow",
+    // 1.1: push transfers (ADR 0027). As provider, the consumer's data
+    // address with its token, kept with the transfer and with its data
+    // flow until they end (the columns are emptied then). As consumer, the
+    // hash of the token our receiving route takes, and the key of the
+    // object the data went into once it arrived
+    "ALTER TABLE transfer ADD COLUMN data_address TEXT;
+     ALTER TABLE data_flow ADD COLUMN push_address TEXT;
+     CREATE TABLE push_receipt (
+        consumer_pid TEXT PRIMARY KEY,
+        token_hash   TEXT NOT NULL,
+        expires_at   INTEGER NOT NULL,
+        object_key   TEXT
+     )",
 ];
 
 /// Adapter: negotiations in a `SQLite` file.
@@ -976,6 +1000,33 @@ mod tests {
         let mut third = found.clone();
         third.provider_pid = "urn:uuid:third".to_owned();
         assert!(!TransferStore::insert(&store, &third).unwrap());
+    }
+
+    /// A file written by 1.0 (11 migrations) with a data flow: 1.1 marks
+    /// the flow as started before memberships were kept (migration 12),
+    /// and a new flow has nothing kept until the transfer keeps it.
+    #[test]
+    fn a_flow_from_1_0_is_marked_as_started_before_1_1() {
+        use crate::data_plane::FlowStore;
+        use crate::flow_membership::StoredMembership;
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..11]).unwrap();
+        conn.execute(
+            "INSERT INTO data_flow (id, state, dataset_id, token_hash, expires_at) \
+             VALUES ('urn:uuid:old', 'STARTED', 'd', 'ab', 1900000000)",
+            [],
+        )
+        .unwrap();
+        let store = setup(conn).unwrap();
+        assert_eq!(
+            store.memberships("urn:uuid:old").unwrap(),
+            StoredMembership::StartedBefore1_1
+        );
+        assert_eq!(
+            store.memberships("urn:uuid:new").unwrap(),
+            StoredMembership::Missing
+        );
     }
 }
 

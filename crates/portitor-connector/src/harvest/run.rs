@@ -308,7 +308,9 @@ fn is_same(old: &StoredDataset, fresh: &StoredDataset) -> bool {
 }
 
 /// Takes `portitor:source` out of the entry. It must be an `http://` or
-/// `https://` URL (set by the operator, so plain HTTP is allowed).
+/// `https://` URL (set by the operator, so plain HTTP is allowed), or an
+/// object in the connector's object storage, `s3://{bucket}/{key}`
+/// (ADR 0027, section 3).
 fn take_upstream(
     entry: &mut serde_json::Value,
     id: Option<&str>,
@@ -324,10 +326,11 @@ fn take_upstream(
         Some(url) if url.starts_with("https://") || url.starts_with("http://") => {
             Ok(Some(url.to_owned()))
         }
+        Some(uri) if crate::object_storage::parse_s3_uri(uri).is_some() => Ok(Some(uri.to_owned())),
         _ => Err(EntryFailure::new(
             CheckKind::Dsp,
             format!(
-                "dataset {:?} has {SOURCE_KEY} {source}; it must be an http:// or https:// URL",
+                "dataset {:?} has {SOURCE_KEY} {source}; it must be an http:// or https:// URL, or s3://{{bucket}}/{{key}}",
                 id.unwrap_or_default()
             ),
         )),

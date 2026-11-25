@@ -2,7 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! Portitor binary.
+//! The `portitor-connector` binary: reads the settings, puts the adapters
+//! together ([`portitor_connector::build`]), sends again the messages left
+//! from the last run, and serves the public port and the management port.
+//! `portitor-connector health` asks a running connector's readiness check
+//! instead.
 
 use std::ffi::OsString;
 use std::process::ExitCode;
@@ -61,8 +65,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     #[cfg(feature = "tck")]
     let sender = portitor_connector::tck::LateStart(sender);
-    let mut ports = portitor_connector::Ports::new(Arc::new(sender));
-    ports.use_sqlite(&store);
+    let mut ports = portitor_connector::Ports::new(Arc::new(sender), &store);
+    ports.object_storage = object_storage()?;
     let settings = AuthSettings::from_env(&config.participant_id, config.allow_http)?;
     if let Some(settings) = &settings
         && let Some(warning) = settings.policy_types_warning(&config.credential_types)
@@ -141,8 +145,29 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // the time limit, so a slow body counts against the time too
     let app = limits.on_public_port(app);
     let app = with_limits(app, REQUEST_TIMEOUT, MAX_CONCURRENT_REQUESTS);
+    // push transfers received (ADR 0027): outside both limits, as a
+    // dataset may be large and slow; the token is checked first, and the
+    // route has limits of its own (`receiving.rs`)
+    let app = app.merge(negotiator.receiving_routes());
     serve((listener, app), Some((management_listener, management_app))).await?;
     Ok(())
+}
+
+/// The object storage of the `AWS_*` settings and `PORTITOR_PUSH_BUCKET`
+/// (ADR 0027), if they are set. The log names the endpoint and the
+/// bucket, never the keys.
+fn object_storage() -> Result<Option<Arc<portitor_connector::object_storage::ObjectStorage>>, String>
+{
+    use portitor_connector::object_storage::{ObjectStorage, Settings};
+    let Some(settings) = Settings::from_env()? else {
+        return Ok(None);
+    };
+    tracing::info!(
+        endpoint = %settings.endpoint,
+        push_bucket = settings.push_bucket.as_deref().unwrap_or("none"),
+        "object storage"
+    );
+    Ok(Some(Arc::new(ObjectStorage::new(settings)?)))
 }
 
 /// Takes the authority's signed bundle (ADR 0005), and applies its rules

@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// A minimal EDC data plane for HTTP pull transfers, built with the Data
-// Plane Signaling SDK, as EDC's own tests (system-tests/e2e-transfer-test/
-// signaling-data-plane) and the Minimum Viable Dataspace do: EDC 1.0 has
-// no data plane of its own.
+// A minimal EDC data plane for HTTP pull transfers, and for receiving HTTP
+// push transfers as consumer, built with the Data Plane Signaling SDK, as
+// EDC's own tests (system-tests/e2e-transfer-test/signaling-data-plane)
+// and the Minimum Viable Dataspace do: EDC 1.0 has no data plane of its
+// own.
 
 val edcVersion: String by project
 val dataplaneSdkVersion: String by project

@@ -10,15 +10,24 @@
 //!   which puts the HTTP routes together.
 //! - [`ports`]: which adapter sits behind each port, chosen at start.
 //! - [`negotiation`], [`consumer`]: contract negotiation as provider and
-//!   as consumer (HTTP handlers and in-memory stores).
+//!   as consumer (HTTP handlers and the sending of their messages).
 //! - [`transfer`], [`consumer_transfer`]: the transfer process, the same
 //!   way.
 //! - `outbox`: sending saved DSP messages, retries and proof of delivery
 //!   (ADR 0007).
 //! - [`catalog_reader`]: reading a provider's catalog as consumer, for
 //!   the management API.
-//! - [`data_plane`], [`data_flows`]: the built-in HTTP pull data plane and
-//!   the Data Plane Signaling link to it (ADR 0013).
+//! - [`data_plane`], [`data_flows`]: the built-in HTTP data plane (pull,
+//!   and the consumer's address for push) and the Data Plane Signaling
+//!   link to it (ADR 0013).
+//! - [`push`], [`receiving`], [`object_storage`]: push transfers (ADR
+//!   0027): the provider's sender, the consumer's receiving route, and
+//!   the S3 client both use.
+//! - [`audit`]: the audit line of each data transfer (`data transfer
+//!   done`, ADR 0027).
+//! - [`running_flows`], [`flow_membership`]: what stops a running
+//!   download, and the consumer's membership checked again on every use
+//!   of a data flow (ADR 0027, sections 5 and 7).
 //! - [`harvest`]: datasets come from a source (the datasets file) into a
 //!   read copy, checked entry by entry; every run is a stored job
 //!   (ADR 0020).
@@ -57,20 +66,26 @@ use portitor_runtime::request_size::small_message;
 use portitor_runtime::settings::{self, RemovedSetting};
 use serde::Serialize;
 
+pub mod audit;
 pub mod auth;
 pub mod catalog_reader;
 pub mod consumer;
 pub mod consumer_transfer;
 pub mod data_flows;
 pub mod data_plane;
+pub mod flow_membership;
 pub mod harvest;
 pub mod health;
 pub mod http_client;
 mod inbound;
 pub mod management;
 pub mod negotiation;
+pub mod object_storage;
 mod outbox;
 pub mod ports;
+pub mod push;
+pub mod receiving;
+pub mod running_flows;
 // the signed schema and vocabulary bundle (ADR 0005): where it comes
 // from and its read copy are in `portitor-bundle` (its settings are read
 // by `portitor_bundle::source::BundleConfig`, not by `Config`); here, the
@@ -83,6 +98,8 @@ pub mod store;
 pub mod system;
 #[cfg(feature = "tck")]
 pub mod tck;
+#[cfg(test)]
+mod test_stores;
 pub mod transfer;
 
 pub use http_client::HttpSender;
@@ -344,6 +361,7 @@ pub struct Negotiator {
     transfer_consumer: Arc<consumer_transfer::TransferConsumer>,
     harvester: Arc<harvest::DatasetHarvester>,
     catalog_reader: Arc<catalog_reader::CatalogReader>,
+    receiving: Router,
 }
 
 impl std::fmt::Debug for Negotiator {
@@ -415,6 +433,22 @@ impl Negotiator {
         self.transfer_consumer.request(agreement_id, format)
     }
 
+    /// The routes that receive push transfers (`/push/{consumerPid}`,
+    /// ADR 0027), when the connector has object storage and a push
+    /// bucket. They are not in [`build`]'s router: the binary serves them
+    /// outside the public port's body size and time limits. [`router`]
+    /// has them.
+    pub fn receiving_routes(&self) -> Router {
+        self.receiving.clone()
+    }
+
+    /// The object the data of push transfer `consumer_pid` went into, once
+    /// some arrived (ADR 0027).
+    #[must_use]
+    pub fn object_key(&self, consumer_pid: &str) -> Option<String> {
+        self.transfer_consumer.object_key(consumer_pid)
+    }
+
     /// The transfer, as consumer, with this consumer pid.
     ///
     /// # Errors
@@ -451,6 +485,48 @@ impl Negotiator {
         decision: ConsumerTransferDecision,
     ) -> Result<ConsumerTransfer, Box<TransferFailure>> {
         self.transfer_consumer.act(consumer_pid, decision)
+    }
+
+    /// The transfer `provider_pid` that this connector runs as provider
+    /// (ADR 0027, section 7.1).
+    ///
+    /// # Errors
+    ///
+    /// Unknown transfer, or the store failed.
+    pub fn provided_transfer(
+        &self,
+        provider_pid: &str,
+    ) -> Result<portitor_dsp::transfer::provider::Transfer, Box<TransferFailure>> {
+        self.transfers.transfer(provider_pid)
+    }
+
+    /// Up to `limit` transfers this connector runs as provider, after
+    /// `after`, in provider pid order.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn provided_transfers(
+        &self,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<portitor_dsp::transfer::provider::Transfer>, Box<TransferFailure>> {
+        self.transfers.list(after, limit)
+    }
+
+    /// Ends transfer `provider_pid` as provider: its data flow is
+    /// terminated at once, which cuts the downloads that run, and the DSP
+    /// termination is sent in the background (ADR 0027, section 7.1).
+    ///
+    /// # Errors
+    ///
+    /// Unknown or ended transfer, data plane or store failure.
+    pub fn terminate_provided_transfer(
+        &self,
+        provider_pid: &str,
+    ) -> Result<portitor_dsp::transfer::provider::Transfer, Box<TransferFailure>> {
+        self.transfers
+            .terminate_own(provider_pid, "terminated by the provider")
     }
 
     /// Runs a dataset harvest every `every`, in the background, the first
@@ -579,7 +655,30 @@ impl Negotiator {
 ///
 /// The stored datasets cannot be read (see [`build`]).
 pub fn router(config: &Config, ports: Ports) -> Result<Router, StartError> {
-    build(config, ports).map(|(router, _)| router)
+    build(config, ports).map(|(router, negotiator)| router.merge(negotiator.receiving_routes()))
+}
+
+/// What `/.well-known/dspace-version` answers: the one DSP version, at
+/// `service_id`.
+fn versions(service_id: String) -> VersionResponse {
+    VersionResponse {
+        protocol_versions: vec![ProtocolVersion {
+            version: VERSION.to_owned(),
+            path: DSP_PATH.to_owned(),
+            binding: Binding::Https,
+            service_id: Some(service_id),
+            identifier_type: Some("did:web".to_owned()),
+            // every DSP endpoint needs a DCP token (ADR 0016)
+            auth: Some(portitor_dsp::Auth {
+                protocol: "DCP".to_owned(),
+                version: "1.0".to_owned(),
+                profile: vec![
+                    portitor_dcp::credential::Profile::Vc11.alias().to_owned(),
+                    portitor_dcp::credential::Profile::Vc20.alias().to_owned(),
+                ],
+            }),
+        }],
+    }
 }
 
 /// Like [`router`], and also returns the handle that starts negotiations
@@ -609,11 +708,8 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         config.participant_id.clone(),
         config.allow_http,
     ));
-    let transfer_consumer = Arc::new(consumer_transfer::TransferConsumer::new(
-        &ports,
-        callback_address,
-        config.allow_http,
-    ));
+    let (transfer_consumer, receiving) =
+        receiving::consumer_transfers(config, &ports, callback_address);
     #[cfg(feature = "tck")]
     {
         // the adapter itself (`.0`), not the `Shared` around it: see
@@ -626,12 +722,22 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         &ports,
         config.allow_http,
     ));
-    let data_plane = start_data_plane(config, &mut ports, &datasets);
-    let transfers = Arc::new(transfer::TransferProvider::new(
+    let (data_plane, gate) = match data_plane::setup::start(config, &mut ports, &datasets) {
+        Some((plane, gate)) => (Some(plane), Some(gate)),
+        None => (None, None),
+    };
+    let transfers = transfer::TransferProvider::new_shared(
         &ports,
         datasets.clone(),
         config.allow_http,
-    ));
+        data_plane.clone(),
+    );
+    if let Some(gate) = gate {
+        // the data plane ends a transfer whose consumer is no longer a
+        // member as the provider's own termination (ADR 0027)
+        let ender = transfer::EndsThroughProvider(Arc::downgrade(&transfers));
+        gate.ends_transfers_with(Arc::new(ender));
+    }
     let provider = Arc::new(negotiation::Provider::new(
         ports,
         datasets.clone(),
@@ -645,24 +751,7 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         service_id.clone(),
         endpoint_url,
     );
-    let versions = VersionResponse {
-        protocol_versions: vec![ProtocolVersion {
-            version: VERSION.to_owned(),
-            path: DSP_PATH.to_owned(),
-            binding: Binding::Https,
-            service_id: Some(service_id),
-            identifier_type: Some("did:web".to_owned()),
-            // every DSP endpoint needs a DCP token (ADR 0016)
-            auth: Some(portitor_dsp::Auth {
-                protocol: "DCP".to_owned(),
-                version: "1.0".to_owned(),
-                profile: vec![
-                    portitor_dcp::credential::Profile::Vc11.alias().to_owned(),
-                    portitor_dcp::credential::Profile::Vc20.alias().to_owned(),
-                ],
-            }),
-        }],
-    };
+    let versions = versions(service_id);
     let negotiator = Negotiator {
         consumer: Arc::clone(&consumer),
         provider: Arc::clone(&provider),
@@ -670,6 +759,7 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         transfer_consumer: Arc::clone(&transfer_consumer),
         harvester,
         catalog_reader,
+        receiving,
     };
     let state = Arc::new(AppState { catalog, versions });
     // open: discovery (DSP 2025-1), health, and the data plane, which
@@ -678,7 +768,7 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         .route("/.well-known/dspace-version", get(version))
         .route("/health", get(|| async { "ok" }))
         .with_state(Arc::clone(&state))
-        .merge(data_routes(data_plane));
+        .merge(data_plane::setup::routes(data_plane));
     // every DSP endpoint: the caller must be authenticated (ADR 0016).
     // The routes of messages that are small by specification (catalog
     // request, negotiation event, verification and termination, transfer
@@ -817,53 +907,6 @@ fn start_harvest(
     let harvester = harvest::DatasetHarvester::new(source, check, Arc::clone(&ports.store.0));
     harvester.start().map_err(|e| StartError(e.0))?;
     Ok(harvester)
-}
-
-/// Builds the built-in HTTP pull data plane, if the `data-plane` feature
-/// is on and `ports` has a flow store, and makes transfers use it. It
-/// reads each dataset's upstream URL from the read copy `datasets`.
-fn start_data_plane(
-    config: &Config,
-    ports: &mut Ports,
-    datasets: &harvest::DatasetCopy,
-) -> Option<Arc<data_plane::HttpDataPlane>> {
-    if !cfg!(feature = "data-plane") {
-        return None;
-    }
-    let store = ports.flow_store.clone()?;
-    let sources: Arc<dyn data_plane::UpstreamSources> = Arc::new(datasets.clone());
-    let plane = match data_plane::HttpDataPlane::new(
-        store,
-        Arc::clone(&sources),
-        &config.public_url,
-        config.data_token_seconds,
-    ) {
-        Ok(plane) => plane,
-        Err(e) => {
-            tracing::error!(error = %e, "no data plane: transfers will be refused");
-            return None;
-        }
-    };
-    let flows = data_flows::SignalingDataFlows::new(
-        plane.clone(),
-        &config.participant_id,
-        "default",
-        sources,
-    );
-    ports.transfers.flows = ports::Shared(Arc::new(flows));
-    Some(Arc::new(plane))
-}
-
-fn data_routes(plane: Option<Arc<data_plane::HttpDataPlane>>) -> Router {
-    let Some(plane) = plane else {
-        return Router::new();
-    };
-    Router::new()
-        .route(
-            &format!("{}/{{id}}", data_plane::DATA_PATH),
-            get(data_plane::serve),
-        )
-        .with_state(plane)
 }
 
 fn transfer_routes(provider: Arc<transfer::TransferProvider>) -> Router {

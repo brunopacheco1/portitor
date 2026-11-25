@@ -3,20 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Adapters for the provider side of contract negotiation: the HTTPS
-//! binding (DSP 2025-1, "Contract Negotiation HTTPS Binding") and an
-//! in-memory negotiation store.
+//! binding (DSP 2025-1, "Contract Negotiation HTTPS Binding").
 
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use portitor_dsp::Offer;
-use portitor_dsp::negotiation::provider::{
-    Failure, Negotiation, NegotiationStore, Outgoing, ProviderService, StoreError,
-};
+use portitor_dsp::negotiation::provider::{Failure, Outgoing, ProviderService};
 use portitor_dsp::negotiation::{
     ContractAgreementVerificationMessage, ContractNegotiation, ContractNegotiationError,
     ContractNegotiationEventMessage, ContractNegotiationTerminationMessage, ContractRequestMessage,
@@ -34,54 +30,6 @@ use crate::inbound::read_message;
 use crate::outbox::{self, Link, Message, Outbox};
 use crate::ports::{AnyDecider, AnyStore, Ports};
 use crate::system::SystemEnvironment;
-
-/// Adapter: negotiations kept in memory (lost on restart). The `SQLite`
-/// adapter replaces it for real use.
-#[derive(Debug, Clone, Default)]
-pub struct InMemoryNegotiations(Arc<Mutex<BTreeMap<String, Negotiation>>>);
-
-impl InMemoryNegotiations {
-    pub(crate) fn map(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Negotiation>> {
-        // a panic while holding the lock cannot leave a half-written entry:
-        // every write is a single insert
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
-impl NegotiationStore for InMemoryNegotiations {
-    fn get(&self, provider_pid: &str) -> Result<Option<Negotiation>, StoreError> {
-        Ok(self.map().get(provider_pid).cloned())
-    }
-
-    fn insert(&self, negotiation: &Negotiation) -> Result<(), StoreError> {
-        let mut map = self.map();
-        if map.contains_key(&negotiation.provider_pid) {
-            return Err(StoreError(format!("{} exists", negotiation.provider_pid)));
-        }
-        map.insert(negotiation.provider_pid.clone(), negotiation.clone());
-        Ok(())
-    }
-
-    fn replace_if(&self, negotiation: &Negotiation, expected: u64) -> Result<bool, StoreError> {
-        let mut map = self.map();
-        match map.get(&negotiation.provider_pid) {
-            Some(old) if old.version == expected => {
-                map.insert(negotiation.provider_pid.clone(), negotiation.clone());
-                Ok(true)
-            }
-            _ => Ok(false),
-        }
-    }
-
-    fn pending(&self) -> Result<Vec<Negotiation>, StoreError> {
-        Ok(self
-            .map()
-            .values()
-            .filter(|negotiation| negotiation.pending.is_some())
-            .cloned()
-            .collect())
-    }
-}
 
 type Service = ProviderService<AnyStore, AnyDecider, DatasetCopy, SystemEnvironment>;
 
@@ -384,6 +332,8 @@ mod tests {
     use crate::http_client::{HttpSender, Sender};
     use crate::outbox::Link;
     use crate::ports::Shared;
+    use crate::test_stores::InMemoryNegotiations;
+    use portitor_dsp::negotiation::provider::{Negotiation, NegotiationStore, StoreError};
     use portitor_runtime::BoxFuture;
 
     fn negotiation(state: NegotiationState) -> Negotiation {
@@ -420,7 +370,7 @@ mod tests {
     /// The provider as the connector builds it, on the negotiation store
     /// `store`. It never sends in these tests.
     fn provider_on(store: AnyStore) -> Provider {
-        let mut ports = Ports::new(Arc::new(PostOnly));
+        let mut ports = Ports::in_memory(Arc::new(PostOnly));
         ports.store = store;
         let participant_id = "did:web:p.example".to_owned();
         Provider::new(ports, DatasetCopy::default(), participant_id, false)
@@ -497,43 +447,8 @@ mod tests {
     }
 
     #[test]
-    fn in_memory_store_compares_before_replacing() {
-        let store: AnyStore = Shared(Arc::new(InMemoryNegotiations::default()));
-        let n = negotiation(NegotiationState::Requested);
-        assert!(store.get("p").unwrap().is_none());
-        store.insert(&n).unwrap();
-        assert!(store.insert(&n).is_err());
-        let mut offered = negotiation(NegotiationState::Offered);
-        offered.version = 1;
-        assert!(!store.replace_if(&offered, 1).unwrap());
-        assert!(store.replace_if(&offered, 0).unwrap());
-        assert_eq!(
-            store.get("p").unwrap().unwrap().state,
-            NegotiationState::Offered
-        );
-        // a second write from the same read loses
-        assert!(!store.replace_if(&offered, 0).unwrap());
-        let mut other = offered.clone();
-        other.provider_pid = "q".into();
-        assert!(!store.replace_if(&other, 0).unwrap());
-        assert!(store.pending().unwrap().is_empty());
-        offered.version = 2;
-        offered.pending = Some(Outgoing {
-            provider_pid: "p".into(),
-            url: "https://c.example/negotiations/c/agreement".into(),
-            body: serde_json::json!({}),
-            transition: Transition::Agree,
-            to: NegotiationState::Agreed,
-            status_url: "https://c.example/negotiations/c".into(),
-            counter_party: "did:web:c.example".into(),
-        });
-        assert!(store.replace_if(&offered, 1).unwrap());
-        assert_eq!(store.pending().unwrap(), vec![offered]);
-    }
-
-    #[test]
     fn debug_hides_internals() {
-        let ports = Ports::new(Arc::new(HttpSender::new(true).unwrap()));
+        let ports = Ports::in_memory(Arc::new(HttpSender::new(true).unwrap()));
         let shown = format!("{ports:?} {:?} {:?}", ports.store, ports.decider);
         assert!(shown.contains("Ports") && shown.contains("Shared"));
         assert!(format!("{:?}", HttpSender::new(true).unwrap()).contains("allow_http: true"));
@@ -569,7 +484,7 @@ mod tests {
         url: &str,
         to: NegotiationState,
     ) -> bool {
-        let mut ports = Ports::new(sender);
+        let mut ports = Ports::in_memory(sender);
         ports.prover = prover;
         let reached = |state: Value| {
             serde_json::from_value::<ContractNegotiation>(state).is_ok_and(|n| n.state == to)

@@ -206,6 +206,27 @@ fn a_bad_upstream_or_a_non_object_rejects_only_that_entry() {
     assert_eq!(errors[2].position, Some(3));
 }
 
+/// A source in the connector's object storage is taken as it is (ADR
+/// 0027, section 3); an `s3:` URI without a key is refused.
+#[test]
+fn an_object_storage_source_is_accepted() {
+    use crate::data_plane::UpstreamSources as _;
+    let store = memory();
+    let mut in_storage = entry("a");
+    in_storage["portitor:source"] = json!("s3://provider-data/health/a.csv");
+    let mut no_key = entry("b");
+    no_key["portitor:source"] = json!("s3://provider-data");
+    let source = Source::with(vec![in_storage, no_key]);
+    let harvester = started(&source, &store, dsp());
+    assert_eq!(ids(&harvester.copy()), ["a"]);
+    assert_eq!(
+        harvester.copy().upstream_of("a").as_deref(),
+        Some("s3://provider-data/health/a.csv")
+    );
+    let (_, errors) = last_job(&store);
+    assert!(errors[0].message.contains("s3://"), "{errors:?}");
+}
+
 #[test]
 fn a_dataset_missing_from_the_snapshot_is_withdrawn() {
     let store = memory();

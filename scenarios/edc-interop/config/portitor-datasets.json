@@ -78,6 +78,17 @@
         "dcat:accessURL": {
           "@id": "https://portitor.example/datasets/portitor-interop"
         }
+      },
+      {
+        "@id": "https://portitor.example/datasets/portitor-interop/push",
+        "@type": "Distribution",
+        "format": "HttpData-PUSH",
+        "http://data.europa.eu/r5r/applicableLegislation": {
+          "@id": "http://data.europa.eu/eli/reg/2025/327/oj"
+        },
+        "dcat:accessURL": {
+          "@id": "https://portitor.example/datasets/portitor-interop"
+        }
       }
     ]
   },

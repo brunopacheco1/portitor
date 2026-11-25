@@ -116,6 +116,17 @@
         "dcat:accessURL": {
           "@id": "https://biobank.health-lu.example/datasets/genotypes"
         }
+      },
+      {
+        "@id": "https://biobank.health-lu.example/datasets/genotypes/distribution/push",
+        "@type": "Distribution",
+        "format": "HttpData-PUSH",
+        "http://data.europa.eu/r5r/applicableLegislation": {
+          "@id": "http://data.europa.eu/eli/reg/2025/327/oj"
+        },
+        "dcat:accessURL": {
+          "@id": "https://biobank.health-lu.example/datasets/genotypes"
+        }
       }
     ],
     "http://healthdataportal.eu/ns/health#hasVariables": {
