@@ -1007,7 +1007,7 @@ mod tests {
     /// and a new flow has nothing kept until the transfer keeps it.
     #[test]
     fn a_flow_from_1_0_is_marked_as_started_before_1_1() {
-        use crate::data_plane::FlowStore;
+        use crate::flow_membership::MembershipStore as _;
         use crate::flow_membership::StoredMembership;
 
         let mut conn = Connection::open_in_memory().unwrap();

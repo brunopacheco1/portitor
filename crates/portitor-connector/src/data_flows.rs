@@ -20,8 +20,9 @@ use portitor_dps::state::DataFlowState;
 use portitor_dsp::transfer::DataAddress;
 use portitor_dsp::transfer::provider::{DataFlows, Transfer};
 
-use crate::data_plane::UpstreamSources;
+use crate::flow_membership::{MembershipStore, StoredMembership};
 use crate::system::new_uuid;
+use portitor_dataplane::UpstreamSources;
 
 /// The DSP formats the built-in data plane serves, with the Data Plane
 /// Signaling profile of each: pull since 0.4, push since 1.1 (ADR 0027).
@@ -50,9 +51,9 @@ pub trait NewAddress {
     fn new_address(&self, id: &str) -> Result<DataAddress, SignalError>;
 }
 
-impl NewAddress for crate::data_plane::HttpDataPlane {
+impl NewAddress for portitor_dataplane::HttpDataPlane {
     fn new_address(&self, id: &str) -> Result<DataAddress, SignalError> {
-        crate::data_plane::HttpDataPlane::new_address(self, id)
+        portitor_dataplane::HttpDataPlane::new_address(self, id)
     }
 }
 
@@ -65,6 +66,9 @@ pub struct SignalingDataFlows<P> {
     /// Where the data plane fetches each dataset's data: the datasets with
     /// an upstream URL are the ones it can serve.
     sources: Arc<dyn UpstreamSources>,
+    /// What the control plane kept of each flow's consumer: a flow of 1.0
+    /// is not started again (ADR 0027, section 7). `None` in unit tests.
+    memberships: Option<Arc<dyn MembershipStore + Send + Sync>>,
 }
 
 impl<P> std::fmt::Debug for SignalingDataFlows<P> {
@@ -91,7 +95,36 @@ impl<P: DataPlane> SignalingDataFlows<P> {
             participant_id: participant_id.to_owned(),
             dataspace_context: dataspace_context.to_owned(),
             sources,
+            memberships: None,
         }
+    }
+
+    /// The same adapter, refusing to start again a flow that started before
+    /// 1.1, by what `memberships` kept of it.
+    #[must_use]
+    pub fn with_memberships(mut self, memberships: Arc<dyn MembershipStore + Send + Sync>) -> Self {
+        self.memberships = Some(memberships);
+        self
+    }
+
+    /// A flow of 1.0 is served without a membership check only until its
+    /// token expires (ADR 0027, section 7): it gets no new token, which
+    /// would keep it unchecked for good. The consumer asks for a new
+    /// transfer instead.
+    fn refuse_flow_of_1_0(&self, pid: &str) -> Result<(), String> {
+        let Some(memberships) = &self.memberships else {
+            return Ok(());
+        };
+        let kept = memberships
+            .memberships(pid)
+            .map_err(|e| format!("data plane failed: flow store: {}", e.0))?;
+        if kept == StoredMembership::StartedBefore1_1 {
+            return Err(format!(
+                "invalid signal: data flow {pid} started before 1.1 and has no membership to check; \
+                 it is not started again: ask for a new transfer"
+            ));
+        }
+        Ok(())
     }
 
     /// A reason message with a fresh id.
@@ -182,6 +215,7 @@ impl<P: DataPlane + NewAddress> DataFlows for SignalingDataFlows<P> {
             self.resume(pid, None)?;
             return Ok(None);
         }
+        self.refuse_flow_of_1_0(pid)?;
         // the new token first, so the old one never works again
         let address = self.plane.new_address(pid).map_err(|e| e.to_string())?;
         self.resume(pid, None)?;
@@ -423,5 +457,21 @@ mod tests {
                 .unwrap_err()
                 .contains("Starting")
         );
+    }
+
+    /// A flow of 1.0 is served without a membership check only until its
+    /// token expires (ADR 0027, section 7): it gets no new token, which
+    /// would keep it unchecked for good.
+    #[test]
+    fn a_flow_from_before_1_1_gets_no_new_token() {
+        let plane = Plane::default();
+        let memberships = crate::test_stores::InMemoryFlows::default();
+        let flows = flows_over(&plane).with_memberships(Arc::new(memberships.clone()));
+        let pull = transfer("HttpData-PULL");
+        flows.start(&pull).unwrap();
+        memberships.started_before_1_1("p");
+        flows.suspend("p").unwrap();
+        let refused = flows.restart(&pull).unwrap_err();
+        assert!(refused.contains("before 1.1"), "{refused}");
     }
 }

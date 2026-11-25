@@ -31,12 +31,12 @@ use portitor_dsp::transfer::provider::{
 use portitor_dsp::transfer::{DataAddress, TransferState};
 
 use crate::auth::{CallerVerifier, Membership, NoTokens, Prover, RefuseAll};
-use crate::data_plane::{Flow, FlowStore, FlowStoreError};
-use crate::flow_membership::StoredMembership;
+use crate::flow_membership::{MembershipStore, StoredMembership};
 use crate::http_client::Sender;
 use crate::state_events::{self, Role};
 use crate::store::SqliteNegotiations;
 use crate::transfer::NoDataFlows;
+use portitor_dataplane::{Flow, FlowStore, FlowStoreError};
 
 /// How often and how fast to retry a message the consumer did not take.
 #[derive(Debug, Clone, Copy)]
@@ -97,8 +97,8 @@ pub struct Ports {
     /// The connector's S3-compatible object storage (ADR 0027): the
     /// provider's `s3://` sources, and where a consumer's pushed data
     /// lands. [`Ports::new`] starts without; the binary sets it from the
-    /// `AWS_*` settings ([`crate::object_storage::Settings`]).
-    pub object_storage: Option<Arc<crate::object_storage::ObjectStorage>>,
+    /// `AWS_*` settings ([`portitor_dataplane::object_storage::Settings`]).
+    pub object_storage: Option<Arc<portitor_dataplane::object_storage::ObjectStorage>>,
     /// The credential types that policies may use (ADR 0019): which scopes
     /// to ask for, and grant, for an offer's credential constraints.
     /// [`crate::build`] sets it from [`crate::Config::credential_types`].
@@ -588,8 +588,24 @@ impl HeldAgreements for AnyHeldAgreements {
     }
 }
 
+/// What the connector needs of a flow store: the data plane's flows, and
+/// the consumer's memberships the control plane keeps with each flow. The
+/// `SQLite` file has both; any type with both is one (the empty `impl`
+/// below gives it the name).
+pub trait ProviderFlowStore: FlowStore + MembershipStore {}
+
+impl<T: FlowStore + MembershipStore> ProviderFlowStore for T {}
+
 /// The flow store chosen at start.
-pub type AnyFlowStore = Shared<dyn FlowStore + Send + Sync>;
+pub type AnyFlowStore = Shared<dyn ProviderFlowStore + Send + Sync>;
+
+impl AnyFlowStore {
+    /// The same store, as the data plane sees it: its flows only.
+    #[must_use]
+    pub fn flows_only(&self) -> Arc<dyn FlowStore + Send + Sync> {
+        Arc::clone(&self.0) as Arc<dyn FlowStore + Send + Sync>
+    }
+}
 
 impl FlowStore for AnyFlowStore {
     fn get(&self, id: &str) -> Result<Option<Flow>, FlowStoreError> {
@@ -626,6 +642,9 @@ impl FlowStore for AnyFlowStore {
     fn started_pushes(&self) -> Result<Vec<String>, FlowStoreError> {
         self.0.started_pushes()
     }
+}
+
+impl MembershipStore for AnyFlowStore {
     fn memberships(&self, id: &str) -> Result<StoredMembership, FlowStoreError> {
         self.0.memberships(id)
     }

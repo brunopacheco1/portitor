@@ -35,9 +35,8 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::auth::{AnyVerifier, Caller, credentials_for};
-use crate::data_plane::FlowStore as _;
-use crate::data_plane::{HttpDataPlane, PushJob};
 use crate::flow_membership::EndsTransfers;
+use crate::flow_membership::MembershipStore as _;
 use crate::harvest::DatasetCopy;
 use crate::http_client::outbound_url_allowed;
 use crate::outbox::{self, Link, Message, Outbox};
@@ -45,6 +44,7 @@ use crate::ports::{
     AnyAgreements, AnyDataFlows, AnyFlowStore, AnyTransferDecider, AnyTransferStore,
 };
 use crate::system::SystemEnvironment;
+use portitor_dataplane::{HttpDataPlane, PushJob};
 
 /// The data plane until one is configured (0.4 PR 4): it supports no
 /// format, so every transfer request is refused with a clear reason.
@@ -518,11 +518,11 @@ async fn until_consumer_started(link: &Link, status_url: &str, audience: &str) {
 /// Sends `job` (a push of `provider`'s), writes the audit line, then
 /// completes or terminates the transfer. A push that suspend or terminate
 /// cut leaves the transfer as they made it; any other cut is a failure
-/// ([`crate::push::send`]).
+/// ([`portitor_dataplane::push::send`]).
 async fn run_push(provider: Arc<TransferProvider>, plane: Arc<HttpDataPlane>, mut job: PushJob) {
     let pid = job.flow_id.clone();
     let transfer = provider.service.transfer(&pid).ok();
-    let pushed = crate::push::send(&plane, &mut job).await;
+    let pushed = portitor_dataplane::push::send(&plane, &mut job).await;
     // the push is over: a later start again may send again
     drop(job);
     let (agreement, counter_party) = match &transfer {
@@ -530,11 +530,11 @@ async fn run_push(provider: Arc<TransferProvider>, plane: Arc<HttpDataPlane>, mu
         // the transfer could not be read: the audit line names no one
         None => ("", ""),
     };
-    crate::push::audit(&pid, agreement, counter_party, &pushed);
+    portitor_dataplane::push::audit(&pid, agreement, counter_party, &pushed);
     let failure = match &pushed.sent {
-        crate::push::Sent::Done => None,
-        crate::push::Sent::Failed(reason) => Some(reason.as_str()),
-        crate::push::Sent::Cancelled => return,
+        portitor_dataplane::push::Sent::Done => None,
+        portitor_dataplane::push::Sent::Failed(reason) => Some(reason.as_str()),
+        portitor_dataplane::push::Sent::Cancelled => return,
     };
     provider.push_finished(&pid, failure).await;
 }

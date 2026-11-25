@@ -14,7 +14,7 @@ use portitor_dsp::Dataset;
 use portitor_dsp::catalog::CatalogDatasets;
 
 use super::{DatasetState, StoredDataset};
-use crate::data_plane::UpstreamSources;
+use portitor_dataplane::UpstreamSources;
 
 /// One snapshot of the copy.
 #[derive(Debug, Default)]

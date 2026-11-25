@@ -67,6 +67,11 @@ jobs:
               echo "::error::$c depends on an I/O crate"; exit 1
             fi
           done
+      - name: The data plane does not depend on the control plane (ADR 0028)
+        run: |
+          if cargo tree -p portitor-dataplane -e normal --prefix none | grep -E "^portitor-connector "; then
+            echo "::error::portitor-dataplane depends on portitor-connector"; exit 1
+          fi
       - name: Build static binaries
         run: |
           start=$(date +%s)

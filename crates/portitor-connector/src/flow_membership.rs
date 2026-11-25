@@ -42,8 +42,12 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
+use portitor_dataplane::FlowStoreError;
+pub use portitor_dataplane::access::Access;
+use portitor_dataplane::access::AccessGate;
+use portitor_runtime::BoxFuture;
+
 use crate::auth::{AnyVerifier, Membership, VerifyError};
-use crate::data_plane::{FlowStore, FlowStoreError};
 use crate::ports::AnyFlowStore;
 
 /// What the flow store keeps of a flow's consumer.
@@ -57,17 +61,25 @@ pub enum StoredMembership {
     Kept(Vec<Membership>),
 }
 
-/// The answer of [`MembershipGate::check`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Access {
-    /// The consumer is still a member: serve.
-    Granted,
-    /// The check could not finish now, for this reason: refuse, keep the
-    /// transfer.
-    Unchecked(String),
-    /// The consumer is no longer a member, for this reason: refuse and end
-    /// the transfer.
-    Revoked(String),
+/// Port: what the control plane keeps of each flow's consumer: its
+/// memberships when it asked for the transfer (ADR 0027, section 7.2).
+/// Kept by the provider's transfer service, read by [`MembershipGate`].
+pub trait MembershipStore {
+    /// What is kept of the consumer of flow `id`.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be read.
+    fn memberships(&self, id: &str) -> Result<StoredMembership, FlowStoreError>;
+
+    /// Keeps `memberships` for flow `id` (the transfer's provider pid),
+    /// unless something is kept for it already. Written before the flow
+    /// starts, or just after: its token is sent only later.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be written.
+    fn keep_memberships(&self, id: &str, memberships: &[Membership]) -> Result<(), FlowStoreError>;
 }
 
 /// Ends a transfer on the provider's side: the DSP termination is sent
@@ -178,6 +190,21 @@ impl MembershipGate {
                 "data flow started before 1.1: no membership kept; served until its token expires"
             );
         }
+    }
+}
+
+/// The data plane asks the gate through its port (ADR 0028, decision 5).
+impl AccessGate for MembershipGate {
+    fn check<'a>(&'a self, flow_id: &'a str) -> BoxFuture<'a, Access> {
+        Box::pin(MembershipGate::check(self, flow_id))
+    }
+
+    fn end_transfer(&self, flow_id: &str, reason: &str) {
+        MembershipGate::end_transfer(self, flow_id, reason);
+    }
+
+    fn recheck_interval(&self) -> Duration {
+        MembershipGate::recheck_interval(self)
     }
 }
 

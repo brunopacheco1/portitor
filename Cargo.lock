@@ -1006,6 +1006,7 @@ dependencies = [
  "hyper",
  "jsonschema",
  "portitor-bundle",
+ "portitor-dataplane",
  "portitor-dcp",
  "portitor-dps",
  "portitor-dsp",
@@ -1021,6 +1022,25 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "utoipa",
+]
+
+[[package]]
+name = "portitor-dataplane"
+version = "1.1.0"
+dependencies = [
+ "axum",
+ "base64",
+ "http-body-util",
+ "hyper",
+ "portitor-dps",
+ "portitor-dsp",
+ "portitor-runtime",
+ "ring",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

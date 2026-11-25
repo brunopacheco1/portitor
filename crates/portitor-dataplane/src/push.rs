@@ -48,7 +48,7 @@ use tracing::Instrument as _;
 use portitor_dsp::transfer::DataAddress;
 
 use crate::audit::{self, Outcome};
-use crate::data_plane::{HttpDataPlane, PushJob};
+use crate::{HttpDataPlane, PushJob};
 
 /// The media type sent when neither the source nor the consumer's address
 /// names one.
@@ -302,8 +302,7 @@ mod tests {
     async fn a_push_without_progress_fails() {
         let source = source().await;
         let sources = BTreeMap::from([("d1".to_owned(), source.clone())]);
-        let flows =
-            crate::ports::Shared(Arc::new(crate::test_stores::InMemoryFlows::default()) as _);
+        let flows = Arc::new(crate::test_store::InMemoryFlows::default());
         let plane = HttpDataPlane::new(flows, Arc::new(sources), "https://provider.example", 60)
             .unwrap()
             .with_push_over_http(true)

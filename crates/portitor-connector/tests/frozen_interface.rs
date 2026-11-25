@@ -86,14 +86,15 @@ async fn from_the_consumer(
 
 /// The settings in `docs/STABILITY.md` ("Settings of every binary" and
 /// "Settings of portitor-connector") are the environment variables the
-/// connector's code names: its own crate, `portitor-bundle` and
-/// `portitor-runtime`. See the top of this file for what to do when it
+/// connector's code names: its own crate, `portitor-dataplane` (linked
+/// in, ADR 0028), `portitor-bundle` and `portitor-runtime`. See the top of this file for what to do when it
 /// fails.
 #[test]
 fn frozen_settings() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let folders = [
         crates.join("portitor-connector/src"),
+        crates.join("portitor-dataplane/src"),
         crates.join("portitor-bundle/src"),
         crates.join("portitor-runtime/src"),
     ];

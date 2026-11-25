@@ -1003,7 +1003,7 @@ async fn a_push_body_that_breaks_off_aborts_the_upload() {
     let (log, _guard) = Log::start();
     let (chunks, answer) = p.push_streamed(&cpid, &token);
     // more than one part, so the upload is a multipart one
-    let part = vec![7u8; portitor_connector::object_storage::PART_BYTES + 10];
+    let part = vec![7u8; portitor_dataplane::object_storage::PART_BYTES + 10];
     chunks.send(Ok(Bytes::from(part))).await.unwrap();
     until(|| p.s3.open_uploads(), |n| *n == 1).await;
     chunks

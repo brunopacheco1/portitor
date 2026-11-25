@@ -33,9 +33,9 @@ pub const PUSH_BUCKET: &str = "received";
 
 /// The connector's object storage client for the store at `endpoint`,
 /// with the test keys and [`PUSH_BUCKET`].
-pub fn client(endpoint: &str) -> portitor_connector::object_storage::ObjectStorage {
-    portitor_connector::object_storage::ObjectStorage::new(
-        portitor_connector::object_storage::Settings {
+pub fn client(endpoint: &str) -> portitor_dataplane::object_storage::ObjectStorage {
+    portitor_dataplane::object_storage::ObjectStorage::new(
+        portitor_dataplane::object_storage::Settings {
             endpoint: endpoint.to_owned(),
             region: "us-east-1".to_owned(),
             access_key_id: KEY_ID.to_owned(),

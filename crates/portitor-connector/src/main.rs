@@ -156,9 +156,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// The object storage of the `AWS_*` settings and `PORTITOR_PUSH_BUCKET`
 /// (ADR 0027), if they are set. The log names the endpoint and the
 /// bucket, never the keys.
-fn object_storage() -> Result<Option<Arc<portitor_connector::object_storage::ObjectStorage>>, String>
+fn object_storage() -> Result<Option<Arc<portitor_dataplane::object_storage::ObjectStorage>>, String>
 {
-    use portitor_connector::object_storage::{ObjectStorage, Settings};
+    use portitor_dataplane::object_storage::{ObjectStorage, Settings};
     let Some(settings) = Settings::from_env()? else {
         return Ok(None);
     };

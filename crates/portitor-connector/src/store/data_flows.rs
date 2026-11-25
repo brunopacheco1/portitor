@@ -10,8 +10,8 @@ use rusqlite::{Row, params};
 
 use super::{SqliteNegotiations, col};
 use crate::auth::Membership;
-use crate::data_plane::{Flow, FlowStore, FlowStoreError};
-use crate::flow_membership::StoredMembership;
+use crate::flow_membership::{MembershipStore, StoredMembership};
+use portitor_dataplane::{Flow, FlowStore, FlowStoreError};
 
 #[allow(clippy::needless_pass_by_value)] // used as map_err(failed)
 fn failed(e: rusqlite::Error) -> FlowStoreError {
@@ -155,7 +155,11 @@ impl FlowStore for SqliteNegotiations {
         })
         .map_err(store_error)
     }
+}
 
+/// What the control plane keeps of each flow's consumer (ADR 0027,
+/// section 7.2), in its own table.
+impl MembershipStore for SqliteNegotiations {
     fn memberships(&self, id: &str) -> Result<StoredMembership, FlowStoreError> {
         // a row whose `memberships` is NULL: the migration's mark for a
         // flow of 1.0 (migration 12)
@@ -224,7 +228,7 @@ mod tests {
     #[test]
     fn memberships_are_kept_once_per_flow() {
         let db = SqliteNegotiations::in_memory().unwrap();
-        let store: &dyn FlowStore = &db;
+        let store: &dyn MembershipStore = &db;
         assert_eq!(store.memberships("f1").unwrap(), StoredMembership::Missing);
         let entry: portitor_dcp::status_list::StatusEntry = serde_json::from_value(
             serde_json::json!({"type": "BitstringStatusListEntry", "statusPurpose": "revocation",

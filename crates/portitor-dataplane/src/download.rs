@@ -11,7 +11,7 @@
 //!   the server drops the connection and the consumer sees an incomplete
 //!   download, never a complete one.
 //! - [`watchdog`] runs next to the download and checks the consumer's
-//!   membership again every [`MembershipGate::recheck_interval`]. When it
+//!   membership again every [`AccessGate::recheck_interval`](crate::access::AccessGate::recheck_interval). When it
 //!   no longer holds, it ends the transfer (which cuts the flow); when the
 //!   check cannot finish, it cuts the flow's downloads and keeps the
 //!   transfer. It stops with the download: the body holds it and aborts
@@ -27,7 +27,7 @@ use axum::response::Response;
 use hyper::body::{Bytes, Frame, SizeHint};
 use tokio::task::JoinHandle;
 
-use crate::flow_membership::{Access, MembershipGate};
+use crate::access::{Access, AccessGate};
 use crate::running_flows::{CutSignal, RunningFlows};
 
 /// The error type of a body: any error that can cross threads.
@@ -45,7 +45,7 @@ impl Drop for AbortOnDrop {
 /// Starts the membership checks of one download of flow `flow_id` (module
 /// doc). Keep the value as long as the download runs.
 pub(super) fn watchdog(
-    gate: Arc<MembershipGate>,
+    gate: Arc<dyn AccessGate>,
     running: Arc<RunningFlows>,
     flow_id: &str,
 ) -> AbortOnDrop {

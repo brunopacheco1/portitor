@@ -326,7 +326,9 @@ fn take_upstream(
         Some(url) if url.starts_with("https://") || url.starts_with("http://") => {
             Ok(Some(url.to_owned()))
         }
-        Some(uri) if crate::object_storage::parse_s3_uri(uri).is_some() => Ok(Some(uri.to_owned())),
+        Some(uri) if portitor_dataplane::object_storage::parse_s3_uri(uri).is_some() => {
+            Ok(Some(uri.to_owned()))
+        }
         _ => Err(EntryFailure::new(
             CheckKind::Dsp,
             format!(
