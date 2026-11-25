@@ -1524,6 +1524,7 @@ async fn a_finished_pull_writes_one_audit_line() {
     assert_eq!(line["flow"], flow);
     assert_eq!(line["agreement"], "a1");
     assert_eq!(line["counterParty"], CONSUMER);
+    assert_eq!(line["direction"], "sent");
     assert_eq!(line["bytes"], 5);
     assert_eq!(line["outcome"], "complete");
     assert!(!line.to_string().contains(&token), "never the token");

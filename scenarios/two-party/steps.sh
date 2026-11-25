@@ -440,7 +440,7 @@ if [[ -n ${S3_ENDPOINT:-} ]]; then
   done
   echo "$PUSH_LINE"
   BYTES=$(wc -c <"$DATA/hospital-admissions.csv" | tr -d ' ')
-  jq -e --argjson bytes "$BYTES" '.outcome == "complete" and .bytes == $bytes' \
+  jq -e --argjson bytes "$BYTES" '.outcome == "complete" and .direction == "sent" and .bytes == $bytes' \
     <<<"$PUSH_LINE" >/dev/null || fail "no complete audit line of $BYTES bytes for the push"
   if [[ -n ${CONSUMER_PUBLIC:-} ]]; then
     STATUS=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CONSUMER_PUBLIC/push/$PUSH_PID" \

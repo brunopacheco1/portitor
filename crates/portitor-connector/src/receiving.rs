@@ -396,10 +396,12 @@ pub(crate) async fn receive(
             (Outcome::Failed, StatusCode::BAD_GATEWAY.into_response())
         }
     };
+    // the provider's process id, as in the provider's own line
     audit::transfer_done(
-        &consumer_pid,
+        transfer.provider_pid.as_deref().unwrap_or_default(),
         &transfer.agreement_id,
         &transfer.provider_id,
+        audit::Direction::Received,
         total.load(Ordering::Relaxed),
         outcome,
     );

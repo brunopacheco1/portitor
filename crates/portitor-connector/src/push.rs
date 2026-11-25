@@ -257,6 +257,7 @@ pub fn audit(flow: &str, agreement: &str, counter_party: &str, pushed: &Pushed) 
         flow,
         agreement,
         counter_party,
+        audit::Direction::Sent,
         pushed.bytes,
         pushed.outcome(),
     );

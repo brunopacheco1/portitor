@@ -330,9 +330,10 @@ line at INFO with the message `data transfer done` and the target
 
 | Field | Value |
 |---|---|
-| `flow` | The data flow id: the provider's process id of the transfer (`portitor.dsp.provider_pid` in the state change lines) |
+| `flow` | The data flow id: the provider's process id of the transfer (`providerPid`; `portitor.dsp.provider_pid` in the state change lines), on both sides |
 | `agreement` | The agreement id |
 | `counterParty` | The consumer's DID |
+| `direction` | `sent` (a pull served, a push sent) or `received` (a push received) |
 | `bytes` | The bytes of data actually sent to the consumer |
 | `outcome` | `complete` (all of it sent), `cut` (stopped before the end: the consumer closed the connection, or access was taken away while the data was flowing) or `failed` (the data source failed before or during the answer; `bytes` is then what was sent before) |
 
@@ -341,17 +342,22 @@ For a push the fields are the same, with these differences. A push sent
 consumer's DID, and `outcome` is `complete` when the consumer answered
 2xx, `failed` when it answered anything else, did not answer or the
 source failed, and `cut` when the transfer was suspended or terminated,
-or the consumer's membership no longer held. A push received (as consumer): `flow` is
-the consumer's process id (`consumerPid`, also the object key),
-`counterParty` the provider's participant id, `bytes` what arrived, and
+or the consumer's membership no longer held. A push received (as consumer): `direction`
+is `received`, `flow` is still the provider's process id (so the two
+partners' lines of one push can be matched; the object key is the
+`consumerPid`), `counterParty` the provider's participant id, `bytes`
+what arrived, and
 `outcome` is `complete` when the object is stored, `cut` when the
 sender's body broke off, and `failed` when the object storage failed.
 
 For example:
 
 ```json
-{"timestamp":"2026-11-24T10:00:00.000000Z","level":"INFO","fields":{"message":"data transfer done","flow":"urn:uuid:6f0c...","agreement":"urn:uuid:a1b2...","counterParty":"did:web:consumer.example","bytes":18,"outcome":"complete"},"target":"portitor::audit"}
+{"timestamp":"2026-11-24T10:00:00.000000Z","level":"INFO","fields":{"message":"data transfer done","flow":"urn:uuid:6f0c...","agreement":"urn:uuid:a1b2...","counterParty":"did:web:consumer.example","direction":"sent","bytes":18,"outcome":"complete"},"target":"portitor::audit"}
 ```
+
+The message, the target and these fields are stable in 1.x
+([STABILITY, Audit line](STABILITY.md#audit-line)).
 
 A refused request (HTTP 401, on `/data` or `/push`) writes no audit
 line. When the transfer

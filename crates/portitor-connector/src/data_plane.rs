@@ -59,7 +59,7 @@ use portitor_dps::port::{DataPlane, SignalError};
 use portitor_dps::state::DataFlowState;
 use portitor_dsp::transfer::{DataAddress, DataAddressType, EndpointProperty, check_push_address};
 
-use crate::audit::{AuditedBody, Outcome, Parties, transfer_done};
+use crate::audit::{AuditedBody, Direction, Outcome, Parties, transfer_done};
 use crate::auth::Membership;
 use crate::flow_membership::{Access, MembershipGate, StoredMembership};
 use crate::http_client::{
@@ -849,7 +849,14 @@ pub(crate) async fn serve(
             // the source is private: the log names the flow, not the URL
             tracing::warn!(flow = %id, %error, "upstream fetch failed");
             let (agreement, consumer) = (&parties.agreement, &parties.counter_party);
-            transfer_done(&id, agreement, consumer, 0, Outcome::Failed);
+            transfer_done(
+                &id,
+                agreement,
+                consumer,
+                Direction::Sent,
+                0,
+                Outcome::Failed,
+            );
             StatusCode::BAD_GATEWAY.into_response()
         }
     }

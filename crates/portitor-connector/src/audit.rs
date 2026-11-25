@@ -7,11 +7,17 @@
 //! received writes one JSON log line at INFO, with the message
 //! `data transfer done` and the target [`AUDIT_EVENTS`]:
 //!
-//! - `flow`: the data flow id (the provider's process id);
+//! - `flow`: the transfer's DSP `providerPid`, on both sides, so the
+//!   provider's line and the consumer's line of one push can be matched;
 //! - `agreement`: the agreement id;
 //! - `counterParty`: the other participant's DID;
+//! - `direction`: `sent` (a pull served, a push sent) or `received` (a
+//!   push received) ([`Direction`]);
 //! - `bytes`: the bytes of data actually sent (or received);
 //! - `outcome`: `complete`, `cut` or `failed` ([`Outcome`]).
+//!
+//! The message, the target and these fields are stable in 1.x
+//! (`docs/STABILITY.md`); a later release may add fields.
 //!
 //! It never holds the token or the data source's URL. There is no audit
 //! store: the operator ships and keeps the log (ADR 0023).
@@ -62,14 +68,36 @@ impl Outcome {
     }
 }
 
-/// Writes the audit line of one finished data transfer: flow `flow`,
-/// under agreement `agreement`, with the participant `counter_party`
-/// (its DID), `bytes` of data, ended with `outcome`. Call it exactly once
-/// per transfer of data (one `/data` response, one push).
+/// Which way the data went, seen from the connector that writes the line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// This connector sent the data: a pull it served, a push it sent.
+    Sent,
+    /// This connector received the data: a push into its bucket.
+    Received,
+}
+
+impl Direction {
+    /// The value of the `direction` field: `sent` or `received`.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Direction::Sent => "sent",
+            Direction::Received => "received",
+        }
+    }
+}
+
+/// Writes the audit line of one finished data transfer: flow `flow` (the
+/// transfer's `providerPid`), under agreement `agreement`, with the
+/// participant `counter_party` (its DID), `bytes` of data going
+/// `direction`, ended with `outcome`. Call it exactly once per transfer of
+/// data (one `/data` response, one push sent, one push received).
 pub fn transfer_done(
     flow: &str,
     agreement: &str,
     counter_party: &str,
+    direction: Direction,
     bytes: u64,
     outcome: Outcome,
 ) {
@@ -79,6 +107,7 @@ pub fn transfer_done(
         flow,
         agreement,
         counterParty = counter_party,
+        direction = direction.name(),
         bytes,
         outcome = outcome.name(),
         "{TRANSFER_DONE}"
@@ -137,6 +166,7 @@ impl<B: Body> AuditedBody<B> {
             &self.flow,
             &self.parties.agreement,
             &self.parties.counter_party,
+            Direction::Sent,
             self.bytes,
             outcome,
         );

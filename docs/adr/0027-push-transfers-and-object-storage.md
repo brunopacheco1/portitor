@@ -179,8 +179,10 @@ AWS test vectors and RustFS. Path-style addresses
 ### 6. Audit line
 
 Each finished pull, push sent and push received writes one log line at
-INFO, `data transfer done`, with `flow`, `agreement`, `counterParty`
-(DID), `bytes`, `outcome`. It uses the existing JSON log (ADR 0023);
+INFO, `data transfer done`, with `flow` (the `providerPid`, on both
+sides), `agreement`, `counterParty` (DID), `direction` (`sent`,
+`received`), `bytes`, `outcome`. The maintainer made the line stable in
+1.x on 2026-11-25 (STABILITY). It uses the existing JSON log (ADR 0023);
 no new format ([TD-31](../RISKS_AND_TECHNICAL_DEBTS.md#td-31), first
 half).
 

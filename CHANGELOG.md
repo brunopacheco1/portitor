@@ -68,9 +68,13 @@ to push. Upgrading from 1.0:
   route.
 - Audit line for each data pull: the provider's data plane writes one
   INFO line, `data transfer done` (target `portitor::audit`), with
-  `flow`, `agreement`, `counterParty`, `bytes` and `outcome`
-  (`complete`, `cut`, `failed`) for each `/data` answer
-  ([OPERATING](docs/OPERATING.md), TD-31, first half).
+  `flow`, `agreement`, `counterParty`, `direction` (`sent`,
+  `received`), `bytes` and `outcome` (`complete`, `cut`, `failed`) for
+  each `/data` answer ([OPERATING](docs/OPERATING.md), TD-31, first
+  half). `flow` is the transfer's `providerPid` on both sides. The
+  message, the target and these fields are stable in 1.x
+  ([STABILITY, Audit line](docs/STABILITY.md#audit-line); maintainer,
+  2026-11-25).
 - The provider can always end access (ADR 0027, section 7). Management
   routes for the transfers a connector runs as provider:
   `GET /v1/provided-transfers`, `GET /v1/provided-transfers/{providerPid}`

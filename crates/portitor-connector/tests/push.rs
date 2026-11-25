@@ -1016,6 +1016,10 @@ async fn a_push_body_that_breaks_off_aborts_the_upload() {
     let audit = log.with_message("data transfer done");
     assert_eq!(audit.len(), 1, "{audit:?}");
     assert_eq!(audit[0]["fields"]["outcome"], "cut");
+    assert_eq!(audit[0]["fields"]["direction"], "received");
+    // the provider's process id, as in the provider's line
+    let provider_pid = p.consumer.transfer(&cpid).unwrap().provider_pid.unwrap();
+    assert_eq!(audit[0]["fields"]["flow"], provider_pid.as_str());
 }
 
 /// One upload at a time per transfer: a second one while the first runs

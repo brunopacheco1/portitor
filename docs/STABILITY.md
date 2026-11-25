@@ -332,13 +332,26 @@ confirmed this for 1.x at the freeze (2026-11-20,
 [TD-22](RISKS_AND_TECHNICAL_DEBTS.md#td-22);
 [OPERATING, upgrade and rollback](OPERATING.md#upgrade-and-rollback)).
 
+## Audit line
+
+Since 1.1 (maintainer, 2026-11-25). Each data transfer writes one log
+line at INFO with the message `data transfer done` and the target
+`portitor::audit`
+([OPERATING, Audit line](OPERATING.md#health-and-logs)). In 1.x the
+message, the target, and these fields keep their names and meaning:
+`flow` (the transfer's `providerPid`), `agreement`, `counterParty`,
+`direction` (`sent` or `received`), `bytes` and `outcome` (`complete`,
+`cut` or `failed`). A 1.x release may add fields and add values to
+`outcome`; a reader must ignore fields it does not know.
+
 ## Not part of the stable interface
 
 - **Metric, span and log names.** [ADR 0023](adr/0023-observability.md)
   promises none of them. The metric names, their attributes, the span
   names, and the texts and fields of log lines can change in a 1.x
   release. Each change is named in the CHANGELOG, so check your alerts
-  and dashboards when you upgrade. The two HTTP histograms follow
+  and dashboards when you upgrade. One exception: the audit line
+  (below). The two HTTP histograms follow
   OpenTelemetry's semantic conventions and change only with them.
 - **The Rust crates.** They are not published as libraries
   (`publish = false` in every `Cargo.toml`); their APIs change without
