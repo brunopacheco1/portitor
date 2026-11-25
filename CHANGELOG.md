@@ -29,6 +29,8 @@ versions may change behaviour and configuration.
   the stored records under every delivery order. Roadmap entry marked
   done. New UML state diagram
   `docs/diagrams/state-negotiation.drawio.svg`, shown in ARCHITECTURE.
+  TD-49 (Accepted): after a failed message the two parties of a
+  negotiation can stay in different states, as in EDC.
 
 ## [1.1.0] - 2026-11-25
 
