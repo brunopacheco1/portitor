@@ -18,15 +18,19 @@
 //! [`crate::process`]; this file holds what only the provider's transfer
 //! does.
 //!
-//! Data plane first, then the transfer (ADR 0013): for every state change
-//! the data plane is told before the transfer is saved, so a failure in
-//! between can only take access away, never give it.
+//! The data plane is told after the transfer's write, from what was
+//! written, once (ADR 0028, decision 6): the write records the step, and
+//! the step runs right after it, before our message for that change is
+//! sent. How, and what happens when the data plane refuses: the module
+//! `flow_steps`.
 //!
 //! A push transfer (`HttpData-PUSH`, ADR 0027) carries the consumer's
 //! `dataAddress` in its request; it is kept with the transfer until the
 //! transfer ends, and handed to the data plane when the flow starts. The
 //! data plane sends the data; [`TransferService::push_finished`] then
 //! completes or terminates the transfer.
+
+use std::sync::{Arc, Mutex};
 
 use crate::catalog::CatalogDatasets;
 use crate::negotiation::provider::{Negotiation, finalization_proved};
@@ -71,8 +75,67 @@ pub struct Transfer {
     pub data_address: Option<DataAddress>,
     /// Our message on its way to the consumer, saved before it is sent.
     pub pending: Option<Outgoing>,
+    /// The data plane step a write decided and that has not run yet
+    /// (`flow_steps`). Our message waits until it has run.
+    pub flow_step: Option<FlowStep>,
     /// Changes on every write; writes compare it (optimistic locking).
     pub version: u64,
+}
+
+/// A step of the data flow, recorded with the transfer's write that
+/// decided it and run after that write (`flow_steps`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlowStep {
+    /// Start the data flow of a new transfer ([`DataFlows::start`]). The
+    /// start message is made once it has run: it carries the address.
+    Start,
+    /// The provider starts a suspended transfer again
+    /// ([`DataFlows::restart`]): a new token, so the start message is
+    /// made once it has run, as for [`FlowStep::Start`].
+    Restart,
+    /// The consumer started the transfer again: access again with the
+    /// same token ([`DataFlows::resume`]).
+    Resume,
+    /// As [`FlowStep::Resume`], for a push the consumer started again
+    /// with a new address: the transfer's `data_address` is handed over.
+    ResumeWithAddress,
+    /// Stop access for now ([`DataFlows::suspend`]).
+    Suspend,
+    /// End the data flow normally ([`DataFlows::complete`]).
+    Complete,
+    /// End the data flow early ([`DataFlows::terminate`]).
+    Terminate,
+}
+
+impl FlowStep {
+    /// A stable name, for storage.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Restart => "restart",
+            Self::Resume => "resume",
+            Self::ResumeWithAddress => "resume-with-address",
+            Self::Suspend => "suspend",
+            Self::Complete => "complete",
+            Self::Terminate => "terminate",
+        }
+    }
+
+    /// The step with this [`FlowStep::name`].
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        let all = [
+            Self::Start,
+            Self::Restart,
+            Self::Resume,
+            Self::ResumeWithAddress,
+            Self::Suspend,
+            Self::Complete,
+            Self::Terminate,
+        ];
+        all.into_iter().find(|step| step.name() == name)
+    }
 }
 
 /// A message for the consumer, to be sent by the adapter.
@@ -159,8 +222,8 @@ pub trait TransferStore {
     /// The store cannot be written.
     fn replace_if(&self, transfer: &Transfer, expected: u64) -> Result<bool, StoreError>;
 
-    /// Every transfer with a pending message (to send again after a
-    /// restart).
+    /// Every transfer with a pending message or a data plane step not
+    /// run yet (`flow_step`): what a restart takes up again.
     ///
     /// # Errors
     ///
@@ -214,6 +277,7 @@ pub trait Agreements {
 /// Port: the data plane, as the transfer process needs it. The connector
 /// implements it with Data Plane Signaling (`portitor-dps`). Each call is
 /// safe to repeat: a change the data plane already made counts as done.
+/// The service calls it only after the transfer's write (`flow_steps`).
 pub trait DataFlows {
     /// Whether the data plane can serve dataset `dataset_id` in `format`
     /// (for example `HttpData-PULL`): it supports the format and knows
@@ -225,6 +289,11 @@ pub trait DataFlows {
     /// push transfer `None` (the data plane sends the data to
     /// `transfer.data_address`, and DSP gives the start message no
     /// address).
+    ///
+    /// Safe to repeat too: the flow may exist already when the process
+    /// stopped after the start and before its address was saved. Its
+    /// token was never sent, so it gets a new one, as with
+    /// [`DataFlows::restart`].
     ///
     /// # Errors
     ///
@@ -362,6 +431,9 @@ pub struct TransferService<S, A, F, D, C, E> {
     decider: D,
     catalog: C,
     env: E,
+    /// Held while a data plane step runs, so the steps run one at a time
+    /// in this process (`flow_steps`). Shared by clones of the service.
+    one_step_at_a_time: Arc<Mutex<()>>,
 }
 
 impl<S, A, F, D, C, E> TransferService<S, A, F, D, C, E>
@@ -382,6 +454,7 @@ where
             decider,
             catalog,
             env,
+            one_step_at_a_time: Arc::new(Mutex::new(())),
         }
     }
 
@@ -541,33 +614,32 @@ where
             // checked: only a push transfer has one
             data_address: msg.data_address.clone(),
             pending: None,
+            flow_step: None,
             version: 0,
         };
-        transfer.pending = self.next(&transfer);
-        self.save_new(transfer, msg)
+        self.decide_next(&mut transfer);
+        self.save_new(&transfer, msg)
     }
 
-    /// Saves the new `transfer` that the request `msg` asked for, and
-    /// returns the answer. If it cannot be saved, the data flow that may
-    /// have started for it is ended again (best effort).
-    fn save_new(&self, transfer: Transfer, msg: &TransferRequestMessage) -> Handled {
-        match self.store.insert(&transfer) {
-            Ok(true) => Ok((ack(&transfer), transfer.pending)),
+    /// Saves the new `transfer` that the request `msg` asked for, then
+    /// starts its data flow if the decider said so, and returns the
+    /// answer. A transfer that is not saved starts nothing.
+    fn save_new(&self, transfer: &Transfer, msg: &TransferRequestMessage) -> Handled {
+        match self.store.insert(transfer) {
+            Ok(true) => {
+                let now = self.after_write(transfer.clone(), &IfRefused::EndTheTransfer)?;
+                Ok((ack(transfer), ready_to_send(&now)))
+            }
             Ok(false) => {
                 // a copy of this request was saved while this one was
                 // being checked: answer with the transfer that was saved
-                let _ = self.flows.terminate(&transfer.provider_pid);
                 let (caller, cpid) = (&transfer.counter_party, &transfer.consumer_pid);
                 match self.requested_before(caller, cpid)? {
                     Some(existing) => answer_again(&existing, msg),
                     None => Err(bad("", cpid, "the request was sent twice; retry")),
                 }
             }
-            Err(e) => {
-                // the store error is reported, not the data plane's
-                let _ = self.flows.terminate(&transfer.provider_pid);
-                Err(Failure::Store(e))
-            }
+            Err(e) => Err(Failure::Store(e)),
         }
     }
 
@@ -713,11 +785,15 @@ where
                 .apply_sent(sent)
                 .map_err(|e| transition_failure(transfer, e))?;
             if !transfer.state.is_terminal() {
-                transfer.pending = self.next(transfer);
+                self.decide_next(transfer);
             }
             Ok(Write::Save)
         })?;
-        Ok(saved.and_then(|transfer| transfer.pending))
+        let Some(saved) = saved else {
+            return Ok(None);
+        };
+        let now = self.after_write(saved, &IfRefused::EndTheTransfer)?;
+        Ok(ready_to_send(&now))
     }
 
     /// `sent` could not be delivered: end the data flow and the transfer,
@@ -726,35 +802,50 @@ where
     ///
     /// # Errors
     ///
-    /// Unknown transfer, data plane or store failure.
+    /// Unknown transfer, data plane or store failure. When the data plane
+    /// refuses, the transfer stays as it was (`flow_steps`).
     pub fn abort(&self, sent: &Outgoing, reason: &str) -> Result<Option<Outgoing>, Failure> {
-        let saved = process::update(self, &Lookup::own(&sent.provider_pid), |transfer| {
+        let lookup = Lookup::own(&sent.provider_pid);
+        let saved = process::update_keeping_before(self, &lookup, |transfer| {
             if !process::can_abort(transfer, sent) {
                 return Ok(Write::Skip);
             }
-            self.flows
-                .terminate(&transfer.provider_pid)
-                .map_err(Failure::DataPlane)?;
             transfer.pending = Some(termination(transfer, reason));
+            transfer.flow_step = Some(FlowStep::Terminate);
             Ok(Write::Save)
         })?;
-        Ok(saved.and_then(|transfer| transfer.pending))
+        let Some((before, written)) = saved else {
+            return Ok(None);
+        };
+        let if_refused = IfRefused::TakeBack { before: &before };
+        let now = self.after_write(written.clone(), &if_refused)?;
+        Ok(ready_to_send(&now))
     }
 
     /// Transfers with a message still to send, for example after a
-    /// restart.
+    /// restart. The data plane steps that were recorded but had not run
+    /// when the process stopped run first (`flow_steps`); a message
+    /// waits for its step.
     ///
     /// # Errors
     ///
     /// Store failure.
     pub fn pending(&self) -> Result<Vec<Outgoing>, Failure> {
         let transfers = self.store.pending().map_err(Failure::Store)?;
-        Ok(process::pending_messages(transfers))
+        let mut messages = Vec::new();
+        for transfer in transfers {
+            let now = self.after_write(transfer, &IfRefused::EndTheTransfer)?;
+            if let Some(message) = ready_to_send(&now) {
+                messages.push(message);
+            }
+        }
+        Ok(messages)
     }
 
     /// Applies a consumer's message: checks the ids and the transition,
-    /// tells the data plane, then saves the new state. `address`: the new
-    /// push address a start message may carry.
+    /// saves the new state with the data plane step it needs, then runs
+    /// that step (`flow_steps`). `address`: the new push address a start
+    /// message may carry.
     fn handle(
         &self,
         pid: &str,
@@ -774,7 +865,7 @@ where
         }
         // a transfer that is not found is answered without a consumer pid
         let lookup = Lookup::from_caller(pid, "", caller);
-        let saved = process::update(self, &lookup, |transfer| {
+        let saved = process::update_keeping_before(self, &lookup, |transfer| {
             if transfer.consumer_pid != named_consumer {
                 return Err(bad(pid, named_consumer, "process ids do not match"));
             }
@@ -791,69 +882,70 @@ where
                 // nothing more is sent on an ended transfer
                 transfer.pending = None;
             }
-            self.signal(transfer.state, pid, address)?;
+            transfer.flow_step = consumer_step(transfer.state, address.is_some());
             Ok(Write::Save)
         })?;
-        let transfer = saved.ok_or_else(|| not_found(pid, named_consumer))?;
-        Ok((ack(&transfer), transfer.pending))
+        let (before, written) = saved.ok_or_else(|| not_found(pid, named_consumer))?;
+        let if_refused = IfRefused::TakeBack { before: &before };
+        let now = self.after_write(written.clone(), &if_refused)?;
+        Ok((ack(&written), ready_to_send(&now)))
     }
 
-    /// Tells the data plane about a transfer that moved to `state` after a
-    /// consumer's message (`address`: a new push address with it).
-    fn signal(
-        &self,
-        state: TransferState,
-        pid: &str,
-        address: Option<&DataAddress>,
-    ) -> Result<(), Failure> {
-        let result = match state {
-            TransferState::Started => self.flows.resume(pid, address),
-            TransferState::Suspended => self.flows.suspend(pid),
-            TransferState::Completed => self.flows.complete(pid),
-            TransferState::Terminated => self.flows.terminate(pid),
-            // a consumer's message never leads to REQUESTED
-            TransferState::Requested => Ok(()),
-        };
-        result.map_err(Failure::DataPlane)
-    }
-
-    /// The provider's next message for `transfer`, as the decider says.
-    /// The data plane is told first (ADR 0013); if it refuses, the
-    /// transfer ends.
-    fn next(&self, transfer: &Transfer) -> Option<Outgoing> {
+    /// Records on `transfer` the provider's next step, as the decider
+    /// says: the message to send and the data plane step it needs. The
+    /// step runs after the write (`flow_steps`). A start has no message
+    /// yet: it is made once the data plane has given the address.
+    fn decide_next(&self, transfer: &mut Transfer) {
         let transition = match self.decider.decide(transfer) {
-            TransferDecision::Wait => return None,
+            TransferDecision::Wait => return,
             TransferDecision::Start => Transition::Start,
             TransferDecision::Suspend => Transition::Suspend,
             TransferDecision::Complete => Transition::Complete,
             TransferDecision::Terminate => Transition::Terminate,
         };
         // a step the state machine does not allow here is not taken
-        next_state(Some(transfer.state), transition, Role::Provider).ok()?;
-        let pid = transfer.provider_pid.as_str();
-        // only a start gives an address (for the start message), and only
-        // for a pull transfer
-        let signalled = match transition {
+        if next_state(Some(transfer.state), transition, Role::Provider).is_err() {
+            return;
+        }
+        let (message, step) = match transition {
             Transition::Start if transfer.state == TransferState::Requested => {
-                self.flows.start(transfer)
+                (None, FlowStep::Start)
             }
-            Transition::Start => self.flows.restart(transfer),
-            Transition::Suspend => self.flows.suspend(pid).map(|()| None),
-            Transition::Complete => self.flows.complete(pid).map(|()| None),
-            _ => self.flows.terminate(pid).map(|()| None),
+            Transition::Start => (None, FlowStep::Restart),
+            Transition::Suspend => (Some(suspension(transfer)), FlowStep::Suspend),
+            Transition::Complete => (Some(completion(transfer)), FlowStep::Complete),
+            _ => (
+                Some(termination(transfer, "terminated by the provider")),
+                FlowStep::Terminate,
+            ),
         };
-        Some(match (signalled, transition) {
-            (Ok(address), Transition::Start) => start_message(transfer, address),
-            (Ok(_), Transition::Suspend) => suspension(transfer),
-            (Ok(_), Transition::Complete) => completion(transfer),
-            (Ok(_), _) => termination(transfer, "terminated by the provider"),
-            (Err(reason), _) => {
-                // end whatever the data plane still serves (best effort)
-                let _ = self.flows.terminate(pid);
-                termination(transfer, &format!("the data plane refused: {reason}"))
-            }
-        })
+        transfer.pending = message;
+        transfer.flow_step = Some(step);
     }
+}
+
+/// The data plane step for a transfer that a consumer's message moved to
+/// `state`; `new_address`: the message carried a new push address.
+fn consumer_step(state: TransferState, new_address: bool) -> Option<FlowStep> {
+    match state {
+        TransferState::Started if new_address => Some(FlowStep::ResumeWithAddress),
+        TransferState::Started => Some(FlowStep::Resume),
+        TransferState::Suspended => Some(FlowStep::Suspend),
+        TransferState::Completed => Some(FlowStep::Complete),
+        TransferState::Terminated => Some(FlowStep::Terminate),
+        // a consumer's message never leads to REQUESTED
+        TransferState::Requested => None,
+    }
+}
+
+/// The message of ours on `transfer` that may be sent now: none while a
+/// data plane step is still to run, since the message follows the step
+/// (`flow_steps`).
+fn ready_to_send(transfer: &Transfer) -> Option<Outgoing> {
+    if transfer.flow_step.is_some() {
+        return None;
+    }
+    transfer.pending.clone()
 }
 
 /// How the shared core ([`process::update`]) reads and writes transfers.
@@ -962,7 +1054,9 @@ fn not_found(pid: &str, cpid: &str) -> Failure {
     Failure::NotFound(TransferError::new(pid, cpid, "404", "no such transfer"))
 }
 
+mod flow_steps;
 mod own_steps;
+use flow_steps::IfRefused;
 pub use own_steps::MAX_PAGE;
 
 #[cfg(test)]

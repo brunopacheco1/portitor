@@ -188,6 +188,10 @@ const MIGRATIONS: &[&str] = &[
         expires_at   INTEGER NOT NULL,
         object_key   TEXT
      )",
+    // 1.2: the data plane step a provider's transfer write decided, run
+    // after that write and then emptied (ADR 0028, decision 6; TD-48;
+    // `portitor-dsp`, `transfer::provider::flow_steps`). NULL: none waits
+    "ALTER TABLE transfer ADD COLUMN flow_step TEXT",
 ];
 
 /// Adapter: negotiations in a `SQLite` file.

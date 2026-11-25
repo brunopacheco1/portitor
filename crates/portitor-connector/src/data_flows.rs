@@ -8,7 +8,9 @@
 //!
 //! Every call is safe to repeat (ADR 0013): a signal the data plane
 //! refuses because the flow is already where the signal leads counts as
-//! done, and so does ending a flow that never started.
+//! done, and so does ending a flow that never started. A start of a flow
+//! that exists gives it a new token (`start`). The transfer service
+//! calls them after its writes (ADR 0028, decision 6).
 
 use std::sync::Arc;
 
@@ -182,7 +184,16 @@ impl<P: DataPlane + NewAddress> DataFlows for SignalingDataFlows<P> {
             // here); push: where the data plane sends the data
             data_address: if push { t.data_address.clone() } else { None },
         };
-        let status = self.plane.start(&message).map_err(|e| e.to_string())?;
+        let status = match self.plane.start(&message) {
+            Ok(status) => status,
+            // The flow exists: the process stopped after this start and
+            // before the transfer recorded it, and the start runs again
+            // after the restart (`portitor-dsp`, `flow_steps`). Its token
+            // was never sent, and only its hash is kept, so the flow gets
+            // a new one, as when the provider starts it again.
+            Err(SignalError::DataFlowExists(_)) => return self.restart(t),
+            Err(e) => return Err(e.to_string()),
+        };
         match (status.state, status.data_address) {
             (DataFlowState::Started, _) if push => Ok(None),
             (DataFlowState::Started, Some(address)) => Ok(Some(address)),
@@ -284,6 +295,9 @@ mod tests {
             // a push start carries the consumer's address, a pull start none
             assert_eq!(m.flow.profile == HTTP_PUSH, m.data_address.is_some());
             let push = m.flow.profile == HTTP_PUSH;
+            if self.0.borrow().contains_key(&m.flow.data_flow_id) {
+                return Err(SignalError::DataFlowExists(m.flow.data_flow_id.clone()));
+            }
             let state = self.1.borrow().unwrap_or(DataFlowState::Started);
             self.0
                 .borrow_mut()
@@ -375,6 +389,7 @@ mod tests {
             format: format.to_owned(),
             data_address: None,
             pending: None,
+            flow_step: None,
             version: 0,
         }
     }
@@ -436,6 +451,56 @@ mod tests {
         assert!(flows.terminate("p").unwrap_err().contains("final"));
         assert!(flows.suspend("p").is_err());
         assert!(flows.restart(&pull).is_err(), "nothing to start again");
+    }
+
+    /// The process stopped after a start and before the transfer
+    /// recorded it, so the start runs again after the restart (ADR 0028,
+    /// decision 6): the flow exists, and gets a new token (the first was
+    /// never sent). A push flow simply goes on.
+    #[test]
+    fn a_start_that_runs_again_gives_a_new_token() {
+        let plane = Plane::default();
+        let flows = flows_over(&plane);
+        let pull = transfer("HttpData-PULL");
+        flows.start(&pull).unwrap().unwrap();
+        let again = flows.start(&pull).unwrap();
+        assert!(again.is_some(), "a new address for the consumer");
+        assert_eq!((&plane).status("p").unwrap().state, DataFlowState::Started);
+
+        let plane = Plane::default();
+        let flows = flows_over(&plane);
+        let push = push_transfer();
+        assert_eq!(flows.start(&push).unwrap(), None);
+        assert_eq!(flows.start(&push).unwrap(), None);
+        assert_eq!((&plane).status("p").unwrap().state, DataFlowState::Started);
+    }
+
+    /// The same with the built-in data plane: the start run again makes a
+    /// new token, and the first one, never sent, opens nothing.
+    #[test]
+    fn with_the_built_in_plane_a_start_run_again_replaces_the_token() {
+        let store = crate::test_stores::InMemoryFlows::default();
+        let sources: Arc<dyn UpstreamSources> = Arc::new(BTreeMap::from([(
+            "d".to_owned(),
+            "https://upstream.example/d".to_owned(),
+        )]));
+        let plane = portitor_dataplane::HttpDataPlane::new(
+            Arc::new(store),
+            Arc::clone(&sources),
+            "https://p.example",
+            3_600,
+        )
+        .unwrap();
+        let flows = SignalingDataFlows::new(plane.clone(), "did:web:p", "default", sources);
+        let pull = transfer("HttpData-PULL");
+        let first = flows.start(&pull).unwrap().unwrap();
+        let again = flows.start(&pull).unwrap().unwrap();
+        let token = |address: &DataAddress| address.property("authorization").unwrap().to_owned();
+        assert_ne!(token(&first), token(&again));
+        // any time before the tokens expire
+        let now = 1;
+        assert!(plane.authorize("p", &token(&first), now).is_err());
+        assert!(plane.authorize("p", &token(&again), now).is_ok());
     }
 
     #[test]

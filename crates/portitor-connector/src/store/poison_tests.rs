@@ -62,6 +62,7 @@ fn a_transfer_is_stored_and_found_after_a_panic() {
         format: "HttpData-PULL".to_owned(),
         data_address: None,
         pending: None,
+        flow_step: None,
         version: 0,
     };
     let transfers: &dyn TransferStore = store.as_ref();

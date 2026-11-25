@@ -353,8 +353,32 @@ pub(crate) fn update<S: Records>(
     lookup: &Lookup<'_>,
     change: impl Fn(&mut S::Record) -> Result<Write, S::Failure>,
 ) -> Result<Option<S::Record>, S::Failure> {
+    match update_keeping_before(records, lookup, change)? {
+        Some((_before, written)) => Ok(Some(written)),
+        None => Ok(None),
+    }
+}
+
+/// A record as it was read before a change, and as it was written.
+pub(crate) type BeforeAndWritten<R> = (R, R);
+
+/// Like [`update`], but returns two records: the one as it was read
+/// before the change that was written, and the one written. The
+/// provider's transfer needs the first to take its write back when the
+/// data plane refuses the step that write decided
+/// (`transfer::provider::flow_steps`).
+///
+/// # Errors
+///
+/// As [`update`].
+pub(crate) fn update_keeping_before<S: Records>(
+    records: &S,
+    lookup: &Lookup<'_>,
+    change: impl Fn(&mut S::Record) -> Result<Write, S::Failure>,
+) -> Result<Option<BeforeAndWritten<S::Record>>, S::Failure> {
     for _ in 0..WRITE_ATTEMPTS {
-        let mut record = records.read(lookup)?;
+        let before = records.read(lookup)?;
+        let mut record = before.clone();
         match change(&mut record)? {
             Write::Skip => return Ok(None),
             Write::Save => {}
@@ -364,7 +388,7 @@ pub(crate) fn update<S: Records>(
         let expected = record.version();
         record.set_version(expected.wrapping_add(1));
         if records.replace_if(&record, expected)? {
-            return Ok(Some(record));
+            return Ok(Some((before, record)));
         }
     }
     Err(records.keeps_changing(lookup))
