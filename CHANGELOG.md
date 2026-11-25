@@ -27,7 +27,8 @@ versions may change behaviour and configuration.
   contract negotiation states and transitions in DSP 2025-1 terms, what
   is stored for each, a comparison with EDC 1.0.0-RC8, and a check of
   the stored records under every delivery order. Roadmap entry marked
-  done.
+  done. New UML state diagram
+  `docs/diagrams/state-negotiation.drawio.svg`, shown in ARCHITECTURE.
 
 ## [1.1.0] - 2026-11-25
 
