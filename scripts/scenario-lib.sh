@@ -124,11 +124,24 @@ request_credentials() { # participant issuer-did credential-id...: asks, then wa
 # --- the connectors -------------------------------------------------------------
 
 api() { # participant method path [body]: that participant's connector management API
+  # prints the answer; on an error status or no answer, says why on stderr
+  # (status and body, or curl's error) and returns 1
   local who=$1 method=$2 path=$3 body=${4-}
-  local args=(-sf -X "$method" "${MANAGEMENT[$who]}$path"
+  local args=(-sS -w '\n%{http_code}' -X "$method" "${MANAGEMENT[$who]}$path"
     -H "authorization: Bearer $(cat "$RUN/$who/management.key")")
   if [[ $# -gt 3 ]]; then args+=(-H 'content-type: application/json' -d "$body"); fi
-  curl "${args[@]}"
+  local answer status
+  answer=$(curl "${args[@]}") || {
+    echo "$who: $method $path: no answer" >&2
+    return 1
+  }
+  status=${answer##*$'\n'}
+  answer=${answer%$'\n'*}
+  if [[ $status != 2* ]]; then
+    echo "$who: $method $path: HTTP $status ${answer:0:2000}" >&2
+    return 1
+  fi
+  printf '%s\n' "$answer"
 }
 
 state_of() { # record: its state
