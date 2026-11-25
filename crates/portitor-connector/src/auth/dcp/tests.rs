@@ -2008,7 +2008,7 @@ async fn a_credential_signed_with_another_dids_key_refuses_the_caller() {
     let forged = ds.third.sign(&in_the_issuers_name);
     ds.answer(&[ds.presentation(&ds.holder, &[forged])]);
     let error = ds.verify_error().await;
-    assert!(matches!(error, VerifyError::Rejected(_)), "{error:?}");
+    assert!(matches!(error, VerifyError::NotAMember { .. }), "{error:?}");
     assert!(
         error
             .to_string()

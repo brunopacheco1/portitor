@@ -14,27 +14,36 @@
 //! as `pending` before it is sent (outbox), the state changes once the
 //! consumer acknowledges it, a consumer message that only fits the state
 //! after our pending message proves that message arrived, and every write
-//! compares the transfer's `version`.
+//! compares the transfer's `version`. These steps are the shared core in
+//! [`crate::process`]; this file holds what only the provider's transfer
+//! does.
 //!
 //! Data plane first, then the transfer (ADR 0013): for every state change
 //! the data plane is told before the transfer is saved, so a failure in
 //! between can only take access away, never give it.
+//!
+//! A push transfer (`HttpData-PUSH`, ADR 0027) carries the consumer's
+//! `dataAddress` in its request; it is kept with the transfer until the
+//! transfer ends, and handed to the data plane when the flow starts. The
+//! data plane sends the data; [`TransferService::push_finished`] then
+//! completes or terminates the transfer.
 
-use crate::Context;
-use crate::WRITE_ATTEMPTS;
 use crate::catalog::CatalogDatasets;
-pub use crate::negotiation::provider::{Environment, StoreError};
 use crate::negotiation::provider::{Negotiation, finalization_proved};
 use crate::negotiation::{Agreement, NegotiationState};
 use crate::policy::CallerCredentials;
+use crate::process::{self, Lookup, Message, Record, Records, Refused, WRITE_ATTEMPTS, Write};
+pub use crate::process::{Environment, StoreError};
 
 use super::{
-    DataAddress, Role, TransferCompletionMessage, TransferCompletionMessageType, TransferError,
-    TransferProcess, TransferRequestMessage, TransferStartMessage, TransferStartMessageType,
-    TransferState, TransferSuspensionMessage, TransferSuspensionMessageType,
-    TransferTerminationMessage, TransferTerminationMessageType, Transition, TransitionError,
-    next_state,
+    DataAddress, Role, TransferError, TransferProcess, TransferRequestMessage,
+    TransferStartMessage, TransferState, Transition, TransitionError, check_push_address,
+    is_push_format, next_state,
 };
+
+mod messages;
+mod push;
+use messages::{completion, start_message, suspension, termination};
 
 /// One transfer as the provider keeps it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +65,10 @@ pub struct Transfer {
     pub dataset_id: String,
     /// The format the consumer asked for, for example `HttpData-PULL`.
     pub format: String,
+    /// Where to send the data in a push transfer: the consumer's
+    /// `dataAddress`, with its token (ADR 0027). `None` for a pull
+    /// transfer, and once the transfer has ended. Never shown or logged.
+    pub data_address: Option<DataAddress>,
     /// Our message on its way to the consumer, saved before it is sent.
     pub pending: Option<Outgoing>,
     /// Changes on every write; writes compare it (optimistic locking).
@@ -81,6 +94,25 @@ pub struct Outgoing {
     /// The counter-party's participant id (its DID): who the message is
     /// for, and the audience of the token it is sent with (ADR 0016).
     pub counter_party: String,
+}
+
+impl Record for Transfer {
+    type State = TransferState;
+    type Outgoing = Outgoing;
+    const PARTY: Role = Role::Provider;
+
+    fn parts(&self) -> (TransferState, Option<&Outgoing>, u64) {
+        (self.state, self.pending.as_ref(), self.version)
+    }
+    fn parts_mut(&mut self) -> (&mut TransferState, &mut Option<Outgoing>, &mut u64) {
+        (&mut self.state, &mut self.pending, &mut self.version)
+    }
+}
+
+impl Message<Transition> for Outgoing {
+    fn transition_caused(&self) -> Transition {
+        self.transition
+    }
 }
 
 /// Port: where the provider keeps its transfers.
@@ -134,6 +166,14 @@ pub trait TransferStore {
     ///
     /// The store cannot be read.
     fn pending(&self) -> Result<Vec<Transfer>, StoreError>;
+
+    /// Up to `limit` transfers in provider pid order, those after `after`
+    /// when it is given: one page for the management API.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be read.
+    fn list(&self, after: Option<&str>, limit: usize) -> Result<Vec<Transfer>, StoreError>;
 }
 
 /// Port: the provider's agreements.
@@ -180,13 +220,16 @@ pub trait DataFlows {
     /// where the dataset's data is.
     fn supports(&self, dataset_id: &str, format: &str) -> bool;
 
-    /// Starts the data flow for `transfer` and returns where the consumer
-    /// fetches the data, with its access token.
+    /// Starts the data flow for `transfer`. For a pull transfer, returns
+    /// where the consumer fetches the data, with its access token; for a
+    /// push transfer `None` (the data plane sends the data to
+    /// `transfer.data_address`, and DSP gives the start message no
+    /// address).
     ///
     /// # Errors
     ///
     /// The data plane refused or failed, with the reason.
-    fn start(&self, transfer: &Transfer) -> Result<DataAddress, String>;
+    fn start(&self, transfer: &Transfer) -> Result<Option<DataAddress>, String>;
 
     /// Stops access until [`DataFlows::resume`].
     ///
@@ -196,23 +239,26 @@ pub trait DataFlows {
     fn suspend(&self, provider_pid: &str) -> Result<(), String>;
 
     /// Gives access again after [`DataFlows::suspend`], with the same
-    /// token. Used when the consumer starts the transfer again.
+    /// token. Used when the consumer starts the transfer again. In a push
+    /// transfer the consumer may send a new `address` (a fresh token); it
+    /// replaces the old one.
     ///
     /// # Errors
     ///
     /// The data plane refused or failed, with the reason.
-    fn resume(&self, provider_pid: &str) -> Result<(), String>;
+    fn resume(&self, provider_pid: &str, address: Option<&DataAddress>) -> Result<(), String>;
 
     /// Gives access again after [`DataFlows::suspend`] with a new token,
     /// and returns the new address. Used when the provider starts the
     /// transfer again: its start message must carry a data address (DSP
     /// 2025-1, "Transfer Start Message"), and only the token's hash is
-    /// kept, so the old token cannot be sent again (ADR 0014).
+    /// kept, so the old token cannot be sent again (ADR 0014). A push
+    /// transfer is resumed and sends its data again; `None`.
     ///
     /// # Errors
     ///
     /// The data plane refused or failed, with the reason.
-    fn restart(&self, provider_pid: &str) -> Result<DataAddress, String>;
+    fn restart(&self, transfer: &Transfer) -> Result<Option<DataAddress>, String>;
 
     /// Ends the data flow normally. Final.
     ///
@@ -492,6 +538,8 @@ where
             agreement_id: agreement.id,
             dataset_id: agreement.target,
             format: msg.format.clone(),
+            // checked: only a push transfer has one
+            data_address: msg.data_address.clone(),
             pending: None,
             version: 0,
         };
@@ -547,8 +595,23 @@ where
         if msg.callback_address.is_empty() {
             return Err(bad("", cpid, "callbackAddress is required"));
         }
-        if msg.data_address.is_some() {
-            return Err(bad("", cpid, "push transfers are not supported"));
+        // DSP 2025-1, "Transfer Request Message": the dataAddress "MUST
+        // only be provided if the format REQUIRES a push transfer"
+        match (&msg.data_address, is_push_format(&msg.format)) {
+            (Some(address), true) => {
+                check_push_address(address).map_err(|reason| bad("", cpid, &reason))?;
+            }
+            (None, true) => {
+                return Err(bad("", cpid, "a push transfer request has a dataAddress"));
+            }
+            (Some(_), false) => {
+                return Err(bad(
+                    "",
+                    cpid,
+                    "only a push transfer request has a dataAddress",
+                ));
+            }
+            (None, false) => {}
         }
         // an unknown agreement and another consumer's agreement get the
         // same answer, so a caller cannot learn which agreement ids exist
@@ -584,18 +647,26 @@ where
     }
 
     /// `POST /transfers/:providerPid/start`: the consumer starts a
-    /// suspended transfer again. The data flow resumes with the same token,
-    /// so no new address is sent (ADR 0013).
+    /// suspended transfer again. A pull data flow resumes with the same
+    /// token, so no new address is sent (ADR 0013). A push transfer sends
+    /// its data again from the start, to the new `dataAddress` if the
+    /// message has one (ADR 0027).
     ///
     /// # Errors
     ///
-    /// Unknown transfer, invalid transition, data plane or store failure.
+    /// Unknown transfer, invalid transition, a `dataAddress` on a pull
+    /// transfer or an invalid one, data plane or store failure.
     pub fn start(&self, pid: &str, msg: &TransferStartMessage, caller: &str) -> Handled {
+        let ids = (msg.provider_pid.as_str(), msg.consumer_pid.as_str());
+        if let Some(address) = &msg.data_address {
+            check_push_address(address).map_err(|reason| bad(pid, ids.1, &reason))?;
+        }
         self.handle(
             pid,
-            (&msg.provider_pid, &msg.consumer_pid),
+            ids,
             caller,
             Transition::Start,
+            msg.data_address.as_ref(),
         )
     }
 
@@ -605,7 +676,7 @@ where
     ///
     /// Unknown transfer, invalid transition, data plane or store failure.
     pub fn suspend(&self, pid: &str, ids: (&str, &str), caller: &str) -> Handled {
-        self.handle(pid, ids, caller, Transition::Suspend)
+        self.handle(pid, ids, caller, Transition::Suspend, None)
     }
 
     /// `POST /transfers/:providerPid/completion`.
@@ -614,7 +685,7 @@ where
     ///
     /// Unknown transfer, invalid transition, data plane or store failure.
     pub fn complete(&self, pid: &str, ids: (&str, &str), caller: &str) -> Handled {
-        self.handle(pid, ids, caller, Transition::Complete)
+        self.handle(pid, ids, caller, Transition::Complete, None)
     }
 
     /// `POST /transfers/:providerPid/termination`.
@@ -623,7 +694,7 @@ where
     ///
     /// Unknown transfer, terminal state, data plane or store failure.
     pub fn terminate(&self, pid: &str, ids: (&str, &str), caller: &str) -> Handled {
-        self.handle(pid, ids, caller, Transition::Terminate)
+        self.handle(pid, ids, caller, Transition::Terminate, None)
     }
 
     /// Records that the consumer acknowledged `sent`, then asks the
@@ -634,15 +705,17 @@ where
     ///
     /// Unknown transfer, or the store failed.
     pub fn delivered(&self, sent: &Outgoing) -> Result<Option<Outgoing>, Failure> {
-        let saved = self.update(&sent.provider_pid, None, |transfer| {
-            if transfer.pending.as_ref() != Some(sent) {
-                return Ok(false);
+        let saved = process::update(self, &Lookup::own(&sent.provider_pid), |transfer| {
+            if !process::is_pending(transfer, sent) {
+                return Ok(Write::Skip);
             }
-            apply_sent(transfer, sent).map_err(|e| transition_failure(transfer, e))?;
+            transfer
+                .apply_sent(sent)
+                .map_err(|e| transition_failure(transfer, e))?;
             if !transfer.state.is_terminal() {
                 transfer.pending = self.next(transfer);
             }
-            Ok(true)
+            Ok(Write::Save)
         })?;
         Ok(saved.and_then(|transfer| transfer.pending))
     }
@@ -655,15 +728,15 @@ where
     ///
     /// Unknown transfer, data plane or store failure.
     pub fn abort(&self, sent: &Outgoing, reason: &str) -> Result<Option<Outgoing>, Failure> {
-        let saved = self.update(&sent.provider_pid, None, |transfer| {
-            if transfer.state.is_terminal() || transfer.pending.as_ref() != Some(sent) {
-                return Ok(false);
+        let saved = process::update(self, &Lookup::own(&sent.provider_pid), |transfer| {
+            if !process::can_abort(transfer, sent) {
+                return Ok(Write::Skip);
             }
             self.flows
                 .terminate(&transfer.provider_pid)
                 .map_err(Failure::DataPlane)?;
             transfer.pending = Some(termination(transfer, reason));
-            Ok(true)
+            Ok(Write::Save)
         })?;
         Ok(saved.and_then(|transfer| transfer.pending))
     }
@@ -676,20 +749,19 @@ where
     /// Store failure.
     pub fn pending(&self) -> Result<Vec<Outgoing>, Failure> {
         let transfers = self.store.pending().map_err(Failure::Store)?;
-        Ok(transfers
-            .into_iter()
-            .filter_map(|transfer| transfer.pending)
-            .collect())
+        Ok(process::pending_messages(transfers))
     }
 
     /// Applies a consumer's message: checks the ids and the transition,
-    /// tells the data plane, then saves the new state.
+    /// tells the data plane, then saves the new state. `address`: the new
+    /// push address a start message may carry.
     fn handle(
         &self,
         pid: &str,
         ids: (&str, &str),
         caller: &str,
         transition: Transition,
+        address: Option<&DataAddress>,
     ) -> Handled {
         // the process ids the message itself names
         let (named_provider, named_consumer) = ids;
@@ -700,27 +772,42 @@ where
                 "providerPid does not match the path",
             ));
         }
-        let saved = self.update(pid, Some(caller), |transfer| {
+        // a transfer that is not found is answered without a consumer pid
+        let lookup = Lookup::from_caller(pid, "", caller);
+        let saved = process::update(self, &lookup, |transfer| {
             if transfer.consumer_pid != named_consumer {
                 return Err(bad(pid, named_consumer, "process ids do not match"));
+            }
+            if let Some(address) = address {
+                if !is_push_format(&transfer.format) {
+                    let reason = "only a push transfer is started again with a dataAddress";
+                    return Err(bad(pid, named_consumer, reason));
+                }
+                // the new token replaces the old one (ADR 0027)
+                transfer.data_address = Some(address.clone());
             }
             receive(transfer, transition)?;
             if transfer.state.is_terminal() {
                 // nothing more is sent on an ended transfer
                 transfer.pending = None;
             }
-            self.signal(transfer.state, pid)?;
-            Ok(true)
+            self.signal(transfer.state, pid, address)?;
+            Ok(Write::Save)
         })?;
         let transfer = saved.ok_or_else(|| not_found(pid, named_consumer))?;
         Ok((ack(&transfer), transfer.pending))
     }
 
     /// Tells the data plane about a transfer that moved to `state` after a
-    /// consumer's message.
-    fn signal(&self, state: TransferState, pid: &str) -> Result<(), Failure> {
+    /// consumer's message (`address`: a new push address with it).
+    fn signal(
+        &self,
+        state: TransferState,
+        pid: &str,
+        address: Option<&DataAddress>,
+    ) -> Result<(), Failure> {
         let result = match state {
-            TransferState::Started => self.flows.resume(pid),
+            TransferState::Started => self.flows.resume(pid, address),
             TransferState::Suspended => self.flows.suspend(pid),
             TransferState::Completed => self.flows.complete(pid),
             TransferState::Terminated => self.flows.terminate(pid),
@@ -730,49 +817,9 @@ where
         result.map_err(Failure::DataPlane)
     }
 
-    /// Reads a transfer, changes it and writes it if its version is
-    /// unchanged; otherwise reads it again and repeats, a few times.
-    /// With `caller`, only that consumer's transfer is found. `change`
-    /// returns `false` to write nothing. Returns what was written.
-    fn update(
-        &self,
-        pid: &str,
-        caller: Option<&str>,
-        change: impl Fn(&mut Transfer) -> Result<bool, Failure>,
-    ) -> Result<Option<Transfer>, Failure> {
-        for _ in 0..WRITE_ATTEMPTS {
-            let Some(mut transfer) = self.store.get(pid).map_err(Failure::Store)? else {
-                return Err(not_found(pid, ""));
-            };
-            // another consumer's transfer looks like a missing one
-            // (DSP: "if the client is not authorized ... MUST return 404")
-            if let Some(participant) = caller
-                && transfer.counter_party != participant
-            {
-                return Err(not_found(pid, ""));
-            }
-            if !change(&mut transfer)? {
-                return Ok(None);
-            }
-            let expected = transfer.version;
-            transfer.version = expected.wrapping_add(1);
-            if self
-                .store
-                .replace_if(&transfer, expected)
-                .map_err(Failure::Store)?
-            {
-                return Ok(Some(transfer));
-            }
-        }
-        Err(bad(
-            pid,
-            "",
-            "the transfer keeps changing concurrently; retry",
-        ))
-    }
-
-    /// The provider's next message for `t`, as the decider says. The data
-    /// plane is told first (ADR 0013); if it refuses, the transfer ends.
+    /// The provider's next message for `transfer`, as the decider says.
+    /// The data plane is told first (ADR 0013); if it refuses, the
+    /// transfer ends.
     fn next(&self, transfer: &Transfer) -> Option<Outgoing> {
         let transition = match self.decider.decide(transfer) {
             TransferDecision::Wait => return None,
@@ -784,27 +831,70 @@ where
         // a step the state machine does not allow here is not taken
         next_state(Some(transfer.state), transition, Role::Provider).ok()?;
         let pid = transfer.provider_pid.as_str();
-        // only a start gives an address (for the start message)
+        // only a start gives an address (for the start message), and only
+        // for a pull transfer
         let signalled = match transition {
             Transition::Start if transfer.state == TransferState::Requested => {
-                self.flows.start(transfer).map(Some)
+                self.flows.start(transfer)
             }
-            Transition::Start => self.flows.restart(pid).map(Some),
+            Transition::Start => self.flows.restart(transfer),
             Transition::Suspend => self.flows.suspend(pid).map(|()| None),
             Transition::Complete => self.flows.complete(pid).map(|()| None),
             _ => self.flows.terminate(pid).map(|()| None),
         };
         Some(match (signalled, transition) {
-            (Ok(Some(address)), _) => start_message(transfer, address),
-            (Ok(None), Transition::Suspend) => suspension(transfer),
-            (Ok(None), Transition::Complete) => completion(transfer),
-            (Ok(None), _) => termination(transfer, "terminated by the provider"),
+            (Ok(address), Transition::Start) => start_message(transfer, address),
+            (Ok(_), Transition::Suspend) => suspension(transfer),
+            (Ok(_), Transition::Complete) => completion(transfer),
+            (Ok(_), _) => termination(transfer, "terminated by the provider"),
             (Err(reason), _) => {
                 // end whatever the data plane still serves (best effort)
                 let _ = self.flows.terminate(pid);
                 termination(transfer, &format!("the data plane refused: {reason}"))
             }
         })
+    }
+}
+
+/// How the shared core ([`process::update`]) reads and writes transfers.
+impl<S, A, F, D, C, E> Records for TransferService<S, A, F, D, C, E>
+where
+    S: TransferStore,
+{
+    type Record = Transfer;
+    type Failure = Failure;
+
+    fn read(&self, lookup: &Lookup<'_>) -> Result<Transfer, Failure> {
+        let missing = || not_found(lookup.pid, lookup.named_pid);
+        let Some(transfer) = self.store.get(lookup.pid).map_err(Failure::Store)? else {
+            return Err(missing());
+        };
+        // another consumer's transfer looks like a missing one
+        // (DSP: "if the client is not authorized ... MUST return 404")
+        if let Some(caller) = lookup.caller
+            && transfer.counter_party != caller
+        {
+            return Err(missing());
+        }
+        Ok(transfer)
+    }
+
+    fn replace_if(&self, transfer: &Transfer, expected: u64) -> Result<bool, Failure> {
+        self.store
+            .replace_if(transfer, expected)
+            .map_err(Failure::Store)
+    }
+
+    fn keeps_changing(&self, lookup: &Lookup<'_>) -> Failure {
+        let reason = "the transfer keeps changing concurrently; retry";
+        bad(lookup.pid, lookup.named_pid, reason)
+    }
+
+    fn before_write(&self, transfer: &mut Transfer) {
+        if transfer.state.is_terminal() {
+            // an ended transfer keeps no token of the consumer's
+            transfer.data_address = None;
+        }
     }
 }
 
@@ -822,7 +912,8 @@ where
 fn answer_again(existing: &Transfer, msg: &TransferRequestMessage) -> Handled {
     let same_request = existing.agreement_id == msg.agreement_id
         && existing.format == msg.format
-        && existing.callback_address == msg.callback_address;
+        && existing.callback_address == msg.callback_address
+        && (existing.data_address.is_none() || existing.data_address == msg.data_address);
     if !same_request {
         return Err(bad(
             "",
@@ -841,123 +932,18 @@ fn ack(transfer: &Transfer) -> TransferProcess {
     )
 }
 
-/// The start message carrying where to fetch the data.
-fn start_message(transfer: &Transfer, address: DataAddress) -> Outgoing {
-    let msg = TransferStartMessage {
-        context: Context::default(),
-        kind: TransferStartMessageType,
-        provider_pid: transfer.provider_pid.clone(),
-        consumer_pid: transfer.consumer_pid.clone(),
-        data_address: Some(address),
-    };
-    outgoing(transfer, "start", &msg, Transition::Start)
-}
-
-fn suspension(transfer: &Transfer) -> Outgoing {
-    let msg = TransferSuspensionMessage {
-        context: Context::default(),
-        kind: TransferSuspensionMessageType,
-        provider_pid: transfer.provider_pid.clone(),
-        consumer_pid: transfer.consumer_pid.clone(),
-        code: None,
-        reason: vec![serde_json::Value::String(
-            "suspended by the provider".to_owned(),
-        )],
-    };
-    outgoing(transfer, "suspension", &msg, Transition::Suspend)
-}
-
-fn completion(transfer: &Transfer) -> Outgoing {
-    let msg = TransferCompletionMessage {
-        context: Context::default(),
-        kind: TransferCompletionMessageType,
-        provider_pid: transfer.provider_pid.clone(),
-        consumer_pid: transfer.consumer_pid.clone(),
-    };
-    outgoing(transfer, "completion", &msg, Transition::Complete)
-}
-
-fn termination(transfer: &Transfer, reason: &str) -> Outgoing {
-    let msg = TransferTerminationMessage {
-        context: Context::default(),
-        kind: TransferTerminationMessageType,
-        provider_pid: transfer.provider_pid.clone(),
-        consumer_pid: transfer.consumer_pid.clone(),
-        code: None,
-        reason: vec![serde_json::Value::String(reason.to_owned())],
-    };
-    outgoing(transfer, "termination", &msg, Transition::Terminate)
-}
-
-/// Wraps `msg` for the consumer's callback endpoint `path` (DSP 2025-1,
-/// "Transfer Process HTTPS Binding": `/transfers/:consumerPid/...`).
-fn outgoing<T: serde::Serialize>(
-    transfer: &Transfer,
-    path: &str,
-    msg: &T,
-    transition: Transition,
-) -> Outgoing {
-    let status_url = format!(
-        "{}/transfers/{}",
-        transfer.callback_address.trim_end_matches('/'),
-        transfer.consumer_pid
-    );
-    Outgoing {
-        provider_pid: transfer.provider_pid.clone(),
-        url: format!("{status_url}/{path}"),
-        body: serde_json::to_value(msg).unwrap_or_default(),
-        transition,
-        to: next_state(Some(transfer.state), transition, Role::Provider).unwrap_or(transfer.state),
-        status_url,
-        counter_party: transfer.counter_party.clone(),
-    }
-}
-
-/// Applies our acknowledged message `sent` to `t`.
-fn apply_sent(transfer: &mut Transfer, sent: &Outgoing) -> Result<(), TransitionError> {
-    transfer.state = next_state(Some(transfer.state), sent.transition, Role::Provider)?;
-    transfer.pending = None;
-    Ok(())
-}
-
-/// Applies a consumer's message to `t`. If it does not fit the current
-/// state but fits the state our pending message leads to, the consumer has
-/// received that message (it could not have sent this one otherwise), so
-/// both are applied.
+/// Applies a consumer's message to `transfer` with the shared core
+/// ([`process::receive`]): proof of delivery included (ADR 0007).
 fn receive(transfer: &mut Transfer, transition: Transition) -> Result<(), Failure> {
-    let ending = transfer
-        .pending
-        .as_ref()
-        .is_some_and(|p| p.transition == Transition::Terminate);
-    if ending && transition != Transition::Terminate {
-        return Err(bad(
+    match process::receive(transfer, transition) {
+        Ok(()) => Ok(()),
+        Err(Refused::Ending) => Err(bad(
             &transfer.provider_pid,
             &transfer.consumer_pid,
             "the provider is ending this transfer",
-        ));
+        )),
+        Err(Refused::NotAllowed(error)) => Err(transition_failure(transfer, error)),
     }
-    let error = match next_state(Some(transfer.state), transition, Role::Consumer) {
-        Ok(state) => {
-            transfer.state = state;
-            return Ok(());
-        }
-        Err(e) => e,
-    };
-    // our pending message may have arrived without its acknowledgement
-    // being recorded yet: if the counter-party's message fits the state
-    // that message leads to, it is proof of delivery (ADR 0007), and both
-    // are applied together
-    if let Some(sent) = transfer.pending.clone() {
-        let mut proved = transfer.clone();
-        if apply_sent(&mut proved, &sent).is_ok()
-            && let Ok(state) = next_state(Some(proved.state), transition, Role::Consumer)
-        {
-            proved.state = state;
-            *transfer = proved;
-            return Ok(());
-        }
-    }
-    Err(transition_failure(transfer, error))
 }
 
 fn transition_failure(transfer: &Transfer, e: TransitionError) -> Failure {
@@ -975,6 +961,9 @@ fn bad(pid: &str, cpid: &str, reason: &str) -> Failure {
 fn not_found(pid: &str, cpid: &str) -> Failure {
     Failure::NotFound(TransferError::new(pid, cpid, "404", "no such transfer"))
 }
+
+mod own_steps;
+pub use own_steps::MAX_PAGE;
 
 #[cfg(test)]
 mod tests;

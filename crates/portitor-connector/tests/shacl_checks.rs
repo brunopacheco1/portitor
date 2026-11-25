@@ -246,7 +246,10 @@ fn provider_ports(
     entries: Vec<Value>,
     bundle: Option<&BundleRules>,
 ) -> Ports {
-    let mut ports = authenticating(Ports::new(Arc::clone(sender) as Arc<dyn Sender>), PROVIDER);
+    let mut ports = authenticating(
+        common::ports(Arc::clone(sender) as Arc<dyn Sender>),
+        PROVIDER,
+    );
     ports.harvest.source = Some(Arc::new(FixedSource::new(entries)));
     ports.retry = Retry {
         attempts: 1,
@@ -495,7 +498,10 @@ async fn an_inbound_message_that_breaks_the_message_shapes_is_answered_400() {
 async fn an_outbound_message_that_breaks_the_message_shapes_is_not_sent() {
     let rules = rules(&bundle_of("2026.11.0", vec![messages_file(ODRL_RULE)]));
     let sender = Arc::new(Recorder::default());
-    let mut ports = authenticating(Ports::new(Arc::clone(&sender) as Arc<dyn Sender>), CONSUMER);
+    let mut ports = authenticating(
+        common::ports(Arc::clone(&sender) as Arc<dyn Sender>),
+        CONSUMER,
+    );
     ports.retry = Retry {
         attempts: 1,
         first_delay: Duration::from_millis(1),
@@ -637,7 +643,7 @@ async fn a_new_bundle_version_hides_a_failing_dataset_and_keeps_its_transfers() 
     let start_provider = |version: &str, files: Vec<File>| {
         let rules = rules(&bundle_of(version, files));
         let mut ports = authenticating(
-            Ports::new(Arc::clone(&network) as Arc<dyn Sender>),
+            common::ports(Arc::clone(&network) as Arc<dyn Sender>),
             PROVIDER,
         );
         ports.use_sqlite(&store);
@@ -649,7 +655,7 @@ async fn a_new_bundle_version_hides_a_failing_dataset_and_keeps_its_transfers() 
     };
     let (provider, _) = start_provider("2026.11.0", health_files());
     let consumer_ports = authenticating(
-        Ports::new(Arc::clone(&network) as Arc<dyn Sender>),
+        common::ports(Arc::clone(&network) as Arc<dyn Sender>),
         CONSUMER,
     );
     let (consumer_app, consumer) =

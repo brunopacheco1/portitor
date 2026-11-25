@@ -29,6 +29,13 @@
 # PORTITOR_IMAGE, PORTITOR_IDENTITY_IMAGE and PORTITOR_ISSUER_IMAGE pick
 # other images, for example local builds.
 #
+# With S3=1 (connector images from 1.1 on), run.sh also starts the profile
+# "s3": a RustFS object store shared by both participants (bucket
+# provider-data for the provider's sources, consumer-push for the data
+# pushed to the consumer, ADR 0027). run.sh makes its keys and passes them
+# as DEMO_S3_ACCESS_KEY and DEMO_S3_SECRET_KEY; without them the
+# connectors have no object storage.
+#
 # Start order: the deployment order (DEPLOYING). The issuer starts first;
 # each identity once the issuer is healthy; each connector once its own
 # identity (and, for the provider, the issuer, which serves the bundle) is
@@ -42,7 +49,7 @@ name: portitor-demo
 
 # shared by both participants
 x-identity: &identity
-  image: ${PORTITOR_IDENTITY_IMAGE:-ghcr.io/brunopacheco1/portitor-identity:1.0.0}
+  image: ${PORTITOR_IDENTITY_IMAGE:-ghcr.io/brunopacheco1/portitor-identity:1.1.0}
   depends_on:
     issuer:
       condition: service_healthy
@@ -52,14 +59,14 @@ x-identity: &identity
     timeout: 5s
     retries: 30
 x-connector: &connector
-  image: ${PORTITOR_IMAGE:-ghcr.io/brunopacheco1/portitor-connector:1.0.0}
+  image: ${PORTITOR_IMAGE:-ghcr.io/brunopacheco1/portitor-connector:1.1.0}
 
 services:
   # The dataspace's authority: did:web:issuer%3A8070, its issuer service
   # (credential requests, status lists) and its management API, where
   # scenarios/two-party/run.sh registers the participants.
   issuer:
-    image: ${PORTITOR_ISSUER_IMAGE:-ghcr.io/brunopacheco1/portitor-issuer:1.0.0}
+    image: ${PORTITOR_ISSUER_IMAGE:-ghcr.io/brunopacheco1/portitor-issuer:1.1.0}
     environment:
       PORTITOR_PARTICIPANT_ID: did:web:issuer%3A8070
       PORTITOR_ISSUER_SERVICE_URL: http://issuer:8070/issuer
@@ -96,6 +103,20 @@ services:
     image: docker.io/library/nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
     volumes:
       - ../../examples/data:/usr/share/nginx/html:ro
+
+  # the participants' object storage (profile s3): S3 API on :9000
+  rustfs:
+    image: docker.io/rustfs/rustfs:1.0.6
+    profiles: [s3]
+    environment:
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ACCESS_KEY: ${DEMO_S3_ACCESS_KEY:-}
+      RUSTFS_SECRET_KEY: ${DEMO_S3_SECRET_KEY:-}
+    volumes:
+      - rustfs-data:/data
+    ports:
+      - 127.0.0.1:18100:9000 # S3 API, for the checks
 
   # --- the provider ---------------------------------------------------------
 
@@ -148,11 +169,17 @@ services:
       # the harvest jobs (GET /v1/harvest-jobs)
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8081
       PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/provider-management-key
+      # object storage (S3=1): s3:// sources. A demo: in production the
+      # keys come from a secret store (docs/DEPLOYING.md)
+      AWS_ENDPOINT_URL_S3: http://rustfs:9000
+      AWS_ACCESS_KEY_ID: ${DEMO_S3_ACCESS_KEY:-}
+      AWS_SECRET_ACCESS_KEY: ${DEMO_S3_SECRET_KEY:-}
     secrets:
       - provider-sts-secret
       - provider-management-key
     volumes:
-      - ../../examples/healthdcat-datasets.json:/config/datasets.json:ro
+      # examples/healthdcat-datasets.json, or with S3=1 changed by s3-datasets.jq
+      - ./run/datasets.json:/config/datasets.json:ro
       - provider-data:/data
     ports:
       - 127.0.0.1:18080:8080
@@ -206,6 +233,11 @@ services:
       PORTITOR_ALLOW_HTTP: "true"
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8081
       PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/consumer-management-key
+      # object storage (S3=1): where pushed data lands
+      AWS_ENDPOINT_URL_S3: http://rustfs:9000
+      AWS_ACCESS_KEY_ID: ${DEMO_S3_ACCESS_KEY:-}
+      AWS_SECRET_ACCESS_KEY: ${DEMO_S3_SECRET_KEY:-}
+      PORTITOR_PUSH_BUCKET: ${DEMO_PUSH_BUCKET:-}
     secrets:
       - consumer-sts-secret
       - consumer-management-key
@@ -248,3 +280,4 @@ volumes:
   provider-data:
   consumer-identity-data:
   consumer-data:
+  rustfs-data:

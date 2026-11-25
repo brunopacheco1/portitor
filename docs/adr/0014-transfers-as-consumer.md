@@ -110,6 +110,30 @@ no start message is sent back (ADR 0013).
   release build sends at once. The race is listed for an upstream report.
 Reported upstream: https://github.com/eclipse-dataspacetck/dsp-tck/issues/338
 
+### Amended in 1.1: push transfers into the consumer's object storage (accepted 2026-11-24)
+
+[ADR 0027](0027-push-transfers-and-object-storage.md) adds push
+(`HttpData-PUSH`): the request carries a `dataAddress` built by the
+connector, and a new public route `POST /push/{consumerPid}` receives
+the data and streams it into the consumer's own S3-compatible bucket.
+"Pull only" and "the consumer side has no data plane" below hold only
+for pull transfers. Suspend and start again are added to the management
+API (`POST /v1/transfers/{consumerPid}/suspension` and `/start`,
+[TD-11](../RISKS_AND_TECHNICAL_DEBTS.md#td-11)).
+
+Built in 1.1 (2026-11-24): this replaces "Suspend and start again from
+the management API are later work" under "The consumer's own steps".
+Both calls follow the rules of completion and termination: refused
+(400) while another message of ours is on its way or when the state
+machine does not allow the step, and the message is saved in the outbox
+before it is sent (ADR 0007). Start again works whichever party
+suspended the transfer, as DSP 2025-1 allows (`next_state`); our start
+message carries no `dataAddress`, the token stays the same, and the
+provider sends no new start message (ADR 0013). Neither call takes a
+body: the suspension carries a fixed reason, as the termination does.
+The DSP TCK does not test this (TP:02-04 and TP_C:02-04 are disabled in
+v1.0.2, above); the connector's own tests and the two-party scenario do.
+
 ## Consequences
 
 - One shape for both sides and for negotiations: the domain decides, the

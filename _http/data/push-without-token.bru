@@ -1,0 +1,35 @@
+meta {
+  name: Push without a token (refused)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{consumerUrl}}/push/{{mgmtTransferConsumerPid}}
+  body: text
+  auth: none
+}
+
+headers {
+  Content-Type: text/csv
+}
+
+body:text {
+  day,celsius
+  mon,12
+}
+
+assert {
+  res.status: eq 401
+}
+
+docs {
+  Since 1.1 (ADR 0027). The consumer's receiving route of push transfers,
+  POST or PUT /push/{consumerPid}, on a connector with object storage and
+  PORTITOR_PUSH_BUCKET. Only the provider's data plane has the token (the consumer
+  connector keeps only its hash), so a request from here is refused: every refusal is
+  the same 401 (no token, wrong or expired token, unknown transfer, a transfer that is
+  not REQUESTED or STARTED). Without object storage the route does not exist (404).
+  consumerUrl is the consumer connector's public URL; "Start push transfer" saves
+  mgmtTransferConsumerPid. Debug: receiving.rs (crates/portitor-connector/src).
+}

@@ -185,6 +185,14 @@ on the value of `consumerPid`."
   none for that consumer and `consumerPid`), so two copies of a request
   that arrive together give one transfer.
 
+### Amended in 1.1: push, object storage sources, cutting running downloads (accepted 2026-11-24)
+
+[ADR 0027](0027-push-transfers-and-object-storage.md) adds a second
+format, `HttpData-PUSH`, and a second kind of `portitor:source`, an
+`s3://{bucket}/{key}` object read with the provider's own keys. Suspend
+and terminate now cut downloads of the flow that are already running.
+"HTTP pull only" above holds for 1.0.
+
 ## Consequences
 
 - No transfer without a finalized agreement held by the caller; once DCP

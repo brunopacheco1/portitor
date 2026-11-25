@@ -156,6 +156,20 @@ impl Transition {
 
 impl crate::ProcessState for NegotiationState {
     const PROCESS: &'static str = "negotiation";
+    type Transition = Transition;
+    const TERMINATE: Transition = Transition::Terminate;
+
+    fn is_terminal(self) -> bool {
+        NegotiationState::is_terminal(self)
+    }
+
+    fn next_state(
+        from: Option<Self>,
+        transition: Transition,
+        sender: Role,
+    ) -> Result<Self, TransitionError> {
+        next_state(from, transition, sender)
+    }
 }
 
 /// Why a message cannot move the negotiation.

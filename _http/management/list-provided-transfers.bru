@@ -1,0 +1,33 @@
+meta {
+  name: List provided transfers
+  type: http
+  seq: 18
+}
+
+get {
+  url: {{mgmtUrl}}/v1/provided-transfers?limit=20
+  body: none
+  auth: inherit
+}
+
+params:query {
+  limit: 20
+}
+
+script:post-response {
+  if (res.body && res.body.transfers && res.body.transfers.length > 0) {
+    bru.setVar("mgmtProvidedTransferPid", res.body.transfers[0].providerPid);
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  The transfers this connector runs as provider (1.1), in providerPid order:
+  transfers and, on a full page, next (pass it as after). limit is 1 to 100.
+  Send it to the provider's management API (the single environment, or mgmtUrl
+  set to the provider). Keeps the first providerPid for the next two requests.
+  The data plane's token and its hash are never shown.
+}

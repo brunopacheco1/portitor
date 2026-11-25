@@ -9,6 +9,11 @@ SPDX-License-Identifier: Apache-2.0
 How the scenario changed, newest first. Each entry names the Portitor
 version it ran on.
 
+## 2026-11-25, for 1.1.0
+
+- `compose.yaml` takes the 1.1.0 release images by default. The
+  scenario itself is unchanged; it does not use the 1.1 features.
+
 ## 2026-11-24, for 1.0.0
 
 - `compose.yaml` takes the 1.0.0 release images by default. The

@@ -1,0 +1,70 @@
+meta {
+  name: 8. Push transfer request
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{dsp}}/transfers/request
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+    "@type": "TransferRequestMessage",
+    "consumerPid": "{{transferConsumerPid}}",
+    "agreementId": "{{agreementId}}",
+    "format": "HttpData-PUSH",
+    "dataAddress": {
+      "@type": "DataAddress",
+      "endpointType": "https://w3id.org/dspace-sig/profile/http-push",
+      "endpoint": "{{pushEndpoint}}",
+      "endpointProperties": [
+        {"@type": "EndpointProperty", "name": "authorization", "value": "{{pushToken}}"},
+        {"@type": "EndpointProperty", "name": "authType", "value": "bearer"}
+      ]
+    },
+    "callbackAddress": "{{callbackAddress}}"
+  }
+}
+
+script:pre-request {
+  bru.setVar("transferConsumerPid", "urn:uuid:bruno-push-" + Date.now());
+  // where the provider sends the data: any endpoint of yours that takes a POST
+  if (!bru.getVar("pushEndpoint")) {
+    bru.setVar("pushEndpoint", "https://consumer.example/push/receiver");
+  }
+  if (!bru.getVar("pushToken")) {
+    bru.setVar("pushToken", "test-only-push-token");
+  }
+}
+
+script:post-response {
+  if (res.body && res.body.providerPid) {
+    bru.setVar("transferProviderPid", res.body.providerPid);
+  }
+}
+
+assert {
+  res.status: eq 201
+  res.body["@type"]: eq TransferProcess
+}
+
+docs {
+  Since 1.1 (ADR 0027). A push transfer request: format HttpData-PUSH with the consumer's
+  dataAddress (endpointType https://w3id.org/dspace-sig/profile/http-push, an endpoint,
+  and authType bearer with the authorization property). The provider answers 201, sends
+  a TransferStartMessage without a dataAddress to {{callbackAddress}}, then POSTs the
+  dataset to the endpoint with "Authorization: Bearer <token>" and the source's
+  Content-Type. A 2xx answer completes the transfer; anything else terminates it.
+  400 for a wrong endpointType, no endpoint, an http:// endpoint without
+  PORTITOR_ALLOW_HTTP, or a dataset without an HttpData-PUSH distribution.
+  Set pushEndpoint and pushToken to your own test endpoint. Saves transferProviderPid.
+  Debug: transfer.rs and push.rs (crates/portitor-connector/src).
+}

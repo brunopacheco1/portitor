@@ -134,6 +134,20 @@ impl Transition {
 
 impl crate::ProcessState for TransferState {
     const PROCESS: &'static str = "transfer";
+    type Transition = Transition;
+    const TERMINATE: Transition = Transition::Terminate;
+
+    fn is_terminal(self) -> bool {
+        TransferState::is_terminal(self)
+    }
+
+    fn next_state(
+        from: Option<Self>,
+        transition: Transition,
+        sender: Role,
+    ) -> Result<Self, TransitionError> {
+        next_state(from, transition, sender)
+    }
 }
 
 /// Why a message cannot move the transfer.
@@ -230,6 +244,56 @@ impl DataAddress {
             .find(|p| p.name == name)
             .map(|p| p.value.as_str())
     }
+}
+
+/// The format of a push transfer over HTTP: the provider sends the data
+/// to the consumer's endpoint (ADR 0027). The name EDC and its data plane
+/// Siglet use, next to `HttpData-PULL`.
+pub const HTTP_DATA_PUSH: &str = "HttpData-PUSH";
+
+/// The `endpointType` of a push transfer's `dataAddress`: the Data Plane
+/// Signaling HTTP transfer profile's push type
+/// (`eclipse-dataplane-signaling/profiles`, `specifications/profiles/http.md`
+/// and `schemas/http/data-address-schema.json`, last changed 2026-09-25;
+/// ADR 0027).
+pub const HTTP_PUSH_ENDPOINT_TYPE: &str = "https://w3id.org/dspace-sig/profile/http-push";
+
+/// Whether `format` is a push format: a transfer request in it must carry
+/// a `dataAddress` (DSP 2025-1, "Transfer Request Message": the
+/// `dataAddress` "MUST only be provided if the `format` REQUIRES a push
+/// transfer").
+#[must_use]
+pub fn is_push_format(format: &str) -> bool {
+    format == HTTP_DATA_PUSH
+}
+
+/// Checks the consumer's `dataAddress` of a push transfer (ADR 0027,
+/// section 1): `endpointType` is [`HTTP_PUSH_ENDPOINT_TYPE`], an
+/// `endpoint` is given, and when an `authorization` property is present
+/// its `authType` is `bearer`, the only type of the HTTP profile. Whether
+/// the endpoint is an `https://` URL is checked by the adapter, which
+/// knows the connector's `PORTITOR_ALLOW_HTTP`.
+///
+/// # Errors
+///
+/// The reason, without the token.
+pub fn check_push_address(address: &DataAddress) -> Result<(), String> {
+    if address.endpoint_type != HTTP_PUSH_ENDPOINT_TYPE {
+        return Err(format!(
+            "the dataAddress of a push transfer has endpointType {HTTP_PUSH_ENDPOINT_TYPE}"
+        ));
+    }
+    if address.endpoint.as_deref().is_none_or(str::is_empty) {
+        return Err("the dataAddress of a push transfer has an endpoint".to_owned());
+    }
+    if address.property("authorization").is_some()
+        && !address
+            .property("authType")
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("bearer"))
+    {
+        return Err("the authorization of a push dataAddress has authType bearer".to_owned());
+    }
+    Ok(())
 }
 
 /// `TransferRequestMessage`, sent by the consumer to start a transfer

@@ -2,12 +2,12 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Portitor connector",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "description": "HTTP interface of portitor-connector. The DSP endpoints follow the DSP 2025-1 HTTPS bindings; the message schemas are the official DSP 2025-1 JSON Schemas (copied unchanged in crates/portitor-dsp/tests/schemas). DSP itself publishes no OpenAPI file; this one is written by hand and a test checks that every path in it is served. As consumer, the connector sends callbackAddress = public URL + /dsp/2025-1/callback, so providers call the callback paths below. Every DSP endpoint except /.well-known/dspace-version needs a DCP self-issued ID token (ADR 0016), and the caller's credential service must present a valid MembershipCredential from a trusted issuer, in presentations whose every credential passes its checks (DCP v1.0.1, 5.4.3); otherwise the answer is the endpoint's DSP error with reason \"unauthorized\": with HTTP 404 on the negotiation and transfer endpoints, callbacks included (DSP 2025-1 HTTPS bindings, \"Unauthorized Access\": a client that is not authorized gets 404; Eclipse EDC answers the same), and with HTTP 401 on the catalog endpoints (ADR 0016, amended in 0.12). The reason is in the connector's log. When the caller could not be checked because a service the check needs did not answer, the answer is 503 with a problem document, so that a partner tries again. /health and the data plane (/data, its own tokens) are open. Known limits (docs/RISKS_AND_TECHNICAL_DEBTS.md): a negotiation starts from the consumer only, so the DSP consumer endpoint POST /dsp/2025-1/callback/negotiations/offers, with which a provider starts one, is not served (TD-35); Policies are read strictly (ADR 0009, amended 2026-11-18): an offer or agreement with a field this connector does not know is refused with 400, and the reason names the field. Three answers are the same on every route and are a problem document (application/problem+json), not a DSP error, because they are made outside the handlers: 413 when the request body is over the route's limit, 503 when the request took longer than 60 seconds, and 500 when a handler hit a bug (a panic; the server goes on, the error is logged and counted in portitor.http.request.panicked)."
+    "description": "HTTP interface of portitor-connector. The DSP endpoints follow the DSP 2025-1 HTTPS bindings; the message schemas are the official DSP 2025-1 JSON Schemas (copied unchanged in crates/portitor-dsp/tests/schemas). DSP itself publishes no OpenAPI file; this one is written by hand and a test checks that every path in it is served. As consumer, the connector sends callbackAddress = public URL + /dsp/2025-1/callback, so providers call the callback paths below. Every DSP endpoint except /.well-known/dspace-version needs a DCP self-issued ID token (ADR 0016), and the caller's credential service must present a valid MembershipCredential from a trusted issuer, in presentations whose every credential passes its checks (DCP v1.0.1, 5.4.3; since 1.1 a valid token alone is enough to end one's own transfer, TD-47); otherwise the answer is the endpoint's DSP error with reason \"unauthorized\": with HTTP 404 on the negotiation and transfer endpoints, callbacks included (DSP 2025-1 HTTPS bindings, \"Unauthorized Access\": a client that is not authorized gets 404; Eclipse EDC answers the same), and with HTTP 401 on the catalog endpoints (ADR 0016, amended in 0.12). The reason is in the connector's log. When the caller could not be checked because a service the check needs did not answer, the answer is 503 with a problem document, so that a partner tries again. /health and the data plane (/data, its own tokens) are open. Known limits (docs/RISKS_AND_TECHNICAL_DEBTS.md): a negotiation starts from the consumer only, so the DSP consumer endpoint POST /dsp/2025-1/callback/negotiations/offers, with which a provider starts one, is not served (TD-35); Policies are read strictly (ADR 0009, amended 2026-11-18): an offer or agreement with a field this connector does not know is refused with 400, and the reason names the field. Three answers are the same on every route and are a problem document (application/problem+json), not a DSP error, because they are made outside the handlers: 413 when the request body is over the route's limit, 503 when the request took longer than 60 seconds, and 500 when a handler hit a bug (a panic; the server goes on, the error is logged and counted in portitor.http.request.panicked)."
   },
   "servers": [
     {
@@ -667,7 +667,7 @@
           "Transfer process (provider)"
         ],
         "summary": "Request a transfer",
-        "description": "The consumer asks for a dataset under a finalized agreement it holds, in a format the dataset offers (ADR 0013). Only pull transfers (format HttpData-PULL) are supported. The provider answers with its acknowledgement, then sends a TransferStartMessage with the data address (or a termination) to the consumer's callbackAddress. An agreement with credential constraints (ADR 0019) is checked again with fresh credentials, so a revoked credential ends the transfer. A request that the same consumer sends again with the same consumerPid starts nothing new: the answer is the transfer it already has, in its current state, and no second data address or token is sent (DSP 2025-1, Transfer Request Message: idempotent behavior based on consumerPid; ADR 0013, amended in 0.12). If its agreementId, format or callbackAddress differ from the first request, it is refused with 400.",
+        "description": "The consumer asks for a dataset under a finalized agreement it holds, in a format the dataset offers (ADR 0013): pull (HttpData-PULL) or, since 1.1, push (HttpData-PUSH, ADR 0027), where the request carries the consumer's dataAddress (endpointType https://w3id.org/dspace-sig/profile/http-push) and the provider's data plane sends the data to it once the transfer is STARTED. The provider answers with its acknowledgement, then sends a TransferStartMessage with the data address (or a termination) to the consumer's callbackAddress. An agreement with credential constraints (ADR 0019) is checked again with fresh credentials, so a revoked credential ends the transfer. A request that the same consumer sends again with the same consumerPid starts nothing new: the answer is the transfer it already has, in its current state, and no second data address or token is sent (DSP 2025-1, Transfer Request Message: idempotent behavior based on consumerPid; ADR 0013, amended in 0.12). If its agreementId, format or callbackAddress differ from the first request, it is refused with 400.",
         "operationId": "transferRequest",
         "requestBody": {
           "required": true,
@@ -691,7 +691,7 @@
             }
           },
           "400": {
-            "description": "Invalid message, no finalized agreement for the caller, format not offered or not supported, push requested, or refused callback address, or a consumerPid the caller already used for another transfer request",
+            "description": "Invalid message, no finalized agreement for the caller, format not offered or not supported, a dataAddress in a pull request, a push request whose dataAddress is missing, not https:// (unless PORTITOR_ALLOW_HTTP) or not of the push profile, or refused callback address, or a consumerPid the caller already used for another transfer request",
             "content": {
               "application/json": {
                 "schema": {
@@ -844,7 +844,7 @@
             }
           },
           "400": {
-            "description": "Invalid message or transition",
+            "description": "Invalid message or transition, or a dataAddress (only a push transfer has one) that is not https:// (unless PORTITOR_ALLOW_HTTP) or not of the push profile",
             "content": {
               "application/json": {
                 "schema": {
@@ -1074,6 +1074,7 @@
           "Transfer process (provider)"
         ],
         "summary": "Consumer ends the transfer",
+        "description": "Since 1.1 (TD-47; ADR 0016, amended in 1.1): a caller whose token is valid but whose credentials no longer pass (no MembershipCredential from a trusted issuer, or a revoked or expired one) may still end a transfer it is the counter-party of on this route; it is refused everywhere else, and for a transfer that is not its own the answer is 404 as for any unknown transfer.",
         "operationId": "transferTermination",
         "parameters": [
           {
@@ -1909,6 +1910,7 @@
           "Transfer process (consumer callback)"
         ],
         "summary": "Provider ends the transfer",
+        "description": "Since 1.1 (TD-47; ADR 0016, amended in 1.1): a caller whose token is valid but whose credentials no longer pass (no MembershipCredential from a trusted issuer, or a revoked or expired one) may still end a transfer it is the provider of on this route; it is refused everywhere else, and for a transfer that is not its own the answer is 404 as for any unknown transfer.",
         "operationId": "consumerTransferTermination",
         "parameters": [
           {
@@ -1997,7 +1999,7 @@
           "Data plane"
         ],
         "summary": "The data of a started transfer",
-        "description": "Open route with its own token: the bearer token from the transfer's data address (DSP dataAddress, endpointProperties \"authorization\"). Valid while the transfer is STARTED and for PORTITOR_DATA_TOKEN_SECONDS after the start. Streams the source's 2xx answer with its Content-Type; the source URL is never shown.",
+        "description": "Open route with its own token: the bearer token from the transfer's data address (DSP dataAddress, endpointProperties \"authorization\"). Valid while the transfer is STARTED and for PORTITOR_DATA_TOKEN_SECONDS after the start. Streams the source's 2xx answer with its Content-Type; the source URL is never shown. Since 1.1 (ADR 0027): the source may also be an object of the provider's object storage (s3://{bucket}/{key}); the consumer's MembershipCredential, kept from its transfer request, is checked again on each request and while the data streams. A membership that no longer holds gets 401 and ends the transfer; a running download is cut (the connection ends before the data does) when the membership fails or the transfer is suspended or terminated.",
         "operationId": "transferData",
         "parameters": [
           {
@@ -2014,16 +2016,106 @@
             "description": "The data, streamed from the dataset's source"
           },
           "401": {
-            "description": "No token, a wrong or expired token, or an unknown flow"
+            "description": "No token, a wrong or expired token, or an unknown flow; since 1.1 also a consumer whose membership no longer holds or could not be checked now"
           },
           "500": {
             "description": "The store could not be read (no body), or a bug in the handler (a problem document)"
           },
           "502": {
-            "description": "The source did not answer with 2xx"
+            "description": "The source did not answer with 2xx; for an s3:// source, also a connector without object storage"
           },
           "503": {
             "$ref": "#/components/responses/TookTooLong"
+          }
+        }
+      }
+    },
+    "/push/{consumerPid}": {
+      "post": {
+        "tags": [
+          "Data plane"
+        ],
+        "summary": "Receive the data of a push transfer (since 1.1)",
+        "description": "Open route with its own token, on a connector with object storage settings and PORTITOR_PUSH_BUCKET (ADR 0027): the provider's data plane sends the data of a push transfer (format HttpData-PUSH) this connector asked for. The endpoint and the bearer token are those of the dataAddress in our transfer request (endpointType https://w3id.org/dspace-sig/profile/http-push). The token is valid while the transfer is REQUESTED or STARTED and for PORTITOR_DATA_TOKEN_SECONDS after the request (or the last start again). The body is streamed into the push bucket as the object named {consumerPid}, with its Content-Type; a second request replaces the object. POST and PUT do the same: the HTTP Transfer Profile names no method. Not subject to PORTITOR_MAX_REQUEST_BYTES nor to the request time limit.",
+        "operationId": "receivePushedData",
+        "parameters": [
+          {
+            "name": "consumerPid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "The data, with its Content-Type",
+          "content": {
+            "*/*": {
+              "schema": {}
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "The data is in the push bucket"
+          },
+          "400": {
+            "description": "The request body broke off; nothing was stored"
+          },
+          "401": {
+            "description": "No token, a wrong or expired token, an unknown transfer, or a transfer that is not REQUESTED or STARTED"
+          },
+          "500": {
+            "description": "The store could not be read or written (no body), or a bug in the handler (a problem document)"
+          },
+          "502": {
+            "description": "The object storage refused the data or did not answer; nothing was stored"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Data plane"
+        ],
+        "summary": "Receive the data of a push transfer (since 1.1)",
+        "description": "Open route with its own token, on a connector with object storage settings and PORTITOR_PUSH_BUCKET (ADR 0027): the provider's data plane sends the data of a push transfer (format HttpData-PUSH) this connector asked for. The endpoint and the bearer token are those of the dataAddress in our transfer request (endpointType https://w3id.org/dspace-sig/profile/http-push). The token is valid while the transfer is REQUESTED or STARTED and for PORTITOR_DATA_TOKEN_SECONDS after the request (or the last start again). The body is streamed into the push bucket as the object named {consumerPid}, with its Content-Type; a second request replaces the object. POST and PUT do the same: the HTTP Transfer Profile names no method. Not subject to PORTITOR_MAX_REQUEST_BYTES nor to the request time limit.",
+        "operationId": "receivePushedDataPut",
+        "parameters": [
+          {
+            "name": "consumerPid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "The data, with its Content-Type",
+          "content": {
+            "*/*": {
+              "schema": {}
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "The data is in the push bucket"
+          },
+          "400": {
+            "description": "The request body broke off; nothing was stored"
+          },
+          "401": {
+            "description": "No token, a wrong or expired token, an unknown transfer, or a transfer that is not REQUESTED or STARTED"
+          },
+          "500": {
+            "description": "The store could not be read or written (no body), or a bug in the handler (a problem document)"
+          },
+          "502": {
+            "description": "The object storage refused the data or did not answer; nothing was stored"
           }
         }
       }

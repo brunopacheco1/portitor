@@ -118,12 +118,31 @@ export on, `telemetry: exporting` (INFO).
 | A partner says a call got HTTP 404 `unauthorized`, or its side ended with `no such negotiation` although the process exists | The 404 for a caller that is not authenticated does not say why (DSP 2025-1; Eclipse EDC does the same) | Look in **your** log for the line above at that time. A 404 with reason `no such negotiation` or `no such transfer` and without that line means the process id is unknown, or belongs to another participant |
 | `counter-party not reachable; terminating` (WARN) with `HTTP 404` in `error` | The partner does not know the process, or it refused your credentials (a Portitor from 0.12 and Eclipse EDC answer 404 for both). The message is not sent again | Ask the partner for the reason in its log; check that your credential is valid and not revoked, and that the partner trusts its issuer |
 | `DSP request not checked: a service the check needs is unavailable; answered 503` (WARN) | A server the check fetches from (the partner's DID document or Credential Service, its issuer's DID document or status list, your STS) did not answer, or answered 408, 429 or 5xx; `reason` names it. The partner tries again | If it repeats: check your STS, then ask the partner about its services |
+| `DSP termination accepted from a partner without membership` (WARN, 1.1) | A partner whose DCP token is valid but whose membership no longer holds (revoked, expired, untrusted issuer, missing) ended a transfer it is the counter-party of; `process` and `caller` name them, `reason` says what failed. Every other message from it is refused (TD-47) | Nothing: the transfer ended as the partner asked. Check whether the partner is still meant to be in the data space |
+| `data flow ended: the consumer's membership no longer holds` (WARN, 1.1) | As provider: the consumer's `MembershipCredential` kept with the data flow failed its check again (`reason`); its request was refused with 401 or its download cut, and the transfer is terminated (the DSP termination goes to the consumer) | Nothing, unless the consumer should still be a member: then check its credential at the issuer |
+| `request for data refused: the consumer's membership could not be checked now` (WARN, 1.1) | A `/data` request got 401 because the membership check could not finish (`reason`: a status list or the issuer's DID document did not answer). The transfer is kept; the next request may pass | If it repeats: check the issuer's status list and DID document from the connector's network |
+| `running download cut: the consumer's membership could not be checked now` (WARN, 1.1) | The same, for a download that was running: it was cut, the transfer is kept | As above |
+| `running downloads cut` (INFO, 1.1) | A data flow was suspended or terminated while downloads of it ran (`downloads` counts them, `state` is the new state); they were stopped | Nothing |
+| `data flow started before 1.1: no membership kept; served until its token expires` (INFO, 1.1) | Once per flow and process: a transfer started before the upgrade has no membership to check again; it is served as in 1.0 until its token expires | Nothing; it stops once those tokens have expired (`PORTITOR_DATA_TOKEN_SECONDS`) |
+| `the consumer's memberships could not be kept; its requests for data will be refused` (ERROR, 1.1) | The database could not be written when the transfer was asked for; the transfer is refused at the data plane (fail closed) | Check disk space and the `/data` volume; the consumer asks for a new transfer |
+| `transfer terminated by the provider's operator` (INFO, 1.1) | `POST /v1/provided-transfers/{providerPid}/termination` was called: access ended and the termination is on its way | Nothing |
+| `transfer not ended again` (INFO, 1.1) | A transfer whose consumer is no longer a member had already ended, or its termination was on its way | Nothing |
 | `no token: ...` in a send failure (WARN) | The STS did not give a token for an outgoing DSP request | Check the identity component, `PORTITOR_STS_URL` and the shared secret |
 | `own identity checked: DID document and STS agree` (INFO, at start) | The connector's DID document resolves and the STS signs for it | Nothing |
 | `panic` (ERROR) | A bug: code stopped at `place` (file, line and column). One of the next two lines follows | Report it with `place` and the version |
 | `a request handler panicked; answered 500` (ERROR) | The request on `route` got HTTP 500; the other requests went on | Report it; if it repeats for one partner, its message triggers the bug |
 | `a background task panicked; it starts again` / `...; its message is sent again` / `...; its work is left as saved` (ERROR) | The task `task` stopped at a bug. A task that runs all the time starts again after a pause (`restart_in_seconds`): 5 seconds, twice as long after each further panic in a row, at most 5 minutes. A DSP message whose sending panicked (`outbox_delivery`) is sent again after the same pauses (`again_in_seconds`). A credential decision stays saved and is tried again on the issuer's next outbox round (at most a minute); the other requests and deliveries go on | Report it. A line that repeats for the same `pid` or `issuer_pid` is a message or request that meets the bug every time: it stays as it is until a fixed version runs |
 | `portitor-connector stopped` (ERROR) | The process could not start or stopped with an error; the message says why | Fix the cause; the container restarts |
+| `data transfer done` (INFO, target `portitor::audit`) | One per data response served at `/data/{flowId}`, per push sent and per push received (since 1.1), when it ended: the audit line below | Ship and keep it as your audit trail |
+| `audit: transfer store failed` (WARN, 1.1) | As provider: the transfer of a data flow (`flow`) could not be read for its audit line (`error`). The data is served anyway; in that audit line `agreement` and `counterParty` are empty | Check disk space and the `/data` volume |
+| `upstream fetch failed` (WARN) | The data source of a pull did not answer, or answered other than 2xx; the consumer got HTTP 502 and `error` says why. The audit line says `failed` | Check the dataset's `portitor:source` and that the source is up |
+| `object storage` (INFO, at start, 1.1) | The connector has object storage: `endpoint` and `push_bucket` (`none` when it does not receive pushes); never the keys | Nothing |
+| `push: the source could not be read` (WARN, 1.1) | As provider: the source of a push did not answer, or answered other than 2xx (`error`); the push is not sent and the transfer is terminated | Check the dataset's `portitor:source` and that the source is up |
+| `push not sent: the consumer's membership could not be checked now` (WARN, 1.1) | As provider: the membership check before or during a push could not finish (`reason`); the push fails and the transfer is terminated | Check the issuer's status list and DID document from the connector's network; the consumer asks for a new transfer |
+| `push: cannot start` (WARN, 1.1) | As provider: the dataset of a started push transfer has no source, or the database failed (`error`); nothing is sent | Check that the dataset is still in the datasets file, and the `/data` volume |
+| `push: the end of the transfer could not be saved` / `push: the started pushes cannot be read` (ERROR, 1.1) | As provider: the database failed while a push ended, or at start while looking for pushes to send again | Check disk space and the `/data` volume |
+| `push received: the object storage failed` (WARN, 1.1) | As consumer: a push arrived but could not be stored (`error` names a status or a cause, never a key); the sender got HTTP 502. The audit line says `failed` | Check the object storage, the push bucket and the connector's key |
+| `object storage: an unfinished upload could not be aborted` (WARN, 1.1) | An upload into the push bucket failed, and its parts could not be removed | Remove unfinished multipart uploads with your storage's tools, or set a lifecycle rule for them |
 | `harvesting datasets` (INFO, at start) | The datasets file and the interval in use | Nothing |
 | `no datasets file (PORTITOR_DATASETS_FILE): the catalog is empty` (INFO) | No datasets file is set | Set it, if you offer datasets |
 | `harvest run` (INFO) | One per run: `job`, `trigger`, `outcome` and the counts | Nothing |
@@ -300,6 +319,55 @@ state changed`, with `portitor.dsp.process`, `portitor.dsp.role`,
 `portitor.dsp.previous_state` (none for a new process) and
 `portitor.dsp.state`.
 
+**Audit line of each data transfer** (since 1.1,
+[ADR 0027](adr/0027-push-transfers-and-object-storage.md) section 6,
+[TD-31](RISKS_AND_TECHNICAL_DEBTS.md#td-31) first half). Each response
+of the provider's data plane (`GET /data/{flowId}`), each push the
+provider sends and each push the consumer receives
+(`POST` or `PUT /push/{consumerPid}`) writes, once it has ended, one
+line at INFO with the message `data transfer done` and the target
+`portitor::audit`, with these fields:
+
+| Field | Value |
+|---|---|
+| `flow` | The data flow id: the provider's process id of the transfer (`providerPid`; `portitor.dsp.provider_pid` in the state change lines), on both sides |
+| `agreement` | The agreement id |
+| `counterParty` | The consumer's DID |
+| `direction` | `sent` (a pull served, a push sent) or `received` (a push received) |
+| `bytes` | The bytes of data actually sent to the consumer |
+| `outcome` | `complete` (all of it sent), `cut` (stopped before the end: the consumer closed the connection, or access was taken away while the data was flowing) or `failed` (the data source failed before or during the answer; `bytes` is then what was sent before) |
+
+For a push the fields are the same, with these differences. A push sent
+(as provider): `flow` is the provider's process id, `counterParty` the
+consumer's DID, and `outcome` is `complete` when the consumer answered
+2xx, `failed` when it answered anything else, did not answer or the
+source failed, and `cut` when the transfer was suspended or terminated,
+or the consumer's membership no longer held. A push received (as consumer): `direction`
+is `received`, `flow` is still the provider's process id (so the two
+partners' lines of one push can be matched; the object key is the
+`consumerPid`), `counterParty` the provider's participant id, `bytes`
+what arrived, and
+`outcome` is `complete` when the object is stored, `cut` when the
+sender's body broke off, and `failed` when the object storage failed.
+
+For example:
+
+```json
+{"timestamp":"2026-11-24T10:00:00.000000Z","level":"INFO","fields":{"message":"data transfer done","flow":"urn:uuid:6f0c...","agreement":"urn:uuid:a1b2...","counterParty":"did:web:consumer.example","direction":"sent","bytes":18,"outcome":"complete"},"target":"portitor::audit"}
+```
+
+The message, the target and these fields are stable in 1.x
+([STABILITY, Audit line](STABILITY.md#audit-line)).
+
+A refused request (HTTP 401, on `/data` or `/push`) writes no audit
+line. When the transfer
+cannot be read from the database, `agreement` and `counterParty` are
+empty, the data is served anyway, and a WARN line `audit: transfer
+store failed` comes first. The line never holds
+the token or the data source's URL. Portitor keeps no audit store: keep
+these lines as long as your rules require (ADR 0025, "Audit"). With
+`RUST_LOG` set, keep `portitor::audit=info` in it.
+
 **Metrics.** Names follow OpenTelemetry's
 [naming rules](https://opentelemetry.io/docs/specs/semconv/general/naming/);
 the two HTTP histograms are the
@@ -351,6 +419,9 @@ backup separate from its database backup.
 
 Negotiations and transfers that were in progress at backup time continue
 from their saved state.
+
+Data received by push (since 1.1) is in your object storage, not in
+`/data`: back the push bucket up with your storage's own tools.
 
 ## Rotating a key
 
@@ -424,6 +495,52 @@ after the backup is lost. This stays so in 1.x
 Messages the connector was sending when it stopped are saved and sent
 again at start (ADR 0007), so an upgrade does not leave negotiations
 waiting. A partner may receive such a message twice; that is handled.
+
+### From 1.0 to 1.1
+
+1.1 adds push transfers, object storage and ways to end access
+([ADR 0027](adr/0027-push-transfers-and-object-storage.md)). No setting
+or route was removed or renamed; the new ones are listed in
+[STABILITY](STABILITY.md). Nothing has to change in your configuration.
+
+1. **Back up `/data` first.** Migrations 12 and 13 run at start,
+   forward only: the table `flow_membership`, the columns
+   `transfer.data_address` and `data_flow.push_address`, and the table
+   `push_receipt`. To go back to 1.0, restore the backup.
+2. **Behaviour change, provider: the consumer's membership is checked
+   again on every `/data` request and while a download runs.** A
+   consumer whose `MembershipCredential` was revoked, has expired or
+   whose issuer left `PORTITOR_TRUSTED_ISSUERS` gets 401, and the
+   transfer is terminated. Transfers started before the upgrade have no
+   membership kept: they are served as in 1.0 until their token expires,
+   with one INFO line per flow. They never get a new token: a provider
+   policy that starts such a suspended transfer again (only a scripted
+   one, as in the TCK build) terminates it instead, and the consumer
+   asks for a new transfer, which is checked
+   ([DEPLOYING, Revocation and running transfers](DEPLOYING.md#revocation-and-running-transfers)).
+   Each check reads the status list through the cache
+   (`PORTITOR_STATUS_LIST_CACHE_SECONDS`); with a cache of `0`, every
+   `/data` request fetches the list.
+3. **Behaviour change, provider: suspend and terminate cut running
+   downloads.** In 1.0 a running download went on to its end.
+4. **Behaviour change, both sides: a partner whose membership was
+   revoked can still end a transfer it shares with you** (TD-47); every
+   other message from it is refused as before.
+5. **Logs.** Each pull, push sent and push received writes the audit
+   line `data transfer done` (target `portitor::audit`,
+   [Traces and metrics](#traces-and-metrics)). With `RUST_LOG` set, keep
+   `portitor::audit=info` in it. The other new lines are in
+   [Health and logs](#health-and-logs), marked 1.1.
+6. **Only if you use push or `s3://` sources:** set the object storage
+   settings and create the push bucket (with a lifecycle rule that
+   aborts incomplete multipart uploads), let your reverse proxy pass
+   large, long requests on `/push/`, and keep the egress firewall: a
+   push goes to an address the consumer chose
+   ([DEPLOYING, Object storage and push transfers](DEPLOYING.md#object-storage-and-push-transfers)).
+   `AWS_*` variables already in your environment are checked only when
+   `PORTITOR_PUSH_BUCKET` is set; otherwise unusable ones are ignored.
+   As consumer, the push token lives `PORTITOR_DATA_TOKEN_SECONDS`
+   from your transfer request, not from the provider's start.
 
 ### From 0.9 to 1.0 in one step
 

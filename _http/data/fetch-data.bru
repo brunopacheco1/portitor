@@ -20,7 +20,9 @@ assert {
 
 docs {
   Run "management/Get transfer" first: it saves dataEndpoint and dataAuthorization.
-  The provider fetches the dataset's portitor:source and streams it back. After
+  The provider fetches the dataset's portitor:source and streams it back: an http(s)
+  URL, or since 1.1 an object of its own object storage, s3://{bucket}/{key}, read with
+  its AWS_* keys (ADR 0027); 502 when the source fails, for both kinds. After
   "Complete transfer", or once the token expires, the answer is 401.
   Debug: data_plane.rs (crates/portitor-connector/src).
 }

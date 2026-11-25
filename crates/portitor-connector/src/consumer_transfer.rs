@@ -4,131 +4,47 @@
 
 //! Adapters for the consumer side of the transfer process (ADR 0014): the
 //! callback endpoints a provider calls (DSP 2025-1, "Transfer Process HTTPS
-//! Binding", consumer callback paths), in-memory transfers, and the loop
-//! that sends the consumer's messages.
+//! Binding", consumer callback paths) and the loop that sends the
+//! consumer's messages.
 //!
 //! The callback endpoints live under `{DSP_PATH}/callback/transfers`, next
 //! to the negotiation callbacks.
+//!
+//! A push transfer (1.1, ADR 0027) asks the provider to send the data to
+//! us: its request carries our own data address and token, made by
+//! [`crate::receiving`], whose route then stores the data.
 
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use portitor_dsp::negotiation::Agreement;
 use portitor_dsp::policy::credential_scopes;
+use portitor_dsp::process::StoreError;
 use portitor_dsp::transfer::consumer::{
-    AgreementProvider, ConsumerTransfer, ConsumerTransferDecision, ConsumerTransferService,
-    ConsumerTransferStore, Handled, HeldAgreements, Outgoing,
+    ConsumerTransfer, ConsumerTransferDecision, ConsumerTransferService, Handled, HeldAgreements,
+    Outgoing, Request,
 };
-use portitor_dsp::transfer::provider::{Failure, StoreError};
+use portitor_dsp::transfer::provider::Failure;
 use portitor_dsp::transfer::{
     TransferCompletionMessage, TransferError, TransferStartMessage, TransferSuspensionMessage,
-    TransferTerminationMessage, Transition,
+    TransferTerminationMessage, Transition, is_push_format,
 };
 use portitor_runtime::telemetry::metrics;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::auth::Caller;
-use crate::consumer::{InMemoryConsumerNegotiations, page};
 use crate::http_client::outbound_url_allowed;
 use crate::inbound::{Body, read_message};
 use crate::outbox::{self, Link, Message, Outbox};
 use crate::ports::{
     AnyConsumerTransferDecider, AnyConsumerTransferStore, AnyHeldAgreements, Ports,
 };
+use crate::receiving::PushAddresses;
 use crate::system::SystemEnvironment;
-use crate::transfer::{bad_request, failed, reached_state};
-
-/// Adapter: consumer transfers kept in memory (lost on restart). The
-/// `SQLite` adapter replaces it for real use.
-#[derive(Debug, Clone, Default)]
-pub struct InMemoryConsumerTransfers(Arc<Mutex<BTreeMap<String, ConsumerTransfer>>>);
-
-impl InMemoryConsumerTransfers {
-    fn map(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, ConsumerTransfer>> {
-        // every write is a single insert, so a panic cannot leave half a
-        // transfer behind
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
-impl ConsumerTransferStore for InMemoryConsumerTransfers {
-    fn get(&self, consumer_pid: &str) -> Result<Option<ConsumerTransfer>, StoreError> {
-        Ok(self.map().get(consumer_pid).cloned())
-    }
-
-    fn insert(&self, transfer: &ConsumerTransfer) -> Result<(), StoreError> {
-        let mut map = self.map();
-        if map.contains_key(&transfer.consumer_pid) {
-            return Err(StoreError(format!("{} exists", transfer.consumer_pid)));
-        }
-        map.insert(transfer.consumer_pid.clone(), transfer.clone());
-        Ok(())
-    }
-
-    fn replace_if(&self, transfer: &ConsumerTransfer, expected: u64) -> Result<bool, StoreError> {
-        let mut map = self.map();
-        let current = map.get(&transfer.consumer_pid).map(|old| old.version);
-        if current != Some(expected) {
-            return Ok(false);
-        }
-        map.insert(transfer.consumer_pid.clone(), transfer.clone());
-        Ok(true)
-    }
-
-    fn pending(&self) -> Result<Vec<ConsumerTransfer>, StoreError> {
-        let map = self.map();
-        Ok(map
-            .values()
-            .filter(|transfer| transfer.pending.is_some())
-            .cloned()
-            .collect())
-    }
-
-    fn list(&self, after: Option<&str>, limit: usize) -> Result<Vec<ConsumerTransfer>, StoreError> {
-        Ok(page(&self.map(), after, limit))
-    }
-}
-
-impl HeldAgreements for InMemoryConsumerNegotiations {
-    fn provider_of(&self, agreement_id: &str) -> Result<Option<AgreementProvider>, StoreError> {
-        use portitor_dsp::negotiation::NegotiationState;
-        let map = self.map();
-        Ok(map
-            .values()
-            .find(|negotiation| {
-                negotiation.state == NegotiationState::Finalized
-                    && negotiation
-                        .agreement
-                        .as_ref()
-                        .is_some_and(|a| a.id == agreement_id)
-            })
-            .map(|negotiation| AgreementProvider {
-                address: negotiation.provider_address.clone(),
-                id: negotiation.provider_id.clone(),
-            }))
-    }
-
-    fn agreement(&self, agreement_id: &str) -> Result<Option<Agreement>, StoreError> {
-        use portitor_dsp::negotiation::NegotiationState;
-        let map = self.map();
-        for negotiation in map.values() {
-            if negotiation.state != NegotiationState::Finalized {
-                continue;
-            }
-            if let Some(agreement) = &negotiation.agreement
-                && agreement.id == agreement_id
-            {
-                return Ok(Some(agreement.clone()));
-            }
-        }
-        Ok(None)
-    }
-}
+use crate::transfer::{bad_request, failed, log_termination_without_membership, reached_state};
 
 type Service = ConsumerTransferService<
     AnyConsumerTransferStore,
@@ -143,10 +59,18 @@ pub(crate) struct TransferConsumer {
     held: AnyHeldAgreements,
     link: Link,
     allow_http: bool,
+    /// Our push data addresses (ADR 0027): `None` without object storage
+    /// and a push bucket, and then push transfers are refused.
+    push: Option<PushAddresses>,
 }
 
 impl TransferConsumer {
-    pub(crate) fn new(ports: &Ports, callback_address: String, allow_http: bool) -> Self {
+    pub(crate) fn new(
+        ports: &Ports,
+        callback_address: String,
+        allow_http: bool,
+        push: Option<PushAddresses>,
+    ) -> Self {
         let transfer_ports = ports.consumer_transfers.clone();
         Self {
             service: ConsumerTransferService::new(
@@ -158,6 +82,7 @@ impl TransferConsumer {
             held: transfer_ports.held,
             link: Link::new(ports),
             allow_http,
+            push,
         }
     }
 
@@ -173,6 +98,9 @@ impl TransferConsumer {
         agreement_id: &str,
         format: &str,
     ) -> Result<ConsumerTransfer, Box<Failure>> {
+        if is_push_format(format) {
+            self.push_addresses()?;
+        }
         let provider = self
             .held
             .provider_of(agreement_id)
@@ -187,8 +115,8 @@ impl TransferConsumer {
     ///
     /// # Errors
     ///
-    /// The address is not an allowed URL, an id is empty, or the store
-    /// failed.
+    /// The address is not an allowed URL, an id is empty, a push without
+    /// object storage, or the store failed.
     pub(crate) fn start(
         self: &Arc<Self>,
         provider_address: &str,
@@ -201,12 +129,54 @@ impl TransferConsumer {
                 "the provider address must be an https URL",
             )));
         }
-        let (transfer, out) = self
-            .service
-            .start(provider_address, provider_id, agreement_id, format)
-            .map_err(Box::new)?;
+        let (transfer, out) = if is_push_format(format) {
+            let request = Request {
+                provider_address,
+                provider_id,
+                agreement_id,
+                format,
+            };
+            self.start_push(&request)?
+        } else {
+            self.service
+                .start(provider_address, provider_id, agreement_id, format)
+                .map_err(Box::new)?
+        };
         tokio::spawn(outbox::deliver(Arc::clone(self), out));
         Ok(transfer)
+    }
+
+    /// The request of a push transfer: with our data address and a new
+    /// token, whose hash is kept before the request is sent.
+    fn start_push(
+        &self,
+        request: &Request<'_>,
+    ) -> Result<(ConsumerTransfer, Outgoing), Box<Failure>> {
+        let push = self.push_addresses()?;
+        let token =
+            PushAddresses::new_token().map_err(|e| Box::new(Failure::Store(StoreError(e))))?;
+        let (transfer, out) = self
+            .service
+            .start_push(request, &|consumer_pid| push.address(consumer_pid, &token))
+            .map_err(Box::new)?;
+        push.keep(&transfer.consumer_pid, &token)
+            .map_err(|e| Box::new(Failure::Store(e)))?;
+        Ok((transfer, out))
+    }
+
+    /// Our push addresses, or the refusal of a push transfer.
+    fn push_addresses(&self) -> Result<&PushAddresses, Box<Failure>> {
+        self.push.as_ref().ok_or_else(|| {
+            Box::new(refused(
+                "push transfers need object storage settings and PORTITOR_PUSH_BUCKET",
+            ))
+        })
+    }
+
+    /// The object the data of push transfer `consumer_pid` went into, once
+    /// some arrived.
+    pub(crate) fn object_key(&self, consumer_pid: &str) -> Option<String> {
+        self.push.as_ref()?.object_key(consumer_pid)
     }
 
     /// Our own step on a transfer (suspend, start again, complete or
@@ -222,7 +192,24 @@ impl TransferConsumer {
         consumer_pid: &str,
         decision: ConsumerTransferDecision,
     ) -> Result<ConsumerTransfer, Box<Failure>> {
-        let out = self.service.act(consumer_pid, decision).map_err(Box::new)?;
+        let push_again = decision == ConsumerTransferDecision::Start
+            && is_push_format(&self.transfer(consumer_pid)?.format);
+        let out = if push_again {
+            // a new token, which replaces the one the provider has
+            let push = self.push_addresses()?;
+            let token =
+                PushAddresses::new_token().map_err(|e| Box::new(Failure::Store(StoreError(e))))?;
+            let address = push.address(consumer_pid, &token);
+            let out = self
+                .service
+                .act_with_address(consumer_pid, decision, Some(&address))
+                .map_err(Box::new)?;
+            push.keep(consumer_pid, &token)
+                .map_err(|e| Box::new(Failure::Store(e)))?;
+            out
+        } else {
+            self.service.act(consumer_pid, decision).map_err(Box::new)?
+        };
         tokio::spawn(outbox::deliver(Arc::clone(self), out));
         self.transfer(consumer_pid)
     }
@@ -446,91 +433,11 @@ pub(crate) async fn termination(
             Err(refused) => return bad_request(*refused),
         };
     let ids = (msg.provider_pid.as_str(), msg.consumer_pid.as_str());
-    consumer.answer(
-        consumer
-            .service
-            .provider_step(&cpid, ids, Transition::Terminate),
-    )
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use portitor_dsp::negotiation::NegotiationState;
-    use portitor_dsp::negotiation::consumer::{ConsumerNegotiation, ConsumerStore};
-    use portitor_dsp::transfer::TransferState;
-
-    use super::*;
-    use crate::ports::Shared;
-
-    fn transfer(pid: &str) -> ConsumerTransfer {
-        ConsumerTransfer {
-            consumer_pid: pid.to_owned(),
-            provider_pid: None,
-            state: TransferState::Requested,
-            provider_address: "https://p.example/dsp".to_owned(),
-            provider_id: "did:web:p.example".to_owned(),
-            agreement_id: "a".to_owned(),
-            format: "HttpData-PULL".to_owned(),
-            data_address: None,
-            pending: None,
-            version: 0,
-        }
+    let handled = consumer
+        .service
+        .provider_step(&cpid, ids, Transition::Terminate);
+    if handled.is_ok() {
+        log_termination_without_membership(&caller, &cpid);
     }
-
-    #[test]
-    fn in_memory_transfers_compare_before_replacing() {
-        let store: AnyConsumerTransferStore =
-            Shared(Arc::new(InMemoryConsumerTransfers::default()));
-        let t = transfer("c");
-        assert!(store.get("c").unwrap().is_none());
-        store.insert(&t).unwrap();
-        assert!(store.insert(&t).is_err());
-        let mut started = t.clone();
-        started.state = TransferState::Started;
-        started.version = 1;
-        assert!(!store.replace_if(&started, 1).unwrap());
-        assert!(store.replace_if(&started, 0).unwrap());
-        assert!(store.pending().unwrap().is_empty());
-        assert!(!store.replace_if(&transfer("d"), 0).unwrap(), "unknown");
-        store.insert(&transfer("d")).unwrap();
-        assert_eq!(store.list(None, 10).unwrap().len(), 2);
-        assert_eq!(store.list(Some("c"), 10).unwrap(), vec![transfer("d")]);
-    }
-
-    #[test]
-    fn in_memory_negotiations_hold_only_finalized_agreements() {
-        let negotiations = InMemoryConsumerNegotiations::default();
-        let held: AnyHeldAgreements = Shared(Arc::new(negotiations.clone()));
-        let agreement = serde_json::json!({
-            "@id": "a", "@type": "Agreement", "target": "d",
-            "assigner": "did:web:p.example", "assignee": "did:web:c.example",
-            "timestamp": "2026-11-13T00:00:00Z", "permission": [{"action": "use"}]
-        });
-        let mut n = ConsumerNegotiation {
-            consumer_pid: "n".to_owned(),
-            provider_pid: Some("pn".to_owned()),
-            state: NegotiationState::Agreed,
-            provider_address: "https://p.example/dsp".to_owned(),
-            provider_id: "did:web:p.example".to_owned(),
-            offer: serde_json::from_value(
-                serde_json::json!({"@id": "o", "@type": "Offer", "target": "d"}),
-            )
-            .unwrap(),
-            agreement: Some(serde_json::from_value(agreement).unwrap()),
-            pending: None,
-            version: 0,
-        };
-        negotiations.insert(&n).unwrap();
-        assert_eq!(held.provider_of("a").unwrap(), None);
-        assert_eq!(held.agreement("a").unwrap(), None);
-        n.state = NegotiationState::Finalized;
-        n.version = 1;
-        assert!(negotiations.replace_if(&n, 0).unwrap());
-        let provider = held.provider_of("a").unwrap().unwrap();
-        assert_eq!(provider.address, "https://p.example/dsp");
-        assert_eq!(held.provider_of("b").unwrap(), None);
-        assert_eq!(held.agreement("a").unwrap(), n.agreement);
-        assert_eq!(held.agreement("b").unwrap(), None);
-    }
+    consumer.answer(handled)
 }

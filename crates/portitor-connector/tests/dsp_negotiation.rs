@@ -130,7 +130,10 @@ fn ports(sender: &Arc<FakeSender>) -> Ports {
 
 /// Like [`ports`], and the audience of each token the provider sends.
 fn recorded_ports(sender: &Arc<FakeSender>) -> (Ports, Audiences) {
-    let (mut p, audiences) = recording(Ports::new(Arc::clone(sender) as Arc<dyn Sender>), PROVIDER);
+    let (mut p, audiences) = recording(
+        common::ports(Arc::clone(sender) as Arc<dyn Sender>),
+        PROVIDER,
+    );
     // the default build agrees to catalog offers; the tck build scripts
     // only ACN* datasets, so CAT0101 behaves the same in both
     p.retry = Retry {
@@ -835,7 +838,10 @@ async fn a_send_that_panics_leaves_the_message_saved_for_the_next_start() {
         std::sync::atomic::AtomicBool::new(true),
     ));
     let file = Arc::new(SqliteNegotiations::in_memory().unwrap());
-    let (mut p, _) = recording(Ports::new(with_a_bug.clone() as Arc<dyn Sender>), PROVIDER);
+    let (mut p, _) = recording(
+        common::ports(with_a_bug.clone() as Arc<dyn Sender>),
+        PROVIDER,
+    );
     p.use_sqlite(&file);
     let (app, connector) = portitor_connector::build(&config(false), p).unwrap();
 

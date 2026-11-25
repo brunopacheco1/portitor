@@ -207,12 +207,17 @@ cargo test --workspace
 cargo test -p portitor-connector --features tck   # also the TCK scripts
 ```
 
-**Changed one, check the other three.** The negotiation and transfer
-logic exists four times in near-copies: provider and consumer, for
-negotiations and for transfers
-([TD-42](RISKS_AND_TECHNICAL_DEBTS.md#td-42)). A fix or a new test for
-one of them most often applies to the other three; the table of files is
-in [READING-THE-CODE](READING-THE-CODE.md#the-three-siblings).
+**Changed one, check the other three.** Negotiation and transfer, as
+provider and as consumer, are four services with the same shape
+([TD-42](RISKS_AND_TECHNICAL_DEBTS.md#td-42)). The steps they share
+(receive with proof of delivery, apply our sent message,
+compare-and-update) are written once, in `portitor-dsp/src/process.rs`,
+and tested there on a small record of its own (`process/tests.rs`); a
+fix there reaches all four, and the four services' tests must still
+pass. A fix or a new test for one service's own rules (its checks, its
+messages, its decider) most often applies to the other three; the table
+of files is in
+[READING-THE-CODE](READING-THE-CODE.md#the-three-siblings).
 
 Where the tests are:
 
@@ -242,7 +247,13 @@ Where the tests are:
   `tests/dsp_transfer.rs` does the same for transfers as provider, with a
   fake data plane and a fixed agreement; its last tests use the built-in
   data plane and fetch data from an upstream served on a local port (no
-  network needed). `tests/end_to_end.rs` runs two connectors in one
+  network needed). `tests/provider_control.rs` (1.1, ADR 0027) uses the
+  built-in data plane too, with a never-ending upstream download: a
+  revoked membership refuses the next request and cuts a running
+  download, the provider's termination route and a suspension cut it, a
+  flow from before 1.1 is served until its token expires, and a partner
+  without membership may still end a shared transfer (TD-47), on both
+  sides. `tests/end_to_end.rs` runs two connectors in one
   process, joined by a fake network: the consumer negotiates, requests a
   transfer, fetches the data from the provider's built-in data plane and
   completes the transfer. `tests/credential_constraints.rs` does the same
@@ -672,7 +683,7 @@ each must show (steps 1 and 2 make the keys and start Compose):
 | 3 | Each identity asks the issuer for its credential through its own API, and the issuer delivers it (DCP 6.4, 6.5): the IdentityHub through its Identity API (`POST .../participants/{id}/credentials/request`, in the package `v1.unstable` in RC8), Portitor's identity through its management API (`POST /v1/credential-requests`). The issuer registered both first | both requests reach `ISSUED`; each identity holds one `MembershipCredential`, the IdentityHub's from `did:web:issuer%3A8070` |
 | 4 | EDC accepts Portitor's identity: the EDC provider's catalog, read through the Portitor connector's management API (`POST /v1/catalog/request`; EDC queries Portitor's credential service) | HTTP 200, and the catalog has an offer for `edc-interop` |
 | 5 | Portitor consumer, EDC provider: negotiation, pull transfer, fetch from the EDC data plane | negotiation `FINALIZED`, transfer `STARTED`, the bytes equal `data/edc-provider.csv` |
-| 6 | EDC consumer, Portitor provider: catalog, negotiation, pull transfer (EDC's data plane fetches from Portitor's). The issuer serves the HealthDCAT-AP demo bundle and the Portitor connector follows it, so its datasets (`config/portitor-datasets.json`) are checked against the shapes | EDC read `dct:conformsTo` and the HealthDCAT-AP metadata as full IRIs; negotiation `FINALIZED`, transfer `STARTED`, the bytes equal `data/portitor-provider.csv` |
+| 6 | EDC consumer, Portitor provider: catalog, negotiation, pull transfer (EDC's data plane fetches from Portitor's), then a push transfer under the same agreement (Portitor pushes to the address EDC's data plane names; ADR 0027). The issuer serves the HealthDCAT-AP demo bundle and the Portitor connector follows it, so its datasets (`config/portitor-datasets.json`) are checked against the shapes | EDC read `dct:conformsTo` and the HealthDCAT-AP metadata as full IRIs; negotiation `FINALIZED`, transfer `STARTED`, the bytes equal `data/portitor-provider.csv`; the push `COMPLETED` on both sides, the pushed bytes equal the same file |
 | 7a | Gaia-X, Portitor: its identity did its onboarding by itself (ADR 0021) | its DID document, read over HTTPS, has `alg` `ES256` and `x5u`; the newest compliance run is `SUCCEEDED`; it holds a `gx:ParticipantComplianceCredential` from `did:web:compliance.gaiax.test` |
 | 7b | Gaia-X, the offer: the Portitor provider's second dataset (`.../portitor-interop-gaiax`) is offered only with `ParticipantComplianceCredential.gx:labelLevel` `eq` `SC` (ADR 0022) | the offer in the catalog EDC read still has that left operand and `SC` |
 | 7b | Gaia-X, refused: the EDC consumer, which holds no compliance credential, negotiates that offer | the EDC negotiation ends `TERMINATED`, and its `errorDetail` has no `code=`: Portitor took the request (the caller is a member) and then sent a `ContractNegotiationTerminationMessage`, not an HTTP error |
@@ -1384,6 +1395,9 @@ walks through it.
 - Running it again after `KEEP=1` works: the script first removes the
   containers and volumes of the last run
   (`docker compose down --volumes --remove-orphans`), then `run/`.
+- It follows the provider's log into `scenarios/two-party/run/provider.log`
+  (`compose logs -f provider`), where the steps look for the audit line
+  of each pull. The suspension and audit steps need 1.1 images or later.
 - The images must be 0.9 or later: the Compose file starts each service
   once the ones it needs are healthy (`condition: service_healthy`),
   which needs the image's `health` subcommand.

@@ -628,7 +628,7 @@ mod tests {
         guard: Arc<dyn MessageGuard + Send + Sync>,
         first: bool,
     ) -> (&'static str, String) {
-        let mut ports = Ports::new(sender);
+        let mut ports = Ports::in_memory(sender);
         ports.prover = Arc::new(FixedToken);
         ports.guard = guard;
         ports.retry = Retry {
@@ -751,7 +751,7 @@ mod tests {
     /// try 3 times, at once. Its state is read at `status_url` (empty:
     /// unknown), and `reached` says whether the state shows it arrived.
     async fn attempt_through(sender: Arc<Fails>, status_url: &str, reached: bool) -> Outcome {
-        let mut ports = Ports::new(sender);
+        let mut ports = Ports::in_memory(sender);
         ports.prover = Arc::new(FixedToken);
         ports.guard = Arc::new(portitor_dsp::guard::AllowAll);
         ports.retry = Retry {
@@ -890,7 +890,7 @@ mod tests {
 
     /// A link to a counter-party that answers nothing, tried once.
     fn link_to_nobody() -> Link {
-        let mut ports = Ports::new(Arc::new(Down));
+        let mut ports = Ports::in_memory(Arc::new(Down));
         ports.prover = Arc::new(FixedToken);
         ports.retry = Retry {
             attempts: 1,
@@ -1090,7 +1090,7 @@ mod tests {
     #[tokio::test]
     async fn a_delivered_message_is_not_asked_about() {
         let mut outbox = Undeliverable::new(false);
-        let mut ports = Ports::new(Arc::new(Accepts));
+        let mut ports = Ports::in_memory(Arc::new(Accepts));
         ports.prover = Arc::new(FixedToken);
         outbox.link = Link::new(&ports);
         let event = serde_json::json!({"@type": "ContractNegotiationEventMessage"});
@@ -1112,7 +1112,7 @@ mod tests {
     /// long they were.
     #[tokio::test(start_paused = true)]
     async fn a_message_whose_delivery_panics_is_sent_again_after_a_pause() {
-        let mut ports = Ports::new(Arc::new(Accepts));
+        let mut ports = Ports::in_memory(Arc::new(Accepts));
         ports.prover = Arc::new(FixedToken);
         let outbox = Arc::new(PanicsWhenRecording {
             link: Link::new(&ports),

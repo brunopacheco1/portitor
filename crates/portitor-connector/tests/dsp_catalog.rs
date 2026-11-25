@@ -99,14 +99,21 @@ fn provider_config(datasets_file: Option<&str>) -> portitor_connector::Config {
 }
 
 fn ports() -> portitor_connector::Ports {
-    authenticating(
-        portitor_connector::Ports::new(std::sync::Arc::new(NoSender)),
-        PROVIDER,
-    )
+    authenticating(common::ports(std::sync::Arc::new(NoSender)), PROVIDER)
 }
 
 fn app() -> axum::Router {
     portitor_connector::router(&provider_config(Some(TCK_DATASETS)), ports()).unwrap()
+}
+
+/// [`app`] with object storage and a push bucket: it has the receiving
+/// route of push transfers (1.1). Nothing calls the store.
+fn app_with_object_storage() -> axum::Router {
+    let mut ports = ports();
+    ports.object_storage = Some(std::sync::Arc::new(common::fake_s3::client(
+        "http://127.0.0.1:9",
+    )));
+    portitor_connector::router(&provider_config(Some(TCK_DATASETS)), ports).unwrap()
 }
 
 async fn call(req: Request<Body>) -> (StatusCode, Value) {
@@ -613,7 +620,7 @@ fn config_from_variables() {
 async fn openapi_paths_are_served() {
     let raw = include_str!("../../../docs/api/openapi.json");
     let spec: Value = serde_json::from_str(raw).unwrap();
-    let app = app();
+    let app = app_with_object_storage();
     let mut count = 0;
     for (path, ops) in spec["paths"].as_object().unwrap() {
         let uri = path
@@ -638,5 +645,5 @@ async fn openapi_paths_are_served() {
             count += 1;
         }
     }
-    assert_eq!(count, 27);
+    assert_eq!(count, 29);
 }
