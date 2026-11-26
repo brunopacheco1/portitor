@@ -140,6 +140,7 @@ export on, `telemetry: exporting` (INFO).
 | `push not sent: the consumer's membership could not be checked now` (WARN, 1.1) | As provider: the membership check before or during a push could not finish (`reason`); the push fails and the transfer is terminated | Check the issuer's status list and DID document from the connector's network; the consumer asks for a new transfer |
 | `push: cannot start; the transfer is terminated` (WARN, 1.1) | As provider: a started push transfer has no source kept (only one started under 1.1 whose dataset had no `portitor:source` at the upgrade to 1.2), or the database failed (`error`); nothing is sent and the transfer is terminated | Check the `/data` volume. For a missing source: the consumer asks for a new transfer |
 | `push: the end of the transfer could not be saved` / `push: the started pushes cannot be read` (ERROR, 1.1) | As provider: the database failed while a push ended, or at start while looking for pushes to send again | Check disk space and the `/data` volume |
+| `transfer not taken up after the restart: its data plane step stays recorded and runs before its next change or at the next restart` (ERROR, 1.2) | As provider: at start, the database failed while running a data plane step left over from before the restart (`transfer`, `failure`). The connector starts; that step runs before the transfer's next change or at the next restart | Check disk space and the `/data` volume |
 | `push received: the object storage failed` (WARN, 1.1) | As consumer: a push arrived but could not be stored (`error` names a status or a cause, never a key); the sender got HTTP 502. The audit line says `failed` | Check the object storage, the push bucket and the connector's key |
 | `object storage: an unfinished upload could not be aborted` (WARN, 1.1) | An upload into the push bucket failed, and its parts could not be removed | Remove unfinished multipart uploads with your storage's tools, or set a lifecycle rule for them |
 | `harvesting datasets` (INFO, at start) | The datasets file and the interval in use | Nothing |
@@ -528,7 +529,12 @@ change in your configuration.
    route above, so the consumer is told; it asks for a new transfer.
 4. **Fixed, provider: the data plane is told once, after the transfer
    is saved**
-   ([TD-48](RISKS_AND_TECHNICAL_DEBTS.md#td-48)). Nothing to do.
+   ([TD-48](RISKS_AND_TECHNICAL_DEBTS.md#td-48)). Nothing to do. New
+   log line: `transfer not taken up after the restart: its data plane
+   step stays recorded and runs before its next change or at the next
+   restart` (ERROR, `transfer`): the database failed for that transfer
+   at the start; the connector starts anyway. Check disk space and the
+   `/data` volume.
 5. **Logs.** `audit: transfer store failed` is gone: the audit line now
    takes the agreement and the consumer from the data flow. The audit
    line itself (`data transfer done`, target `portitor::audit`) does

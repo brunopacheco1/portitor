@@ -56,8 +56,12 @@ versions may change behaviour and configuration.
   read-change-write of a transfer, so a step could run although its
   write lost, or run twice. Now the write records the step it needs
   (`transfer.flow_step`), the same call runs it right after the write,
-  one step at a time in the process, and our DSP message waits until it
-  has run. After a restart, recorded steps run before pending messages
+  and our DSP message waits until it has run. Each write of a provider
+  transfer and its step run under one lock in the process, so no other
+  write can come between them; a step still recorded runs before the
+  next write of its transfer. The state change of a transfer is logged
+  and counted once its step has run, so a write taken back logs
+  nothing, as before. After a restart, recorded steps run before pending messages
   are sent. A step the data plane refuses still ends the transfer when
   it is the provider's own decision; for a consumer's message, an
   undelivered message, the provider's own termination or the end of a
@@ -65,6 +69,12 @@ versions may change behaviour and configuration.
   before. A transfer request whose insert fails or loses to a repeated
   request no longer starts a data flow (before: started, then
   terminated).
+  Only when the database fails: if a step ran but recording that it
+  ran failed twice, the caller gets an error although its write landed,
+  and the step runs again before the next write of the transfer or at
+  the next restart; a transfer that fails at the restart is skipped and
+  logged (`transfer not taken up after the restart`, ERROR) instead of
+  stopping the connector.
 
 ### Upgrade notes
 
