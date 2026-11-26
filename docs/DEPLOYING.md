@@ -929,6 +929,8 @@ Besides the [settings of every component](#settings-of-every-component):
 | Variable | Default | Meaning |
 |---|---|---|
 | `PORTITOR_PUBLIC_URL` | none (**required**) | Your public base URL, for example `https://connector.example.com` |
+| `PORTITOR_DATABASE_URL` | none (the SQLite file) | Since 1.3. PostgreSQL to keep the connector's state in, as `postgresql://user@host:5432/database?sslmode=verify-full`, without the password; not together with `PORTITOR_DB_FILE` |
+| `PORTITOR_DATABASE_PASSWORD_FILE` | none | Since 1.3. File with the PostgreSQL password, only with `PORTITOR_DATABASE_URL` |
 | `PORTITOR_STS_URL` | none (**required**) | Your identity's STS token endpoint, for example `http://identity:8090/sts/token` |
 | `PORTITOR_STS_ALLOW_HTTP` | `false` | `true` allows a plain `http://` `PORTITOR_STS_URL`, and nothing else |
 | `PORTITOR_STS_CLIENT_SECRET_FILE` | none (**required**) | The STS secret, the same file as the identity's |

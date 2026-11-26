@@ -83,8 +83,8 @@ pub struct PushReceipt {
     pub object_key: Option<String>,
 }
 
-/// Where push receipts are kept: the `SQLite` file
-/// (`crate::store::SqliteNegotiations`).
+/// Where push receipts are kept: the connector's database
+/// (`crate::store::ConnectorStore`).
 pub trait PushReceipts {
     /// Keeps `token_hash` for transfer `consumer_pid` until `expires_at`,
     /// in place of an older one. The object key, if any, stays.

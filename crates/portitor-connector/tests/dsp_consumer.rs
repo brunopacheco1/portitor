@@ -20,6 +20,7 @@ use portitor_connector::ports::{Retry, Shared};
 use portitor_connector::{Config, Negotiator};
 use portitor_dsp::Offer;
 use portitor_runtime::BoxFuture;
+use portitor_runtime::database::DatabaseSetting;
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 use tower::ServiceExt as _;
@@ -222,7 +223,7 @@ fn connector() -> Connector {
         datasets_file: None,
         harvest_interval_seconds: 0,
         allow_http: false,
-        db_file: "unused.db".into(),
+        database: DatabaseSetting::SqliteFile("unused.db".into()),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     };
@@ -452,12 +453,12 @@ async fn a_message_racing_our_acknowledgement_proves_delivery() {
 /// negotiation waiting to send ACCEPTED and a provider negotiation
 /// waiting to send its agreement.
 fn leave_pending(path: &std::path::Path) {
-    use portitor_connector::store::SqliteNegotiations;
+    use portitor_connector::store::ConnectorStore;
     use portitor_dsp::negotiation::consumer::{self, ConsumerNegotiation, ConsumerStore};
     use portitor_dsp::negotiation::provider::{self, Negotiation, NegotiationStore};
     use portitor_dsp::negotiation::{NegotiationState, Transition};
 
-    let store = SqliteNegotiations::open(path).unwrap();
+    let store = ConnectorStore::open_sqlite_file(path).unwrap();
     let accept = event_msg("c-1", "ACCEPTED");
     ConsumerStore::insert(
         &store,
@@ -514,7 +515,7 @@ fn leave_pending(path: &std::path::Path) {
 /// start, as consumer and as provider.
 #[tokio::test]
 async fn pending_messages_are_sent_after_a_restart() {
-    use portitor_connector::store::SqliteNegotiations;
+    use portitor_connector::store::ConnectorStore;
     use portitor_dsp::negotiation::NegotiationState;
     use portitor_dsp::negotiation::provider::NegotiationStore;
 
@@ -529,7 +530,7 @@ async fn pending_messages_are_sent_after_a_restart() {
         common::ports(Arc::clone(&provider) as Arc<dyn Sender>),
         CONSUMER,
     );
-    let store = Arc::new(SqliteNegotiations::open(&path).unwrap());
+    let store = Arc::new(ConnectorStore::open_sqlite_file(&path).unwrap());
     ports.store = Shared(Arc::clone(&store) as _);
     ports.consumer_store = Shared(Arc::clone(&store) as _);
     let config = Config {
@@ -538,7 +539,7 @@ async fn pending_messages_are_sent_after_a_restart() {
         datasets_file: None,
         harvest_interval_seconds: 0,
         allow_http: false,
-        db_file: path.clone(),
+        database: DatabaseSetting::SqliteFile(path.clone()),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     };
@@ -865,7 +866,7 @@ async fn other_participants_cannot_use_the_transfer_callback() {
         datasets_file: None,
         harvest_interval_seconds: 0,
         allow_http: false,
-        db_file: "unused.db".into(),
+        database: DatabaseSetting::SqliteFile("unused.db".into()),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     };

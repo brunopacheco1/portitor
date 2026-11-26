@@ -40,6 +40,7 @@ use portitor_dsp::negotiation::NegotiationState;
 use portitor_dsp::policy::{CredentialTypes, HeldCredential, MEMBERSHIP};
 use portitor_dsp::transfer::TransferState;
 use portitor_runtime::BoxFuture;
+use portitor_runtime::database::DatabaseSetting;
 use portitor_runtime::system::{new_uuid, now_secs};
 use serde_json::{Value, json};
 
@@ -190,7 +191,7 @@ fn config(participant: &str, public_url: &str) -> Config {
         datasets_file: None,
         harvest_interval_seconds: 0,
         allow_http: false,
-        db_file: "unused.db".into(),
+        database: DatabaseSetting::SqliteFile("unused.db".into()),
         data_token_seconds: 3_600,
         credential_types: types(),
     }

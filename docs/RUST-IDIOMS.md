@@ -344,7 +344,7 @@ type before the second closure is read.
 A `trait` lists methods that a type promises to have, like an interface.
 Every port (ADR 0004) is a trait, for example `NegotiationStore`, and
 every adapter implements it (`impl NegotiationStore for
-SqliteNegotiations`).
+ConnectorStore`).
 
 ```rust
 pub struct ProviderService<S, D, C, E> { /* ... */ }
@@ -462,7 +462,7 @@ its methods (here `B64.encode(...)` and `.decode(...)`) can be called,
 but the name `Engine` is not used in the file. Rust only lets you call a
 trait's methods when the trait is in scope.
 
-`Arc::clone(store) as _` (in `Ports::use_sqlite`) makes a new pointer to
+`Arc::clone(store) as _` (in `Ports::use_database`) makes a new pointer to
 the same store. `as _` lets the compiler turn it into the `dyn` type the
 field expects.
 

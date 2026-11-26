@@ -18,6 +18,7 @@ use portitor_connector::{Config, Ports};
 use portitor_dsp::guard::{Direction, MessageGuard, Rejection};
 use portitor_dsp::negotiation::provider::{Decider, Decision, Negotiation};
 use portitor_runtime::BoxFuture;
+use portitor_runtime::database::DatabaseSetting;
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 use tower::ServiceExt as _;
@@ -118,7 +119,7 @@ fn config(allow_http: bool) -> Config {
         datasets_file: Some(path.into()),
         harvest_interval_seconds: 0,
         allow_http,
-        db_file: "unused.db".into(),
+        database: DatabaseSetting::SqliteFile("unused.db".into()),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     }
@@ -829,7 +830,7 @@ impl Sender for PanicsWhileSet {
 /// is sent at the next start, as after any stop (ADR 0007).
 #[tokio::test]
 async fn a_send_that_panics_leaves_the_message_saved_for_the_next_start() {
-    use portitor_connector::store::SqliteNegotiations;
+    use portitor_connector::store::ConnectorStore;
     use portitor_dsp::negotiation::provider::NegotiationStore as _;
 
     let sender = Arc::new(FakeSender::default());
@@ -837,12 +838,12 @@ async fn a_send_that_panics_leaves_the_message_saved_for_the_next_start() {
         Arc::clone(&sender),
         std::sync::atomic::AtomicBool::new(true),
     ));
-    let file = Arc::new(SqliteNegotiations::in_memory().unwrap());
+    let file = Arc::new(ConnectorStore::in_memory().unwrap());
     let (mut p, _) = recording(
         common::ports(with_a_bug.clone() as Arc<dyn Sender>),
         PROVIDER,
     );
-    p.use_sqlite(&file);
+    p.use_database(&file);
     let (app, connector) = portitor_connector::build(&config(false), p).unwrap();
 
     let pid = start(&app).await;

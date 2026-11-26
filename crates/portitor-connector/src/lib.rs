@@ -32,7 +32,8 @@
 //!   0005; source and read copy in `portitor-bundle`), new versions pulled
 //!   without a restart, and its rules: the SHACL check of each harvested
 //!   dataset, and the SHACL guard on DSP messages.
-//! - [`store`]: everything kept in the `SQLite` file.
+//! - [`store`]: everything kept in the database (PostgreSQL or a `SQLite`
+//!   file).
 //! - [`management`]: the management API for your own systems.
 //! - [`auth`]: who calls a DSP endpoint, and our tokens on the DSP
 //!   requests we send (DCP, ADR 0016).
@@ -59,6 +60,7 @@ use portitor_dsp::policy::CredentialTypes;
 use portitor_dsp::transfer::consumer::{ConsumerTransfer, ConsumerTransferDecision};
 use portitor_dsp::transfer::provider::Failure as TransferFailure;
 use portitor_dsp::{Binding, CatalogError, ProtocolVersion, VERSION, VersionResponse};
+use portitor_runtime::database::{self, DatabaseSetting};
 use portitor_runtime::request_size::small_message;
 use portitor_runtime::settings::{self, RemovedSetting};
 use serde::Serialize;
@@ -140,8 +142,10 @@ pub struct Config {
     /// Development and the TCK only: partners choose most of these
     /// addresses, so this widens what the connector can be made to call.
     pub allow_http: bool,
-    /// The `SQLite` file that keeps negotiations.
-    pub db_file: std::path::PathBuf,
+    /// Where the connector keeps its state: PostgreSQL
+    /// (`PORTITOR_DATABASE_URL`, `PORTITOR_DATABASE_PASSWORD_FILE`) or a
+    /// `SQLite` file (`PORTITOR_DB_FILE`, deprecated since 1.3).
+    pub database: DatabaseSetting,
     /// How long a data access token stays valid, in seconds
     /// (`PORTITOR_DATA_TOKEN_SECONDS`, default one hour, at most
     /// [`MAX_SETTING_SECONDS`]).
@@ -152,8 +156,33 @@ pub struct Config {
     pub credential_types: CredentialTypes,
 }
 
-/// The `SQLite` file unless `PORTITOR_DB_FILE` says otherwise.
+/// The `SQLite` file, unless `PORTITOR_DB_FILE` says otherwise or
+/// `PORTITOR_DATABASE_URL` names PostgreSQL.
 pub const DEFAULT_DB_FILE: &str = "portitor.db";
+
+/// The folder of the connector's image that holds its volume.
+const IMAGE_DATA_FOLDER: &str = "/data";
+
+/// Where the bundle cache goes unless `PORTITOR_BUNDLE_CACHE_DIR` says
+/// otherwise: `bundle-cache` next to the `SQLite` file. PostgreSQL has no
+/// file: then `/data/bundle-cache` when there is a `/data` folder (the
+/// image's volume), and `bundle-cache` in the working directory when
+/// there is none.
+#[must_use]
+pub fn default_bundle_cache_dir(database: &DatabaseSetting) -> PathBuf {
+    use portitor_bundle::source::{DEFAULT_CACHE_FOLDER, cache_dir_next_to};
+    match database {
+        DatabaseSetting::SqliteFile(file) => cache_dir_next_to(file),
+        DatabaseSetting::Postgres(_) => {
+            let data = std::path::Path::new(IMAGE_DATA_FOLDER);
+            if data.is_dir() {
+                data.join(DEFAULT_CACHE_FOLDER)
+            } else {
+                PathBuf::from(DEFAULT_CACHE_FOLDER)
+            }
+        }
+    }
+}
 
 /// Where the public port listens unless `PORTITOR_BIND` says otherwise.
 pub const DEFAULT_BIND: &str = "0.0.0.0:8080";
@@ -206,6 +235,9 @@ pub enum ConfigError {
     Refused(&'static str, String),
     /// `PORTITOR_POLICY_CREDENTIALS` cannot be used; the text says why.
     PolicyCredentials(String),
+    /// The database settings cannot be used; the text says why
+    /// (`portitor_runtime::database::setting`).
+    Database(String),
 }
 
 impl std::fmt::Display for ConfigError {
@@ -215,7 +247,7 @@ impl std::fmt::Display for ConfigError {
             Self::Missing(name, what) => write!(f, "{name}: required ({what})"),
             Self::Invalid(name, value) => write!(f, "{name} has an invalid value {value:?}"),
             Self::Refused(name, problem) => write!(f, "{name}: {problem}"),
-            Self::PolicyCredentials(why) => f.write_str(why),
+            Self::PolicyCredentials(why) | Self::Database(why) => f.write_str(why),
         }
     }
 }
@@ -247,8 +279,10 @@ impl std::error::Error for StartError {}
 impl Config {
     /// Reads `PORTITOR_PARTICIPANT_ID` and `PORTITOR_PUBLIC_URL` (both
     /// required: there is no default that is right for anyone),
-    /// `PORTITOR_ALLOW_HTTP` (`true` to allow), `PORTITOR_DB_FILE`
-    /// (default `portitor.db`), `PORTITOR_DATA_TOKEN_SECONDS` (default
+    /// `PORTITOR_ALLOW_HTTP` (`true` to allow), the database
+    /// (`PORTITOR_DATABASE_URL` and `PORTITOR_DATABASE_PASSWORD_FILE`, or
+    /// `PORTITOR_DB_FILE`, default `portitor.db`; see
+    /// `portitor_runtime::database::setting`), `PORTITOR_DATA_TOKEN_SECONDS` (default
     /// 3600), `PORTITOR_POLICY_CREDENTIALS` (see
     /// [`auth::policy_credentials`]), `PORTITOR_HARVEST_INTERVAL_SECONDS`
     /// (default 3600) and, when set, `PORTITOR_DATASETS_FILE` from the
@@ -273,8 +307,8 @@ impl Config {
     /// URL (or has a query or fragment), `PORTITOR_ALLOW_HTTP` is neither
     /// `true` nor `false`, a number is not a number, a number of seconds is above
     /// [`MAX_SETTING_SECONDS`] (one year), `PORTITOR_DATA_TOKEN_SECONDS` is
-    /// 0, `PORTITOR_POLICY_CREDENTIALS` cannot be used, or one of the
-    /// [`REMOVED_SETTINGS`] is set.
+    /// 0, `PORTITOR_POLICY_CREDENTIALS` cannot be used, the database
+    /// settings cannot be used, or one of the [`REMOVED_SETTINGS`] is set.
     pub fn from_vars(var: impl Fn(&str) -> Option<OsString>) -> Result<Self, ConfigError> {
         settings::refuse_removed(&var, REMOVED_SETTINGS).map_err(ConfigError::Removed)?;
         // required, as the identity's and the issuer's id and URL are: a
@@ -330,16 +364,14 @@ impl Config {
         )?;
         let credential_types =
             auth::policy_credentials(&var).map_err(ConfigError::PolicyCredentials)?;
+        let database = database::setting(&var, DEFAULT_DB_FILE).map_err(ConfigError::Database)?;
         Ok(Self {
             participant_id,
             public_url,
             datasets_file: settings::text(&var, "PORTITOR_DATASETS_FILE").map(PathBuf::from),
             harvest_interval_seconds,
             allow_http,
-            db_file: match settings::text(&var, "PORTITOR_DB_FILE") {
-                Some(file) => PathBuf::from(file),
-                None => PathBuf::from(DEFAULT_DB_FILE),
-            },
+            database,
             data_token_seconds,
             credential_types,
         })

@@ -5,11 +5,11 @@
 //! In-memory stores for the unit tests (TD-42): negotiations as provider
 //! and as consumer, transfers as consumer, the agreements the consumer
 //! holds, and the data plane's flows. They are compiled only for tests; the
-//! connector itself always keeps these in `SQLite` (`store.rs`, an
-//! in-memory database in the integration tests).
+//! connector itself always keeps these in its database (`store.rs`, an
+//! in-memory `SQLite` database in the integration tests).
 //!
 //! Each store keeps its records in a `BTreeMap` behind a `Mutex`, and
-//! does what the port asks in one lock, as the `SQLite` adapter does in
+//! does what the port asks in one lock, as the database adapter does in
 //! one statement or transaction.
 
 use std::collections::BTreeMap;
@@ -28,7 +28,7 @@ use crate::auth::Membership;
 use crate::flow_membership::{MembershipStore, StoredMembership};
 use crate::http_client::Sender;
 use crate::ports::Ports;
-use crate::store::SqliteNegotiations;
+use crate::store::ConnectorStore;
 use portitor_dataplane::{Flow, FlowStore, FlowStoreError};
 
 impl Ports {
@@ -36,12 +36,12 @@ impl Ports {
     /// database, as [`Ports::new`] does.
     #[allow(clippy::unwrap_used)]
     pub(crate) fn in_memory(sender: Arc<dyn Sender>) -> Self {
-        Ports::new(sender, &Arc::new(SqliteNegotiations::in_memory().unwrap()))
+        Ports::new(sender, &Arc::new(ConnectorStore::in_memory().unwrap()))
     }
 }
 
-/// Adapter: negotiations kept in memory (lost on restart). The `SQLite`
-/// adapter replaces it for real use.
+/// Adapter: negotiations kept in memory (lost on restart). The database
+/// adapter (`ConnectorStore`) replaces it for real use.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct InMemoryNegotiations(Arc<Mutex<BTreeMap<String, Negotiation>>>);
 
@@ -157,7 +157,7 @@ fn page<V: Clone>(map: &BTreeMap<String, V>, after: Option<&str>, limit: usize) 
 }
 
 /// Adapter: consumer transfers kept in memory (lost on restart). The
-/// `SQLite` adapter replaces it for real use.
+/// database adapter replaces it for real use.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct InMemoryConsumerTransfers(Arc<Mutex<BTreeMap<String, ConsumerTransfer>>>);
 

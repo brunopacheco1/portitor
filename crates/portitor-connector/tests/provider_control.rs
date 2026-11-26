@@ -29,13 +29,14 @@ use portitor_connector::harvest::FixedSource;
 use portitor_connector::http_client::Sender;
 use portitor_connector::management::ApiKey;
 use portitor_connector::ports::Shared;
-use portitor_connector::store::SqliteNegotiations;
+use portitor_connector::store::ConnectorStore;
 use portitor_connector::{Config, Ports};
 use portitor_dsp::negotiation::Agreement;
 use portitor_dsp::negotiation::provider::Negotiation;
 use portitor_dsp::transfer::TransferState;
 use portitor_dsp::transfer::provider::{Agreements, FlowStep, Lease, StoreError, TransferStore};
 use portitor_runtime::BoxFuture;
+use portitor_runtime::database::DatabaseSetting;
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
@@ -150,7 +151,7 @@ fn config(token_seconds: u64) -> Config {
         datasets_file: None,
         harvest_interval_seconds: 0,
         allow_http: false,
-        db_file: "unused.db".into(),
+        database: DatabaseSetting::SqliteFile("unused.db".into()),
         data_token_seconds: token_seconds,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     }
@@ -163,7 +164,7 @@ fn provider_with(
     source: &str,
     recheck: Duration,
     token_seconds: u64,
-    store: &Arc<SqliteNegotiations>,
+    store: &Arc<ConnectorStore>,
 ) -> Provider {
     let file = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tck/datasets.json");
     let mut entries: Vec<Value> = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
@@ -191,7 +192,7 @@ fn provider_with(
 }
 
 fn provider(source: &str, recheck: Duration) -> Provider {
-    let store = Arc::new(SqliteNegotiations::in_memory().unwrap());
+    let store = Arc::new(ConnectorStore::in_memory().unwrap());
     provider_with(source, recheck, 3_600, &store)
 }
 
@@ -454,7 +455,7 @@ async fn a_suspension_cuts_a_running_download() {
 async fn a_flow_from_before_1_1_is_served_until_its_token_expires() {
     let folder = portitor_runtime::testing::TempDir::new("flow-1-0");
     let file = folder.path().join("portitor.db");
-    let store = Arc::new(SqliteNegotiations::open(&file).unwrap());
+    let store = Arc::new(ConnectorStore::open_sqlite_file(&file).unwrap());
     let source = format!("{}/file", upstream().await);
     let p = provider_with(&source, Duration::from_secs(60), 2, &store);
     let (pid, path, token) = p.started_transfer().await;
@@ -481,7 +482,7 @@ async fn a_flow_from_before_1_1_is_served_until_its_token_expires() {
 async fn a_flow_without_a_kept_membership_is_refused() {
     let folder = portitor_runtime::testing::TempDir::new("flow-no-membership");
     let file = folder.path().join("portitor.db");
-    let store = Arc::new(SqliteNegotiations::open(&file).unwrap());
+    let store = Arc::new(ConnectorStore::open_sqlite_file(&file).unwrap());
     let source = format!("{}/file", upstream().await);
     let p = provider_with(&source, Duration::from_secs(60), 3_600, &store);
     let (_, path, token) = p.started_transfer().await;
@@ -647,7 +648,7 @@ fn now_seconds() -> u64 {
 /// Writes to `store`, as another process sharing the database would, that
 /// transfer `pid` is suspended by the consumer and its data plane step
 /// recorded but not run, with a lease that ends at `lease_until`.
-fn left_suspending(store: &SqliteNegotiations, pid: &str, lease_until: u64) {
+fn left_suspending(store: &ConnectorStore, pid: &str, lease_until: u64) {
     let mut transfer = store.get(pid).unwrap().unwrap();
     let expected = transfer.version;
     transfer.version += 1;
@@ -669,7 +670,7 @@ fn left_suspending(store: &SqliteNegotiations, pid: &str, lease_until: u64) {
 /// step is recorded as run.
 #[tokio::test]
 async fn a_leased_transfer_is_answered_503_and_the_sweep_takes_it_over() {
-    let store = Arc::new(SqliteNegotiations::in_memory().unwrap());
+    let store = Arc::new(ConnectorStore::in_memory().unwrap());
     let p = provider_with(
         &format!("{}/file", upstream().await),
         Duration::from_secs(60),

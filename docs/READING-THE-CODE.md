@@ -95,7 +95,7 @@ environment (clock and new ids). Tests pass fakes; the connector passes
 the real adapters.
 
 **5. Store.** The port is the trait `NegotiationStore`, in the same
-file. Its SQLite adapter is `SqliteNegotiations` in
+file. Its database adapter is `ConnectorStore` in
 `portitor-connector/src/store.rs`: `insert` for a new negotiation and
 `replace_if` for every later change. `replace_if` writes only if the
 row's `version` is the one the caller read, so two messages that arrive

@@ -2,21 +2,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! Adapter: negotiations (as provider and as consumer) and transfers (as
-//! provider) kept in a `SQLite` file. Transfers are in `store/transfers.rs`.
+//! Adapter: negotiations (as provider and as consumer), transfers (both
+//! sides), data flows, the harvest's read copy and push receipts, in the
+//! connector's database (`portitor_runtime::database`, ADR 0029):
+//! PostgreSQL, which several replicas share, or a `SQLite` file for one
+//! process (deprecated since 1.3). Transfers are in `store/transfers.rs`,
+//! the other tables in the other files of `store/`.
 //!
-//! One connector process owns one file (no sharing between replicas). The
-//! SQL is kept portable (plain `CREATE TABLE`, `INSERT`, `UPDATE ... WHERE`)
-//! so a `PostgreSQL` adapter can follow the same migrations. Offers and
-//! agreements are stored as their DSP JSON, as received or sent.
+//! The SQL is written once, for both databases; only the schema differs
+//! ([`MIGRATIONS`]). A write of several statements is one
+//! `Database::transaction`. Offers and agreements are stored as their DSP
+//! JSON, as received or sent.
 
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 
 use portitor_dsp::negotiation::consumer::{self, ConsumerNegotiation, ConsumerStore};
 use portitor_dsp::negotiation::provider::{self, Negotiation, NegotiationStore, StoreError};
 use portitor_dsp::negotiation::{NegotiationState, Transition};
-use rusqlite::{Connection, Row, params};
+use portitor_runtime::database::{
+    Database, DatabaseSetting, DbError, Executor, FromValue, Migrations, Row, Value,
+};
+use portitor_runtime::values;
 
 mod consumer_transfers;
 mod data_flows;
@@ -26,10 +33,19 @@ mod transfers;
 use serde::{Deserialize, Serialize};
 pub use transfers::finalized_agreement;
 
-/// Schema migrations, applied in order. The schema version is the number
-/// of migrations applied (`PRAGMA user_version`). Never edit a migration
-/// that has been released; add a new one.
-const MIGRATIONS: &[&str] = &[
+/// The connector's schema, for each database. A database of another
+/// component (identity, issuer) is refused.
+pub const MIGRATIONS: Migrations = Migrations {
+    component: "portitor-connector",
+    sqlite: SQLITE_MIGRATIONS,
+    postgres: POSTGRES_MIGRATIONS,
+};
+
+/// Schema migrations of the `SQLite` file, applied in order. The schema
+/// version is the number of migrations applied (`PRAGMA user_version`).
+/// Never edit a migration that has been released; add a new one, here and
+/// in [`POSTGRES_MIGRATIONS`].
+const SQLITE_MIGRATIONS: &[&str] = &[
     // 0.3: negotiations as provider
     "CREATE TABLE negotiation (
         provider_pid     TEXT PRIMARY KEY,
@@ -228,63 +244,247 @@ const MIGRATIONS: &[&str] = &[
      CREATE INDEX transfer_recorded_step ON transfer (provider_pid) WHERE flow_step IS NOT NULL",
 ];
 
-/// Adapter: negotiations in a `SQLite` file.
-#[derive(Debug)]
-pub struct SqliteNegotiations(Mutex<Connection>);
+/// The PostgreSQL schema (since 1.3), applied in order as the `SQLite`
+/// migrations are. The first one is the schema of all the `SQLite`
+/// migrations above at once, with the same tables and columns (checked by
+/// `the_two_schemas_have_the_same_tables_and_columns`): `BIGINT` for whole
+/// numbers, `TEXT` for text. Never edit a migration that has been
+/// released; add a new one, here and in [`SQLITE_MIGRATIONS`].
+///
+/// Two differences, because a PostgreSQL database starts empty and has no
+/// old rows to keep:
+///
+/// - `transfer_request` is a UNIQUE index: one transfer for each repeated
+///   request, which `SQLite` files from before 0.12 cannot promise (see
+///   migration 9 above);
+/// - PostgreSQL has no `json_extract`: the schema defines one, with the
+///   meaning `SQLite` gives it for the paths the connector uses
+///   (`'$."@id"'`), so the agreement lookups and their indexes are the same
+///   SQL on both databases.
+const POSTGRES_MIGRATIONS: &[&str] = &[
+    // 1.3: the schema of 1.2 (the 17 SQLite migrations)
+    r#"CREATE FUNCTION json_extract(document TEXT, path TEXT) RETURNS TEXT
+        LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE
+        AS $$ SELECT jsonb_path_query_first(document::jsonb, path::jsonpath) #>> '{}' $$;
+    CREATE TABLE negotiation (
+        provider_pid     TEXT PRIMARY KEY,
+        consumer_pid     TEXT NOT NULL,
+        state            TEXT NOT NULL,
+        callback_address TEXT NOT NULL,
+        counter_party    TEXT NOT NULL,
+        offer            TEXT NOT NULL,
+        agreement        TEXT,
+        pending          TEXT,
+        version          BIGINT NOT NULL DEFAULT 0
+    );
+    CREATE INDEX negotiation_agreement
+        ON negotiation (json_extract(agreement, '$."@id"'));
+    CREATE TABLE consumer_negotiation (
+        consumer_pid     TEXT PRIMARY KEY,
+        provider_pid     TEXT,
+        state            TEXT NOT NULL,
+        provider_address TEXT NOT NULL,
+        provider_id      TEXT NOT NULL,
+        offer            TEXT NOT NULL,
+        agreement        TEXT,
+        pending          TEXT,
+        version          BIGINT NOT NULL DEFAULT 0
+    );
+    CREATE INDEX consumer_negotiation_agreement
+        ON consumer_negotiation (json_extract(agreement, '$."@id"'));
+    CREATE TABLE transfer (
+        provider_pid      TEXT PRIMARY KEY,
+        consumer_pid      TEXT NOT NULL,
+        state             TEXT NOT NULL,
+        callback_address  TEXT NOT NULL,
+        counter_party     TEXT NOT NULL,
+        agreement_id      TEXT NOT NULL,
+        dataset_id        TEXT NOT NULL,
+        format            TEXT NOT NULL,
+        pending           TEXT,
+        version           BIGINT NOT NULL DEFAULT 0,
+        data_address      TEXT,
+        flow_step         TEXT,
+        state_before_step TEXT,
+        lease_holder      TEXT,
+        lease_until       BIGINT
+    );
+    CREATE UNIQUE INDEX transfer_request ON transfer (counter_party, consumer_pid);
+    CREATE INDEX transfer_recorded_step ON transfer (provider_pid) WHERE flow_step IS NOT NULL;
+    CREATE TABLE data_flow (
+        id               TEXT PRIMARY KEY,
+        state            TEXT NOT NULL,
+        dataset_id       TEXT NOT NULL,
+        token_hash       TEXT NOT NULL,
+        expires_at       BIGINT NOT NULL,
+        push_address     TEXT,
+        source           TEXT,
+        agreement_id     TEXT NOT NULL DEFAULT '',
+        counter_party_id TEXT NOT NULL DEFAULT ''
+    );
+    CREATE TABLE flow_membership (
+        flow_id     TEXT PRIMARY KEY,
+        memberships TEXT
+    );
+    CREATE TABLE consumer_transfer (
+        consumer_pid     TEXT PRIMARY KEY,
+        provider_pid     TEXT,
+        state            TEXT NOT NULL,
+        provider_address TEXT NOT NULL,
+        provider_id      TEXT NOT NULL,
+        agreement_id     TEXT NOT NULL,
+        format           TEXT NOT NULL,
+        data_address     TEXT,
+        pending          TEXT,
+        version          BIGINT NOT NULL DEFAULT 0
+    );
+    CREATE TABLE push_receipt (
+        consumer_pid TEXT PRIMARY KEY,
+        token_hash   TEXT NOT NULL,
+        expires_at   BIGINT NOT NULL,
+        object_key   TEXT
+    );
+    CREATE TABLE dataset (
+        id             TEXT PRIMARY KEY,
+        entry          TEXT NOT NULL,
+        content        TEXT NOT NULL,
+        upstream       TEXT,
+        content_sha256 TEXT NOT NULL,
+        state          TEXT NOT NULL,
+        conforms_to    TEXT,
+        first_seen     BIGINT NOT NULL,
+        last_changed   BIGINT NOT NULL,
+        last_job       BIGINT NOT NULL
+    );
+    CREATE TABLE harvest_job (
+        id              BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+        started_at      BIGINT NOT NULL,
+        finished_at     BIGINT NOT NULL,
+        run_trigger     TEXT NOT NULL,
+        source          TEXT NOT NULL,
+        snapshot_sha256 TEXT,
+        outcome         TEXT NOT NULL,
+        seen            BIGINT NOT NULL,
+        added           BIGINT NOT NULL,
+        updated         BIGINT NOT NULL,
+        unchanged       BIGINT NOT NULL,
+        withdrawn       BIGINT NOT NULL,
+        rejected        BIGINT NOT NULL,
+        summary         TEXT NOT NULL,
+        kind            TEXT NOT NULL DEFAULT 'datasets'
+    );
+    CREATE TABLE harvest_error (
+        job_id         BIGINT NOT NULL,
+        seq            BIGINT NOT NULL,
+        entry_position BIGINT,
+        dataset_id     TEXT,
+        kind           TEXT NOT NULL,
+        message        TEXT NOT NULL,
+        report         TEXT,
+        PRIMARY KEY (job_id, seq)
+    );
+    CREATE TABLE harvest_state (
+        id              BIGINT PRIMARY KEY,
+        rules_version   TEXT,
+        snapshot_sha256 TEXT
+    );
+    INSERT INTO harvest_state (id, rules_version, snapshot_sha256) VALUES (1, NULL, NULL)"#,
+];
 
-impl SqliteNegotiations {
-    /// Opens (or creates) the database file and brings its schema up to
-    /// date.
+/// Adapter: every store of the connector, on its database. Cloning it
+/// is cheap: the clones share the database.
+#[derive(Debug, Clone)]
+pub struct ConnectorStore {
+    database: Arc<Database>,
+}
+
+impl ConnectorStore {
+    /// The stores on `database`, opened with [`MIGRATIONS`]
+    /// (`Database::open(&setting, &MIGRATIONS)`).
+    #[must_use]
+    pub fn new(database: Arc<Database>) -> Self {
+        Self { database }
+    }
+
+    /// Opens (or creates) the `SQLite` file at `path` and brings its
+    /// schema up to date; for tests and tools that work on a file.
     ///
     /// # Errors
     ///
     /// The file cannot be opened or created, it is not a `SQLite` database,
     /// or it was written by a newer Portitor version.
-    pub fn open(path: &Path) -> Result<Self, StoreError> {
-        Self::open_at(Some(path))
+    pub fn open_sqlite_file(path: &Path) -> Result<Self, StoreError> {
+        let setting = DatabaseSetting::SqliteFile(path.to_path_buf());
+        let database = Database::open(&setting, &MIGRATIONS).map_err(err)?;
+        Ok(Self::new(Arc::new(database)))
     }
 
-    /// An in-memory database, for tests.
+    /// An in-memory `SQLite` database, for tests.
     ///
     /// # Errors
     ///
     /// `SQLite` cannot allocate the database.
     pub fn in_memory() -> Result<Self, StoreError> {
-        Self::open_at(None)
+        let database = Database::in_memory(&MIGRATIONS).map_err(err)?;
+        Ok(Self::new(Arc::new(database)))
     }
 
-    /// The file at `path`, or an in-memory database when `None`, opened
-    /// and migrated the way every Portitor store is (`portitor_runtime::sqlite`).
-    fn open_at(path: Option<&Path>) -> Result<Self, StoreError> {
-        let conn = portitor_runtime::sqlite::open(path, MIGRATIONS).map_err(StoreError)?;
-        Ok(Self(Mutex::new(conn)))
+    /// The database the stores are on.
+    #[must_use]
+    pub fn database(&self) -> &Arc<Database> {
+        &self.database
     }
 
-    fn conn(&self) -> MutexGuard<'_, Connection> {
-        // SQLite keeps the file consistent even if a holder panicked
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
+    /// Runs a `SELECT` and reads each row with `from_row`.
     fn query<T>(
         &self,
         sql: &str,
-        args: impl rusqlite::Params,
-        from_row: fn(&Row<'_>) -> Result<T, StoreError>,
+        values: &[Value],
+        from_row: fn(&Row) -> Result<T, StoreError>,
     ) -> Result<Vec<T>, StoreError> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare(sql).map_err(err)?;
-        let mut rows = stmt.query(args).map_err(err)?;
-        let mut out = Vec::new();
-        while let Some(row) = rows.next().map_err(err)? {
+        // `Executor` is implemented for `&Database`: a reference to the
+        // database is what runs statements outside a transaction
+        let mut database: &Database = &self.database;
+        let rows = database.query(sql, values).map_err(err)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
             out.push(from_row(row)?);
         }
         Ok(out)
     }
+
+    /// [`ConnectorStore::query`] for the first row only, if there is one.
+    fn query_first<T>(
+        &self,
+        sql: &str,
+        values: &[Value],
+        from_row: fn(&Row) -> Result<T, StoreError>,
+    ) -> Result<Option<T>, StoreError> {
+        Ok(self.query(sql, values, from_row)?.into_iter().next())
+    }
+
+    /// Runs one statement that changes rows; returns how many it changed.
+    fn execute(&self, sql: &str, values: &[Value]) -> Result<u64, StoreError> {
+        let mut database: &Database = &self.database;
+        database.execute(sql, values).map_err(err)
+    }
+
+    /// Runs `work` as one transaction (`Database::transaction`). On
+    /// PostgreSQL `work` may run more than once, so it must only read and
+    /// write through `tx`. It returns the database's own error
+    /// (`DbError`), so that a collision with another transaction is seen
+    /// and the transaction tried again.
+    fn transaction<T>(
+        &self,
+        work: impl FnMut(&mut dyn Executor) -> Result<T, DbError>,
+    ) -> Result<T, StoreError> {
+        self.database.transaction(work).map_err(err)
+    }
 }
 
 #[allow(clippy::needless_pass_by_value)] // used as map_err(err)
-fn err(e: rusqlite::Error) -> StoreError {
-    StoreError(e.to_string())
+fn err(e: DbError) -> StoreError {
+    StoreError(e.message)
 }
 
 fn state_text(s: NegotiationState) -> Result<String, StoreError> {
@@ -303,7 +503,7 @@ fn version(v: u64) -> Result<i64, StoreError> {
 }
 
 /// Column `i` of a row.
-fn col<T: rusqlite::types::FromSql>(row: &Row<'_>, i: usize) -> Result<T, StoreError> {
+fn col<T: FromValue>(row: &Row, i: usize) -> Result<T, StoreError> {
     row.get(i).map_err(err)
 }
 
@@ -393,7 +593,7 @@ fn consumer_pending(o: Option<&consumer::Outgoing>) -> Result<Option<String>, St
 const NEGOTIATION_COLUMNS: &str = "provider_pid, consumer_pid, state, callback_address, \
      counter_party, offer, agreement, pending, version";
 
-fn negotiation_from_row(row: &Row<'_>) -> Result<Negotiation, StoreError> {
+fn negotiation_from_row(row: &Row) -> Result<Negotiation, StoreError> {
     let provider_pid: String = col(row, 0)?;
     let counter_party: String = col(row, 4)?;
     let pending = col::<Option<String>>(row, 7)?
@@ -425,63 +625,55 @@ fn negotiation_from_row(row: &Row<'_>) -> Result<Negotiation, StoreError> {
     })
 }
 
-impl NegotiationStore for SqliteNegotiations {
+impl NegotiationStore for ConnectorStore {
     fn get(&self, provider_pid: &str) -> Result<Option<Negotiation>, StoreError> {
-        let sql = format!("SELECT {NEGOTIATION_COLUMNS} FROM negotiation WHERE provider_pid = ?1");
-        Ok(self
-            .query(&sql, params![provider_pid], negotiation_from_row)?
-            .into_iter()
-            .next())
+        let sql = format!("SELECT {NEGOTIATION_COLUMNS} FROM negotiation WHERE provider_pid = $1");
+        self.query_first(&sql, values![provider_pid], negotiation_from_row)
     }
 
     fn insert(&self, negotiation: &Negotiation) -> Result<(), StoreError> {
         let sql = format!(
             "INSERT INTO negotiation ({NEGOTIATION_COLUMNS})
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
         );
-        self.conn()
-            .execute(
-                &sql,
-                params![
-                    negotiation.provider_pid,
-                    negotiation.consumer_pid,
-                    state_text(negotiation.state)?,
-                    negotiation.callback_address,
-                    negotiation.counter_party,
-                    json(&negotiation.offer)?,
-                    negotiation.agreement.as_ref().map(json).transpose()?,
-                    provider_pending(negotiation.pending.as_ref())?,
-                    version(negotiation.version)?,
-                ],
-            )
-            .map_err(err)?;
+        self.execute(
+            &sql,
+            values![
+                &negotiation.provider_pid,
+                &negotiation.consumer_pid,
+                state_text(negotiation.state)?,
+                &negotiation.callback_address,
+                &negotiation.counter_party,
+                json(&negotiation.offer)?,
+                negotiation.agreement.as_ref().map(json).transpose()?,
+                provider_pending(negotiation.pending.as_ref())?,
+                version(negotiation.version)?,
+            ],
+        )?;
         Ok(())
     }
 
     fn replace_if(&self, negotiation: &Negotiation, expected: u64) -> Result<bool, StoreError> {
         // compare-and-update in one statement: a concurrent change makes
         // the WHERE clause miss and nothing is written
-        let changed = self
-            .conn()
-            .execute(
-                "UPDATE negotiation
-                 SET consumer_pid = ?2, state = ?3, callback_address = ?4, counter_party = ?5,
-                     offer = ?6, agreement = ?7, pending = ?8, version = ?9
-                 WHERE provider_pid = ?1 AND version = ?10",
-                params![
-                    negotiation.provider_pid,
-                    negotiation.consumer_pid,
-                    state_text(negotiation.state)?,
-                    negotiation.callback_address,
-                    negotiation.counter_party,
-                    json(&negotiation.offer)?,
-                    negotiation.agreement.as_ref().map(json).transpose()?,
-                    provider_pending(negotiation.pending.as_ref())?,
-                    version(negotiation.version)?,
-                    version(expected)?,
-                ],
-            )
-            .map_err(err)?;
+        let changed = self.execute(
+            "UPDATE negotiation
+             SET consumer_pid = $2, state = $3, callback_address = $4, counter_party = $5,
+                 offer = $6, agreement = $7, pending = $8, version = $9
+             WHERE provider_pid = $1 AND version = $10",
+            values![
+                &negotiation.provider_pid,
+                &negotiation.consumer_pid,
+                state_text(negotiation.state)?,
+                &negotiation.callback_address,
+                &negotiation.counter_party,
+                json(&negotiation.offer)?,
+                negotiation.agreement.as_ref().map(json).transpose()?,
+                provider_pending(negotiation.pending.as_ref())?,
+                version(negotiation.version)?,
+                version(expected)?,
+            ],
+        )?;
         Ok(changed == 1)
     }
 
@@ -490,14 +682,14 @@ impl NegotiationStore for SqliteNegotiations {
             "SELECT {NEGOTIATION_COLUMNS} FROM negotiation WHERE pending IS NOT NULL
              ORDER BY provider_pid"
         );
-        self.query(&sql, [], negotiation_from_row)
+        self.query(&sql, values![], negotiation_from_row)
     }
 }
 
 const CONSUMER_COLUMNS: &str = "consumer_pid, provider_pid, state, provider_address, \
      provider_id, offer, agreement, pending, version";
 
-fn consumer_negotiation_from_row(row: &Row<'_>) -> Result<ConsumerNegotiation, StoreError> {
+fn consumer_negotiation_from_row(row: &Row) -> Result<ConsumerNegotiation, StoreError> {
     let consumer_pid: String = col(row, 0)?;
     let provider_id: String = col(row, 4)?;
     let pending = col::<Option<String>>(row, 7)?
@@ -530,37 +722,32 @@ fn consumer_negotiation_from_row(row: &Row<'_>) -> Result<ConsumerNegotiation, S
     })
 }
 
-impl ConsumerStore for SqliteNegotiations {
+impl ConsumerStore for ConnectorStore {
     fn get(&self, consumer_pid: &str) -> Result<Option<ConsumerNegotiation>, StoreError> {
         let sql =
-            format!("SELECT {CONSUMER_COLUMNS} FROM consumer_negotiation WHERE consumer_pid = ?1");
-        Ok(self
-            .query(&sql, params![consumer_pid], consumer_negotiation_from_row)?
-            .into_iter()
-            .next())
+            format!("SELECT {CONSUMER_COLUMNS} FROM consumer_negotiation WHERE consumer_pid = $1");
+        self.query_first(&sql, values![consumer_pid], consumer_negotiation_from_row)
     }
 
     fn insert(&self, negotiation: &ConsumerNegotiation) -> Result<(), StoreError> {
         let sql = format!(
             "INSERT INTO consumer_negotiation ({CONSUMER_COLUMNS})
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
         );
-        self.conn()
-            .execute(
-                &sql,
-                params![
-                    negotiation.consumer_pid,
-                    negotiation.provider_pid,
-                    state_text(negotiation.state)?,
-                    negotiation.provider_address,
-                    negotiation.provider_id,
-                    json(&negotiation.offer)?,
-                    negotiation.agreement.as_ref().map(json).transpose()?,
-                    consumer_pending(negotiation.pending.as_ref())?,
-                    version(negotiation.version)?,
-                ],
-            )
-            .map_err(err)?;
+        self.execute(
+            &sql,
+            values![
+                &negotiation.consumer_pid,
+                negotiation.provider_pid.as_deref(),
+                state_text(negotiation.state)?,
+                &negotiation.provider_address,
+                &negotiation.provider_id,
+                json(&negotiation.offer)?,
+                negotiation.agreement.as_ref().map(json).transpose()?,
+                consumer_pending(negotiation.pending.as_ref())?,
+                version(negotiation.version)?,
+            ],
+        )?;
         Ok(())
     }
 
@@ -570,27 +757,24 @@ impl ConsumerStore for SqliteNegotiations {
         expected: u64,
     ) -> Result<bool, StoreError> {
         // compare-and-update in one statement, as for the provider side
-        let changed = self
-            .conn()
-            .execute(
-                "UPDATE consumer_negotiation
-                 SET provider_pid = ?2, state = ?3, provider_address = ?4, provider_id = ?5,
-                     offer = ?6, agreement = ?7, pending = ?8, version = ?9
-                 WHERE consumer_pid = ?1 AND version = ?10",
-                params![
-                    negotiation.consumer_pid,
-                    negotiation.provider_pid,
-                    state_text(negotiation.state)?,
-                    negotiation.provider_address,
-                    negotiation.provider_id,
-                    json(&negotiation.offer)?,
-                    negotiation.agreement.as_ref().map(json).transpose()?,
-                    consumer_pending(negotiation.pending.as_ref())?,
-                    version(negotiation.version)?,
-                    version(expected)?,
-                ],
-            )
-            .map_err(err)?;
+        let changed = self.execute(
+            "UPDATE consumer_negotiation
+             SET provider_pid = $2, state = $3, provider_address = $4, provider_id = $5,
+                 offer = $6, agreement = $7, pending = $8, version = $9
+             WHERE consumer_pid = $1 AND version = $10",
+            values![
+                &negotiation.consumer_pid,
+                negotiation.provider_pid.as_deref(),
+                state_text(negotiation.state)?,
+                &negotiation.provider_address,
+                &negotiation.provider_id,
+                json(&negotiation.offer)?,
+                negotiation.agreement.as_ref().map(json).transpose()?,
+                consumer_pending(negotiation.pending.as_ref())?,
+                version(negotiation.version)?,
+                version(expected)?,
+            ],
+        )?;
         Ok(changed == 1)
     }
 
@@ -599,13 +783,15 @@ impl ConsumerStore for SqliteNegotiations {
         after: Option<&str>,
         limit: usize,
     ) -> Result<Vec<ConsumerNegotiation>, StoreError> {
+        // no `after`: from the first. The CAST gives PostgreSQL the type of
+        // $1, which it cannot tell from `$1 IS NULL`
         let sql = format!(
             "SELECT {CONSUMER_COLUMNS} FROM consumer_negotiation
-             WHERE ?1 IS NULL OR consumer_pid > ?1
-             ORDER BY consumer_pid LIMIT ?2"
+             WHERE CAST($1 AS TEXT) IS NULL OR consumer_pid > $1
+             ORDER BY consumer_pid LIMIT $2"
         );
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        self.query(&sql, params![after, limit], consumer_negotiation_from_row)
+        self.query(&sql, values![after, limit], consumer_negotiation_from_row)
     }
 
     fn pending(&self) -> Result<Vec<ConsumerNegotiation>, StoreError> {
@@ -613,15 +799,36 @@ impl ConsumerStore for SqliteNegotiations {
             "SELECT {CONSUMER_COLUMNS} FROM consumer_negotiation WHERE pending IS NOT NULL
              ORDER BY consumer_pid"
         );
-        self.query(&sql, [], consumer_negotiation_from_row)
+        self.query(&sql, values![], consumer_negotiation_from_row)
+    }
+}
+
+/// Runs `test` on a store on each database of
+/// `portitor_runtime::testing::databases::all`: `SQLite` in memory, and
+/// PostgreSQL when there is a test server. Each run gets a new, empty
+/// database. A failure names the database it happened on.
+#[cfg(test)]
+fn on_every_database(test: impl Fn(&ConnectorStore)) {
+    for database in portitor_runtime::testing::databases::all(&MIGRATIONS) {
+        let name = if database.is_postgres() {
+            "PostgreSQL"
+        } else {
+            "SQLite"
+        };
+        // printed only when the test fails
+        println!("on {name}");
+        test(&ConnectorStore::new(Arc::new(database)));
     }
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use std::sync::{Mutex, MutexGuard};
+
     use super::*;
     use portitor_dsp::negotiation::Agreement;
+    use rusqlite::{Connection, params};
 
     /// How many migrations a file written by 1.0 has.
     const MIGRATIONS_OF_1_0: usize = 11;
@@ -630,13 +837,72 @@ mod tests {
 
     /// Brings `conn` up to date, as `open` does.
     fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
-        portitor_runtime::sqlite::migrate(conn, MIGRATIONS).map_err(StoreError)
+        portitor_runtime::sqlite::migrate(conn, SQLITE_MIGRATIONS).map_err(StoreError)
     }
 
-    /// A store on a connection a test prepared.
-    fn setup(mut conn: Connection) -> Result<SqliteNegotiations, StoreError> {
+    /// A store on a `SQLite` connection a test prepared, as it is.
+    fn on_connection(conn: Connection) -> ConnectorStore {
+        ConnectorStore::new(Arc::new(Database::Sqlite(Mutex::new(conn))))
+    }
+
+    /// A store on a `SQLite` connection a test prepared, brought up to
+    /// date.
+    fn setup(mut conn: Connection) -> Result<ConnectorStore, StoreError> {
         migrate(&mut conn)?;
-        Ok(SqliteNegotiations(Mutex::new(conn)))
+        Ok(on_connection(conn))
+    }
+
+    /// The `SQLite` connection under a store, for the tests of files.
+    fn sqlite(store: &ConnectorStore) -> MutexGuard<'_, Connection> {
+        store.database.sqlite_connection().unwrap()
+    }
+
+    /// The `SQLite` connection a store was on, to open it again.
+    fn into_connection(store: ConnectorStore) -> Connection {
+        match Arc::try_unwrap(store.database).unwrap() {
+            Database::Sqlite(conn) => conn.into_inner().unwrap(),
+            Database::Postgres(_) => panic!("not SQLite"),
+        }
+    }
+
+    /// Each table and its columns, as `(table, column)` in order, from
+    /// `sql`.
+    fn columns(database: &Database, sql: &str) -> Vec<(String, String)> {
+        let mut database = database;
+        let rows = database.query(sql, values![]).unwrap();
+        let mut out = Vec::new();
+        for row in rows {
+            out.push((row.get(0).unwrap(), row.get(1).unwrap()));
+        }
+        out
+    }
+
+    /// The PostgreSQL schema is the `SQLite` one: after the migrations,
+    /// both have the same tables with the same columns. Runs when there is
+    /// a PostgreSQL test server.
+    #[test]
+    fn the_two_schemas_have_the_same_tables_and_columns() {
+        let Some(postgres) = portitor_runtime::testing::databases::fresh_postgres(&MIGRATIONS)
+        else {
+            return;
+        };
+        let sqlite = Database::in_memory(&MIGRATIONS).unwrap();
+        let in_sqlite = columns(
+            &sqlite,
+            "SELECT m.name, p.name FROM sqlite_master AS m, pragma_table_info(m.name) AS p
+             WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite%'
+             ORDER BY m.name, p.name",
+        );
+        // `portitor_schema` holds the schema version, which `SQLite` keeps
+        // in `PRAGMA user_version` instead
+        let in_postgres = columns(
+            &postgres,
+            "SELECT table_name::text, column_name::text FROM information_schema.columns
+             WHERE table_schema = current_schema() AND table_name <> 'portitor_schema'
+             ORDER BY table_name, column_name",
+        );
+        assert!(in_sqlite.len() > 90, "{in_sqlite:?}");
+        assert_eq!(in_sqlite, in_postgres);
     }
 
     fn sample(pid: &str, state: NegotiationState) -> Negotiation {
@@ -671,8 +937,11 @@ mod tests {
 
     #[test]
     fn round_trip_and_compare_and_update() {
-        let owned = SqliteNegotiations::in_memory().unwrap();
-        let store: &dyn NegotiationStore = &owned;
+        on_every_database(round_trip_and_compare_and_update_on);
+    }
+
+    fn round_trip_and_compare_and_update_on(owned: &ConnectorStore) {
+        let store: &dyn NegotiationStore = owned;
         assert!(store.get("p").unwrap().is_none());
         let n = sample("p", NegotiationState::Requested);
         store.insert(&n).unwrap();
@@ -720,12 +989,12 @@ mod tests {
         let path = dir.join("portitor.db");
         let _ = std::fs::remove_file(&path);
         {
-            let store: &dyn NegotiationStore = &SqliteNegotiations::open(&path).unwrap();
+            let store: &dyn NegotiationStore = &ConnectorStore::open_sqlite_file(&path).unwrap();
             store
                 .insert(&sample("p", NegotiationState::Requested))
                 .unwrap();
         }
-        let owned = SqliteNegotiations::open(&path).unwrap();
+        let owned = ConnectorStore::open_sqlite_file(&path).unwrap();
         let store: &dyn NegotiationStore = &owned;
         assert_eq!(
             store.get("p").unwrap().unwrap().state,
@@ -736,32 +1005,35 @@ mod tests {
     }
 
     #[test]
-    fn refuses_a_newer_schema_and_garbage() {
+    fn refuses_a_newer_schema() {
         let conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "user_version", 99).unwrap();
         let e = setup(conn).unwrap_err();
         assert!(e.0.contains("newer"), "{e}");
+    }
 
-        let conn = Connection::open_in_memory().unwrap();
-        migrate(&mut Connection::open_in_memory().unwrap()).unwrap();
-        let store = setup(conn).unwrap();
+    #[test]
+    fn refuses_garbage() {
+        on_every_database(refuses_garbage_on);
+    }
+
+    fn refuses_garbage_on(store: &ConnectorStore) {
         store
-            .conn()
             .execute(
                 "INSERT INTO negotiation VALUES ('x', 'c', 'NOT_A_STATE', 'u', 'p', '{}', NULL,
                                                  NULL, 0)",
-                [],
+                values![],
             )
             .unwrap();
         assert!(
-            NegotiationStore::get(&store, "x")
+            NegotiationStore::get(store, "x")
                 .unwrap_err()
                 .0
                 .contains("state")
         );
         let offer = json(&sample("p", NegotiationState::Requested).offer).unwrap();
         for (pid, pending, version, what) in [
-            ("y", r#"{"url":"u"}"#, 0, "pending message"),
+            ("y", r#"{"url":"u"}"#, 0_i64, "pending message"),
             (
                 "z",
                 r#"{"url":"u","statusUrl":"s","body":{},"transition":"jump","to":"REQUESTED"}"#,
@@ -771,14 +1043,13 @@ mod tests {
             ("w", "", -1, "version"),
         ] {
             store
-                .conn()
                 .execute(
-                    "INSERT INTO negotiation VALUES (?1, 'c', 'REQUESTED', 'u', 'p', ?2, NULL,
-                                                     NULLIF(?3, ''), ?4)",
-                    params![pid, offer, pending, version],
+                    "INSERT INTO negotiation VALUES ($1, 'c', 'REQUESTED', 'u', 'p', $2, NULL,
+                                                     NULLIF($3, ''), $4)",
+                    values![pid, &offer, pending, version],
                 )
                 .unwrap();
-            let e = NegotiationStore::get(&store, pid).unwrap_err();
+            let e = NegotiationStore::get(store, pid).unwrap_err();
             assert!(e.0.contains(what), "{e}");
         }
     }
@@ -799,8 +1070,11 @@ mod tests {
 
     #[test]
     fn consumer_round_trip_and_compare_and_update() {
-        let store = SqliteNegotiations::in_memory().unwrap();
-        let c: &dyn ConsumerStore = &store;
+        on_every_database(consumer_round_trip_and_compare_and_update_on);
+    }
+
+    fn consumer_round_trip_and_compare_and_update_on(store: &ConnectorStore) {
+        let c: &dyn ConsumerStore = store;
         assert!(c.get("urn:uuid:c").unwrap().is_none());
         let n = consumer_sample(NegotiationState::Requested);
         c.insert(&n).unwrap();
@@ -842,7 +1116,7 @@ mod tests {
         assert_eq!(c.pending().unwrap(), vec![first]);
         // the provider table is separate
         assert!(
-            NegotiationStore::get(&store, "urn:uuid:p")
+            NegotiationStore::get(store, "urn:uuid:p")
                 .unwrap()
                 .is_none()
         );
@@ -851,7 +1125,7 @@ mod tests {
     #[test]
     fn upgrades_a_version_1_database() {
         let mut conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(MIGRATIONS[0]).unwrap();
+        conn.execute_batch(SQLITE_MIGRATIONS[0]).unwrap();
         conn.pragma_update(None, "user_version", 1).unwrap();
         conn.execute(
             "INSERT INTO negotiation VALUES ('p', 'c', 'REQUESTED', 'u', 'x', ?1, NULL)",
@@ -862,7 +1136,7 @@ mod tests {
         let version: i64 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, i64::try_from(MIGRATIONS.len()).unwrap());
+        assert_eq!(version, i64::try_from(SQLITE_MIGRATIONS.len()).unwrap());
         let store = setup(conn).unwrap();
         let n = NegotiationStore::get(&store, "p").unwrap().unwrap();
         assert_eq!((n.pending, n.version), (None, 0));
@@ -874,7 +1148,7 @@ mod tests {
     #[test]
     fn harvest_jobs_from_before_the_kind_are_dataset_runs() {
         let mut conn = Connection::open_in_memory().unwrap();
-        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..7]).unwrap();
+        portitor_runtime::sqlite::migrate(&mut conn, &SQLITE_MIGRATIONS[..7]).unwrap();
         conn.execute(
             "INSERT INTO harvest_job (started_at, finished_at, run_trigger, source, \
              snapshot_sha256, outcome, seen, added, updated, unchanged, withdrawn, rejected, \
@@ -906,8 +1180,7 @@ mod tests {
                 "EXPLAIN QUERY PLAN SELECT agreement FROM {table}
                    WHERE state = ?1 AND json_extract(agreement, '$.\"@id\"') = ?2"
             );
-            let plan: Vec<String> = store
-                .conn()
+            let plan: Vec<String> = sqlite(&store)
                 .prepare(&sql)
                 .unwrap()
                 .query_map(["FINALIZED", "urn:uuid:a"], |row| row.get(3))
@@ -918,8 +1191,7 @@ mod tests {
         }
         // 0.13: the negotiation behind an agreement, in any state
         // (`store/transfers.rs`, `negotiation_of`), uses the same index
-        let plan: Vec<String> = store
-            .conn()
+        let plan: Vec<String> = sqlite(&store)
             .prepare(
                 "EXPLAIN QUERY PLAN SELECT provider_pid FROM negotiation
                    WHERE json_extract(agreement, '$.\"@id\"') = ?1",
@@ -933,6 +1205,35 @@ mod tests {
         assert!(plan.iter().any(|step| step.contains(index)), "{plan:?}");
     }
 
+    /// The same lookups on PostgreSQL use the same indexes, through the
+    /// schema's `json_extract`. (With the few rows of a test PostgreSQL
+    /// would rather read the table, so that is switched off here.)
+    #[test]
+    fn the_agreement_lookups_use_their_indexes_on_postgresql() {
+        let Some(postgres) = portitor_runtime::testing::databases::fresh_postgres(&MIGRATIONS)
+        else {
+            return;
+        };
+        for (table, index) in [
+            ("negotiation", "negotiation_agreement"),
+            ("consumer_negotiation", "consumer_negotiation_agreement"),
+        ] {
+            let sql = format!(
+                "EXPLAIN SELECT agreement FROM {table}
+                   WHERE state = $1 AND json_extract(agreement, '$.\"@id\"') = $2"
+            );
+            let plan = postgres
+                .transaction(|tx| {
+                    tx.execute("SET LOCAL enable_seqscan = off", values![])?;
+                    tx.query(&sql, values!["FINALIZED", "urn:uuid:a"])
+                })
+                .unwrap();
+            let steps: Vec<String> = plan.iter().map(|row| row.get(0).unwrap()).collect();
+            let wanted = format!("Index Scan using {index}");
+            assert!(steps.iter().any(|step| step.contains(&wanted)), "{steps:?}");
+        }
+    }
+
     /// A file written by 0.11 (8 migrations) with negotiations in it, as
     /// provider and as consumer, with and without an agreement:
     /// migrations 10 and 11 add the agreement indexes, every row reads
@@ -943,8 +1244,8 @@ mod tests {
         use portitor_dsp::transfer::provider::Agreements;
 
         let mut conn = Connection::open_in_memory().unwrap();
-        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..8]).unwrap();
-        let written_by_0_11 = SqliteNegotiations(Mutex::new(conn));
+        portitor_runtime::sqlite::migrate(&mut conn, &SQLITE_MIGRATIONS[..8]).unwrap();
+        let written_by_0_11 = on_connection(conn);
         let mut finalized = sample("urn:uuid:p-finalized", NegotiationState::Finalized);
         finalized.agreement = Some(agreement());
         let requested = sample("urn:uuid:p-requested", NegotiationState::Requested);
@@ -958,18 +1259,19 @@ mod tests {
         ConsumerStore::insert(&written_by_0_11, &asked).unwrap();
 
         // 0.12 opens the file
-        let store = setup(written_by_0_11.0.into_inner().unwrap()).unwrap();
-        let version: i64 = store
-            .conn()
+        let store = setup(into_connection(written_by_0_11)).unwrap();
+        let version: i64 = sqlite(&store)
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, i64::try_from(MIGRATIONS.len()).unwrap());
+        assert_eq!(version, i64::try_from(SQLITE_MIGRATIONS.len()).unwrap());
         for (index, table) in [
             ("negotiation_agreement", "negotiation"),
             ("consumer_negotiation_agreement", "consumer_negotiation"),
         ] {
             let sql = "SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = ?1";
-            let indexed: String = store.conn().query_row(sql, [index], |r| r.get(0)).unwrap();
+            let indexed: String = sqlite(&store)
+                .query_row(sql, [index], |r| r.get(0))
+                .unwrap();
             assert_eq!(indexed, table);
         }
 
@@ -993,7 +1295,7 @@ mod tests {
         );
 
         // opening it once more applies no migration twice
-        assert!(setup(store.0.into_inner().unwrap()).is_ok());
+        assert!(setup(into_connection(store)).is_ok());
     }
 
     /// A file written by 0.11 (8 migrations) may hold two transfers for
@@ -1004,7 +1306,7 @@ mod tests {
         use portitor_dsp::transfer::provider::TransferStore;
 
         let mut conn = Connection::open_in_memory().unwrap();
-        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..8]).unwrap();
+        portitor_runtime::sqlite::migrate(&mut conn, &SQLITE_MIGRATIONS[..8]).unwrap();
         for provider_pid in ["urn:uuid:z-first", "urn:uuid:a-second"] {
             conn.execute(
                 "INSERT INTO transfer (provider_pid, consumer_pid, state, callback_address, \
@@ -1016,13 +1318,11 @@ mod tests {
             .unwrap();
         }
         let store = setup(conn).unwrap();
-        let version: i64 = store
-            .conn()
+        let version: i64 = sqlite(&store)
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, i64::try_from(MIGRATIONS.len()).unwrap());
-        let index: String = store
-            .conn()
+        assert_eq!(version, i64::try_from(SQLITE_MIGRATIONS.len()).unwrap());
+        let index: String = sqlite(&store)
             .query_row(
                 "SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = 'transfer_request'",
                 [],
@@ -1054,7 +1354,8 @@ mod tests {
         use crate::flow_membership::StoredMembership;
 
         let mut conn = Connection::open_in_memory().unwrap();
-        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..MIGRATIONS_OF_1_0]).unwrap();
+        portitor_runtime::sqlite::migrate(&mut conn, &SQLITE_MIGRATIONS[..MIGRATIONS_OF_1_0])
+            .unwrap();
         conn.execute(
             "INSERT INTO data_flow (id, state, dataset_id, token_hash, expires_at) \
              VALUES ('urn:uuid:old', 'STARTED', 'd', 'ab', 1900000000)",
@@ -1081,7 +1382,8 @@ mod tests {
         use portitor_dataplane::FlowStore;
 
         let mut conn = Connection::open_in_memory().unwrap();
-        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..MIGRATIONS_OF_1_1]).unwrap();
+        portitor_runtime::sqlite::migrate(&mut conn, &SQLITE_MIGRATIONS[..MIGRATIONS_OF_1_1])
+            .unwrap();
         for (dataset, upstream) in [
             ("d-url", Some("https://upstream.example/d")),
             ("d-s3", Some("s3://datasets/d.csv")),
@@ -1133,7 +1435,8 @@ mod tests {
         use portitor_dataplane::FlowStore;
 
         let mut conn = Connection::open_in_memory().unwrap();
-        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..MIGRATIONS_OF_1_1]).unwrap();
+        portitor_runtime::sqlite::migrate(&mut conn, &SQLITE_MIGRATIONS[..MIGRATIONS_OF_1_1])
+            .unwrap();
         conn.execute(
             "INSERT INTO transfer (provider_pid, consumer_pid, state, callback_address, \
              counter_party, agreement_id, dataset_id, format, pending, version) \
@@ -1180,7 +1483,7 @@ mod tests {
             (MIGRATIONS_BEFORE_THE_LEASE, Some("suspend")),
         ] {
             let mut conn = Connection::open_in_memory().unwrap();
-            portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..applied]).unwrap();
+            portitor_runtime::sqlite::migrate(&mut conn, &SQLITE_MIGRATIONS[..applied]).unwrap();
             conn.execute(
                 "INSERT INTO transfer (provider_pid, consumer_pid, state, callback_address, \
                  counter_party, agreement_id, dataset_id, format, pending, version) \
@@ -1207,8 +1510,7 @@ mod tests {
         }
 
         let store = setup(Connection::open_in_memory().unwrap()).unwrap();
-        let plan: Vec<String> = store
-            .conn()
+        let plan: Vec<String> = sqlite(&store)
             .prepare(
                 "EXPLAIN QUERY PLAN SELECT provider_pid FROM transfer
                    WHERE flow_step IS NOT NULL ORDER BY provider_pid",

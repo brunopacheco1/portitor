@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Transfers as provider, and the agreements they are made under, in the
-//! same `SQLite` file as the negotiations (ADR 0013).
+//! same database as the negotiations (ADR 0013).
 
 use portitor_dsp::negotiation::provider::{Negotiation, NegotiationStore};
 use portitor_dsp::negotiation::{Agreement, NegotiationState};
@@ -11,10 +11,11 @@ use portitor_dsp::transfer::provider::{
     Agreements, FlowStep, Lease, Outgoing, Transfer, TransferStore,
 };
 use portitor_dsp::transfer::{TransferState, Transition};
-use rusqlite::{Row, params};
+use portitor_runtime::database::{Row, Value};
+use portitor_runtime::values;
 
 use super::{
-    NEGOTIATION_COLUMNS, SqliteNegotiations, StoreError, StoredMessage, col, err, json,
+    ConnectorStore, NEGOTIATION_COLUMNS, StoreError, StoredMessage, col, json,
     negotiation_from_row, parsed, parsed_version, state_text, version,
 };
 
@@ -124,7 +125,7 @@ fn pending_message(
     })
 }
 
-fn transfer_from_row(row: &Row<'_>) -> Result<Transfer, StoreError> {
+fn transfer_from_row(row: &Row) -> Result<Transfer, StoreError> {
     let provider_pid: String = col(row, 0)?;
     let counter_party: String = col(row, 4)?;
     let pending = match col::<Option<String>>(row, 8)? {
@@ -156,11 +157,33 @@ fn transfer_from_row(row: &Row<'_>) -> Result<Transfer, StoreError> {
     })
 }
 
-impl TransferStore for SqliteNegotiations {
+/// The values of a new `transfer` row, in the order of [`TRANSFER_COLUMNS`].
+fn transfer_values(transfer: &Transfer) -> Result<Vec<Value>, StoreError> {
+    let (lease_holder, lease_until) = lease_columns(transfer);
+    Ok(values![
+        &transfer.provider_pid,
+        &transfer.consumer_pid,
+        transfer_state_text(transfer.state)?,
+        &transfer.callback_address,
+        &transfer.counter_party,
+        &transfer.agreement_id,
+        &transfer.dataset_id,
+        &transfer.format,
+        pending_text(transfer.pending.as_ref())?,
+        version(transfer.version)?,
+        address_text(transfer)?,
+        flow_step_text(transfer),
+        state_before_step_text(transfer)?,
+        lease_holder,
+        lease_until,
+    ]
+    .to_vec())
+}
+
+impl TransferStore for ConnectorStore {
     fn get(&self, provider_pid: &str) -> Result<Option<Transfer>, StoreError> {
-        let sql = format!("SELECT {TRANSFER_COLUMNS} FROM transfer WHERE provider_pid = ?1");
-        let found = self.query(&sql, params![provider_pid], transfer_from_row)?;
-        Ok(found.into_iter().next())
+        let sql = format!("SELECT {TRANSFER_COLUMNS} FROM transfer WHERE provider_pid = $1");
+        self.query_first(&sql, values![provider_pid], transfer_from_row)
     }
 
     fn requested(
@@ -168,60 +191,51 @@ impl TransferStore for SqliteNegotiations {
         counter_party: &str,
         consumer_pid: &str,
     ) -> Result<Option<Transfer>, StoreError> {
-        // served by the index `transfer_request` (migration 9). `rowid`
-        // grows with each insert, so a file from before 0.12 that holds
-        // several transfers for one request gives the first one.
+        // served by the index `transfer_request` (migration 9). In SQLite
+        // `rowid` grows with each insert, so a file from before 0.12 that
+        // holds several transfers for one request gives the first one.
+        // PostgreSQL has no `rowid` and needs no order: its
+        // `transfer_request` is UNIQUE, so there is at most one row.
+        let first_stored_first = if self.database.is_postgres() {
+            ""
+        } else {
+            "ORDER BY rowid"
+        };
         let sql = format!(
             "SELECT {TRANSFER_COLUMNS} FROM transfer
-             WHERE counter_party = ?1 AND consumer_pid = ?2
-             ORDER BY rowid LIMIT 1"
+             WHERE counter_party = $1 AND consumer_pid = $2
+             {first_stored_first} LIMIT 1"
         );
-        let found = self.query(
+        self.query_first(
             &sql,
-            params![counter_party, consumer_pid],
+            values![counter_party, consumer_pid],
             transfer_from_row,
-        )?;
-        Ok(found.into_iter().next())
+        )
     }
 
     fn insert(&self, transfer: &Transfer) -> Result<bool, StoreError> {
-        // one statement, so it is atomic: the row is added only if this
-        // consumer has no transfer with this consumer pid yet (DSP 2025-1,
-        // "Transfer Request Message": idempotent on `consumerPid`). Not a
-        // UNIQUE index, because files from before 0.12 may hold repeated
-        // requests and must still open.
-        let sql = format!(
+        // one transaction, so the check and the write are atomic: the row
+        // is added only if this consumer has no transfer with this
+        // consumer pid yet (DSP 2025-1, "Transfer Request Message":
+        // idempotent on `consumerPid`). In SQLite not a UNIQUE index,
+        // because files from before 0.12 may hold repeated requests and
+        // must still open.
+        let row = transfer_values(transfer)?;
+        let insert = format!(
             "INSERT INTO transfer ({TRANSFER_COLUMNS})
-             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
-             WHERE NOT EXISTS (
-                 SELECT 1 FROM transfer WHERE counter_party = ?5 AND consumer_pid = ?2
-             )"
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)"
         );
-        let (lease_holder, lease_until) = lease_columns(transfer);
-        let inserted = self
-            .conn()
-            .execute(
-                &sql,
-                params![
-                    transfer.provider_pid,
-                    transfer.consumer_pid,
-                    transfer_state_text(transfer.state)?,
-                    transfer.callback_address,
-                    transfer.counter_party,
-                    transfer.agreement_id,
-                    transfer.dataset_id,
-                    transfer.format,
-                    pending_text(transfer.pending.as_ref())?,
-                    version(transfer.version)?,
-                    address_text(transfer)?,
-                    flow_step_text(transfer),
-                    state_before_step_text(transfer)?,
-                    lease_holder,
-                    lease_until,
-                ],
-            )
-            .map_err(err)?;
-        Ok(inserted == 1)
+        self.transaction(|tx| {
+            let already_requested = tx.query_one(
+                "SELECT 1 FROM transfer WHERE counter_party = $1 AND consumer_pid = $2",
+                values![&transfer.counter_party, &transfer.consumer_pid],
+            )?;
+            if already_requested.is_some() {
+                return Ok(false);
+            }
+            tx.execute(&insert, &row)?;
+            Ok(true)
+        })
     }
 
     fn replace_if(&self, transfer: &Transfer, expected: u64) -> Result<bool, StoreError> {
@@ -230,26 +244,23 @@ impl TransferStore for SqliteNegotiations {
         // transfer step changes are written. The lease is taken and given
         // back in this same statement (TD-48): nothing else writes it.
         let (lease_holder, lease_until) = lease_columns(transfer);
-        let changed = self
-            .conn()
-            .execute(
-                "UPDATE transfer SET state = ?2, pending = ?3, version = ?4, data_address = ?6,
-                     flow_step = ?7, state_before_step = ?8, lease_holder = ?9, lease_until = ?10
-                 WHERE provider_pid = ?1 AND version = ?5",
-                params![
-                    transfer.provider_pid,
-                    transfer_state_text(transfer.state)?,
-                    pending_text(transfer.pending.as_ref())?,
-                    version(transfer.version)?,
-                    version(expected)?,
-                    address_text(transfer)?,
-                    flow_step_text(transfer),
-                    state_before_step_text(transfer)?,
-                    lease_holder,
-                    lease_until,
-                ],
-            )
-            .map_err(err)?;
+        let changed = self.execute(
+            "UPDATE transfer SET state = $2, pending = $3, version = $4, data_address = $6,
+                 flow_step = $7, state_before_step = $8, lease_holder = $9, lease_until = $10
+             WHERE provider_pid = $1 AND version = $5",
+            values![
+                &transfer.provider_pid,
+                transfer_state_text(transfer.state)?,
+                pending_text(transfer.pending.as_ref())?,
+                version(transfer.version)?,
+                version(expected)?,
+                address_text(transfer)?,
+                flow_step_text(transfer),
+                state_before_step_text(transfer)?,
+                lease_holder,
+                lease_until,
+            ],
+        )?;
         Ok(changed == 1)
     }
 
@@ -259,7 +270,7 @@ impl TransferStore for SqliteNegotiations {
              WHERE pending IS NOT NULL OR flow_step IS NOT NULL
              ORDER BY provider_pid"
         );
-        self.query(&sql, [], transfer_from_row)
+        self.query(&sql, values![], transfer_from_row)
     }
 
     fn recorded_steps(&self) -> Result<Vec<Transfer>, StoreError> {
@@ -271,32 +282,37 @@ impl TransferStore for SqliteNegotiations {
              WHERE flow_step IS NOT NULL
              ORDER BY provider_pid"
         );
-        self.query(&sql, [], transfer_from_row)
+        self.query(&sql, values![], transfer_from_row)
     }
 
     fn list(&self, after: Option<&str>, limit: usize) -> Result<Vec<Transfer>, StoreError> {
         // the primary key is the order, so no index is needed
+        // no `after`: from the first. The CAST gives PostgreSQL the type of
+        // $1, which it cannot tell from `$1 IS NULL`
         let sql = format!(
             "SELECT {TRANSFER_COLUMNS} FROM transfer
-             WHERE ?1 IS NULL OR provider_pid > ?1
-             ORDER BY provider_pid LIMIT ?2"
+             WHERE CAST($1 AS TEXT) IS NULL OR provider_pid > $1
+             ORDER BY provider_pid LIMIT $2"
         );
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        self.query(&sql, params![after, limit], transfer_from_row)
+        self.query(&sql, values![after, limit], transfer_from_row)
     }
 }
 
-impl Agreements for SqliteNegotiations {
+/// The agreement in the first column of a row.
+fn agreement_from_row(row: &Row) -> Result<Agreement, StoreError> {
+    parsed("agreement", &col::<String>(row, 0)?)
+}
+
+impl Agreements for ConnectorStore {
     fn finalized(&self, agreement_id: &str) -> Result<Option<Agreement>, StoreError> {
-        // json_extract is SQLite's; a PostgreSQL adapter would use
-        // `agreement::json->>'@id'` or a column of its own
+        // `json_extract` is SQLite's; the PostgreSQL schema defines the
+        // same function. The expression is the one of the index
+        // `negotiation_agreement` (migration 10)
         let sql = "SELECT agreement FROM negotiation
-                   WHERE state = ?1 AND json_extract(agreement, '$.\"@id\"') = ?2";
+                   WHERE state = $1 AND json_extract(agreement, '$.\"@id\"') = $2";
         let finalized = state_text(NegotiationState::Finalized)?;
-        let found = self.query(sql, params![finalized, agreement_id], |row| {
-            parsed("agreement", &col::<String>(row, 0)?)
-        })?;
-        Ok(found.into_iter().next())
+        self.query_first(sql, values![finalized, agreement_id], agreement_from_row)
     }
 
     fn negotiation_of(&self, agreement_id: &str) -> Result<Option<Negotiation>, StoreError> {
@@ -305,10 +321,9 @@ impl Agreements for SqliteNegotiations {
         // here and are unique, so there is at most one row
         let sql = format!(
             "SELECT {NEGOTIATION_COLUMNS} FROM negotiation
-             WHERE json_extract(agreement, '$.\"@id\"') = ?1"
+             WHERE json_extract(agreement, '$.\"@id\"') = $1"
         );
-        let found = self.query(&sql, params![agreement_id], negotiation_from_row)?;
-        Ok(found.into_iter().next())
+        self.query_first(&sql, values![agreement_id], negotiation_from_row)
     }
 
     fn replace_negotiation_if(
@@ -336,6 +351,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::store::on_every_database;
 
     fn stored_transfer(pending: Option<Outgoing>) -> Transfer {
         Transfer {
@@ -358,8 +374,11 @@ mod tests {
 
     #[test]
     fn transfers_round_trip_with_their_pending_message() {
-        let file = SqliteNegotiations::in_memory().unwrap();
-        let db: &dyn TransferStore = &file;
+        on_every_database(transfers_round_trip_with_their_pending_message_on);
+    }
+
+    fn transfers_round_trip_with_their_pending_message_on(file: &ConnectorStore) {
+        let db: &dyn TransferStore = file;
         let start = Outgoing {
             provider_pid: "urn:uuid:p".to_owned(),
             url: "https://c.example/cb/transfers/urn:uuid:c/start".to_owned(),
@@ -393,8 +412,11 @@ mod tests {
     /// pending message (ADR 0028, decision 6; TD-48).
     #[test]
     fn a_recorded_data_plane_step_round_trips_and_is_taken_up_again() {
-        let file = SqliteNegotiations::in_memory().unwrap();
-        let db: &dyn TransferStore = &file;
+        on_every_database(a_recorded_data_plane_step_round_trips_and_is_taken_up_again_on);
+    }
+
+    fn a_recorded_data_plane_step_round_trips_and_is_taken_up_again_on(file: &ConnectorStore) {
+        let db: &dyn TransferStore = file;
         let mut t = stored_transfer(None);
         t.flow_step = Some(FlowStep::Start);
         t.lease = Some(Lease {
@@ -445,8 +467,11 @@ mod tests {
     /// `consumerPid`, for the same consumer.
     #[test]
     fn a_request_is_stored_once_for_each_consumer() {
-        let file = SqliteNegotiations::in_memory().unwrap();
-        let db: &dyn TransferStore = &file;
+        on_every_database(a_request_is_stored_once_for_each_consumer_on);
+    }
+
+    fn a_request_is_stored_once_for_each_consumer_on(file: &ConnectorStore) {
+        let db: &dyn TransferStore = file;
         let first = stored_transfer(None);
         assert!(db.insert(&first).unwrap());
 
@@ -473,8 +498,11 @@ mod tests {
 
     #[test]
     fn only_finalized_agreements_are_found() {
-        let db = SqliteNegotiations::in_memory().unwrap();
-        let negotiations: &dyn NegotiationStore = &db;
+        on_every_database(only_finalized_agreements_are_found_on);
+    }
+
+    fn only_finalized_agreements_are_found_on(db: &ConnectorStore) {
+        let negotiations: &dyn NegotiationStore = db;
         let agreement: Agreement = serde_json::from_value(json!({
             "@id": "urn:uuid:a", "@type": "Agreement", "target": "d",
             "assigner": "did:web:p", "assignee": "did:web:c",
@@ -512,8 +540,11 @@ mod tests {
     /// amended in 0.13).
     #[test]
     fn the_negotiation_of_an_agreement_is_found_and_replaced_by_version() {
-        let db = SqliteNegotiations::in_memory().unwrap();
-        let negotiations: &dyn NegotiationStore = &db;
+        on_every_database(the_negotiation_of_an_agreement_is_found_and_replaced_by_version_on);
+    }
+
+    fn the_negotiation_of_an_agreement_is_found_and_replaced_by_version_on(db: &ConnectorStore) {
+        let negotiations: &dyn NegotiationStore = db;
         let without_agreement: Negotiation = Negotiation {
             provider_pid: "urn:uuid:n0".to_owned(),
             consumer_pid: "urn:uuid:c0".to_owned(),

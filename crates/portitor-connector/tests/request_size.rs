@@ -15,6 +15,7 @@ use axum::http::request::Builder;
 use axum::http::{Request, header};
 use portitor_connector::Config;
 use portitor_connector::management::{ApiKey, router as management_router};
+use portitor_runtime::database::DatabaseSetting;
 use portitor_runtime::request_size::testing::assert_size_limit;
 use portitor_runtime::request_size::{
     MANAGEMENT_SETTING, PUBLIC_SETTING, RequestLimits, SMALL_MESSAGE_MAX_BYTES,
@@ -43,7 +44,7 @@ fn ports() -> (Router, Router) {
         datasets_file: None,
         harvest_interval_seconds: 0,
         allow_http: false,
-        db_file: "unused.db".into(),
+        database: DatabaseSetting::SqliteFile("unused.db".into()),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     };

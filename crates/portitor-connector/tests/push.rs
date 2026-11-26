@@ -37,6 +37,7 @@ use portitor_dsp::negotiation::NegotiationState;
 use portitor_dsp::transfer::TransferState;
 use portitor_dsp::transfer::consumer::ConsumerTransferDecision;
 use portitor_runtime::BoxFuture;
+use portitor_runtime::database::DatabaseSetting;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tower::ServiceExt as _;
@@ -101,7 +102,7 @@ fn config(participant: &str, public_url: &str, allow_http: bool) -> Config {
         datasets_file: None,
         harvest_interval_seconds: 0,
         allow_http,
-        db_file: "unused.db".into(),
+        database: DatabaseSetting::SqliteFile("unused.db".into()),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     }

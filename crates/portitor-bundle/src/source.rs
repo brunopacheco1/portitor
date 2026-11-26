@@ -28,8 +28,9 @@
 //! required with a bundle), `PORTITOR_BUNDLE_VERSION` (`latest`, the
 //! default, or one fixed version), `PORTITOR_BUNDLE_REFRESH_SECONDS` (how
 //! often the newest version is looked for; default one hour, 0 only at
-//! start) and `PORTITOR_BUNDLE_CACHE_DIR` (default `bundle-cache` next to
-//! `PORTITOR_DB_FILE`, `/data/bundle-cache` in the image).
+//! start) and `PORTITOR_BUNDLE_CACHE_DIR` (by default a folder the caller
+//! chooses: the connector's is `bundle-cache` next to `PORTITOR_DB_FILE`,
+//! `/data/bundle-cache` in the image).
 //!
 //! Limits on what is read: [`bundle::MAX_LATEST_BYTES`] for
 //! `latest.json`, [`MAX_MANIFEST_BYTES`] for `manifest.json` and
@@ -63,8 +64,9 @@ use crate::MAX_REFRESH_SECONDS;
 /// is read.
 pub const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// The name of the cache folder next to `PORTITOR_DB_FILE`, unless
-/// `PORTITOR_BUNDLE_CACHE_DIR` says otherwise.
+/// The name of the cache folder (next to `PORTITOR_DB_FILE`, see
+/// [`cache_dir_next_to`]), unless `PORTITOR_BUNDLE_CACHE_DIR` says
+/// otherwise.
 pub const DEFAULT_CACHE_FOLDER: &str = "bundle-cache";
 
 /// How often the newest version is looked for by default
@@ -194,8 +196,9 @@ pub struct BundleConfig {
 
 impl BundleConfig {
     /// Reads the bundle settings with `var` (see the module
-    /// documentation). `db_file` is `PORTITOR_DB_FILE`, next to which the
-    /// cache goes by default. `None`: no bundle is configured.
+    /// documentation). `default_cache_dir` is where the cache goes
+    /// unless `PORTITOR_BUNDLE_CACHE_DIR` says otherwise. `None`: no
+    /// bundle is configured.
     ///
     /// # Errors
     /// Both a URL and a folder, a bundle without authority, a version,
@@ -203,7 +206,7 @@ impl BundleConfig {
     /// used.
     pub fn from_vars(
         var: impl Fn(&str) -> Option<OsString>,
-        db_file: &Path,
+        default_cache_dir: &Path,
         allow_http: bool,
     ) -> Result<Option<Self>, BundleSourceError> {
         // trimmed, and `None` for an empty value
@@ -262,7 +265,7 @@ impl BundleConfig {
             },
         };
         let cache_dir = text("PORTITOR_BUNDLE_CACHE_DIR")
-            .map_or_else(|| default_cache_dir(db_file), PathBuf::from);
+            .map_or_else(|| default_cache_dir.to_path_buf(), PathBuf::from);
         Ok(Some(Self {
             location,
             version,
@@ -277,8 +280,11 @@ impl BundleConfig {
     ///
     /// # Errors
     /// See [`BundleConfig::from_vars`].
-    pub fn from_env(db_file: &Path, allow_http: bool) -> Result<Option<Self>, BundleSourceError> {
-        Self::from_vars(|name| std::env::var_os(name), db_file, allow_http)
+    pub fn from_env(
+        default_cache_dir: &Path,
+        allow_http: bool,
+    ) -> Result<Option<Self>, BundleSourceError> {
+        Self::from_vars(|name| std::env::var_os(name), default_cache_dir, allow_http)
     }
 
     /// What version `version` of the bundle must be.
@@ -303,8 +309,9 @@ impl BundleConfig {
     }
 }
 
-/// `bundle-cache` in the folder of the database file.
-fn default_cache_dir(db_file: &Path) -> PathBuf {
+/// `bundle-cache` in the folder of the `SQLite` file `db_file`.
+#[must_use]
+pub fn cache_dir_next_to(db_file: &Path) -> PathBuf {
     match db_file.parent() {
         Some(folder) => folder.join(DEFAULT_CACHE_FOLDER),
         None => PathBuf::from(DEFAULT_CACHE_FOLDER),
@@ -652,7 +659,7 @@ mod tests {
     fn read(pairs: &[(&str, &str)]) -> Result<Option<BundleConfig>, BundleSourceError> {
         BundleConfig::from_vars(
             portitor_runtime::testing::vars(pairs),
-            Path::new("/data/portitor.db"),
+            &cache_dir_next_to(Path::new("/data/portitor.db")),
             false,
         )
     }
@@ -705,7 +712,7 @@ mod tests {
         assert_eq!(config.version, VersionChoice::Latest);
         assert_eq!(config.refresh_every(), None, "0: only at start");
         assert_eq!(
-            default_cache_dir(Path::new("portitor.db")),
+            cache_dir_next_to(Path::new("portitor.db")),
             PathBuf::from("bundle-cache")
         );
     }
