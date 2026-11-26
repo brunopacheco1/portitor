@@ -1148,6 +1148,10 @@ in its database (ADR 0020). Today the source is the
 - The file is read again at each run. When its SHA-256 is the last run's,
   the run ends `unchanged` and nothing else is touched. To publish a
   change, replace the file; it is taken at the next run (or restart).
+  A changed `portitor:source` reaches only transfers that start after
+  that run: since 1.2 a transfer keeps the source it started with until
+  it ends ([ADR 0028](adr/0028-separate-pluggable-data-plane.md),
+  note added in 1.2).
 - Each dataset is checked on its own: JSON object, DSP `Dataset` form,
   the DSP catalog rules, offers with only the policy terms and ODRL
   constraints the connector reads ([Policies](#policies)), a valid
