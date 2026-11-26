@@ -37,6 +37,25 @@ jobs:
     if: ${{ needs.changes.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    # The store tests run on SQLite and on PostgreSQL (ADR 0029): the oldest and the newest
+    # version Portitor supports (DEPLOYING, "Database"). Test servers only: trust, no TLS.
+    services:
+      postgres-oldest:
+        image: docker.io/library/postgres:16.16-alpine3.24@sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d
+        env:
+          POSTGRES_USER: portitor
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5416:5432"]
+        options: --health-cmd "pg_isready -U portitor" --health-interval 2s --health-timeout 5s --health-retries 30
+      postgres-newest:
+        image: docker.io/library/postgres:19.0-alpine3.24@sha256:cac45fb483caee3668946088a1c0532db89d5285c28dbfeac889b4068296e06f
+        env:
+          POSTGRES_USER: portitor
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5419:5432"]
+        options: --health-cmd "pg_isready -U portitor" --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      PORTITOR_TEST_REQUIRE_POSTGRES: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,15 +72,21 @@ jobs:
         run: |
           cargo clippy --workspace --all-targets --locked -- -D warnings
           cargo clippy -p portitor-connector --features tck --all-targets --locked -- -D warnings
-      - name: Test
+      - name: Test (PostgreSQL 19)
+        env:
+          PORTITOR_TEST_DATABASE_URL: postgresql://portitor@localhost:5419/postgres?sslmode=disable
         run: |
           cargo test --workspace --locked
           # the TCK scripts (test-only feature, never in a release build)
           cargo test -p portitor-connector --features tck --locked
+      - name: Test (PostgreSQL 16)
+        env:
+          PORTITOR_TEST_DATABASE_URL: postgresql://portitor@localhost:5416/postgres?sslmode=disable
+        run: cargo test --workspace --locked
       - name: Domain crates have no I/O dependencies (ADR 0004)
         run: |
           # web servers and clients, async I/O, databases, TLS
-          io='axum|hyper|hyper-util|hyper-rustls|tokio|mio|socket2|reqwest|ureq|rusqlite|libsqlite3-sys|sqlx|postgres|rustls'
+          io='axum|hyper|hyper-util|hyper-rustls|tokio|mio|socket2|reqwest|ureq|rusqlite|libsqlite3-sys|sqlx|postgres|tokio-postgres|rustls'
           for c in portitor-dsp portitor-dcp portitor-dps portitor-time portitor-shacl; do
             if cargo tree -p "$c" -e normal --prefix none | grep -E "^($io) "; then
               echo "::error::$c depends on an I/O crate"; exit 1
@@ -187,6 +212,17 @@ jobs:
       # only whether there is a token; the token itself goes to the scan step alone, so the
       # build scripts and tests of the dependencies (coverage step) never see it
       HAS_SONAR_TOKEN: ${{ secrets.SONAR_TOKEN != '' }}
+      # coverage includes the PostgreSQL half of the store tests
+      PORTITOR_TEST_REQUIRE_POSTGRES: "true"
+      PORTITOR_TEST_DATABASE_URL: postgresql://portitor@localhost:5432/postgres?sslmode=disable
+    services:
+      postgres:
+        image: docker.io/library/postgres:19.0-alpine3.24@sha256:cac45fb483caee3668946088a1c0532db89d5285c28dbfeac889b4068296e06f
+        env:
+          POSTGRES_USER: portitor
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U portitor" --health-interval 2s --health-timeout 5s --health-retries 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

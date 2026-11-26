@@ -29,6 +29,11 @@ portitor-dcp = { path = "../portitor-dcp" }
 portitor-time = { path = "../portitor-time" }
 ring.workspace = true
 rusqlite.workspace = true
+tokio-postgres.workspace = true
+tokio-rustls.workspace = true
+rustls-native-certs.workspace = true
+# decodes sslrootcert in PORTITOR_DATABASE_URL; already in the tree through tokio-postgres
+percent-encoding = "2"
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
