@@ -129,3 +129,10 @@ without a breaking change; this ADR does not plan it.
   result.
 - `PORTITOR_ALLOW_HTTP_CALLBACKS` and `PORTITOR_STS_ALLOW_HTTP` keep
   their meaning. The first stays for development and tests only.
+
+## Note added in 1.2 (2026-11-26)
+
+`HttpDataPlane::new`, named in the table above, moved with the data
+plane into its own crate: `crates/portitor-dataplane/src/plane.rs`
+([ADR 0028](0028-separate-pluggable-data-plane.md), step 1). What it
+allows is unchanged.

@@ -106,3 +106,40 @@ all as recommended:
 5. **When:** step 1 (untie inside the process, no change of behaviour)
    when it fits in a 1.x release. Steps 2 to 4 later in 1.x, or after
    DPS 1.0 is released.
+
+## Note added in 1.2 (2026-11-26): step 1 is done
+
+Release 1.2 did step 1 of decision 7: the data plane is untied inside
+the process, with one accepted change of behaviour.
+
+- The built-in data plane is the crate `portitor-dataplane`
+  (decision 4). The connector links it in and builds it in
+  `portitor-connector/src/data_plane.rs`. CI checks with `cargo tree`
+  that the crate does not depend on `portitor-connector`.
+- The membership check is a port of the data plane, `AccessGate`
+  (`portitor-dataplane/src/access.rs`), and the control plane
+  implements it: `MembershipGate` in
+  `portitor-connector/src/flow_membership.rs` reads the memberships
+  kept with each flow (the connector's `MembershipStore` port) and
+  checks them again (decision 5; maintainer's decision D1 for 1.2). The
+  data plane still asks on every request and while a download or a
+  push runs, as in 1.1. Data Plane Signaling has no message for this
+  question; how a data plane in its own process asks is left to step 2.
+- The control plane sends the dataset's source in the `metadata` of the
+  start message, as `{"portitor:source": "<url>"}` (decision 4;
+  maintainer's decision D2 for 1.2). Data Plane Signaling v1.0-RC4
+  gives `metadata` no fixed shape and names no key for a source, so
+  the key is the one of the datasets file. The flow keeps the source
+  until it ends: a source changed by a later harvest reaches only new
+  transfers. This is the accepted change of behaviour.
+- The flow also keeps the agreement and the consumer of its start
+  message (`agreementId`, `counterPartyId`), so the audit line no
+  longer reads the transfer store.
+- Decision 6: the provider's transfer service records the data plane
+  step in the transfer's own write (`transfer.flow_step`) and runs it
+  right after that write wins, once, one step at a time; our DSP
+  message waits until the step has run. This is the outbox pattern of
+  ADR 0007 applied to the data plane step, in the same call rather
+  than by the outbox's sender
+  (`portitor-dsp/src/transfer/provider/flow_steps.rs`;
+  [TD-48](../RISKS_AND_TECHNICAL_DEBTS.md#td-48), closed).

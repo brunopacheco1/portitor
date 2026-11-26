@@ -217,3 +217,14 @@ process was settled without it (`Outbox::settled_without_delivery` and
 `count_if_given_up` in `portitor-connector/src/outbox.rs`;
 [TD-44](../RISKS_AND_TECHNICAL_DEBTS.md#td-44)). The rule itself is
 unchanged.
+
+## Note added in 1.2 (2026-11-26)
+
+The provider's transfers now use the same pattern for the data plane:
+the write that changes a transfer also records the data plane step it
+needs (`transfer.flow_step`), and a pending message is sent only once
+that step has run. At start, recorded steps run before the pending
+messages are sent again (`portitor-dsp/src/transfer/provider/flow_steps.rs`;
+ADR 0028, decision 6;
+[TD-48](../RISKS_AND_TECHNICAL_DEBTS.md#td-48)). The rules above are
+unchanged.

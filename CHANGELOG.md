@@ -14,12 +14,78 @@ versions may change behaviour and configuration.
 
 ### Changed
 
+- The built-in data plane is its own crate, `portitor-dataplane`
+  ([ADR 0028](docs/adr/0028-separate-pluggable-data-plane.md), step 1).
+  The connector links it in as before: no route, setting or image
+  changes. The data plane no longer reads the connector's stores. It
+  asks the control plane through ports: `AccessGate` for the
+  membership check, still on every request
+  (`MembershipGate` in `flow_membership.rs` implements it), and
+  `FlowStore` for its own flows. The memberships kept with each flow
+  are now behind the connector's `MembershipStore`. The data plane's
+  `lib.rs` is split into one file per topic
+  ([R-01](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-01)).
+- The control plane names the dataset's source in the Data Plane
+  Signaling start message, in `metadata` as
+  `{"portitor:source": "<url>"}` (the key of the datasets file; Data
+  Plane Signaling v1.0-RC4 names no key for this). The data plane checks
+  it at start, as before, and the data flow keeps it until it ends.
+  **Behaviour change:** a `portitor:source` changed in the datasets file
+  reaches only transfers that start after the next harvest run; a
+  running transfer keeps the source it started with, also when it is
+  suspended and started again.
+- Each data flow keeps the agreement and the consumer its start
+  message names (`agreementId`, `counterPartyId`), for the audit line.
+  The data plane no longer reads the transfer store for it, so the WARN
+  line `audit: transfer store failed` is gone. The audit line itself
+  does not change.
+- The data plane's log lines (all but the audit line) have the target
+  `portitor_dataplane::...` instead of `portitor_connector::...`; their
+  texts do not change.
+- CI checks with `cargo tree` that `portitor-dataplane` does not depend
+  on `portitor-connector`.
 - Scenarios: a failed management call in `scripts/scenario-lib.sh`
   (`api`, used by hdab-intermediary and data-permits) now shows its
   HTTP status and answer, or curl's error, instead of failing silently.
 
+### Fixed
+
+- The provider tells the data plane after the transfer's write, once
+  ([TD-48](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-48); ADR 0028, decision
+  6). Before, the data plane was called inside the retried
+  read-change-write of a transfer, so a step could run although its
+  write lost, or run twice. Now the write records the step it needs
+  (`transfer.flow_step`), the same call runs it right after the write,
+  one step at a time in the process, and our DSP message waits until it
+  has run. After a restart, recorded steps run before pending messages
+  are sent. A step the data plane refuses still ends the transfer when
+  it is the provider's own decision; for a consumer's message, an
+  undelivered message, the provider's own termination or the end of a
+  push, the write is taken back and the caller gets the failure, as
+  before. A transfer request whose insert fails or loses to a repeated
+  request no longer starts a data flow (before: started, then
+  terminated).
+
+### Upgrade notes
+
+- Database migrations 14, 15 and 16 (forward only) add
+  `data_flow.source`, `data_flow.agreement_id` and
+  `data_flow.counter_party_id`, and `transfer.flow_step`. Flows of 1.1
+  get the source their dataset has in the harvest's read copy, and the
+  agreement and consumer of their transfer. A 1.1 flow whose dataset had
+  no `portitor:source` keeps none and is refused, as in 1.1: 401 for a
+  pull, a push transfer is terminated. Back up `/data` first:
+  [OPERATING, From 1.1 to 1.2](docs/OPERATING.md#from-11-to-12).
+
 ### Documentation
 
+- 1.2 documentation: OPERATING (upgrade from 1.1 and the log lines),
+  DEPLOYING (a changed source reaches only new transfers), ADRs 0007,
+  0013, 0014, 0026 and 0028 (dated notes), the C3 and C4 diagrams,
+  ARCHITECTURE, the reading guide, SECURITY-ASSURANCE (the data plane's
+  files), RUST-IDIOMS (the patterns the 1.2 code uses), TD-48 closed in
+  RISKS_AND_TECHNICAL_DEBTS, and the scenario READMEs, which now give
+  the roadmap's new release numbers.
 - TESTING: the 1.1.0 run of all six scenarios on Linux before the tag,
   and how to build the images with Podman 4.9, whose Buildah does not
   know `HEALTHCHECK --start-interval`.

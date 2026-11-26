@@ -179,27 +179,42 @@ From there the steps are the same: state machine, store, outbox.
 ## Where to go next
 
 - A transfer: `TransferService` adds two ports, `Agreements` and
-  `DataFlows`. `DataFlows` leads to the data plane
-  (`portitor-connector/src/data_flows.rs`, `data_plane.rs`). The
-  provider's own steps (read, list, end a transfer, 1.1) are in
-  `portitor-dsp/src/transfer/provider/own_steps.rs`; their management
+  `DataFlows`. `DataFlows` leads to the data plane through
+  `portitor-connector/src/data_flows.rs` (`SignalingDataFlows`: the
+  Data Plane Signaling messages, with the dataset's source in the start
+  message's `metadata`). `portitor-dsp/src/transfer/provider/flow_steps.rs`
+  runs each data plane step once, after the transfer's write (1.2,
+  TD-48). The provider's own steps (read, list, end a transfer, 1.1) are
+  in `portitor-dsp/src/transfer/provider/own_steps.rs`; their management
   routes in `portitor-connector/src/management/provided_transfers.rs`.
+- The data plane (1.2, ADR 0028): the crate `portitor-dataplane`. Start
+  with its `lib.rs`, a table of its files: `flows.rs` (the flow and its
+  store port), `plane.rs` (`HttpDataPlane`), `signaling.rs` (the
+  signals), `serving.rs` (`GET /data/{flowId}`), `sources.rs` (reading a
+  source), `push.rs` (the push sender, `send`), `access.rs` (the
+  `AccessGate` port), `download.rs`, `running_flows.rs`,
+  `object_storage.rs` and `audit.rs`. The connector builds it in
+  `portitor-connector/src/data_plane.rs` (how `build` starts the data
+  plane and serves its route).
 - How a provider ends access (ADR 0027, 1.1): `running_flows.rs` (the
-  per-flow switch that cuts running downloads), `flow_membership.rs`
-  (the consumer's membership, kept with the flow and checked again),
-  `data_plane/download.rs` (the body that can be cut, and the check
-  while a download runs) and `auth/dcp/membership.rs` (the check itself,
+  per-flow switch that cuts running downloads) and `download.rs` (the
+  body that can be cut, and the check while a download runs), both in
+  `portitor-dataplane`; in the connector, `flow_membership.rs`
+  (`MembershipGate`, the control plane's side of `AccessGate`: the
+  consumer's membership, kept with the flow in `MembershipStore` and
+  checked again) and `auth/dcp/membership.rs` (the check itself,
   without the consumer).
-- Push and object storage (ADR 0027, 1.1): `object_storage.rs` (the S3
-  client; `object_storage/sigv4.rs` signs, `object_storage/xml.rs` reads
-  the few XML answers), `push.rs` (the provider's push sender, `send`;
-  `begin_push` and `run_push` in `transfer.rs` start it and end the
-  transfer), `receiving.rs` (the consumer's receiving route, `receive`,
-  and push tokens; its store in `store/push_receipts.rs`) and
-  `data_plane/setup.rs` (how `build` starts the data plane). In the domain:
+- Push and object storage (ADR 0027, 1.1): in `portitor-dataplane`,
+  `object_storage.rs` (the S3 client; `object_storage/sigv4.rs` signs,
+  `object_storage/xml.rs` reads the few XML answers) and `push.rs` (the
+  provider's push sender, `send`). In the connector, `begin_push` and
+  `run_push` in `transfer.rs` start it and end the transfer, and
+  `receiving.rs` is the consumer's receiving route (`receive`, and push
+  tokens; its store in `store/push_receipts.rs`). In the domain:
   `portitor-dsp/src/transfer/provider/push.rs` (the end of a push) and
   `provider/messages.rs` (the provider's messages).
-- `audit.rs`: the audit line of each pull, push sent and push received.
+- `portitor-dataplane/src/audit.rs`: the audit line of each pull, push
+  sent and push received.
 - The DCP check of step 2 in full:
   `portitor-connector/src/auth/dcp.rs`.
 - Datasets and the bundle: `portitor-connector/src/harvest.rs` and
