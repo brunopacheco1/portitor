@@ -693,7 +693,8 @@ async fn a_rejection_of_a_request_that_was_sent_closes_it() {
 
 #[tokio::test]
 async fn a_request_recorded_by_0_5_still_takes_its_delivery() {
-    use portitor_identity::store::SqliteStore;
+    use portitor_identity::store::DatabaseStore;
+    use portitor_runtime::database::DatabaseSetting;
     let dir = std::env::temp_dir().join(format!(
         "portitor-identity-0-5-{}",
         portitor_runtime::system::new_uuid().trim_start_matches("urn:uuid:")
@@ -730,7 +731,7 @@ async fn a_request_recorded_by_0_5_still_takes_its_delivery() {
         )
         .unwrap();
     }
-    let store = SqliteStore::open(&path).unwrap();
+    let store = DatabaseStore::open(&DatabaseSetting::SqliteFile(path.clone())).unwrap();
     let world = World::with_store(&common::config(), std::sync::Arc::new(store));
     let view = request_view(&world, "h-0.5").await;
     assert_eq!(view["status"], "REQUESTED");

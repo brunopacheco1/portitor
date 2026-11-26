@@ -21,11 +21,11 @@
 //! The public routes are in [`router`]; the management API has its own
 //! router and port.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use axum::Router;
 use axum::routing::{get, post};
-use portitor_dcp::{JtiCache, Jwk, SigningKey};
+use portitor_dcp::{Jwk, SigningKey};
 use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::did_document::{key_id, read_retired_keys};
 use portitor_runtime::directory::Directory;
@@ -76,7 +76,6 @@ pub struct Identity {
     store: Arc<dyn IdentityStore>,
     directory: Arc<dyn Directory>,
     issuers: Arc<dyn IssuerClient>,
-    used_token_ids: Mutex<JtiCache>,
     /// Where the participant's public documents are: its `did:web` URL
     /// without `did.json` ([`gaiax::public_base`]).
     public_base: String,
@@ -187,7 +186,6 @@ impl Identity {
             store: ports.store,
             directory: ports.directory,
             issuers: ports.issuers,
-            used_token_ids: Mutex::new(JtiCache::default()),
             public_base,
             public_path,
             certificate,

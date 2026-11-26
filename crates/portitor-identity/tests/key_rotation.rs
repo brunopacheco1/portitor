@@ -22,7 +22,7 @@ use portitor_dcp::{
     DidDocument, JtiCache, Jws, SigningKey, unverified_claims, validate_self_issued,
 };
 use portitor_identity::config::Config;
-use portitor_identity::store::{IdentityStore, SqliteStore};
+use portitor_identity::store::{DatabaseStore, IdentityStore};
 use portitor_runtime::system::now_secs;
 use portitor_runtime::testing::TempDir;
 use serde_json::json;
@@ -82,7 +82,7 @@ async fn access_tokens_signed_before_a_key_change_stay_usable_while_listed() {
     let dir = TempDir::new("identity-keys");
     let old_key = SigningKey::generate().unwrap();
     let new_key = SigningKey::generate().unwrap();
-    let store: Arc<dyn IdentityStore> = Arc::new(SqliteStore::in_memory().unwrap());
+    let store: Arc<dyn IdentityStore> = Arc::new(DatabaseStore::in_memory().unwrap());
 
     // before the change: an access token for the verifier, and two
     // credential requests whose access tokens the issuer will send back
@@ -130,7 +130,7 @@ fn the_identity_does_not_start_with_a_wrong_retired_key_file() {
     for (files, reason) in refusals {
         let error = World::try_with(
             &with_retired(files),
-            Arc::new(SqliteStore::in_memory().unwrap()),
+            Arc::new(DatabaseStore::in_memory().unwrap()),
             SigningKey::from_pkcs8(key.pkcs8()).unwrap(),
             None,
         )
@@ -148,7 +148,7 @@ fn the_identity_does_not_start_with_a_wrong_retired_key_file() {
 fn start(config: &Config, key: &SigningKey) -> World {
     World::try_with(
         config,
-        Arc::new(SqliteStore::in_memory().unwrap()),
+        Arc::new(DatabaseStore::in_memory().unwrap()),
         SigningKey::from_pkcs8(key.pkcs8()).unwrap(),
         None,
     )

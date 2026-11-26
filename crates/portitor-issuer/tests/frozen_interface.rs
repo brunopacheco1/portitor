@@ -33,7 +33,7 @@ use std::sync::Arc;
 use axum::Router;
 use portitor_dcp::{DidDocument, SigningKey};
 use portitor_issuer::config::{Config, DEFAULT_MANAGEMENT_BIND, ManagementConfig};
-use portitor_issuer::store::SqliteStore;
+use portitor_issuer::store::DatabaseStore;
 use portitor_issuer::{Issuer, Ports, definitions};
 use portitor_runtime::BoxFuture;
 use portitor_runtime::api_key::ApiKey;
@@ -84,7 +84,7 @@ fn routers(bundles: &Path) -> (Router, Router) {
         credential_definitions_file: "unused".into(),
         issuer_service_url: "https://issuer.example/issuer".to_owned(),
         bind: "unused".to_owned(),
-        db_file: "unused".into(),
+        database: portitor_runtime::database::DatabaseSetting::SqliteFile("unused".into()),
         management: ManagementConfig::health_only(DEFAULT_MANAGEMENT_BIND),
         allow_http: false,
         max_active_per_holder: 10,
@@ -92,7 +92,7 @@ fn routers(bundles: &Path) -> (Router, Router) {
         bundle_dir: Some(bundles.to_owned()),
     };
     let ports = Ports {
-        store: Arc::new(SqliteStore::in_memory().unwrap()),
+        store: Arc::new(DatabaseStore::in_memory().unwrap()),
         directory: Arc::new(NoDirectory),
         sender: Arc::new(NoSender),
     };
@@ -119,6 +119,11 @@ const NOT_FROZEN: &[&str] = &[
     "PORTITOR_ALLOW_HTTP_CALLBACKS",
     // renamed in 0.13 to PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE
     "PORTITOR_ISSUER_CREDENTIALS_FILE",
+    // read only by the tests, on a PostgreSQL test server
+    // (`portitor_runtime::testing::databases`)
+    "PORTITOR_TEST_DATABASE_URL",
+    "PORTITOR_TEST_DATABASE_PASSWORD",
+    "PORTITOR_TEST_REQUIRE_POSTGRES",
 ];
 
 fn stability() -> String {

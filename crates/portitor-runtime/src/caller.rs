@@ -9,28 +9,27 @@
 //! document is resolved and the token checked step by step
 //! (`portitor_dcp::validate_self_issued`).
 
-use std::sync::{Mutex, PoisonError};
-
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
-use portitor_dcp::{Claims, JtiCache, unverified_claims, validate_self_issued};
+use portitor_dcp::{Claims, unverified_claims, validate_self_issued};
 
 use crate::api_key::problem;
 use crate::directory::Directory;
 use crate::http::bearer_token_in;
 use crate::system::now_secs;
+use crate::used_tokens::{RecordIn, UsedTokenStore};
 
 /// What [`authenticate`] checks a token against.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct Audience<'a> {
     /// The DID of the service that is called: the token's `aud` must be
     /// it.
     pub did: &'a str,
     /// Allowed clock difference with the caller, in seconds.
     pub leeway: u64,
-    /// The token ids already used; a token whose `jti` is here is refused,
-    /// and an accepted one is added.
-    pub used_token_ids: &'a Mutex<JtiCache>,
+    /// The token ids already used, in the component's database; a token
+    /// whose `jti` is there is refused, and an accepted one is added.
+    pub used_token_ids: &'a dyn UsedTokenStore,
 }
 
 /// The caller's verified token claims, or a 401 answer. Why a token was
@@ -63,21 +62,13 @@ pub async fn authenticate(
         .did_document(&claimed.sub)
         .await
         .map_err(|e| refused(&format!("cannot resolve {}: {e}", claimed.sub)))?;
-    // the lock is taken only now, after the last `await`, and held for
-    // the check alone. A panic while it was held could at worst leave one
-    // id that is never forgotten (it only panics when memory runs out),
-    // so a poisoned lock is used as it is.
-    let mut used_token_ids = audience
-        .used_token_ids
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
     validate_self_issued(
         token,
         &document,
         audience.did,
         now_secs(),
         audience.leeway,
-        &mut used_token_ids,
+        &mut RecordIn(audience.used_token_ids),
     )
     .map_err(|e| refused(&e.to_string()))
 }
@@ -99,9 +90,10 @@ pub fn refused(reason: &str) -> Response {
 mod tests {
     use super::*;
     use crate::BoxFuture;
+    use portitor_dcp::JtiCache;
     use portitor_dcp::{DidDocument, Relationship, SigningKey, VerificationMethod};
     use serde_json::Value;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     const CALLER: &str = "did:web:caller.example";
     const SERVICE: &str = "did:web:service.example";

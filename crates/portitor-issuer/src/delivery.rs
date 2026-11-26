@@ -23,6 +23,15 @@
 //! message it took before (same `issuerPid`), so a lost answer costs one
 //! more try, not a `FAILED` delivery. Messages still in the outbox at a
 //! restart are sent then.
+//!
+//! Several issuer processes may share one database (TD-57). A process
+//! claims a delivery before it sends it: a lease in the store, held for
+//! [`LEASE_SECONDS`] by its process id, which the store gives to one
+//! process only (as Eclipse EDC's lease columns). The lease ends when the
+//! try is recorded. A process that stops in the middle leaves its lease
+//! to run out; then another process takes the delivery over. A try that
+//! outlasts the lease may be sent twice, which the holder takes (see
+//! above).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,7 +43,7 @@ use portitor_runtime::system::{new_uuid, now_secs};
 use portitor_runtime::telemetry::metrics;
 use serde_json::Value;
 
-use crate::store::{Delivery, DeliveryState};
+use crate::store::{Delivery, DeliveryState, Lease};
 use crate::{Issuer, TOKEN_SECONDS, issue};
 
 /// How many times a delivery is tried. With the waits of
@@ -43,6 +52,12 @@ pub const MAX_ATTEMPTS: u32 = 20;
 
 /// How long the outbox sleeps when nothing is due, unless woken.
 const IDLE: Duration = Duration::from_secs(60);
+
+/// How long a process holds a delivery it claimed, in seconds: longer
+/// than one try takes (the holder's DID document, then the send, each
+/// within 10 seconds). The same time as the connector's lease on a
+/// transfer (`portitor_dsp::transfer::provider::LEASE_SECONDS`, TD-48).
+pub const LEASE_SECONDS: u64 = 30;
 
 /// Whether a failed send should not be tried again: the holder answered
 /// with a 4xx status other than 401 (its check of our token may pass
@@ -89,17 +104,13 @@ pub async fn send_due(issuer: &Issuer) {
     send_due_at(issuer, now_secs()).await;
 }
 
-/// Sends every delivery due at `now`, and schedules the next try of a
-/// failed one from `now` (tests pass a later time instead of waiting).
+/// Sends every delivery due at `now` that no other process holds, one
+/// after the other, and schedules the next try of a failed one from
+/// `now` (tests pass a later time instead of waiting).
 pub async fn send_due_at(issuer: &Issuer, now: u64) {
-    let due = match issuer.store.due_deliveries(now) {
-        Ok(due) => due,
-        Err(error) => {
-            tracing::error!(%error, "cannot read the outbox");
-            return;
-        }
-    };
-    for delivery in due {
+    // a recorded try ends the lease and moves the delivery at least a
+    // second later (or out of the outbox), so the loop ends
+    while let Some(delivery) = claim_next(issuer, now) {
         if delivery.attempts > 0 {
             metrics::outbox_resent(metrics::Outbox::CredentialDelivery);
         }
@@ -108,33 +119,66 @@ pub async fn send_due_at(issuer: &Issuer, now: u64) {
     }
 }
 
-/// Records what became of one try.
+/// Claims the next delivery due at `now` for this process, for
+/// [`LEASE_SECONDS`]. `None` when none is due and free, or the store
+/// fails (logged).
+fn claim_next(issuer: &Issuer, now: u64) -> Option<Delivery> {
+    let lease = Lease {
+        holder: &issuer.process_id,
+        until: now.saturating_add(LEASE_SECONDS),
+    };
+    match issuer.store.claim_due_delivery(now, lease) {
+        Ok(claimed) => claimed,
+        Err(error) => {
+            tracing::error!(%error, "cannot read the outbox");
+            None
+        }
+    }
+}
+
+/// Records what became of one try, and so ends this process's lease.
 fn record(issuer: &Issuer, delivery: &Delivery, outcome: Result<(), String>, now: u64) {
     let pid = delivery.issuer_pid.as_str();
+    let holder = issuer.process_id.as_str();
     let stored = match outcome {
         Ok(()) => {
             tracing::info!(issuer_pid = pid, holder = %delivery.holder_did, "credentials delivered");
-            issuer.store.end_delivery(pid, DeliveryState::Delivered)
+            issuer
+                .store
+                .end_delivery(pid, holder, DeliveryState::Delivered)
         }
         Err(error) => {
             let failed = delivery.attempts + 1;
             if is_permanent(&error) {
                 tracing::error!(issuer_pid = pid, %error, failed, "delivery refused by the holder, given up");
                 metrics::outbox_given_up(metrics::Outbox::CredentialDelivery);
-                issuer.store.end_delivery(pid, DeliveryState::Failed)
+                issuer
+                    .store
+                    .end_delivery(pid, holder, DeliveryState::Failed)
             } else if failed >= MAX_ATTEMPTS {
                 tracing::error!(issuer_pid = pid, %error, failed, "delivery given up");
                 metrics::outbox_given_up(metrics::Outbox::CredentialDelivery);
-                issuer.store.end_delivery(pid, DeliveryState::Failed)
+                issuer
+                    .store
+                    .end_delivery(pid, holder, DeliveryState::Failed)
             } else {
                 let next = now + retry_delay(failed);
                 tracing::warn!(issuer_pid = pid, %error, failed, "delivery failed, will retry");
-                issuer.store.retry_later(pid, failed, next)
+                issuer.store.retry_later(pid, holder, failed, next)
             }
         }
     };
-    if let Err(error) = stored {
-        tracing::error!(issuer_pid = pid, %error, "cannot record the delivery");
+    match stored {
+        Ok(true) => {}
+        // the try took longer than the lease, and another process took
+        // the delivery over: it records what becomes of it
+        Ok(false) => {
+            tracing::warn!(
+                issuer_pid = pid,
+                "the lease on the delivery ended before the try did; another process holds it now"
+            );
+        }
+        Err(error) => tracing::error!(issuer_pid = pid, %error, "cannot record the delivery"),
     }
 }
 

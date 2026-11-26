@@ -19,7 +19,7 @@ use portitor_dcp::bundle::{self, Expected, Manifest, MediaType};
 use portitor_dcp::{DidDocument, SigningKey};
 use portitor_issuer::bundle_build::{LatestUpdate, Options, build};
 use portitor_issuer::config::Config;
-use portitor_issuer::store::SqliteStore;
+use portitor_issuer::store::DatabaseStore;
 use portitor_issuer::{Issuer, Ports, bundles};
 use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::http::HttpSender;
@@ -360,7 +360,7 @@ fn issuer(bundle_dir: Option<PathBuf>) -> Issuer {
         credential_definitions_file: "unused".into(),
         issuer_service_url: "https://issuer.example/issuer".to_owned(),
         bind: "unused".to_owned(),
-        db_file: "unused".into(),
+        database: portitor_runtime::database::DatabaseSetting::SqliteFile("unused".into()),
         management: portitor_issuer::config::ManagementConfig::health_only(
             portitor_issuer::config::DEFAULT_MANAGEMENT_BIND,
         ),
@@ -370,7 +370,7 @@ fn issuer(bundle_dir: Option<PathBuf>) -> Issuer {
         bundle_dir,
     };
     let ports = Ports {
-        store: Arc::new(SqliteStore::in_memory().unwrap()),
+        store: Arc::new(DatabaseStore::in_memory().unwrap()),
         directory: Arc::new(WebDirectory::new(false, 300).unwrap()),
         sender: Arc::new(HttpSender::new(false).unwrap()),
     };

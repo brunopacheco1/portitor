@@ -2,35 +2,53 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! A panic while the store's lock is held: the lock recovery in `conn()`
-//! takes the poisoned lock, and the database is as `SQLite` left it.
+//! A panic while the store's lock is held: the lock recovery of the
+//! `SQLite` database (`portitor_runtime::database`) takes the poisoned
+//! lock, and the database is as `SQLite` left it.
 //! The checks themselves, and why this is safe, are in
 //! `portitor_runtime::sqlite::testing`, shared by the three stores.
 //! The identity store writes more than one statement only inside a
 //! transaction.
 
-use std::sync::Arc;
+use std::sync::{Arc, MutexGuard};
 
+use portitor_runtime::database::Database;
 use portitor_runtime::sqlite::testing;
+use rusqlite::Connection;
 
-use super::{IdentityStore, RunOutcome, SqliteStore};
+use super::{DatabaseStore, IdentityStore, RunOutcome};
 
-/// How the shared checks reach this store: its own `conn()` (the code
-/// under test) and its lock.
-const ACCESS: testing::Access<SqliteStore> = testing::Access {
-    conn: SqliteStore::conn,
-    is_poisoned: |store| store.0.is_poisoned(),
-};
+/// How the shared checks reach this store: the `SQLite` connection of its
+/// database, taken as the store takes it (the code under test), and its
+/// lock.
+const ACCESS: testing::Access<DatabaseStore> = testing::Access { conn, is_poisoned };
+
+/// The store's `SQLite` connection, through its lock (a poisoned one
+/// too).
+fn conn(store: &DatabaseStore) -> MutexGuard<'_, Connection> {
+    match store.db().sqlite_connection() {
+        Some(conn) => conn,
+        None => panic!("these tests run on SQLite"),
+    }
+}
+
+/// Whether a panic poisoned the lock of the store's `SQLite` connection.
+fn is_poisoned(store: &DatabaseStore) -> bool {
+    match store.db() {
+        Database::Sqlite(conn) => conn.is_poisoned(),
+        Database::Postgres(_) => false,
+    }
+}
 
 #[test]
 fn a_panic_inside_a_transaction_rolls_it_back() {
-    let store = SqliteStore::in_memory().unwrap();
+    let store = DatabaseStore::in_memory().unwrap();
     testing::assert_a_panic_inside_a_transaction_rolls_it_back(store, &ACCESS);
 }
 
 #[test]
 fn a_panic_after_a_single_statement_keeps_it() {
-    let store = SqliteStore::in_memory().unwrap();
+    let store = DatabaseStore::in_memory().unwrap();
     testing::assert_a_panic_after_a_single_statement_keeps_it(store, &ACCESS);
 }
 
@@ -38,15 +56,15 @@ fn a_panic_after_a_single_statement_keeps_it() {
 /// run (a transaction of two statements) is recorded and listed.
 #[test]
 fn a_gaiax_run_is_recorded_and_listed_after_a_panic() {
-    let store = Arc::new(SqliteStore::in_memory().unwrap());
+    let store = Arc::new(DatabaseStore::in_memory().unwrap());
     let held = Arc::clone(&store);
     let panicked = std::thread::spawn(move || {
-        let _conn = held.conn();
+        let _conn = conn(&held);
         panic!("while the lock is held");
     })
     .join();
     assert!(panicked.is_err());
-    assert!(store.0.is_poisoned());
+    assert!(is_poisoned(&store));
 
     let runs: &dyn IdentityStore = store.as_ref();
     let id = runs.start_gaiax_run(1_794_484_800).unwrap();

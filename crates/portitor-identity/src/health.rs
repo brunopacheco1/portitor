@@ -6,25 +6,33 @@
 //! served on the management port by `portitor_runtime::health`. Only its
 //! own dependencies, never an issuer or a verifier:
 //!
-//! - `database`: the `SQLite` file answers;
+//! - `database`: the database answers (PostgreSQL, or the `SQLite`
+//!   file);
 //! - `key`: the participant's key is loaded and signs;
 //! - `did-document`: the DID document it serves names the participant
 //!   and lists that key for signing tokens (`capabilityInvocation`).
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use portitor_dcp::{DidDocument, Purpose};
-use portitor_runtime::health::{HealthChecks, blocking, key_signs, sqlite_file_answers};
+use portitor_runtime::database::{Database, DatabaseSetting};
+use portitor_runtime::health::{HealthChecks, blocking, database_answers, key_signs};
 
 use crate::Identity;
 
-/// The identity component's checks, for `identity` with its `SQLite` file
-/// `db_file` (`PORTITOR_DB_FILE`).
+/// The identity component's checks, for `identity` with its `database`,
+/// opened from `setting`.
 #[must_use]
-pub fn readiness_checks(identity: &Arc<Identity>, db_file: PathBuf) -> HealthChecks {
+pub fn readiness_checks(
+    identity: &Arc<Identity>,
+    setting: DatabaseSetting,
+    database: Arc<Database>,
+) -> HealthChecks {
     let mut checks = HealthChecks::new();
-    checks.add("database", blocking(move || sqlite_file_answers(&db_file)));
+    checks.add(
+        "database",
+        blocking(move || database_answers(&setting, &database)),
+    );
     let for_key = Arc::clone(identity);
     checks.add("key", blocking(move || key_signs(&for_key.key)));
     let for_document = Arc::clone(identity);

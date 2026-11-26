@@ -23,7 +23,7 @@ use portitor_dcp::SigningKey;
 use portitor_dcp::bundle::BundleError;
 use portitor_issuer::bundle_build::{Options, build};
 use portitor_issuer::config::Config;
-use portitor_issuer::store::SqliteStore;
+use portitor_issuer::store::DatabaseStore;
 use portitor_issuer::{Issuer, Ports};
 use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::http::HttpSender;
@@ -78,7 +78,7 @@ impl Authority {
             credential_definitions_file: "unused".into(),
             issuer_service_url: format!("http://127.0.0.1:{port}/issuer"),
             bind: "unused".to_owned(),
-            db_file: "unused".into(),
+            database: portitor_runtime::database::DatabaseSetting::SqliteFile("unused".into()),
             management: portitor_issuer::config::ManagementConfig::health_only(
                 portitor_issuer::config::DEFAULT_MANAGEMENT_BIND,
             ),
@@ -88,7 +88,7 @@ impl Authority {
             bundle_dir: Some(bundles.clone()),
         };
         let ports = Ports {
-            store: Arc::new(SqliteStore::in_memory().unwrap()),
+            store: Arc::new(DatabaseStore::in_memory().unwrap()),
             directory: Arc::new(WebDirectory::new(true, 300).unwrap()),
             sender: Arc::new(HttpSender::new(true).unwrap()),
         };
