@@ -2,18 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! The harvest's read copy, jobs and entry errors, in the same `SQLite`
-//! file (ADR 0020). A run's changes are written in one transaction.
+//! The harvest's read copy, jobs and entry errors, in the same database
+//! (ADR 0020). A run's changes are written in one transaction.
 
-use rusqlite::{OptionalExtension as _, Row, Transaction, params};
+use portitor_runtime::database::{DbError, Executor, Row, Value};
+use portitor_runtime::values;
 
-use super::{SqliteNegotiations, StoreError, col, err, json, parsed};
+use super::{ConnectorStore, StoreError, col, json, parsed};
 use crate::harvest::{
     CheckKind, Commit, Counts, DatasetState, DatasetStore, EntryError, HarvestJob, HarvestStatus,
     JobKind, JobOutcome, JobRecord, JobWithErrors, KEPT_JOBS, StoredDataset, Trigger, count,
 };
 
-/// A number as `SQLite` stores it.
+/// A number as the database stores it.
 fn int(n: u64) -> Result<i64, StoreError> {
     i64::try_from(n).map_err(|_| StoreError(format!("number {n} out of range")))
 }
@@ -33,7 +34,7 @@ fn named<T>(what: &str, text: &str, from_name: fn(&str) -> Option<T>) -> Result<
 const DATASET_COLUMNS: &str = "id, entry, content, upstream, content_sha256, state, \
      conforms_to, first_seen, last_changed, last_job";
 
-fn dataset_from_row(row: &Row<'_>) -> Result<StoredDataset, StoreError> {
+fn dataset_from_row(row: &Row) -> Result<StoredDataset, StoreError> {
     Ok(StoredDataset {
         id: col(row, 0)?,
         entry: parsed("dataset entry", &col::<String>(row, 1)?)?,
@@ -55,7 +56,7 @@ fn dataset_from_row(row: &Row<'_>) -> Result<StoredDataset, StoreError> {
 const JOB_COLUMNS: &str = "id, started_at, finished_at, run_trigger, source, snapshot_sha256, \
      outcome, seen, added, updated, unchanged, withdrawn, rejected, summary, kind";
 
-fn job_from_row(row: &Row<'_>) -> Result<HarvestJob, StoreError> {
+fn job_from_row(row: &Row) -> Result<HarvestJob, StoreError> {
     Ok(HarvestJob {
         id: uint(col(row, 0)?)?,
         record: JobRecord {
@@ -79,7 +80,7 @@ fn job_from_row(row: &Row<'_>) -> Result<HarvestJob, StoreError> {
     })
 }
 
-fn error_from_row(row: &Row<'_>) -> Result<EntryError, StoreError> {
+fn error_from_row(row: &Row) -> Result<EntryError, StoreError> {
     let position: Option<i64> = col(row, 0)?;
     let report: Option<String> = col(row, 4)?;
     Ok(EntryError {
@@ -91,190 +92,221 @@ fn error_from_row(row: &Row<'_>) -> Result<EntryError, StoreError> {
     })
 }
 
-/// Writes one dataset: an update of its row, or a new row. (Two plain
-/// statements rather than an upsert, so the SQL stays portable.)
-fn write_dataset(
-    tx: &Transaction<'_>,
-    dataset: &StoredDataset,
-    job_id: i64,
-) -> Result<(), StoreError> {
-    let entry = json(&dataset.entry)?;
-    let content = json(&dataset.content)?;
-    let first_seen = int(dataset.first_seen)?;
-    let last_changed = int(dataset.last_changed)?;
-    let values = params![
-        dataset.id,
-        entry,
-        content,
-        dataset.upstream,
-        dataset.content_sha256,
+fn status_from_row(row: &Row) -> Result<HarvestStatus, StoreError> {
+    Ok(HarvestStatus {
+        rules_version: col(row, 0)?,
+        snapshot_sha256: col(row, 1)?,
+    })
+}
+
+/// A run's rows, made before its transaction: the transaction only
+/// writes them (it may run more than once, see
+/// `ConnectorStore::transaction`). The job's id is known only inside the
+/// transaction, so every statement takes it as `$1`, and each list of
+/// values here starts at `$2`.
+struct RunRows {
+    job: Vec<Value>,
+    datasets: Vec<Vec<Value>>,
+    errors: Vec<Vec<Value>>,
+    status: Vec<Value>,
+    kept_jobs: i64,
+}
+
+/// The values of the job's row, `$2` and on (`$1` is its id).
+fn job_values(job: &JobRecord) -> Result<Vec<Value>, StoreError> {
+    let counts = &job.counts;
+    Ok(values![
+        int(job.started_at)?,
+        int(job.finished_at)?,
+        job.trigger.name(),
+        &job.source,
+        job.snapshot_sha256.as_deref(),
+        job.outcome.name(),
+        int(counts.seen)?,
+        int(counts.added)?,
+        int(counts.updated)?,
+        int(counts.unchanged)?,
+        int(counts.withdrawn)?,
+        int(counts.rejected)?,
+        &job.summary,
+        job.kind.name(),
+    ]
+    .to_vec())
+}
+
+/// The values of a dataset's row, `$2` and on (`$1` is the job's id,
+/// its `last_job`).
+fn dataset_values(dataset: &StoredDataset) -> Result<Vec<Value>, StoreError> {
+    Ok(values![
+        &dataset.id,
+        json(&dataset.entry)?,
+        json(&dataset.content)?,
+        dataset.upstream.as_deref(),
+        &dataset.content_sha256,
         dataset.state.name(),
-        dataset.conforms_to,
-        first_seen,
-        last_changed,
-        job_id,
-    ];
-    let updated = tx
-        .execute(
-            "UPDATE dataset
-             SET entry = ?2, content = ?3, upstream = ?4, content_sha256 = ?5, state = ?6,
-                 conforms_to = ?7, first_seen = ?8, last_changed = ?9, last_job = ?10
-             WHERE id = ?1",
-            values,
-        )
-        .map_err(err)?;
+        dataset.conforms_to.as_deref(),
+        int(dataset.first_seen)?,
+        int(dataset.last_changed)?,
+    ]
+    .to_vec())
+}
+
+/// The values of an entry error's row, `$2` and on (`$1` is the job's
+/// id).
+fn error_values(seq: usize, error: &EntryError) -> Result<Vec<Value>, StoreError> {
+    Ok(values![
+        int(count(seq))?,
+        error.position.map(int).transpose()?,
+        error.dataset_id.as_deref(),
+        error.kind.name(),
+        &error.message,
+        error.report.as_ref().map(json).transpose()?,
+    ]
+    .to_vec())
+}
+
+impl RunRows {
+    fn of(commit: &Commit) -> Result<Self, StoreError> {
+        let mut datasets = Vec::with_capacity(commit.writes.len());
+        for dataset in &commit.writes {
+            datasets.push(dataset_values(dataset)?);
+        }
+        let mut errors = Vec::with_capacity(commit.errors.len());
+        for (seq, error) in commit.errors.iter().enumerate() {
+            errors.push(error_values(seq, error)?);
+        }
+        let status = &commit.status;
+        Ok(Self {
+            job: job_values(&commit.job)?,
+            datasets,
+            errors,
+            status: values![
+                status.rules_version.as_deref(),
+                status.snapshot_sha256.as_deref()
+            ]
+            .to_vec(),
+            kept_jobs: int(KEPT_JOBS)?,
+        })
+    }
+}
+
+/// `values` with the job's id in front, as `$1`.
+fn with_job_id(job_id: i64, values: &[Value]) -> Vec<Value> {
+    let mut all = Vec::with_capacity(values.len() + 1);
+    all.push(Value::Int(job_id));
+    all.extend_from_slice(values);
+    all
+}
+
+/// Writes one run in the transaction `tx` and returns the job's id.
+fn write_run(tx: &mut dyn Executor, rows: &RunRows) -> Result<i64, DbError> {
+    let newest = match tx.query_one("SELECT COALESCE(MAX(id), 0) FROM harvest_job", values![])? {
+        Some(row) => row.get::<i64>(0)?,
+        None => 0,
+    };
+    let id = newest + 1;
+    let insert_job = format!(
+        "INSERT INTO harvest_job ({JOB_COLUMNS})
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)"
+    );
+    tx.execute(&insert_job, &with_job_id(id, &rows.job))?;
+    for dataset in &rows.datasets {
+        write_dataset(tx, &with_job_id(id, dataset))?;
+    }
+    for error in &rows.errors {
+        tx.execute(
+            "INSERT INTO harvest_error
+                 (job_id, seq, entry_position, dataset_id, kind, message, report)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            &with_job_id(id, error),
+        )?;
+    }
+    // keep the newest KEPT_JOBS jobs: ids have no gaps, as each job
+    // takes the next one and the newest is never deleted
+    let oldest_kept = id - rows.kept_jobs + 1;
+    tx.execute(
+        "DELETE FROM harvest_error WHERE job_id < $1",
+        values![oldest_kept],
+    )?;
+    tx.execute(
+        "DELETE FROM harvest_job WHERE id < $1",
+        values![oldest_kept],
+    )?;
+    tx.execute(
+        "UPDATE harvest_state SET rules_version = $1, snapshot_sha256 = $2 WHERE id = 1",
+        &rows.status,
+    )?;
+    Ok(id)
+}
+
+/// Writes one dataset: an update of its row, or a new row. (Two plain
+/// statements rather than an upsert; they run in the run's transaction.)
+/// `values`: the job's id, then the dataset's columns.
+fn write_dataset(tx: &mut dyn Executor, values: &[Value]) -> Result<(), DbError> {
+    let updated = tx.execute(
+        "UPDATE dataset
+         SET entry = $3, content = $4, upstream = $5, content_sha256 = $6, state = $7,
+             conforms_to = $8, first_seen = $9, last_changed = $10, last_job = $1
+         WHERE id = $2",
+        values,
+    )?;
     if updated == 0 {
         let sql = format!(
-            "INSERT INTO dataset ({DATASET_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+            "INSERT INTO dataset ({DATASET_COLUMNS})
+             VALUES ($2, $3, $4, $5, $6, $7, $8, $9, $10, $1)"
         );
-        tx.execute(&sql, values).map_err(err)?;
+        tx.execute(&sql, values)?;
     }
     Ok(())
 }
 
-fn insert_job(tx: &Transaction<'_>, id: i64, job: &JobRecord) -> Result<(), StoreError> {
-    let sql = format!(
-        "INSERT INTO harvest_job ({JOB_COLUMNS})
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"
-    );
-    let counts = &job.counts;
-    tx.execute(
-        &sql,
-        params![
-            id,
-            int(job.started_at)?,
-            int(job.finished_at)?,
-            job.trigger.name(),
-            job.source,
-            job.snapshot_sha256,
-            job.outcome.name(),
-            int(counts.seen)?,
-            int(counts.added)?,
-            int(counts.updated)?,
-            int(counts.unchanged)?,
-            int(counts.withdrawn)?,
-            int(counts.rejected)?,
-            job.summary,
-            job.kind.name(),
-        ],
-    )
-    .map_err(err)?;
-    Ok(())
-}
-
-fn insert_error(
-    tx: &Transaction<'_>,
-    job_id: i64,
-    seq: usize,
-    error: &EntryError,
-) -> Result<(), StoreError> {
-    tx.execute(
-        "INSERT INTO harvest_error
-             (job_id, seq, entry_position, dataset_id, kind, message, report)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![
-            job_id,
-            int(count(seq))?,
-            error.position.map(int).transpose()?,
-            error.dataset_id,
-            error.kind.name(),
-            error.message,
-            error.report.as_ref().map(json).transpose()?,
-        ],
-    )
-    .map_err(err)?;
-    Ok(())
-}
-
-impl DatasetStore for SqliteNegotiations {
+impl DatasetStore for ConnectorStore {
     fn datasets(&self) -> Result<Vec<StoredDataset>, StoreError> {
         let sql = format!("SELECT {DATASET_COLUMNS} FROM dataset ORDER BY id");
-        self.query(&sql, [], dataset_from_row)
+        self.query(&sql, values![], dataset_from_row)
     }
 
     fn status(&self) -> Result<HarvestStatus, StoreError> {
-        let conn = self.conn();
         // the one row of harvest_state: both columns may be NULL
-        let found: Option<(Option<String>, Option<String>)> = conn
-            .query_row(
-                "SELECT rules_version, snapshot_sha256 FROM harvest_state WHERE id = 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .map_err(err)?;
+        let found = self.query_first(
+            "SELECT rules_version, snapshot_sha256 FROM harvest_state WHERE id = 1",
+            values![],
+            status_from_row,
+        )?;
         // no row (cannot happen after the migration): nothing known yet
-        let (rules_version, snapshot_sha256) = found.unwrap_or((None, None));
-        Ok(HarvestStatus {
-            rules_version,
-            snapshot_sha256,
-        })
+        Ok(found.unwrap_or_default())
     }
 
     fn commit(&self, commit: &Commit) -> Result<u64, StoreError> {
-        let mut conn = self.conn();
-        // dropped without `commit()` on any error: nothing is written
-        let tx = conn.transaction().map_err(err)?;
-        let newest: i64 = tx
-            .query_row("SELECT COALESCE(MAX(id), 0) FROM harvest_job", [], |row| {
-                row.get(0)
-            })
-            .map_err(err)?;
-        let id = newest + 1;
-        insert_job(&tx, id, &commit.job)?;
-        for dataset in &commit.writes {
-            write_dataset(&tx, dataset, id)?;
-        }
-        for (seq, error) in commit.errors.iter().enumerate() {
-            insert_error(&tx, id, seq, error)?;
-        }
-        // keep the newest KEPT_JOBS jobs: ids have no gaps, as each job
-        // takes the next one and the newest is never deleted
-        let oldest_kept = id - int(KEPT_JOBS)? + 1;
-        tx.execute(
-            "DELETE FROM harvest_error WHERE job_id < ?1",
-            params![oldest_kept],
-        )
-        .map_err(err)?;
-        tx.execute(
-            "DELETE FROM harvest_job WHERE id < ?1",
-            params![oldest_kept],
-        )
-        .map_err(err)?;
-        tx.execute(
-            "UPDATE harvest_state SET rules_version = ?1, snapshot_sha256 = ?2 WHERE id = 1",
-            params![commit.status.rules_version, commit.status.snapshot_sha256],
-        )
-        .map_err(err)?;
-        tx.commit().map_err(err)?;
+        let rows = RunRows::of(commit)?;
+        // on any error nothing is written
+        let id = self.transaction(|tx| write_run(tx, &rows))?;
         uint(id)
     }
 
     fn jobs(&self, before: Option<u64>, limit: usize) -> Result<Vec<HarvestJob>, StoreError> {
+        // no `before`: from the newest. The CAST gives PostgreSQL the type
+        // of $1, which it cannot tell from `$1 IS NULL`
         let sql = format!(
             "SELECT {JOB_COLUMNS} FROM harvest_job
-             WHERE ?1 IS NULL OR id < ?1
-             ORDER BY id DESC LIMIT ?2"
+             WHERE CAST($1 AS BIGINT) IS NULL OR id < $1
+             ORDER BY id DESC LIMIT $2"
         );
         let before = before.map(int).transpose()?;
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        self.query(&sql, params![before, limit], job_from_row)
+        self.query(&sql, values![before, limit], job_from_row)
     }
 
     fn job(&self, id: u64) -> Result<Option<JobWithErrors>, StoreError> {
         let id = int(id)?;
-        let sql = format!("SELECT {JOB_COLUMNS} FROM harvest_job WHERE id = ?1");
-        let Some(job) = self
-            .query(&sql, params![id], job_from_row)?
-            .into_iter()
-            .next()
-        else {
+        let sql = format!("SELECT {JOB_COLUMNS} FROM harvest_job WHERE id = $1");
+        let Some(job) = self.query_first(&sql, values![id], job_from_row)? else {
             return Ok(None);
         };
         let errors = self.query(
             "SELECT entry_position, dataset_id, kind, message, report FROM harvest_error
-             WHERE job_id = ?1 ORDER BY seq",
-            params![id],
+             WHERE job_id = $1 ORDER BY seq",
+            values![id],
             error_from_row,
         )?;
         Ok(Some((job, errors)))
@@ -292,6 +324,7 @@ mod tests {
 
     use super::*;
     use crate::harvest::{DatasetHarvester, DspCheck, FixedSource, RunResult};
+    use crate::store::on_every_database;
 
     fn entry(id: &str) -> serde_json::Value {
         json!({
@@ -302,10 +335,7 @@ mod tests {
         })
     }
 
-    fn harvester(
-        store: &Arc<SqliteNegotiations>,
-        entries: Vec<serde_json::Value>,
-    ) -> DatasetHarvester {
+    fn harvester(store: &Arc<ConnectorStore>, entries: Vec<serde_json::Value>) -> DatasetHarvester {
         let check = DspCheck::new("https://p.example/dsp/2025-1", &CredentialTypes::default());
         let harvester = DatasetHarvester::new(
             Arc::new(FixedSource::new(entries)),
@@ -318,7 +348,11 @@ mod tests {
 
     #[test]
     fn the_copy_and_the_jobs_survive_a_restart() {
-        let store = Arc::new(SqliteNegotiations::in_memory().unwrap());
+        on_every_database(the_copy_and_the_jobs_survive_a_restart_on);
+    }
+
+    fn the_copy_and_the_jobs_survive_a_restart_on(store: &ConnectorStore) {
+        let store = Arc::new(store.clone());
         let mut broken = entry("b");
         broken["hasPolicy"] = json!([]);
         harvester(&store, vec![entry("a"), broken]);
@@ -354,20 +388,37 @@ mod tests {
         );
     }
 
+    /// Makes every write of an entry error fail, as a full disk would:
+    /// a trigger, written in each database's own SQL.
+    fn make_entry_errors_fail(store: &ConnectorStore) {
+        let statements: &[&str] = if store.database.is_postgres() {
+            &[
+                "CREATE FUNCTION disk_full() RETURNS trigger LANGUAGE plpgsql
+                 AS $$ BEGIN RAISE EXCEPTION 'disk full'; END $$",
+                "CREATE TRIGGER fail_errors BEFORE INSERT ON harvest_error
+                 FOR EACH ROW EXECUTE FUNCTION disk_full()",
+            ]
+        } else {
+            &["CREATE TRIGGER fail_errors BEFORE INSERT ON harvest_error
+               BEGIN SELECT RAISE(ABORT, 'disk full'); END"]
+        };
+        for sql in statements {
+            store.execute(sql, values![]).unwrap();
+        }
+    }
+
     /// A failure in the middle of a run's transaction (here: storing its
     /// entry errors, after the datasets) leaves the copy as it was.
     #[test]
     fn a_failure_mid_run_changes_nothing() {
-        let store = Arc::new(SqliteNegotiations::in_memory().unwrap());
+        on_every_database(a_failure_mid_run_changes_nothing_on);
+    }
+
+    fn a_failure_mid_run_changes_nothing_on(store: &ConnectorStore) {
+        let store = Arc::new(store.clone());
         let harvester = harvester(&store, vec![entry("a")]);
         let before = store.datasets().unwrap();
-        store
-            .conn()
-            .execute_batch(
-                "CREATE TRIGGER fail_errors BEFORE INSERT ON harvest_error
-                 BEGIN SELECT RAISE(ABORT, 'disk full'); END",
-            )
-            .unwrap();
+        make_entry_errors_fail(&store);
         let mut broken = entry("c");
         broken["hasPolicy"] = json!([]);
         let failing = DatasetHarvester::new(
@@ -387,7 +438,11 @@ mod tests {
 
     #[test]
     fn only_the_last_jobs_are_kept_with_their_errors() {
-        let store = Arc::new(SqliteNegotiations::in_memory().unwrap());
+        on_every_database(only_the_last_jobs_are_kept_with_their_errors_on);
+    }
+
+    fn only_the_last_jobs_are_kept_with_their_errors_on(store: &ConnectorStore) {
+        let store = Arc::new(store.clone());
         let status = HarvestStatus::default();
         for n in 0..KEPT_JOBS + 3 {
             let commit = Commit {
@@ -418,11 +473,12 @@ mod tests {
         assert_eq!(u64::try_from(jobs.len()).unwrap(), KEPT_JOBS);
         assert_eq!((jobs[0].id, jobs[99].id), (KEPT_JOBS + 3, 4));
         assert!(store.job(3).unwrap().is_none());
-        let errors: i64 = store
-            .conn()
-            .query_row("SELECT COUNT(*) FROM harvest_error", [], |row| row.get(0))
+        let errors = store
+            .query_first("SELECT COUNT(*) FROM harvest_error", values![], |row| {
+                col::<i64>(row, 0)
+            })
             .unwrap();
-        assert_eq!(errors, 100);
+        assert_eq!(errors, Some(100));
         let (_, kept) = store.job(4).unwrap().unwrap();
         assert_eq!(kept[0].report, Some(json!({"conforms": false})));
         let page: Vec<u64> = store

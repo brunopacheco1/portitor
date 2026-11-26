@@ -4,8 +4,8 @@
 
 //! How the connector is wired: which adapter sits behind each port
 //! (ADR 0004). [`Ports`] holds them all; [`Ports::new`] keeps every
-//! store in one `SQLite` database and [`Ports::use_sqlite`] swaps it for
-//! another. The wrapper [`Shared`] and the `Any...` names below are what
+//! store in one database (`ConnectorStore`) and [`Ports::use_database`]
+//! swaps it for another. The wrapper [`Shared`] and the `Any...` names below are what
 //! make "pick an adapter at start" possible.
 
 use std::sync::Arc;
@@ -34,7 +34,7 @@ use crate::auth::{CallerVerifier, Membership, NoTokens, Prover, RefuseAll};
 use crate::flow_membership::{MembershipStore, StoredMembership};
 use crate::http_client::Sender;
 use crate::state_events::{self, Role};
-use crate::store::SqliteNegotiations;
+use crate::store::ConnectorStore;
 use crate::transfer::NoDataFlows;
 use portitor_dataplane::{Flow, FlowStore, FlowStoreError};
 
@@ -114,9 +114,9 @@ impl std::fmt::Debug for Ports {
 }
 
 impl Ports {
-    /// Every store in `store`, the `SQLite` database (see
-    /// [`Ports::use_sqlite`]; tests pass an in-memory one,
-    /// [`SqliteNegotiations::in_memory`]), no data plane, no caller let in
+    /// Every store in `store`, the connector's database (see
+    /// [`Ports::use_database`]; tests pass an in-memory one,
+    /// [`ConnectorStore::in_memory`]), no data plane, no caller let in
     /// and no tokens to send (set `verifier` and `prover`), no extra
     /// message rules, and the default deciders: as provider, agree to any
     /// offer from the catalog and start every accepted transfer request;
@@ -124,7 +124,7 @@ impl Ports {
     /// transfer only when asked. With the `tck` feature the deciders follow
     /// the DSP TCK scripts instead.
     #[must_use]
-    pub fn new(sender: Arc<dyn Sender>, store: &Arc<SqliteNegotiations>) -> Self {
+    pub fn new(sender: Arc<dyn Sender>, store: &Arc<ConnectorStore>) -> Self {
         Self {
             store: Shared(Arc::clone(store) as _),
             transfers: TransferPorts {
@@ -161,9 +161,10 @@ impl Ports {
 
 impl Ports {
     /// Keeps negotiations and transfers (as provider and as consumer), the
-    /// agreements transfers are checked against, and the harvested
-    /// datasets in one `SQLite` file.
-    pub fn use_sqlite(&mut self, store: &Arc<SqliteNegotiations>) {
+    /// agreements transfers are checked against, the harvested datasets,
+    /// the data flows and the push receipts in one database: PostgreSQL
+    /// or a `SQLite` file.
+    pub fn use_database(&mut self, store: &Arc<ConnectorStore>) {
         // `Arc::clone(store) as _` makes a new pointer to the same store and
         // lets the compiler turn it into the `Arc<dyn Port>` each field needs
         // (`_`: "the type this field expects").
@@ -638,7 +639,7 @@ impl HeldAgreements for AnyHeldAgreements {
 
 /// What the connector needs of a flow store: the data plane's flows, and
 /// the consumer's memberships the control plane keeps with each flow. The
-/// `SQLite` file has both; any type with both is one (the empty `impl`
+/// connector's database has both; any type with both is one (the empty `impl`
 /// below gives it the name).
 pub trait ProviderFlowStore: FlowStore + MembershipStore {}
 
@@ -795,7 +796,7 @@ mod tests {
     /// connector runs it, with a data plane that `refuses` every step or
     /// takes it.
     fn service_on(
-        sqlite: &Arc<SqliteNegotiations>,
+        sqlite: &Arc<ConnectorStore>,
         refuses: bool,
     ) -> TransferService<
         AnyTransferStore,
@@ -841,7 +842,7 @@ mod tests {
     /// The state events logged while the consumer terminates a `STARTED`
     /// transfer, with a data plane that `refuses` the step or takes it.
     fn state_events_of_a_termination(refuses: bool) -> Vec<Value> {
-        let sqlite = Arc::new(SqliteNegotiations::in_memory().unwrap());
+        let sqlite = Arc::new(ConnectorStore::in_memory().unwrap());
         let service = service_on(&sqlite, refuses);
         AnyTransferStore::new(Arc::clone(&sqlite) as _)
             .insert(&started())
@@ -875,7 +876,7 @@ mod tests {
     fn a_step_run_by_another_process_reports_its_change_once() {
         use portitor_dsp::transfer::provider::{FlowStep, Lease};
 
-        let sqlite = Arc::new(SqliteNegotiations::in_memory().unwrap());
+        let sqlite = Arc::new(ConnectorStore::in_memory().unwrap());
         let mut left_over = started();
         left_over.state = TransferState::Suspended;
         left_over.flow_step = Some(FlowStep::Suspend);

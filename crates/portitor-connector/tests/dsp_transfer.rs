@@ -19,7 +19,7 @@ use portitor_connector::harvest::FixedSource;
 use portitor_connector::http_client::Sender;
 use portitor_connector::ports::Retry;
 use portitor_connector::ports::Shared;
-use portitor_connector::store::SqliteNegotiations;
+use portitor_connector::store::ConnectorStore;
 use portitor_connector::{Config, Ports};
 use portitor_dsp::negotiation::provider::{Negotiation, Outgoing};
 use portitor_dsp::negotiation::{Agreement, NegotiationState, Transition};
@@ -27,6 +27,7 @@ use portitor_dsp::policy::HeldCredential;
 use portitor_dsp::transfer::provider::{Agreements, DataFlows, StoreError, Transfer};
 use portitor_dsp::transfer::{DataAddress, DataAddressType, EndpointProperty};
 use portitor_runtime::BoxFuture;
+use portitor_runtime::database::DatabaseSetting;
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
@@ -152,7 +153,7 @@ fn config() -> Config {
         datasets_file: Some(path.into()),
         harvest_interval_seconds: 0,
         allow_http: false,
-        db_file: "unused.db".into(),
+        database: DatabaseSetting::SqliteFile("unused.db".into()),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     }
@@ -448,9 +449,9 @@ async fn a_repeated_request_is_one_transfer_in_the_sqlite_store() {
         Arc::new(FakeSender::default()),
         Arc::new(FakeFlows::default()),
     );
-    let file = Arc::new(SqliteNegotiations::in_memory().unwrap());
+    let file = Arc::new(ConnectorStore::in_memory().unwrap());
     let mut p = ports(&sender, &flows);
-    p.use_sqlite(&file);
+    p.use_database(&file);
     // the agreement still comes from the test, not from a stored negotiation
     p.transfers.agreements = Shared(Arc::new(OneAgreement));
     let app = portitor_connector::router(&config(), p).unwrap();
@@ -847,7 +848,7 @@ async fn sqlite_ports_use_the_stored_agreements() {
     let sender = Arc::new(FakeSender::default());
     let flows = Arc::new(FakeFlows::default());
     let mut p = ports(&sender, &flows);
-    p.use_sqlite(&Arc::new(SqliteNegotiations::in_memory().unwrap()));
+    p.use_database(&Arc::new(ConnectorStore::in_memory().unwrap()));
     let app = portitor_connector::router(&config(), p).unwrap();
     let (status, _) = call(&app, post(&format!("{BASE}/request"), &request("a1"))).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -895,20 +896,20 @@ fn finalization_on_its_way() -> Negotiation {
 
 /// The connector with the `SQLite` store, as in production, holding
 /// `negotiation`.
-fn app_with_stored(negotiation: &Negotiation) -> (Router, Arc<SqliteNegotiations>, Arc<FakeFlows>) {
+fn app_with_stored(negotiation: &Negotiation) -> (Router, Arc<ConnectorStore>, Arc<FakeFlows>) {
     let (sender, flows) = (
         Arc::new(FakeSender::default()),
         Arc::new(FakeFlows::default()),
     );
-    let file = Arc::new(SqliteNegotiations::in_memory().unwrap());
+    let file = Arc::new(ConnectorStore::in_memory().unwrap());
     portitor_dsp::negotiation::provider::NegotiationStore::insert(&*file, negotiation).unwrap();
     let mut p = ports(&sender, &flows);
-    p.use_sqlite(&file);
+    p.use_database(&file);
     let app = portitor_connector::router(&config(), p).unwrap();
     (app, file, flows)
 }
 
-fn stored(file: &SqliteNegotiations) -> Negotiation {
+fn stored(file: &ConnectorStore) -> Negotiation {
     portitor_dsp::negotiation::provider::NegotiationStore::get(file, "urn:uuid:n1")
         .unwrap()
         .unwrap()
@@ -1194,7 +1195,7 @@ fn connector_on(path: &std::path::Path, after_a_start: bool) -> (Router, Arc<Fak
         Arc::new(FakeFlows::default()),
     );
     let mut p = ports(&sender, &flows);
-    p.use_sqlite(&Arc::new(SqliteNegotiations::open(path).unwrap()));
+    p.use_database(&Arc::new(ConnectorStore::open_sqlite_file(path).unwrap()));
     let (app, negotiator) = portitor_connector::build(&config(), p).unwrap();
     let sent_again = if after_a_start {
         negotiator.resume().unwrap()
@@ -1215,7 +1216,7 @@ async fn after_a_restart_a_settled_finalization_is_not_sent_again() {
 
     let folder = portitor_runtime::testing::TempDir::new("td-44");
     let path = folder.path().join("portitor.db");
-    let file = SqliteNegotiations::open(&path).unwrap();
+    let file = ConnectorStore::open_sqlite_file(&path).unwrap();
     file.insert(&finalization_on_its_way()).unwrap();
     let uri = format!("{BASE}/request");
 
@@ -1253,7 +1254,7 @@ async fn after_a_restart_with_the_finalization_still_on_its_way_a_request_is_ser
 
     let folder = portitor_runtime::testing::TempDir::new("td-44");
     let path = folder.path().join("portitor.db");
-    let file = SqliteNegotiations::open(&path).unwrap();
+    let file = ConnectorStore::open_sqlite_file(&path).unwrap();
     file.insert(&finalization_on_its_way()).unwrap();
 
     let (app, sender, sent_again) = connector_on(&path, true);

@@ -183,7 +183,9 @@ fn with_placeholders_filled(path: &str) -> String {
 /// letters, digits and `_`). All Rust files below each folder are read.
 ///
 /// Left out, because they are not what a running binary reads: comment
-/// lines, files named `tests.rs`, and in each file its unit tests: the
+/// lines, files named `tests.rs`, the test support code (a file
+/// `testing.rs` or a folder `testing`, built only for tests with the
+/// `test-support` feature), and in each file its unit tests: the
 /// `mod` that follows a `#[cfg(test)]` line. A module written in the
 /// file (`mod tests {`) is taken to run to the end of the file; one in a
 /// file of its own (`mod tests;`) is that one line. Any other item
@@ -207,10 +209,14 @@ fn add_settings_of_folder(folder: &Path, names: &mut Names) -> Result<(), String
         let path = entry
             .map_err(|error| format!("cannot read {}: {error}", folder.display()))?
             .path();
+        let name = path.file_name().unwrap_or_default();
+        if name == "testing" || name == "testing.rs" {
+            // test support code: never part of a binary
+            continue;
+        }
         if path.is_dir() {
             add_settings_of_folder(&path, names)?;
-        } else if path.extension().is_some_and(|extension| extension == "rs")
-            && path.file_name().is_some_and(|name| name != "tests.rs")
+        } else if path.extension().is_some_and(|extension| extension == "rs") && name != "tests.rs"
         {
             let text = std::fs::read_to_string(&path)
                 .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
@@ -630,7 +636,8 @@ mod tests {
     }
 
     /// Two source folders as a binary has them: its own crate, with a
-    /// `tests.rs` and a folder inside, and a shared crate.
+    /// `tests.rs`, test support code (`testing.rs`, `testing/`) and a
+    /// folder inside, and a shared crate.
     fn source_folders() -> crate::testing::TempDir {
         let dir = crate::testing::TempDir::new("frozen");
         std::fs::create_dir_all(dir.path().join("own/src/auth")).unwrap();
@@ -638,6 +645,15 @@ mod tests {
         let _ = dir.write("own/src/main.rs", "let a = var(\"PORTITOR_A\");\n");
         let _ = dir.write("own/src/auth/sts.rs", "let b = var(\"PORTITOR_B\");\n");
         let _ = dir.write("own/src/tests.rs", "let t = var(\"PORTITOR_TEST\");\n");
+        std::fs::create_dir_all(dir.path().join("own/src/testing")).unwrap();
+        let _ = dir.write(
+            "own/src/testing.rs",
+            "let t = var(\"PORTITOR_TEST_SUPPORT\");\n",
+        );
+        let _ = dir.write(
+            "own/src/testing/db.rs",
+            "let t = var(\"PORTITOR_TEST_DB\");\n",
+        );
         let _ = dir.write("own/src/notes.md", "\"PORTITOR_NOT_RUST\"\n");
         let _ = dir.write("shared/src/lib.rs", "let o = var(\"OTEL_C\");\n");
         dir

@@ -124,6 +124,15 @@ impl Settings {
     pub fn shown(&self) -> &str {
         &self.shown
     }
+
+    /// The password, for the settings tests of the binaries (it is not in
+    /// the `Debug` text, so they cannot see otherwise that a new password
+    /// file was read).
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn password(&self) -> Option<&[u8]> {
+        self.config.get_password()
+    }
 }
 
 /// The TLS options of the URL, which this module reads itself

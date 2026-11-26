@@ -3,19 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Transfers as consumer, and the agreements the consumer holds, in the
-//! same `SQLite` file as the negotiations (ADR 0014).
+//! same database as the negotiations (ADR 0014).
 
 use portitor_dsp::negotiation::{Agreement, NegotiationState};
 use portitor_dsp::transfer::consumer::{
     AgreementProvider, ConsumerTransfer, ConsumerTransferStore, HeldAgreements, Outgoing,
 };
 use portitor_dsp::transfer::{TransferState, Transition};
-use rusqlite::{Row, params};
+use portitor_runtime::database::Row;
+use portitor_runtime::values;
 
 use super::transfers::{parsed_transfer_state, transfer_state_text};
 use super::{
-    SqliteNegotiations, StoreError, StoredMessage, col, err, json, parsed, parsed_version,
-    state_text, version,
+    ConnectorStore, StoreError, StoredMessage, col, json, parsed, parsed_version, state_text,
+    version,
 };
 
 const COLUMNS: &str = "consumer_pid, provider_pid, state, provider_address, provider_id, \
@@ -51,7 +52,7 @@ fn pending_message(
     })
 }
 
-fn consumer_transfer_from_row(row: &Row<'_>) -> Result<ConsumerTransfer, StoreError> {
+fn consumer_transfer_from_row(row: &Row) -> Result<ConsumerTransfer, StoreError> {
     let consumer_pid: String = col(row, 0)?;
     let provider_id: String = col(row, 4)?;
     let pending = col::<Option<String>>(row, 8)?
@@ -73,35 +74,32 @@ fn consumer_transfer_from_row(row: &Row<'_>) -> Result<ConsumerTransfer, StoreEr
     })
 }
 
-impl ConsumerTransferStore for SqliteNegotiations {
+impl ConsumerTransferStore for ConnectorStore {
     fn get(&self, consumer_pid: &str) -> Result<Option<ConsumerTransfer>, StoreError> {
-        let sql = format!("SELECT {COLUMNS} FROM consumer_transfer WHERE consumer_pid = ?1");
-        let found = self.query(&sql, params![consumer_pid], consumer_transfer_from_row)?;
-        Ok(found.into_iter().next())
+        let sql = format!("SELECT {COLUMNS} FROM consumer_transfer WHERE consumer_pid = $1");
+        self.query_first(&sql, values![consumer_pid], consumer_transfer_from_row)
     }
 
     fn insert(&self, transfer: &ConsumerTransfer) -> Result<(), StoreError> {
         let sql = format!(
             "INSERT INTO consumer_transfer ({COLUMNS})
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
         );
-        self.conn()
-            .execute(
-                &sql,
-                params![
-                    transfer.consumer_pid,
-                    transfer.provider_pid,
-                    transfer_state_text(transfer.state)?,
-                    transfer.provider_address,
-                    transfer.provider_id,
-                    transfer.agreement_id,
-                    transfer.format,
-                    transfer.data_address.as_ref().map(json).transpose()?,
-                    pending_text(transfer.pending.as_ref())?,
-                    version(transfer.version)?,
-                ],
-            )
-            .map_err(err)?;
+        self.execute(
+            &sql,
+            values![
+                &transfer.consumer_pid,
+                transfer.provider_pid.as_deref(),
+                transfer_state_text(transfer.state)?,
+                &transfer.provider_address,
+                &transfer.provider_id,
+                &transfer.agreement_id,
+                &transfer.format,
+                transfer.data_address.as_ref().map(json).transpose()?,
+                pending_text(transfer.pending.as_ref())?,
+                version(transfer.version)?,
+            ],
+        )?;
         Ok(())
     }
 
@@ -109,23 +107,20 @@ impl ConsumerTransferStore for SqliteNegotiations {
         // compare-and-update in one statement: a concurrent change makes
         // the WHERE clause miss and nothing is written. Only the fields a
         // transfer step changes are written.
-        let changed = self
-            .conn()
-            .execute(
-                "UPDATE consumer_transfer
-                 SET provider_pid = ?2, state = ?3, data_address = ?4, pending = ?5, version = ?6
-                 WHERE consumer_pid = ?1 AND version = ?7",
-                params![
-                    transfer.consumer_pid,
-                    transfer.provider_pid,
-                    transfer_state_text(transfer.state)?,
-                    transfer.data_address.as_ref().map(json).transpose()?,
-                    pending_text(transfer.pending.as_ref())?,
-                    version(transfer.version)?,
-                    version(expected)?,
-                ],
-            )
-            .map_err(err)?;
+        let changed = self.execute(
+            "UPDATE consumer_transfer
+             SET provider_pid = $2, state = $3, data_address = $4, pending = $5, version = $6
+             WHERE consumer_pid = $1 AND version = $7",
+            values![
+                &transfer.consumer_pid,
+                transfer.provider_pid.as_deref(),
+                transfer_state_text(transfer.state)?,
+                transfer.data_address.as_ref().map(json).transpose()?,
+                pending_text(transfer.pending.as_ref())?,
+                version(transfer.version)?,
+                version(expected)?,
+            ],
+        )?;
         Ok(changed == 1)
     }
 
@@ -134,44 +129,50 @@ impl ConsumerTransferStore for SqliteNegotiations {
             "SELECT {COLUMNS} FROM consumer_transfer WHERE pending IS NOT NULL
              ORDER BY consumer_pid"
         );
-        self.query(&sql, [], consumer_transfer_from_row)
+        self.query(&sql, values![], consumer_transfer_from_row)
     }
 
     fn list(&self, after: Option<&str>, limit: usize) -> Result<Vec<ConsumerTransfer>, StoreError> {
+        // no `after`: from the first. The CAST gives PostgreSQL the type of
+        // $1, which it cannot tell from `$1 IS NULL`
         let sql = format!(
             "SELECT {COLUMNS} FROM consumer_transfer
-             WHERE ?1 IS NULL OR consumer_pid > ?1
-             ORDER BY consumer_pid LIMIT ?2"
+             WHERE CAST($1 AS TEXT) IS NULL OR consumer_pid > $1
+             ORDER BY consumer_pid LIMIT $2"
         );
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        self.query(&sql, params![after, limit], consumer_transfer_from_row)
+        self.query(&sql, values![after, limit], consumer_transfer_from_row)
     }
 }
 
-impl HeldAgreements for SqliteNegotiations {
+fn provider_from_row(row: &Row) -> Result<AgreementProvider, StoreError> {
+    Ok(AgreementProvider {
+        address: col(row, 0)?,
+        id: col(row, 1)?,
+    })
+}
+
+fn agreement_from_row(row: &Row) -> Result<Agreement, StoreError> {
+    let text: String = col(row, 0)?;
+    parsed("agreement", &text)
+}
+
+impl HeldAgreements for ConnectorStore {
     fn provider_of(&self, agreement_id: &str) -> Result<Option<AgreementProvider>, StoreError> {
-        // json_extract is SQLite's, as for the provider's agreements
+        // `json_extract`, as for the provider's agreements: the
+        // expression of the index `consumer_negotiation_agreement`
+        // (migration 11)
         let sql = "SELECT provider_address, provider_id FROM consumer_negotiation
-                   WHERE state = ?1 AND json_extract(agreement, '$.\"@id\"') = ?2";
+                   WHERE state = $1 AND json_extract(agreement, '$.\"@id\"') = $2";
         let finalized = state_text(NegotiationState::Finalized)?;
-        let found = self.query(sql, params![finalized, agreement_id], |row| {
-            Ok(AgreementProvider {
-                address: col(row, 0)?,
-                id: col(row, 1)?,
-            })
-        })?;
-        Ok(found.into_iter().next())
+        self.query_first(sql, values![finalized, agreement_id], provider_from_row)
     }
 
     fn agreement(&self, agreement_id: &str) -> Result<Option<Agreement>, StoreError> {
         let sql = "SELECT agreement FROM consumer_negotiation
-                   WHERE state = ?1 AND json_extract(agreement, '$.\"@id\"') = ?2";
+                   WHERE state = $1 AND json_extract(agreement, '$.\"@id\"') = $2";
         let finalized = state_text(NegotiationState::Finalized)?;
-        let found = self.query(sql, params![finalized, agreement_id], |row| {
-            let text: String = col(row, 0)?;
-            parsed("agreement", &text)
-        })?;
-        Ok(found.into_iter().next())
+        self.query_first(sql, values![finalized, agreement_id], agreement_from_row)
     }
 }
 
@@ -183,6 +184,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::store::on_every_database;
 
     fn request() -> Outgoing {
         Outgoing {
@@ -214,8 +216,13 @@ mod tests {
 
     #[test]
     fn consumer_transfers_round_trip_with_their_address_and_pending_message() {
-        let file = SqliteNegotiations::in_memory().unwrap();
-        let db: &dyn ConsumerTransferStore = &file;
+        on_every_database(consumer_transfers_round_trip_with_their_address_and_pending_message_on);
+    }
+
+    fn consumer_transfers_round_trip_with_their_address_and_pending_message_on(
+        file: &ConnectorStore,
+    ) {
+        let db: &dyn ConsumerTransferStore = file;
         let t = stored_transfer();
         db.insert(&t).unwrap();
         assert_eq!(db.get("urn:uuid:c").unwrap(), Some(t.clone()));
@@ -249,8 +256,11 @@ mod tests {
 
     #[test]
     fn only_finalized_negotiations_hold_agreements() {
-        let db = SqliteNegotiations::in_memory().unwrap();
-        let negotiations: &dyn ConsumerStore = &db;
+        on_every_database(only_finalized_negotiations_hold_agreements_on);
+    }
+
+    fn only_finalized_negotiations_hold_agreements_on(db: &ConnectorStore) {
+        let negotiations: &dyn ConsumerStore = db;
         let mut n = ConsumerNegotiation {
             consumer_pid: "urn:uuid:n".to_owned(),
             provider_pid: Some("urn:uuid:pn".to_owned()),

@@ -17,6 +17,7 @@ use portitor_connector::management::{
     ApiKey, DEFAULT_MANAGEMENT_BIND, ManagementConfig, openapi_json, router,
 };
 use portitor_runtime::BoxFuture;
+use portitor_runtime::database::DatabaseSetting;
 use portitor_runtime::testing::management_calls::{
     Call, statuses_other_than, with_a_wrong_body, with_odd_paths_and_queries, without_the_key,
 };
@@ -52,7 +53,7 @@ fn app() -> Router {
         datasets_file: None,
         harvest_interval_seconds: 0,
         allow_http: false,
-        db_file: "unused.db".into(),
+        database: DatabaseSetting::SqliteFile("unused.db".into()),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     };
@@ -364,16 +365,16 @@ fn harvesting_app() -> Router {
         datasets_file: None,
         harvest_interval_seconds: 0,
         allow_http: false,
-        db_file: "unused.db".into(),
+        database: DatabaseSetting::SqliteFile("unused.db".into()),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     };
-    let store = Arc::new(portitor_connector::store::SqliteNegotiations::in_memory().unwrap());
+    let store = Arc::new(portitor_connector::store::ConnectorStore::in_memory().unwrap());
     // three starts on one store: three jobs, the newest with a rejection
     let mut negotiator = None;
     for entries in [vec![], vec![good.clone()], vec![good, broken]] {
         let mut ports = authenticating(common::ports(Arc::new(Provider)), CONSUMER);
-        ports.use_sqlite(&store);
+        ports.use_database(&store);
         ports.harvest.source = Some(Arc::new(portitor_connector::harvest::FixedSource::new(
             entries,
         )));
@@ -424,7 +425,7 @@ async fn a_harvest_job_shows_at_most_the_first_errors() {
         datasets_file: None,
         harvest_interval_seconds: 0,
         allow_http: false,
-        db_file: "unused.db".into(),
+        database: DatabaseSetting::SqliteFile("unused.db".into()),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     };
@@ -655,7 +656,7 @@ fn app_with_transfer(
         datasets_file: None,
         harvest_interval_seconds: 0,
         allow_http: false,
-        db_file: "unused.db".into(),
+        database: DatabaseSetting::SqliteFile("unused.db".into()),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     };

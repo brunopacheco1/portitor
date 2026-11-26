@@ -18,6 +18,7 @@ use portitor_connector::auth::AuthSettings;
 use portitor_connector::management::{DEFAULT_MANAGEMENT_BIND, ManagementConfig};
 use portitor_connector::{Config, REMOVED_SETTINGS};
 use portitor_dataplane::object_storage;
+use portitor_runtime::database::DatabaseSetting;
 use portitor_runtime::request_size::RequestLimits;
 use portitor_runtime::testing::settings_rule::{
     Case, Read, SWITCH_TRUTH_TABLE, check_binary_refuses_to_start, check_removed, check_rule,
@@ -41,7 +42,9 @@ const MEMBERSHIP_SCOPE: &str = "org.eclipse.dspace.dcp.vc.type:MembershipCredent
 const RESEARCH_SCOPE: &str = "org.eclipse.dspace.dcp.vc.type:ResearchCredential:read";
 
 /// Where the bundle comes from in a table: the two settings exclude
-/// each other, so each has its own table.
+/// each other, so each has its own table. The database settings exclude
+/// each other too, so each table also has its own database: the URL table
+/// a `SQLite` file, the folder table PostgreSQL.
 #[derive(Clone, Copy)]
 enum BundleFrom {
     Url,
@@ -75,7 +78,6 @@ fn table(secrets: &TempDir, bundle_from: BundleFrom) -> Vec<Case> {
             "https://connector.example",
             "https://other.example",
         ),
-        Case::optional("PORTITOR_DB_FILE", "/data/a.db", "/data/b.db"),
         Case::optional("PORTITOR_ALLOW_HTTP", "true", "false"),
         Case::optional("PORTITOR_MANAGEMENT_BIND", "0.0.0.0:9001", "0.0.0.0:9002"),
         Case::optional("PORTITOR_MANAGEMENT_API_KEY_FILE", "/run/key", "/run/other"),
@@ -149,6 +151,38 @@ fn table(secrets: &TempDir, bundle_from: BundleFrom) -> Vec<Case> {
         ),
         Case::optional("PORTITOR_PUSH_BUCKET", "pushed", "other"),
     ]
+    .into_iter()
+    .chain(database_cases(secrets, bundle_from))
+    .collect()
+}
+
+/// The database lines of a table: a `SQLite` file in the URL table,
+/// PostgreSQL in the folder table (see [`BundleFrom`]).
+fn database_cases(secrets: &TempDir, bundle_from: BundleFrom) -> Vec<Case> {
+    match bundle_from {
+        BundleFrom::Url => vec![Case::optional(
+            "PORTITOR_DB_FILE",
+            "/data/a.db",
+            "/data/b.db",
+        )],
+        BundleFrom::Folder => {
+            let password = secrets.write("db-password", "test-only-password\n");
+            let other_password = secrets.write("other-db-password", "test-only-other\n");
+            vec![
+                // "required": the password file is refused without it
+                Case::required(
+                    "PORTITOR_DATABASE_URL",
+                    "postgresql://portitor@db.example/portitor",
+                    "postgresql://portitor@db.example/other",
+                ),
+                Case::optional(
+                    "PORTITOR_DATABASE_PASSWORD_FILE",
+                    password.to_str().unwrap(),
+                    other_password.to_str().unwrap(),
+                ),
+            ]
+        }
+    }
 }
 
 /// Everything the connector reads from `var` at start, in the order of
@@ -158,7 +192,13 @@ fn read(var: &Lookup) -> Read {
     let auth = AuthSettings::from_vars(&config.participant_id, config.allow_http, var)?;
     // the `Debug` text of the settings leaves the secret out
     let secret = auth.as_ref().map(|auth| auth.sts_client_secret.clone());
-    let bundle = BundleConfig::from_vars(var, &config.db_file, config.allow_http)
+    // the `Debug` text of the database settings leaves the password out
+    let database_password = match &config.database {
+        DatabaseSetting::Postgres(settings) => settings.password().map(<[u8]>::to_vec),
+        DatabaseSetting::SqliteFile(_) => None,
+    };
+    let default_cache_dir = portitor_connector::default_bundle_cache_dir(&config.database);
+    let bundle = BundleConfig::from_vars(var, &default_cache_dir, config.allow_http)
         .map_err(|error| error.to_string())?;
     let management = ManagementConfig::from_vars(DEFAULT_MANAGEMENT_BIND, var);
     let limits = RequestLimits::from_vars(var)?;
@@ -172,7 +212,7 @@ fn read(var: &Lookup) -> Read {
         )
     });
     Ok(format!(
-        "{config:?}\n{auth:?}\n{secret:?}\n{bundle:?}\n{management:?}\n{limits:?}\n{storage:?}\n{keys:?}"
+        "{config:?}\n{database_password:?}\n{auth:?}\n{secret:?}\n{bundle:?}\n{management:?}\n{limits:?}\n{storage:?}\n{keys:?}"
     ))
 }
 

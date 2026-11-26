@@ -18,6 +18,8 @@ use portitor_connector::auth::{AuthSettings, CallerVerifier, Prover, dcp_adapter
 use portitor_connector::bundle_harvest::BundleHarvester;
 use portitor_connector::health::{Dependencies, OwnIdentityCheck, readiness_checks};
 use portitor_connector::management::{DEFAULT_MANAGEMENT_BIND, ManagementConfig};
+use portitor_connector::store::{ConnectorStore, MIGRATIONS};
+use portitor_runtime::database::{Database, DatabaseSetting, SQLITE_DEPRECATED};
 use portitor_runtime::directory::{Directory, WebDirectory};
 use portitor_runtime::health;
 use portitor_runtime::management::management_port;
@@ -59,10 +61,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if config.allow_http {
         tracing::warn!("plain http allowed for every outgoing call (PORTITOR_ALLOW_HTTP)");
     }
-    let store = Arc::new(
-        portitor_connector::store::SqliteNegotiations::open(&config.db_file)
-            .map_err(|e| format!("cannot open {}: {e}", config.db_file.display()))?,
-    );
+    // one database for every store, shared with the readiness check
+    let database = open_database(&config.database)?;
+    let store = Arc::new(ConnectorStore::new(Arc::clone(&database)));
     #[cfg(feature = "tck")]
     let sender = portitor_connector::tck::LateStart(sender);
     let mut ports = portitor_connector::Ports::new(Arc::new(sender), &store);
@@ -86,7 +87,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     (ports.verifier, ports.prover) = auth_adapters(settings).await?;
     let bundle = start_bundle_harvest(&config, &mut ports).await?;
     // `build` runs the first harvest before it returns: blocking work (a
-    // file read, SQLite, SHACL) on this async task, done once at start
+    // file read, the database, SHACL) on this async task, done once at start
     // before anything is served, like the bundle read above
     let (app, negotiator) = portitor_connector::build(&config, ports)?;
     schedule_harvest(&config, &negotiator);
@@ -124,7 +125,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // the management port always serves the health checks (ADR 0023);
     // the management API only with its key
     let checks = Arc::new(readiness_checks(Dependencies {
-        db_file: config.db_file.clone(),
+        database,
+        db_file: sqlite_file(&config.database),
         negotiator: negotiator.clone(),
         bundle: bundle_harvester,
         identity: identity_check,
@@ -141,7 +143,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(
         %bind,
         datasets = negotiator.catalog_size(),
-        db = %config.db_file.display(),
+        db = %database_name(&config.database),
         // the lease holder in the database (TD-48): which process this is
         process = portitor_connector::system::process_id(),
         "portitor-connector listening"
@@ -156,6 +158,36 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app = app.merge(negotiator.receiving_routes());
     serve((listener, app), Some((management_listener, management_app))).await?;
     Ok(())
+}
+
+/// Opens the connector's database and brings its schema up to date. A
+/// `SQLite` file is deprecated since 1.3 (ADR 0029): the log says so
+/// once, at start.
+fn open_database(setting: &DatabaseSetting) -> Result<Arc<Database>, String> {
+    if matches!(setting, DatabaseSetting::SqliteFile(_)) {
+        tracing::warn!("{SQLITE_DEPRECATED}");
+    }
+    match Database::open(setting, &MIGRATIONS) {
+        Ok(database) => Ok(Arc::new(database)),
+        Err(e) => Err(format!("cannot open {}: {e}", database_name(setting))),
+    }
+}
+
+/// The `SQLite` file of `setting`, if it names one.
+fn sqlite_file(setting: &DatabaseSetting) -> Option<std::path::PathBuf> {
+    match setting {
+        DatabaseSetting::SqliteFile(file) => Some(file.clone()),
+        DatabaseSetting::Postgres(_) => None,
+    }
+}
+
+/// The database, for the log: the file, or the URL without its query
+/// (it never holds a password).
+fn database_name(setting: &DatabaseSetting) -> String {
+    match setting {
+        DatabaseSetting::SqliteFile(file) => file.display().to_string(),
+        DatabaseSetting::Postgres(settings) => settings.shown().to_owned(),
+    }
 }
 
 /// The object storage of the `AWS_*` settings and `PORTITOR_PUSH_BUCKET`
@@ -190,7 +222,8 @@ async fn start_bundle_harvest(
     Option<(BundleHarvester, portitor_connector::harvest::JobRecord)>,
     Box<dyn std::error::Error>,
 > {
-    let Some(bundle_config) = BundleConfig::from_env(&config.db_file, config.allow_http)? else {
+    let default_cache_dir = portitor_connector::default_bundle_cache_dir(&config.database);
+    let Some(bundle_config) = BundleConfig::from_env(&default_cache_dir, config.allow_http)? else {
         return Ok(None);
     };
     // the authority's DID document, reused as long as every other one
