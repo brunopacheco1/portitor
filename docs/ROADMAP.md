@@ -38,6 +38,7 @@ and debts each release raised or closed are in
 | 0.14 | 2026-11-21 | v0.14.0 | Release candidate for 1.0: shorter documentation with [OPERATING](OPERATING.md); Roman website; EDC Issuer Service in the EDC test; CI scope and gates; CodeQL gate; OpenSSF Baseline level 1 self-assessment | [0.14.0](../CHANGELOG.md#0140---2026-11-21) |
 | 1.0 | 2026-11-24 | v1.0.0 | Stable: the 0.14 release candidate, tried as v1.0.0-rc.1 on 2026-11-22; routes and settings kept until 2.0 ([STABILITY](STABILITY.md)); the demos as self-contained scenarios, with two health scenarios | [1.0.0](../CHANGELOG.md#100---2026-11-24) |
 | 1.1 | 2026-11-25 | v1.1.0 | Push transfers by the Data Plane Signaling HTTP profile into the consumer's object storage; `s3://` dataset sources; the provider can always end access (provider routes, membership checked on every request, running downloads cut); suspend and start as consumer; audit line per transfer; ADR 0027 | [1.1.0](../CHANGELOG.md#110---2026-11-25) |
+| 1.2 | 2026-11-26 | v1.2.0 | The built-in data plane in its own crate, `portitor-dataplane`, behind ports (no route, setting or image change); the source travels in the DPS start message's `metadata` and stays with the flow; the data plane is told once, after the transfer's write (TD-48); ADR 0028 step 1 | [1.2.0](../CHANGELOG.md#120---2026-11-26) |
 
 Older documents cite sections of this file that the table replaced, for
 example "ROADMAP 0.11, Decisions on the 0.11 plan". Their full text is in
@@ -275,7 +276,7 @@ not a CI job (maintainer, 2026-11-15).
     the genotypes into the lab's own RustFS bucket. Written; to be run
     by hand with 1.1 images.
 
-### 1.2 Untangle the data plane (ADR 0028, step 1)
+### 1.2 Untangle the data plane (ADR 0028, step 1; released 2026-11-26 as v1.2.0)
 
 - The built-in data plane moves to its own crate, `portitor-dataplane`.
   The connector links it in as before; no route, setting or image
@@ -287,8 +288,9 @@ not a CI job (maintainer, 2026-11-15).
 - The source of the dataset goes to the data plane in the `metadata` of
   the DPS start message, as `portitor:source`. So a source URL changed
   by a re-harvest reaches only new transfers.
-- Signals to the data plane go out after the transfer's write, through
-  the outbox, never inside the retried update
+- Signals to the data plane go out after the transfer's write, recorded
+  with it as the outbox records our messages, never inside the retried
+  update
   ([TD-48](RISKS_AND_TECHNICAL_DEBTS.md#td-48)).
 - The data plane code (1,114 lines in one file in 1.1) is split so no file is above 1,000 lines
   ([R-01](RISKS_AND_TECHNICAL_DEBTS.md#r-01)).

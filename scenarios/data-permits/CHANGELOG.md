@@ -9,7 +9,9 @@ SPDX-License-Identifier: Apache-2.0
 How the scenario changed, newest first. Each entry names the Portitor
 version it ran on.
 
-## 2026-11-26, for 1.2 (README only)
+## 2026-11-26, for 1.2.0
+
+- `compose.yaml` names the 1.2.0 release images by default.
 
 - The README gives the release numbers of the roadmap as renumbered for
   1.2: purpose, the data permit and the fixes of

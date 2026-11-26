@@ -10,7 +10,9 @@ How the scenario changed, newest first. Each entry names the Portitor
 version it ran on. The repository's [CHANGELOG](../../CHANGELOG.md) has
 the release notes these come from.
 
-## 2026-11-26, for 1.2 (README only)
+## 2026-11-26, for 1.2.0
+
+- `compose.yaml` names the 1.2.0 release images by default.
 
 - The README says purpose and data permits come in 1.3 (was 1.2), as the
   roadmap was renumbered for 1.2. Nothing else changed; the scenario was

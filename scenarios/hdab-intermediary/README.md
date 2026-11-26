@@ -131,7 +131,7 @@ Out, on purpose:
 ## Run it
 
 **It needs 1.1 images.** Step 1 is a push transfer, and step 6 needs
-the TD-47 fix; both are new in 1.1. `compose.yaml` names the 1.1.0
+the TD-47 fix; both are new in 1.1. `compose.yaml` names the 1.2.0
 release images by default, and `run.sh` stops at once with a 1.0
 connector image. To try images built from source ([docs/TESTING.md, "Building the images locally"](../../docs/TESTING.md#building-the-images-locally);
 with Podman, `podman build --format docker`):

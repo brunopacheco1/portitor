@@ -12,6 +12,18 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-26
+
+Portitor 1.2: the built-in data plane in its own crate, the first step
+to a separate, pluggable data plane (ADR 0028). Every 1.1 route,
+setting and file format still works; one change of behaviour: a
+transfer keeps the data source it started with. Upgrading from 1.1:
+[OPERATING, From 1.1 to 1.2](docs/OPERATING.md#from-11-to-12).
+
+- Version 1.2.0. The website quickstart clones `v1.2.0`, and the
+  scenarios that pull release images (two-party, hdab-intermediary,
+  data-permits) default to the 1.2.0 images.
+
 ### Changed
 
 - The built-in data plane is its own crate, `portitor-dataplane`
