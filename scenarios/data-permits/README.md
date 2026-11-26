@@ -95,6 +95,7 @@ Out, on purpose:
 | `portitor-connector` as consumer (Schuman) | Asks for the `DataPermitCredential` scope the offer needs, negotiates and transfers. |
 | The built-in data plane (HTTP pull) | Schuman's app fetches the genotypes, checked against the original. |
 | Status lists | Lux Biobank reads the HDAB issuer's list and sees the revoked permit. |
+| PostgreSQL (`postgres` 19) | One database and role per Portitor component, over TLS ([ADR 0029](../../docs/adr/0029-several-replicas.md)): the documented default from 1.3. A store bug that only PostgreSQL shows would show here. |
 
 ## Run it
 
@@ -106,7 +107,7 @@ It needs Docker or Podman with Docker Compose, bash 4.4 or later, curl,
 jq and openssl ([docs/TESTING.md, "Docker or Podman"](../../docs/TESTING.md#docker-or-podman)).
 The images can be given as arguments, and `CONTAINER_ENGINE=podman`
 picks Podman, as in [hdab-intermediary](../hdab-intermediary/README.md#run-it).
-[run.sh](run.sh) writes the keys into `run/`, starts the 8 containers of
+[run.sh](run.sh) writes the keys into `run/`, starts the 9 containers of
 [compose.yaml](compose.yaml), has Digital Lux Trust register the two
 participants and issue their memberships, then runs
 [steps.sh](steps.sh), the steps below. It takes about a minute.

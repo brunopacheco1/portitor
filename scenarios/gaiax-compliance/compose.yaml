@@ -43,6 +43,47 @@ x-portitor-environment: &portitor-environment
   SSL_CERT_DIR: /ca
 
 services:
+  # One PostgreSQL server for every Portitor component, each with its own
+  # database and role (ADR 0029), as in ../two-party/compose.yaml: TLS with
+  # the server's certificate checked, the passwords in secrets.
+  database:
+    image: docker.io/library/postgres:19.0-alpine3.24@sha256:cac45fb483caee3668946088a1c0532db89d5285c28dbfeac889b4068296e06f
+    entrypoint:
+      - /bin/sh
+      - -c
+      - install -m 600 -o postgres -g postgres /run/secrets/database-server-key /var/lib/postgresql/server.key && exec docker-entrypoint.sh "$$@"
+      - --
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/secrets/database-server-cert
+      - -c
+      - ssl_key_file=/var/lib/postgresql/server.key
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/database-admin-password
+      PORTITOR_DATABASES: issuer provider_identity provider_connector consumer_identity consumer_connector outsider_identity outsider_connector
+    secrets:
+      - database-server-cert
+      - database-server-key
+      - database-admin-password
+      - issuer-database-password
+      - provider-identity-database-password
+      - provider-connector-database-password
+      - consumer-identity-database-password
+      - consumer-connector-database-password
+      - outsider-identity-database-password
+      - outsider-connector-database-password
+    volumes:
+      - ../../examples/postgres/init-databases.sh:/docker-entrypoint-initdb.d/portitor.sh:ro
+      - database-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
   # the local Gaia-X compliance service and its database
   # (../../examples/gaiax/compliance.yaml); did:web:compliance.gaiax.test,
   # its RSA key (PS256) and certificate from this run's test CA
@@ -85,6 +126,8 @@ services:
     <<: *portitor
     image: ${PORTITOR_ISSUER_IMAGE:-portitor-issuer:ci}
     environment:
+      PORTITOR_DATABASE_URL: postgresql://issuer@database:5432/issuer?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/issuer-database-password
       PORTITOR_PARTICIPANT_ID: did:web:issuer%3A8070
       PORTITOR_ISSUER_SERVICE_URL: http://issuer:8070/issuer
       PORTITOR_ISSUER_KEY_FILE: /config/issuer-key.pem
@@ -94,12 +137,18 @@ services:
       PORTITOR_ALLOW_HTTP: "true"
       # it delivers to the Gaia-X participants' credential services over HTTPS
       SSL_CERT_DIR: /ca
+    secrets:
+      - database-ca
+      - issuer-database-password
     volumes:
       - ./run/issuer:/config:ro
       - ./run/ca:/ca:ro
       - ../../examples/issuer-credentials.json:/credentials/issuer-credentials.json:ro
     ports:
       - 127.0.0.1:18471:8071 # management API
+    depends_on:
+      database:
+        condition: service_healthy
 
   # --- the provider ------------------------------------------------------------
 
@@ -107,6 +156,8 @@ services:
     <<: *portitor
     image: ${PORTITOR_IDENTITY_IMAGE:-portitor-identity:ci}
     environment:
+      PORTITOR_DATABASE_URL: postgresql://provider_identity@database:5432/provider_identity?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/provider-identity-database-password
       <<: *portitor-environment
       PORTITOR_PARTICIPANT_ID: did:web:provider.gaiax.test
       PORTITOR_IDENTITY_KEY_FILE: /config/identity-key.pem
@@ -119,6 +170,9 @@ services:
       PORTITOR_GAIAX_COMPLIANCE_URL: https://compliance.gaiax.test
       PORTITOR_GAIAX_COMPLIANCE_DID: did:web:compliance.gaiax.test
       PORTITOR_GAIAX_PARTICIPANT_FILE: /config/participant.json
+    secrets:
+      - database-ca
+      - provider-identity-database-password
     volumes:
       - ./run/provider:/config:ro
       - ./run/ca:/ca:ro
@@ -133,6 +187,8 @@ services:
     <<: *portitor
     image: ${PORTITOR_IMAGE:-portitor-connector:ci}
     environment:
+      PORTITOR_DATABASE_URL: postgresql://provider_connector@database:5432/provider_connector?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/provider-connector-database-password
       <<: *portitor-environment
       PORTITOR_PARTICIPANT_ID: did:web:provider.gaiax.test
       PORTITOR_PUBLIC_URL: http://provider-connector:8080
@@ -145,6 +201,9 @@ services:
       # type its offer constrains (ADR 0019)
       PORTITOR_GAIAX_COMPLIANCE_ISSUERS: did:web:compliance.gaiax.test
       PORTITOR_POLICY_CREDENTIALS: ParticipantComplianceCredential
+    secrets:
+      - database-ca
+      - provider-connector-database-password
     volumes:
       - ./run/provider:/config:ro
       - ./run/ca:/ca:ro
@@ -160,6 +219,8 @@ services:
     <<: *portitor
     image: ${PORTITOR_IDENTITY_IMAGE:-portitor-identity:ci}
     environment:
+      PORTITOR_DATABASE_URL: postgresql://consumer_identity@database:5432/consumer_identity?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/consumer-identity-database-password
       <<: *portitor-environment
       PORTITOR_PARTICIPANT_ID: did:web:consumer.gaiax.test
       PORTITOR_IDENTITY_KEY_FILE: /config/identity-key.pem
@@ -171,6 +232,9 @@ services:
       PORTITOR_GAIAX_COMPLIANCE_URL: https://compliance.gaiax.test
       PORTITOR_GAIAX_COMPLIANCE_DID: did:web:compliance.gaiax.test
       PORTITOR_GAIAX_PARTICIPANT_FILE: /config/participant.json
+    secrets:
+      - database-ca
+      - consumer-identity-database-password
     volumes:
       - ./run/consumer:/config:ro
       - ./run/ca:/ca:ro
@@ -186,6 +250,8 @@ services:
     <<: *portitor
     image: ${PORTITOR_IMAGE:-portitor-connector:ci}
     environment:
+      PORTITOR_DATABASE_URL: postgresql://consumer_connector@database:5432/consumer_connector?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/consumer-connector-database-password
       <<: *portitor-environment
       PORTITOR_PARTICIPANT_ID: did:web:consumer.gaiax.test
       PORTITOR_PUBLIC_URL: http://consumer-connector:8080
@@ -195,6 +261,9 @@ services:
       PORTITOR_STS_CLIENT_SECRET_FILE: /config/sts-client-secret
       # as consumer, it adds the scopes of the offer's credential types
       PORTITOR_POLICY_CREDENTIALS: ParticipantComplianceCredential
+    secrets:
+      - database-ca
+      - consumer-connector-database-password
     volumes:
       - ./run/consumer:/config:ro
       - ./run/ca:/ca:ro
@@ -208,6 +277,8 @@ services:
     <<: *portitor
     image: ${PORTITOR_IDENTITY_IMAGE:-portitor-identity:ci}
     environment:
+      PORTITOR_DATABASE_URL: postgresql://outsider_identity@database:5432/outsider_identity?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/outsider-identity-database-password
       <<: *portitor-environment
       PORTITOR_PARTICIPANT_ID: did:web:outsider-identity%3A8090
       PORTITOR_IDENTITY_KEY_FILE: /config/identity-key.pem
@@ -215,6 +286,9 @@ services:
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8091
       PORTITOR_MANAGEMENT_API_KEY_FILE: /config/identity-management.key
       PORTITOR_STS_CLIENT_SECRET_FILE: /config/sts-client-secret
+    secrets:
+      - database-ca
+      - outsider-identity-database-password
     volumes:
       - ./run/outsider:/config:ro
       - ./run/ca:/ca:ro
@@ -226,6 +300,8 @@ services:
     <<: *portitor
     image: ${PORTITOR_IMAGE:-portitor-connector:ci}
     environment:
+      PORTITOR_DATABASE_URL: postgresql://outsider_connector@database:5432/outsider_connector?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/outsider-connector-database-password
       <<: *portitor-environment
       PORTITOR_PARTICIPANT_ID: did:web:outsider-identity%3A8090
       PORTITOR_PUBLIC_URL: http://outsider-connector:8080
@@ -234,6 +310,9 @@ services:
       PORTITOR_STS_URL: http://outsider-identity:8090/sts/token
       PORTITOR_STS_CLIENT_SECRET_FILE: /config/sts-client-secret
       PORTITOR_POLICY_CREDENTIALS: ParticipantComplianceCredential
+    secrets:
+      - database-ca
+      - outsider-connector-database-password
     volumes:
       - ./run/outsider:/config:ro
       - ./run/ca:/ca:ro
@@ -249,3 +328,31 @@ services:
     volumes:
       - ./run/ca:/ca:ro
     profiles: [tools]
+
+# written by run.sh (scripts/demo-database.sh)
+secrets:
+  database-ca:
+    file: ./run/database/ca.pem
+  database-server-cert:
+    file: ./run/database/server.pem
+  database-server-key:
+    file: ./run/database/server.key
+  database-admin-password:
+    file: ./run/database/admin-password
+  issuer-database-password:
+    file: ./run/database/issuer-password
+  provider-identity-database-password:
+    file: ./run/database/provider-identity-password
+  provider-connector-database-password:
+    file: ./run/database/provider-connector-password
+  consumer-identity-database-password:
+    file: ./run/database/consumer-identity-password
+  consumer-connector-database-password:
+    file: ./run/database/consumer-connector-password
+  outsider-identity-database-password:
+    file: ./run/database/outsider-identity-password
+  outsider-connector-database-password:
+    file: ./run/database/outsider-connector-password
+
+volumes:
+  database-data:

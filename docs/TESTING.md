@@ -23,13 +23,15 @@ All commands run from the repository root. Deploying for real is in
 | Dependencies: every crate version audited or exempted | `cargo vet --locked`, see [CONTRIBUTING](../CONTRIBUTING.md#dependency-audits-cargo-vet) | every PR that changes more than prose (`Dependencies`) |
 | Licence headers | `reuse lint` | every PR (`REUSE compliance`) |
 | Documentation matches the code (C4 diagrams, OpenAPI versions) | `python3 scripts/check_docs.py` | every PR (`CI`) |
-| DSP conformance (TCK) | see [below](#dsp-conformance-tck) | every PR that changes more than prose (`TCK`) |
+| DSP conformance (TCK), the connector on PostgreSQL 19 | see [below](#dsp-conformance-tck) | every PR that changes more than prose (`TCK`) |
 | DCP conformance: identity component, connector as verifier, issuer (TCK) | see [below](#dcp-conformance-tck) | every PR that changes more than prose (`TCK`) |
-| Interoperability with EDC v1.0.0-RC8, with Gaia-X compliance | `scenarios/edc-interop/run.sh`, see [below](#edc-interop-test) | PRs that touch `crates/`, `Cargo.toml`, `Cargo.lock`, the `Dockerfile`, `.dockerignore`, `scenarios/edc-interop/`, `examples/gaiax/`, `examples/bundle/`, the scripts it uses or its workflow, and nightly (`EDC interop`) |
-| Gaia-X compliance between Portitor participants, against a local Gaia-X compliance service in test mode | `scenarios/gaiax-compliance/run.sh`, see [below](#gaia-x-end-to-end-test) | PRs that touch `crates/`, `Cargo.toml`, `Cargo.lock`, the `Dockerfile`, `.dockerignore`, `examples/issuer-credentials.json`, `scenarios/gaiax-compliance/`, `examples/gaiax/`, the scripts or the workflow, and nightly (`Gaia-X`) |
+| Interoperability with EDC v1.0.0-RC8, with Gaia-X compliance | `scenarios/edc-interop/run.sh`, see [below](#edc-interop-test) | PRs that touch `crates/`, `Cargo.toml`, `Cargo.lock`, the `Dockerfile`, `.dockerignore`, `scenarios/edc-interop/`, `examples/gaiax/`, `examples/bundle/`, `examples/postgres/`, the scripts it uses or its workflow, and nightly (`EDC interop`) |
+| Gaia-X compliance between Portitor participants, against a local Gaia-X compliance service in test mode | `scenarios/gaiax-compliance/run.sh`, see [below](#gaia-x-end-to-end-test) | PRs that touch `crates/`, `Cargo.toml`, `Cargo.lock`, the `Dockerfile`, `.dockerignore`, `examples/issuer-credentials.json`, `scenarios/gaiax-compliance/`, `examples/gaiax/`, `examples/postgres/`, the scripts or the workflow, and nightly (`Gaia-X`) |
 | Fuzzing | see [below](#fuzzing) | PRs that touch `crates/`, `fuzz/`, `.clusterfuzzlite/`, `Cargo.toml` or `Cargo.lock` (short), weekly (long) |
 | Two participants authenticate with DCP, agree a contract and transfer a file | `scenarios/two-party/run-local.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
-| The same in Docker Compose | `scenarios/two-party/run.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
+| The same in Docker Compose, each component on its own database of one PostgreSQL server | `scenarios/two-party/run.sh`, see [below](#two-connectors) | every PR that changes more than prose (`CI`) |
+| Two processes of each component on one PostgreSQL database each, every request spread over both; one process stopped in the middle, the other finishes its work ([ADR 0029](adr/0029-several-replicas.md)) | `scenarios/two-party/run-replicas.sh`, see [below](#several-replicas) | every PR that changes more than prose (`CI`, PostgreSQL 19) |
+| The Compose demo with the provider as two connectors behind nginx | `EXTRA_COMPOSE=scenarios/two-party/replicas.yaml scenarios/two-party/run.sh`, see [below](#two-connectors-behind-nginx) | no: by hand, before each release (maintainer, 2026-11-26) |
 | The health scenario [hdab-intermediary](../scenarios/hdab-intermediary/README.md): a chained transfer through an HDAB | `scenarios/hdab-intermediary/run.sh` | no: by hand, a manual test (maintainer, 2026-11-15) |
 | The health scenario [data-permits](../scenarios/data-permits/README.md): data permits as credentials | `scenarios/data-permits/run.sh` | no: by hand, a manual test (maintainer, 2026-11-15) |
 | The container scripts with Podman instead of Docker | `CONTAINER_ENGINE=podman` and the script, see [below](#docker-or-podman) | no: by hand, last run noted there |
@@ -168,6 +170,7 @@ CI runs everything with Docker. The Podman runs are done by hand:
 | `podman build` writes images in OCI format, and Podman reads a health check only from an image in Docker format ([libimage `inspect.go`](https://github.com/containers/common/blob/main/libimage/inspect.go); `--format` in podman-build(1)). The same holds for a pulled image with an OCI manifest. | No script relies on an image's `HEALTHCHECK`: `scenarios/two-party/compose.yaml` has its own `healthcheck:` for the services others wait for. To keep the image's check, build with `podman build --format docker`; for `podman run`, pass `--health-cmd '["/portitor-connector", "health"]'`. |
 | Docker's name server inside a container is `127.0.0.11`; Podman's (aardvark-dns) listens on the network's gateway. | The `tls` web server of the two interop tests takes its `resolver` from the container's `/etc/resolv.conf` (the nginx image's `NGINX_ENTRYPOINT_LOCAL_RESOLVERS`). |
 | Rootless Podman (the default, also in a Podman machine): root in the container is the user who runs Podman; any other user id cannot write into that user's folders. | The demo bundle is built in a container as `0:0` with rootless Podman and as your user otherwise (`engine_bind_mount_user` in `scripts/container-engine.sh`). The scripts make the files they mount readable by all (`chmod a+rX`), as before: the images run as user 65532. |
+| PostgreSQL reads its TLS key only when its own user owns the file and nobody else may read it; a mounted file belongs to your user, or to root in the container with rootless Podman. | The `database` service of each scenario copies the key into its volume as root (`install -m 600 -o postgres`) before the image's entrypoint starts the server. Not yet run with Podman (2026-11-26). |
 | `podman compose` prints a line about its provider on each call. | The scripts set `PODMAN_COMPOSE_WARNING_LOGS=false`. |
 | Podman 4.9.3 (Pop!\_OS 24.04) cannot build the `Dockerfile`: its Buildah stops at `HEALTHCHECK ... --start-interval=2s` with `flag provided but not defined: -start-interval` (2026-11-25). | Build from a copy without the flag, outside the repository: `sed 's/ --start-interval=2s//' Dockerfile > /tmp/Dockerfile.podman4` and `podman build --format docker -f /tmp/Dockerfile.podman4 --target ... .`. The images then wait for their first health check at the normal interval; no script relies on it. Release images are built by CI and keep the flag. |
 | Docker Compose builds through Podman without BuildKit (`podman compose` sets `DOCKER_BUILDKIT=0`). | The Dockerfiles use no BuildKit-only syntax. If the build of the EDC images fails under Podman, build them with `podman build --target <controlplane, dataplane, identityhub or issuerservice> -t portitor-scenarios/edc-interop-<target>:1.0.0-RC8 scenarios/edc-interop/runtimes` and run `scenarios/edc-interop/run.sh --no-build`. |
@@ -527,11 +530,11 @@ docker stop portitor-test-db
   `PORTITOR_TEST_REQUIRE_POSTGRES=true`. `cargo test --workspace` runs
   once against each; the TCK scripts and the coverage job run against
   19. These are the oldest and the newest version Portitor supports
-  ([DEPLOYING, Database](DEPLOYING.md#database)).
-- Planned for 1.3: a test that runs two processes of each image on one
-  PostgreSQL database, and one DSP TCK run on PostgreSQL
-  ([ROADMAP](ROADMAP.md#13-several-replicas-and-postgresql)).
-  <!-- 1.3: check after integration -->
+  ([DEPLOYING, Database](DEPLOYING.md#database)). The same job runs
+  the replica test against 19 ([Several replicas](#several-replicas)),
+  and the `TCK` workflow runs the DSP TCK with the connector on 19.
+- The container scripts (the scenarios) run their own PostgreSQL
+  server: see [Two connectors](#two-connectors).
 
 ## Coverage
 
@@ -548,7 +551,9 @@ command above but not counted.
 
 The Eclipse DSP Technology Compatibility Kit (TCK) acts as the other
 connector and checks that Portitor follows DSP 2025-1. The `TCK` workflow
-builds it from source at a pinned commit. Required today: metadata (MET),
+builds it from source at a pinned commit, and runs it with the connector
+on PostgreSQL 19, in a database of its own (ADR 0029, section 7); the
+DCP TCK jobs keep SQLite files. Required today: metadata (MET),
 catalog (CAT), contract negotiation as provider (CN:01 to CN:03) and as
 consumer (CN_C:01 to CN_C:03), and the transfer process as provider
 (TP:01 to TP:03) and as consumer (TP_C:01 to TP_C:03). The TCK itself
@@ -579,7 +584,8 @@ cargo build -p portitor-connector --features tck
 PORTITOR_BIND=127.0.0.1:8080 PORTITOR_PUBLIC_URL=http://127.0.0.1:8080 \
 PORTITOR_PARTICIPANT_ID='did:web:localhost%3A8080' PORTITOR_TCK_AUTHORIZATION='Bearer dsp-tck-only' \
 PORTITOR_DATASETS_FILE=tck/datasets.json PORTITOR_ALLOW_HTTP=true \
-PORTITOR_DB_FILE=/tmp/portitor-tck.db target/debug/portitor-connector &
+PORTITOR_DATABASE_URL='postgresql://portitor@localhost:5432/portitor_tck?sslmode=disable' \
+  target/debug/portitor-connector &   # an empty database (CI); or PORTITOR_DB_FILE=/tmp/portitor-tck.db
 
 # 3. Run it and check the required tests
 java -jar dsp-tck-1.0.2-all.jar -config tck/dsp-tck.properties > tck.log
@@ -1424,20 +1430,35 @@ What it checks, step by step, is in [the scenario's README](../scenarios/two-par
 `scenarios/two-party/run.sh [connector image [identity image [issuer image]]]`
 runs the same checks against the services in
 `scenarios/two-party/compose.yaml`: the issuer, a provider and a consumer
-(each a connector with its identity), and a small web server that holds
-the provider's data. It uses the released images or the ones you name.
+(each a connector with its identity), a small web server that holds
+the provider's data, and one PostgreSQL server with a database for each
+of the five components. It uses the released images or the ones you name.
 The [quickstart](https://bruno.pacheco.lu/portitor/#try) on the website
 walks through it.
 
 - It writes the keys and secrets into `scenarios/two-party/run/` first,
   and builds the demo bundle with the issuer image into
   `scenarios/two-party/run/issuer/bundle/`.
+- **The database** ([ADR 0029](adr/0029-several-replicas.md)): one
+  container of the official `postgres` image (19, pinned by digest).
+  `examples/postgres/init-databases.sh` makes one role and one database
+  per component when the server's data folder is new; each role owns
+  its database and may connect to no other. `scripts/demo-database.sh`
+  writes into `run/database/` a test CA made for the run, the server's
+  certificate for the host name `database`, and one password per
+  component. The components connect with TLS and check the certificate
+  and the host name (`sslmode=verify-full`, `sslrootcert`); each reads
+  its password from a Compose secret, never from its URL. The other
+  scenarios in Compose do the same. Images before 1.3 do not read
+  `PORTITOR_DATABASE_URL` and keep their SQLite file in `/data`.
 - It stops everything at the end. `KEEP=1` leaves everything running:
   the consumer's management API is on `127.0.0.1:18091` (key in
   `scenarios/two-party/run/consumer/management.key`), the provider's, with
   the harvest jobs, on `127.0.0.1:18081` (key in
   `scenarios/two-party/run/provider/management.key`), the issuer's on
   `127.0.0.1:18071` (key in `scenarios/two-party/run/issuer/management.key`).
+  The database is not published on the host:
+  `docker compose -f scenarios/two-party/compose.yaml exec database psql -U postgres`.
 - Running it again after `KEEP=1` works: the script first removes the
   containers and volumes of the last run
   (`docker compose down --volumes --remove-orphans`), then `run/`.
@@ -1472,6 +1493,67 @@ under that agreement with `POST 127.0.0.1:18091/v1/transfers` and
 data source, so it gets `STARTED` and a `dataAddress` to fetch from (on
 `127.0.0.1:18080`).
 
+### Several replicas
+
+`scenarios/two-party/run-replicas.sh [connector [identity [issuer]]]`
+runs two processes of each component on this machine, both processes on
+the same PostgreSQL database
+([ADR 0029](adr/0029-several-replicas.md), section 7): two issuers, and
+for the provider and the consumer two identities and two connectors. A
+small proxy, `scripts/round-robin-proxy.py`, stands in front of each
+pair as a load balancer would, and sends each request to the next
+process in turn; every address in the setup (DIDs, public URLs, STS,
+management APIs) is the proxy's. The script then:
+
+1. stops a process in the middle of its work (`SIGKILL`, as a crash) and
+   waits for the other process to finish it, for each of: a consumer's
+   negotiation whose request is not sent yet, a provider's transfer
+   whose start message is not sent yet (then fetches the data through
+   the other process), and an issuer's credential delivery. The proxy
+   answers the counter-party's requests with 503 for a moment first, so
+   that the work is still pending when the process stops. The other
+   process has `TAKEOVER_SECONDS` (75) to finish: a lease lasts 30
+   seconds. The stopped process starts again after its check;
+2. runs the scenario's steps (`steps.sh`) with every process up;
+3. checks in the proxy's log that each process served requests.
+
+A failed check of step 1 is reported and the run goes on; the script
+exits non-zero at the end. It needs `PORTITOR_TEST_DATABASE_URL`, a
+server whose user may create databases, as the store tests do
+([PostgreSQL](#postgresql)); it makes five databases there and drops
+them at the end. Also `psql`, `curl`, `jq`, `openssl` and Python 3;
+ports 18260 to 18499. CI runs it in the `CI` workflow with the static
+binaries it builds, against PostgreSQL 19.
+
+```sh
+export PORTITOR_TEST_DATABASE_URL='postgresql://portitor@localhost:5432/postgres?sslmode=disable'
+scenarios/two-party/run-replicas.sh            # builds the debug binaries
+```
+
+### Two connectors behind nginx
+
+Before each release the maintainer runs the Compose demo with the
+provider as two connector containers behind nginx
+([ROADMAP](ROADMAP.md#13-several-replicas-and-postgresql)):
+
+```sh
+EXTRA_COMPOSE=scenarios/two-party/replicas.yaml \
+  scenarios/two-party/run.sh portitor-connector:ci portitor-identity:ci portitor-issuer:ci
+```
+
+`scenarios/two-party/replicas.yaml` is an override of `compose.yaml`:
+`provider-1` and `provider-2` are the provider, with the same settings
+and database and a `/data` volume each; the service `provider` becomes
+nginx (`replicas-nginx.conf`), with the provider's name and host ports,
+and sends each request to the next connector in turn. The steps are
+those of the demo; `run.sh` follows the logs of both connectors for the
+audit lines. It needs 1.3 images (the released 1.2 images keep a SQLite
+file per container) and Docker Compose 2.24 or later (`!reset`,
+`!override`). With `KEEP=1`, stop one connector
+(`docker compose -f scenarios/two-party/compose.yaml -f scenarios/two-party/replicas.yaml stop provider-1`)
+and go on through the consumer's management API: nginx sends every
+request to the other one.
+
 ### Two data spaces
 
 `scenarios/two-data-spaces/run.sh shared` and `scenarios/two-data-spaces/run.sh
@@ -1486,7 +1568,10 @@ exchange works inside each dataspace (catalog, negotiation, transfer,
 data), that a member of one dataspace gets 401 from the connector of
 the other, and, for `shared`, that a verifier of one dataspace
 receives both membership credentials. It needs curl, jq, openssl and
-python3, uses ports 19070 to 19511, and is not run by CI.
+python3, uses ports 19070 to 19511, and is not run by CI. With
+`PORTITOR_TEST_DATABASE_URL` ([PostgreSQL](#postgresql)) each component
+gets a database of its own on that server (and `psql` is needed);
+without it, SQLite files.
 
 Last run by hand that passed: 2026-11-24, both ways, at commit
 `461f6db` (1.0.0-rc.1 code), on Pop!\_OS 24.04 LTS on amd64, over plain

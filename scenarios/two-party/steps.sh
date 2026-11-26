@@ -228,7 +228,9 @@ JOBS=$(provider_api "/v1/harvest-jobs?limit=10") || fail "list the harvest jobs"
 BUNDLE_JOB=$(jq -c '[.jobs[] | select(.kind == "bundle")][0]' <<<"$JOBS")
 [[ $(jq -r '.outcome' <<<"$BUNDLE_JOB") == succeeded ]] || fail "no bundle run that succeeded: $JOBS"
 jq -r '.summary' <<<"$BUNDLE_JOB"
-JOB=$(jq -r '[.jobs[] | select(.kind == "datasets")][0].id' <<<"$JOBS")
+# the newest run that read the file: a process that starts later on the
+# same database (several replicas, ADR 0029) finds it unchanged
+JOB=$(jq -r '[.jobs[] | select(.kind == "datasets" and .outcome != "unchanged")][0].id' <<<"$JOBS")
 JOB=$(provider_api "/v1/harvest-jobs/$JOB") || fail "read harvest job $JOB"
 jq '{id, trigger, outcome, summary}' <<<"$JOB"
 REJECTED=$(jq -c --arg id "$BED_OCCUPANCY" '.errors[] | select(.datasetId == $id)' <<<"$JOB")

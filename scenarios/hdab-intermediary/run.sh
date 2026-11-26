@@ -59,6 +59,8 @@ declare -A MANAGEMENT=([biobank]=http://127.0.0.1:18101 [lab]=http://127.0.0.1:1
   [hdab]=http://127.0.0.1:18121 [schuman]=http://127.0.0.1:18131)
 # shellcheck source=scripts/scenario-lib.sh
 source scripts/scenario-lib.sh
+# shellcheck source=scripts/demo-database.sh
+source scripts/demo-database.sh # write_database_secrets
 
 # step 1 needs push (1.1): stop now with a 1.0 connector image, such as
 # an image named in PORTITOR_IMAGE
@@ -78,6 +80,9 @@ rm -rf "$RUN"
 mkdir -p "$RUN/pipeline"
 write_issuer_keys authority
 for participant in "${PARTICIPANTS[@]}"; do write_participant_keys "$participant"; done
+# the database: a test CA, its certificate and one password per component
+write_database_secrets "$RUN/database" authority biobank_identity biobank_connector lab_identity \
+  lab_connector hdab_identity hdab_connector schuman_identity schuman_connector
 # the lab's object storage: its keys, for this run only; compose.yaml
 # passes them to RustFS and, as AWS_* settings, to the lab's connector
 LAB_S3_ACCESS_KEY=lab-$(openssl rand -hex 8)

@@ -64,7 +64,10 @@ order.
 | 2 | `portitor-identity` | Every participant | Mandatory, unless the participant uses another DCP wallet ([ARCHITECTURE](docs/ARCHITECTURE.md#components)): it holds the participant's key and credentials, and the connector does not start without it |
 | 3 | `portitor-connector` | Every participant | Mandatory: catalog, contract negotiation and data transfer |
 
-Each service keeps its state in one SQLite file. Each has a management
+Each service keeps its state in a PostgreSQL database of its own, and
+several containers of a service may share it
+([ADR 0029](docs/adr/0029-several-replicas.md)); a SQLite file, for one
+container, is deprecated since 1.3. Each has a management
 API for its operator, on its own port and behind an API key; that port
 must never be exposed to the Internet. Inside a deployment, two things
 are optional: the authority's signed schema and vocabulary bundle (the

@@ -5,11 +5,13 @@
 #
 # The demo in Docker Compose (scenarios/two-party/compose.yaml): a provider
 # and a consumer, each a connector with its identity component, the data
-# space's portitor-issuer and a data server, each in its own container.
+# space's portitor-issuer, a data server and the PostgreSQL server that
+# holds a database for each component, each in its own container.
 # Runs the checks of scenarios/two-party/steps.sh from this machine, then removes
 # everything, volumes included.
 #
-#  1. Keys and secrets, in scenarios/two-party/run/; the HealthDCAT-AP demo
+#  1. Keys and secrets, in scenarios/two-party/run/ (the database's test
+#     CA, certificate and passwords in run/database/); the HealthDCAT-AP demo
 #     bundle, built and signed with the issuer image (scripts/demo-bundle.sh)
 #     into run/issuer/bundle/, which the issuer serves.
 #  2. Docker Compose up.
@@ -23,8 +25,9 @@
 # Environment:
 #   KEEP=1       leave the containers running, and run/, at the end
 #   EXTRA_COMPOSE=scenarios/two-party/observability.yaml
-#                one more Compose file, used with compose.yaml (here: the
-#                optional observability stack)
+#                one more Compose file, used with compose.yaml: the
+#                optional observability stack, or replicas.yaml (the
+#                provider as two connectors behind nginx, 1.3 images on)
 #   CONTAINER_ENGINE=docker|podman
 #                the container engine; without it, docker if it answers,
 #                then podman (scripts/container-engine.sh)
@@ -45,6 +48,8 @@ S3=${S3:-0}
 # ENGINE_COMPOSE: `docker compose` or `podman compose`
 # shellcheck source=scripts/container-engine.sh
 source scripts/container-engine.sh
+# shellcheck source=scripts/demo-database.sh
+source scripts/demo-database.sh
 COMPOSE=("${ENGINE_COMPOSE[@]}" -f scenarios/two-party/compose.yaml)
 if [[ -n ${EXTRA_COMPOSE:-} ]]; then COMPOSE+=(-f "$EXTRA_COMPOSE"); fi
 if [[ $S3 == 1 ]]; then COMPOSE+=(--profile s3); fi
@@ -91,6 +96,10 @@ for participant in provider consumer; do
 done
 openssl rand -hex 32 >"$RUN/consumer/management.key"
 openssl rand -hex 32 >"$RUN/provider/management.key"
+# the database: a test CA, the server's certificate and one password per
+# component (scripts/demo-database.sh)
+write_database_secrets "$RUN/database" issuer provider_identity provider_connector \
+  consumer_identity consumer_connector
 # the provider's datasets; with S3=1 one of them from its bucket, and
 # one that also offers push
 if [[ $S3 == 1 ]]; then
@@ -186,8 +195,10 @@ request_credentials consumer 18093 membership-vc20 data-processor-vc20
 
 # --- 4. the demo steps ------------------------------------------------------
 
-# the provider's log, followed into a file, for the audit line check
-"${COMPOSE[@]}" logs --no-color --no-log-prefix -f provider >"$RUN/provider.log" 2>&1 &
+# the provider's log, followed into a file, for the audit line check; with
+# replicas.yaml the provider is two connectors, provider-1 and provider-2
+mapfile -t PROVIDER_SERVICES < <("${COMPOSE[@]}" config --services | grep -E '^provider(-[0-9]+)?$')
+"${COMPOSE[@]}" logs --no-color --no-log-prefix -f "${PROVIDER_SERVICES[@]}" >"$RUN/provider.log" 2>&1 &
 LOG_FOLLOWER=$!
 
 if [[ $S3 == 1 ]]; then

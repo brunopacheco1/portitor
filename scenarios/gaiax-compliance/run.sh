@@ -69,6 +69,8 @@ OUTSIDER_DID=did:web:outsider-identity%3A8090
 # the onboarding calls: shared with scenarios/edc-interop/run.sh
 # shellcheck source=scripts/gaiax-lib.sh
 source scripts/gaiax-lib.sh
+# shellcheck source=scripts/demo-database.sh
+source scripts/demo-database.sh # write_database_secrets
 MEMBER_OF="Portitor Gaia-X test dataspace"
 DATASET=gaiax-compliant-only # config/datasets.json
 DSP=dsp/2025-1
@@ -146,6 +148,9 @@ step "The participants: keys, certificates, registration numbers, participant fi
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$RUN/issuer/issuer-key.pem" 2>/dev/null
 openssl rand -hex 32 >"$RUN/issuer/management.key"
 for name in provider consumer outsider; do participant "$name"; done
+# the database: a test CA, its certificate and one password per component
+write_database_secrets "$RUN/database" issuer provider_identity provider_connector \
+  consumer_identity consumer_connector outsider_identity outsider_connector
 gaiax_participant provider provider.gaiax.test "Portitor Test Provider S.A." LU12345678
 gaiax_participant consumer consumer.gaiax.test "Portitor Test Consumer S.A." LU87654321
 # the Portitor images run as user 65532 and must read them

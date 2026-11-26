@@ -36,6 +36,15 @@ In:
 - With object storage turned on (1.1, ADR 0027): a source in the
   provider's RustFS bucket (`s3://`), and a push transfer into the
   consumer's bucket.
+- In Compose, each component's state in its own database on one
+  PostgreSQL server, over TLS (1.3,
+  [ADR 0029](../../docs/adr/0029-several-replicas.md)); `run-local.sh`
+  keeps SQLite files.
+- Several replicas (1.3): `run-replicas.sh` runs two processes of each
+  component on one database each, stops one in the middle of its work
+  and checks that the other finishes it, then runs the steps with every
+  request spread over both; `replicas.yaml` runs the Compose provider as
+  two connectors behind nginx.
 
 Out, on purpose:
 
@@ -57,6 +66,8 @@ Out, on purpose:
 | The built-in data plane (HTTP pull) | Serves the file with a token, refused while the transfer is suspended and once it is complete, and writes an audit line for each pull. |
 | Status lists | The provider sees the revoked `DataProcessorCredential`, and later the revoked `MembershipCredential`, at once (`PORTITOR_STATUS_LIST_CACHE_SECONDS=0`). |
 | The provider's management API for its transfers | Lists the transfers it runs as provider and ends one; access ends at once. |
+| PostgreSQL (`postgres` 19, in Compose) | One database and role per component (`examples/postgres/init-databases.sh`), reached over TLS with a test CA made for each run: the documented default from 1.3. |
+| `scripts/round-robin-proxy.py` and nginx (replica runs only) | Spread the requests over two processes of a component, as a load balancer would: no answer may depend on which process got the request. |
 | RustFS (`rustfs/rustfs:1.0.6`), with object storage on | One S3 store for both participants: the provider reads a source from bucket `provider-data`, the consumer stores pushed data in bucket `consumer-push`. |
 
 ## Run it
@@ -69,7 +80,24 @@ scenarios/two-party/run-local.sh       # binaries on this machine, built in debu
 ```
 
 It takes a few seconds once the images are there. CI runs both on every
-pull request, with the binaries and images it has just built.
+pull request, with the binaries and images it has just built. The
+Compose run starts a PostgreSQL server too, with one database per
+component; `run-local.sh` keeps SQLite files.
+
+Several replicas (1.3,
+[TESTING, "Several replicas"](../../docs/TESTING.md#several-replicas)
+and ["Two connectors behind nginx"](../../docs/TESTING.md#two-connectors-behind-nginx)):
+
+```sh
+PORTITOR_TEST_DATABASE_URL='postgresql://portitor@localhost:5432/postgres?sslmode=disable' \
+  scenarios/two-party/run-replicas.sh            # two processes of each component; CI runs it
+EXTRA_COMPOSE=scenarios/two-party/replicas.yaml \
+  scenarios/two-party/run.sh portitor-connector:ci portitor-identity:ci portitor-issuer:ci
+```
+
+`run-replicas.sh` takes about two minutes: each stopped process leaves
+its leases, which last 30 seconds, before the other process takes the
+work over.
 [TESTING, "Two connectors"](../../docs/TESTING.md#two-connectors) says
 what each script sets up, how to use your own images, keep the
 containers running (`KEEP=1`) and add the observability stack.

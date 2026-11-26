@@ -34,6 +34,8 @@ on:
       - "scripts/gaiax-lib.sh"
       - "scripts/gaiax_test_notary.py"
       - "scripts/gaiax_test_onboarding.py"
+      - "scripts/demo-database.sh" # the PostgreSQL server: its test CA and passwords
+      - "examples/postgres/**" # its databases and roles
       - ".github/workflows/edc-interop.yml"
   schedule:
     - cron: "37 2 * * *" # nightly: EDC's side changes without our code changing

@@ -57,6 +57,7 @@ Out, on purpose:
 | `portitor-connector` as consumer | Reads the catalog and negotiates through its management API. |
 | Gaia-X compliance service (gx-compliance v2.16.0, test mode, Memgraph 3.9.0) | Issues the compliance credentials ([examples/gaiax/compliance.yaml](../../examples/gaiax/compliance.yaml)). |
 | Test notary ([scripts/gaiax_test_notary.py](../../scripts/gaiax_test_notary.py)) | Signs each Gaia-X participant's registration number credential (`gx:VatID`). |
+| PostgreSQL (`postgres` 19) | One database and role per Portitor component, over TLS ([ADR 0029](../../docs/adr/0029-several-replicas.md)): the documented default from 1.3. A store bug that only PostgreSQL shows would show here. |
 
 ## Run it
 
