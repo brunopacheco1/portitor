@@ -12,6 +12,84 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+Portitor 1.3 (in progress): several containers of each image (connector,
+identity, issuer) share one PostgreSQL database, and SQLite is
+deprecated ([ADR 0029](docs/adr/0029-several-replicas.md)). Every 1.2
+route, setting and file format still works
+([STABILITY](docs/STABILITY.md)). Upgrading from 1.2:
+[OPERATING, From 1.2 to 1.3](docs/OPERATING.md#from-12-to-13).
+<!-- 1.3: check after integration -->
+
+### Added
+
+- PostgreSQL 16 to 19 as the database of each image, behind the same
+  store ports. The database layer is in `portitor-runtime`
+  (`database.rs`, `database/`): SQL written once for both databases,
+  `SERIALIZABLE` transactions on PostgreSQL that run again when two
+  collide, a PostgreSQL migration list per component that runs under an
+  advisory lock (replicas that start together migrate once), and one
+  database per component (`portitor_schema`). The client is
+  `tokio-postgres`, with Portitor's own TLS on `tokio-rustls` and the
+  system's CA certificates.
+- Settings `PORTITOR_DATABASE_URL` (a libpq URI; `sslmode`
+  `verify-full` by default, `verify-ca` and `require` also check the
+  host name, `disable` turns TLS off, `prefer` and `allow` are refused;
+  `sslrootcert` for a private CA) and `PORTITOR_DATABASE_PASSWORD_FILE`.
+  A URL that holds a password is refused, and so is a start with both
+  `PORTITOR_DATABASE_URL` and `PORTITOR_DB_FILE`
+  ([DEPLOYING, Database](docs/DEPLOYING.md#database)).
+- CI runs the store tests on SQLite and on PostgreSQL 16 and 19
+  ([TESTING, PostgreSQL](docs/TESTING.md#postgresql)).
+
+### Deprecated
+
+- SQLite and `PORTITOR_DB_FILE`. A component on a SQLite file still
+  works, for one process, and logs a warning at start. Both are removed
+  in 2.0. A tool that copies a SQLite file into PostgreSQL comes in a
+  1.x release before 2.0
+  ([TD-59](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-59)).
+
+### Changed
+
+- A second process on the same SQLite file refuses to start. <!-- 1.3: check after integration -->
+
+### Fixed
+
+- State that one process held is now in the database, so several
+  replicas give the same answers (ADR 0029, decision 6): used token ids
+  ([TD-09](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-09)), the catalog, read
+  from the database on each request
+  ([TD-50](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-50)), the issuer's
+  signed status lists ([TD-51](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-51)),
+  cuts of running downloads and pushes on another container, within
+  5 seconds ([TD-52](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-52)), the DSP
+  outbox ([TD-53](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-53)), pushes and
+  uploads ([TD-54](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-54)), the
+  bundle version in use ([TD-55](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-55)),
+  scheduled jobs ([TD-56](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-56)) and
+  the issuer's deliveries
+  ([TD-57](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-57)). <!-- 1.3: check after integration -->
+
+### Dependencies
+
+- `tokio-postgres` 0.7 and the crates it brings: 32 crate versions not
+  covered by the imported cargo-vet audits
+  ([R-04](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-04)).
+  <!-- 1.3: fill after the cargo-vet decision -->
+
+### Documentation
+
+- ADR 0029 "Several replicas on one PostgreSQL database"; ADR 0006 gets
+  a dated note. DEPLOYING: a "Database" section, and PostgreSQL in the
+  first deployment and the `docker run` examples. OPERATING: backup
+  with `pg_dump`, a two-step rolling key rotation for several replicas
+  ([TD-58](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-58)), upgrades with
+  several replicas, and moving from SQLite to PostgreSQL. STABILITY:
+  PostgreSQL, and SQLite deprecated. ARCHITECTURE: principle 14 met by
+  design, and a "Storage" section. ROADMAP, RISKS_AND_TECHNICAL_DEBTS
+  (TD-08, TD-09 and TD-50 to TD-58 in progress; new R-49 and TD-59),
+  TESTING (store tests on PostgreSQL), SECURITY-ASSURANCE.
+
 ## [1.2.0] - 2026-11-26
 
 Portitor 1.2: the built-in data plane in its own crate, the first step

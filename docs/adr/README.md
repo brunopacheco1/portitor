@@ -23,7 +23,7 @@ first, then here.
 | [0003](0003-component-split.md) | Component split (modules and images) | Accepted (2026-11-11) | One mono repo; three images (connector, identity, issuer), split by who runs them and which keys they hold |
 | [0004](0004-hexagonal-architecture.md) | Hexagonal architecture (ports and adapters) | Accepted | Pure domain crates with no I/O; everything external is a port (trait) with an adapter |
 | [0005](0005-schema-and-vocabulary-registry.md) | Schema and vocabulary registry | Accepted (2026-11-15) | The authority signs a bundle of SHACL shapes, vocabularies and contexts; connectors pull and verify it and check datasets and messages with Portitor's own SHACL Core subset |
-| [0006](0006-negotiation-storage.md) | Negotiation storage | Accepted (2026-11-12) | A SQLite file behind the `NegotiationStore` port, one process per file; PostgreSQL later on the same port |
+| [0006](0006-negotiation-storage.md) | Negotiation storage | Accepted (2026-11-12) | A SQLite file behind the `NegotiationStore` port, one process per file; PostgreSQL later on the same port (since 1.3: ADR 0029) |
 | [0007](0007-outbox-and-proof-of-delivery.md) | Save each message before sending it (outbox), and proof of delivery | Accepted (2026-11-12) | A message is saved with the state change that caused it, then sent; the state moves when the partner acknowledges or proves it has the message |
 | [0008](0008-project-name.md) | Project name: Portitor | Accepted | The project, crates, images and settings are named Portitor |
 | [0009](0009-minimal-odrl-policies.md) | Minimal ODRL policies | Accepted (2026-11-12) | One constraint type, `dateTime`; anything not understood fails closed; policies are read strictly |
@@ -46,6 +46,7 @@ first, then here.
 | [0026](0026-tls-termination.md) | TLS ends at the operator's reverse proxy | Accepted (2026-11-20) | The services speak plain HTTP; the operator ends TLS at a proxy and keeps the management ports private |
 | [0027](0027-push-transfers-and-object-storage.md) | Push transfers, object storage and revoking access | Accepted (2026-11-24) | Push by the Data Plane Signaling HTTP profile into a receiving route of the consumer; provider data may sit in its own object storage behind `/data`; suspend and terminate cut running downloads; no storage keys cross between participants |
 | [0028](0028-separate-pluggable-data-plane.md) | A separate, pluggable data plane over Data Plane Signaling | Accepted (2026-11-25) | Operators register their own data planes over DPS; the built-in data plane becomes one of them, linked in by default and also an optional image |
+| [0029](0029-several-replicas.md) | Several replicas on one PostgreSQL database | Accepted (2026-11-26) | Several containers of each image share one PostgreSQL database and coordinate through it (leases, compare-and-swap, reads per request); SQLite deprecated in 1.3, removed in 2.0 |
 
 ## Adding an ADR
 

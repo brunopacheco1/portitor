@@ -322,15 +322,27 @@ Several containers serve one participant on one shared database
 (maintainer, 2026-11-26;
 [ARCHITECTURE, principle 14](ARCHITECTURE.md#architecture-principles)).
 
-- An ADR "Several replicas" sets one pattern for all three images:
+- [ADR 0029](adr/0029-several-replicas.md) "Several replicas" (Accepted
+  2026-11-26) sets one pattern for all three images:
   coordination goes through the database, with compare-and-swap writes
   and leases that expire, as Eclipse EDC does with its lease columns and
   `nextNotLeased`; a busy entity answers its caller and does not block
   it (DSP: HTTP 503 with an error body, which EDC retries; a 4xx ends
   EDC's process); a cache in one process only makes things faster and
   never changes an answer.
-- The PostgreSQL adapter on the same ports and migrations
-  ([TD-08](RISKS_AND_TECHNICAL_DEBTS.md#td-08)).
+- The PostgreSQL adapter on the same ports
+  ([TD-08](RISKS_AND_TECHNICAL_DEBTS.md#td-08)): `tokio-postgres`
+  behind the synchronous store ports, one SQL text for both databases,
+  a PostgreSQL migration list per component that starts with the 1.3
+  schema, migrations under an advisory lock, PostgreSQL 16 to 19.
+  Settings `PORTITOR_DATABASE_URL` and
+  `PORTITOR_DATABASE_PASSWORD_FILE`; TLS checks the server's certificate
+  and host name.
+- **SQLite is deprecated** (maintainer, 2026-11-26): it still works for
+  one process, logs a warning at start, and a second process on the
+  same file refuses to start. It is removed in 2.0
+  ([below](#for-20)). PostgreSQL becomes the documented default:
+  DEPLOYING, the demo, the quickstart and the scenarios.
 - The gaps the 2026-11-26 code review found, closed with that pattern:
   used token ids in the database
   ([TD-09](RISKS_AND_TECHNICAL_DEBTS.md#td-09)); the dataset read copy
@@ -344,11 +356,27 @@ Several containers serve one participant on one shared database
   ([TD-56](RISKS_AND_TECHNICAL_DEBTS.md#td-56)); the issuer's
   credential outbox ([TD-57](RISKS_AND_TECHNICAL_DEBTS.md#td-57)); the
   DID document during a key rotation
-  ([TD-58](RISKS_AND_TECHNICAL_DEBTS.md#td-58)).
+  ([TD-58](RISKS_AND_TECHNICAL_DEBTS.md#td-58)). How each is closed is
+  in ADR 0029, decision 6. Two decisions differ from the first text of
+  this plan (maintainer, 2026-11-26):
+  - **the dataset copy:** the catalog is read from the database on each
+    request, as EDC reads its catalog from its asset index, instead of a
+    copy generation number that each process checks (D4, option B);
+  - **the issuer's status lists:** the process that revokes signs the
+    new list in the same transaction and stores it in the database,
+    and every replica serves it from there, as EDC IssuerService does,
+    instead of a revocation counter that makes each process sign again
+    (D5).
+- Not in 1.3: a tool that copies a SQLite file into PostgreSQL (later
+  1.x, before 2.0; [Later](#later-not-planned-for-a-release-yet)).
 - Exit: a test runs two processes of each image on one PostgreSQL
   database, with requests spread over both, and the scenarios pass; one
   process is stopped in the middle and the other finishes its work; the
-  DSP and DCP TCKs and the EDC interop test pass unchanged.
+  DSP and DCP TCKs and the EDC interop test pass unchanged. The store
+  tests run on SQLite and on PostgreSQL 16 and 19 in CI, and one DSP
+  TCK run uses PostgreSQL. Before the tag the maintainer runs the
+  scenarios on PostgreSQL on his laptop, one of them with two
+  connectors behind nginx.
 - Main risk: a piece of state held in one process that the review did
   not find; the two-process test is the guard.
 
@@ -716,6 +744,13 @@ Research first; code only if the ADR finds a hand-over worth building.
 
 ## Later (not planned for a release yet)
 
+- A tool that copies a SQLite file into PostgreSQL, in a 1.x release
+  before 2.0 (maintainer, 2026-11-26;
+  [ADR 0029](adr/0029-several-replicas.md)).
+- Asynchronous store ports, so a database call no longer blocks the
+  thread that makes it
+  ([ADR 0029](adr/0029-several-replicas.md), decision 3;
+  [TD-40](RISKS_AND_TECHNICAL_DEBTS.md#td-40)).
 - A separate, pluggable data plane (maintainer, 2026-11-25): the
   connector drives data planes over Data Plane Signaling, operators
   register their own data planes for new sources and transfer types
@@ -793,6 +828,15 @@ Research first; code only if the ADR finds a hand-over worth building.
   which plane it touches, and whether Portitor should offer it as its
   own component, an adapter or a deployment guide. The result is an ADR
   before any code; consent comes first, as it is not researched yet.
+
+## For 2.0
+
+Changes that break the 1.x interface ([STABILITY](STABILITY.md)), so
+they wait for 2.0. No date.
+
+- Remove SQLite and the setting `PORTITOR_DB_FILE`; PostgreSQL is then
+  the only database (maintainer, 2026-11-26;
+  [ADR 0029](adr/0029-several-replicas.md)).
 
 ## Technical debt
 

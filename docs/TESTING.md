@@ -17,7 +17,7 @@ All commands run from the repository root. Deploying for real is in
 |---|---|---|
 | Format | `cargo fmt --all --check` | every PR that changes more than prose (`CI`) |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` | every PR that changes more than prose (`CI`) |
-| Unit and integration tests | `cargo test --workspace` | every PR that changes more than prose (`CI`) |
+| Unit and integration tests; the store tests on SQLite and on PostgreSQL 16 and 19 ([PostgreSQL](#postgresql)) | `cargo test --workspace` | every PR that changes more than prose (`CI`) |
 | Coverage | `cargo llvm-cov --workspace` | every PR that changes more than prose (`CI`, sent to SonarQube Cloud) |
 | Dependencies: advisories, licences, sources | `cargo deny check` | every PR that changes more than prose, and weekly (`Dependencies`) |
 | Dependencies: every crate version audited or exempted | `cargo vet --locked`, see [CONTRIBUTING](../CONTRIBUTING.md#dependency-audits-cargo-vet) | every PR that changes more than prose (`Dependencies`) |
@@ -488,6 +488,50 @@ Rules for new tests:
   secret.
 - `unwrap()` is allowed in tests only; add
   `#![allow(clippy::unwrap_used)]` to the test file or module.
+
+### PostgreSQL
+
+Since 1.3 the store tests run on every database Portitor supports
+([ADR 0029](adr/0029-several-replicas.md)): always on SQLite in
+memory, and also on PostgreSQL when `PORTITOR_TEST_DATABASE_URL` names
+a server (`crates/portitor-runtime/src/testing/databases.rs`). Each
+test makes a new, empty database on that server, so the URL's user
+must be allowed to create databases. The tests of the database layer
+itself are in `crates/portitor-runtime/tests/postgres.rs`.
+
+On your machine, with a throwaway server (Docker or Podman; trust and
+no TLS are for a test server only):
+
+```sh
+docker run --rm -d --name portitor-test-db \
+  -e POSTGRES_USER=portitor -e POSTGRES_HOST_AUTH_METHOD=trust \
+  -p 5432:5432 postgres:19
+export PORTITOR_TEST_DATABASE_URL='postgresql://portitor@localhost:5432/postgres?sslmode=disable'
+export PORTITOR_TEST_REQUIRE_POSTGRES=true
+cargo test --workspace
+docker stop portitor-test-db
+```
+
+- Without `PORTITOR_TEST_DATABASE_URL` the PostgreSQL half of each
+  store test does nothing. With `PORTITOR_TEST_REQUIRE_POSTGRES=true`
+  it fails instead, so the half cannot be skipped without anyone
+  noticing.
+- A server that needs a password: put it in
+  `PORTITOR_TEST_DATABASE_PASSWORD`, never in the URL.
+- TLS: `PORTITOR_TEST_DATABASE_TLS_URL` names a server with TLS whose
+  CA is in `sslrootcert` and whose certificate names `localhost`. The
+  test checks that the connection is encrypted and that a wrong host
+  name is refused. CI does not run it.
+- **In CI** (`CI` workflow), PostgreSQL 16 and 19 run as service
+  containers, pinned by digest in `.github/workflows/ci.yml`, with
+  `PORTITOR_TEST_REQUIRE_POSTGRES=true`. `cargo test --workspace` runs
+  once against each; the TCK scripts and the coverage job run against
+  19. These are the oldest and the newest version Portitor supports
+  ([DEPLOYING, Database](DEPLOYING.md#database)).
+- Planned for 1.3: a test that runs two processes of each image on one
+  PostgreSQL database, and one DSP TCK run on PostgreSQL
+  ([ROADMAP](ROADMAP.md#13-several-replicas-and-postgresql)).
+  <!-- 1.3: check after integration -->
 
 ## Coverage
 

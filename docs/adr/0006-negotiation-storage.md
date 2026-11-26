@@ -66,6 +66,16 @@ the negotiations this ADR stores. The maintainer decided each on
   ids do not match"), as every other message with a wrong process id
   already is. Until 0.11 this one message was not checked.
 
+### Amended in 1.3: PostgreSQL, and SQLite deprecated (2026-11-26)
+
+The text above is kept as it was decided. From 1.3 the PostgreSQL
+adapter exists, on the same ports, and several processes may share one
+PostgreSQL database. Its migrations are a list of their own, which
+starts with the 1.3 schema as a whole, not the SQLite ones. SQLite is
+deprecated: it still works for one process, a second process on the
+same file refuses to start, and it is removed in 2.0. The decision and
+its reasons are in [ADR 0029](0029-several-replicas.md).
+
 ## Consequences
 
 - Operators mount a volume on `/data` to keep negotiations across

@@ -52,10 +52,11 @@ judged against it.
    config files or images, an allow-list of signature algorithms (`ES256`,
    `PS256`), non-root and read-only containers. *Check:* OpenSSF Baseline
    level 1 and Scorecard in CI.
-8. **Stateless processes, state in a database.** The target is that any
-   instance serves any request (PostgreSQL, ADR 0006); until that adapter
-   exists, each image keeps its state in one SQLite file, with one replica
-   per file. Restarts lose nothing. Data the connector does not own lives
+8. **Stateless processes, state in a database.** Any instance serves any
+   request: from 1.3 the instances of an image share one PostgreSQL
+   database ([ADR 0029](adr/0029-several-replicas.md); [Storage](#storage)).
+   A SQLite file, deprecated since 1.3, serves one instance. Restarts
+   lose nothing. Data the connector does not own lives
    at its source: datasets are harvested into a read copy, and the
    authority's bundle is downloaded and cached
    ([ADR 0020](adr/0020-dataset-harvest.md), [ADR 0005](adr/0005-schema-and-vocabulary-registry.md));
@@ -91,13 +92,13 @@ judged against it.
     an error body, which EDC retries; a 4xx ends EDC's process). A cache
     in one process is fine only to go faster: it never changes an
     answer (maintainer, 2026-11-26). *Check:* a test runs two processes
-    on one database. Not met in 1.2: until
-    [1.3](ROADMAP.md#13-several-replicas-and-postgresql), each image
-    runs one replica per SQLite file (principle 8,
-    [TD-08](RISKS_AND_TECHNICAL_DEBTS.md#td-08)); the gaps are
-    [TD-09](RISKS_AND_TECHNICAL_DEBTS.md#td-09) and
+    of each image on one PostgreSQL database. Met by design from 1.3
+    ([ADR 0029](adr/0029-several-replicas.md)): the places where 1.2
+    kept state in one process ([TD-09](RISKS_AND_TECHNICAL_DEBTS.md#td-09),
     [TD-50](RISKS_AND_TECHNICAL_DEBTS.md#td-50) to
-    [TD-58](RISKS_AND_TECHNICAL_DEBTS.md#td-58).
+    [TD-58](RISKS_AND_TECHNICAL_DEBTS.md#td-58)) now go through the
+    database. On a SQLite file (deprecated) there is one process, so
+    the principle holds trivially. <!-- 1.3: check after integration -->
 
 ## Specification versions
 
@@ -200,6 +201,12 @@ host with the issuer (8070 public, 8071 internal) and its bundles folder,
 and the offline machine that builds and signs the bundles.
 
 ![Deployment: a participant and the dataspace authority](diagrams/deployment.drawio.svg)
+
+The C2, C3 and deployment diagrams still draw each image's database as
+a SQLite file on `/data`. From 1.3 it is a PostgreSQL database outside
+the containers, shared by the replicas of an image
+([Storage](#storage)); the diagrams are redrawn in 1.3.
+<!-- 1.3: check after integration -->
 
 Three dynamic diagrams, as sequences with numbered messages. Joining a
 dataspace: the authority registers the participant's DID, the identity
@@ -409,14 +416,14 @@ One mono repo, one version. Each component is a **module** of the mono
 repo (a crate in the Cargo workspace) and can ship as its **own image**.
 
 **The split is decided in [ADR 0003](adr/0003-component-split.md):**
-three images, split by who runs them and which keys they hold. Today each
-image keeps its state in its own SQLite file; PostgreSQL, an external
-dependency and not a Portitor image, comes later behind the same store
-ports.
+three images, split by who runs them and which keys they hold. Each
+image keeps its state in its own PostgreSQL database, an external
+dependency and not a Portitor image, or, deprecated, in a SQLite file
+([Storage](#storage)).
 
 | # | Component (image) | Role | Mandatory? | Protocols |
 |---|---|---|---|---|
-| 1 | Database: one SQLite file per image today; PostgreSQL (external, not built by Portitor) later | State of negotiations, transfers, credentials | Mandatory | none |
+| 1 | Database: one PostgreSQL database per image (external, not built by Portitor), shared by its replicas; or one SQLite file per image, one process, deprecated since 1.3 | State of negotiations, transfers, credentials | Mandatory | none |
 | 2 | `portitor-identity` | Holds the participant's DID, keys and credentials; asks issuers for credentials; answers presentation queries. Optionally it publishes the X.509 chain of its key and gets its Gaia-X compliance credential from a Gaia-X compliance service ([ADR 0021](adr/0021-gaia-x-onboarding.md)) | Mandatory for each participant, unless an external DCP wallet is used. Simpl-Open does not use DCP between participants; how Portitor would join a Simpl-Open data space is in [ADR 0017](adr/0017-simpl-open.md) | DCP (credential service) |
 | 3 | `portitor-connector` | Control plane: catalog (datasets harvested into a read copy), contract negotiation, transfer; verifies DCP presentations, including Gaia-X compliance credentials ([ADR 0022](adr/0022-gaia-x-compliance-in-policies.md)); checks datasets and DSP messages against the authority's SHACL shapes. The data plane is its own crate, `portitor-dataplane`, linked into the connector ([below](#data-plane-inside-the-connector-or-separate)) | Mandatory | DSP, DCP (verifier) |
 | 4 | `portitor-issuer` ([ADR 0018](adr/0018-issuer-component.md)) | Issues and revokes credentials (for example membership) to the participants the authority registered; publishes their status lists. It also serves the signed schema and vocabulary bundle, which `portitor-issuer bundle build` signs offline ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)) | Optional: one per dataspace, run by the dataspace authority, never on a participant's host | DCP (issuance) |
@@ -425,8 +432,8 @@ ports.
 
 Each release ships three images, built from one `Dockerfile` (one build
 target per image) and released, signed and attested together
-([RELEASING.md](RELEASING.md)). Until the PostgreSQL adapter exists, each
-image keeps its state in its own SQLite file under `/data`.
+([RELEASING.md](RELEASING.md)). Each image keeps its state in its own
+database ([Storage](#storage)); the drawing shows the SQLite files.
 
 ```
  one participant runs both:
@@ -486,8 +493,7 @@ image keeps its state in its own SQLite file under `/data`.
 The three binaries are described in the table above. What the table
 does not say:
 
-- `portitor-connector` also holds the management API and the SQLite
-  store. For datasets and the bundle see
+- `portitor-connector` also holds the management API and its stores. For datasets and the bundle see
   [Datasets and shapes](#datasets-and-shapes).
 - `portitor-identity` asks issuers for credentials through the port
   `IssuerClient` (`issuance.rs`, ADR 0018). The X.509 chain of its key
@@ -499,7 +505,8 @@ does not say:
   `GET /bundles/{version}/{path}` and lists the bundle key in its DID
   document.
 - `portitor-runtime`: library of adapters the binaries share, so they are
-  not copied.
+  not copied. Among them the database layer
+  (`database.rs`, `database/`; [Storage](#storage)).
 - `portitor-dataplane` (1.2): the built-in data plane, linked into the
   connector: HTTP pull, the push sender, object storage, running-flow
   cuts and the audit line. The connector talks to it through the Data
@@ -573,6 +580,50 @@ start the connector resolves its own DID document and checks that its STS
 signs for it. Tests use fake ports; the `tck` build maps the DSP TCK's
 fixed header to the TCK participant.
 
+### Storage
+
+Each image keeps its state in one database, behind its store ports
+([ADR 0004](adr/0004-hexagonal-architecture.md)). The database layer
+is in `portitor-runtime` (`src/database.rs` and `src/database/`;
+[ADR 0029](adr/0029-several-replicas.md)):
+
+- **Two databases.** PostgreSQL, shared by every replica of the
+  image, one database per image. Or a SQLite file, one process per
+  file, deprecated since 1.3 and removed in 2.0. The setting
+  (`PORTITOR_DATABASE_URL` or `PORTITOR_DB_FILE`) chooses
+  ([DEPLOYING, Database](DEPLOYING.md#database)).
+- **One SQL text.** A store writes each statement once, with `$1`,
+  `$2` placeholders, which the layer rewrites for SQLite. Values go in
+  and come out as `Value` (text, whole number, bytes, null). Only the
+  schema differs: each image has a migration list per database. The
+  PostgreSQL list starts with the 1.3 schema as one baseline, and a
+  test keeps the two schemas equal.
+- **Transactions.** A write of several statements is one transaction.
+  On PostgreSQL it runs at the `SERIALIZABLE` level; when PostgreSQL
+  answers that two transactions collided (SQLSTATE `40001` or
+  `40P01`), it runs again, up to 10 times. So a store sees "one writer
+  at a time", as it did with SQLite's single connection, and the
+  compare-and-update writes of
+  [ADR 0007](adr/0007-outbox-and-proof-of-delivery.md) keep their
+  meaning.
+- **Synchronous ports.** A store call waits on the calling thread.
+  On PostgreSQL, a database thread of its own drives the connections
+  with `tokio-postgres`
+  ([TD-40](RISKS_AND_TECHNICAL_DEBTS.md#td-40)). TLS, unless the
+  operator turns it off, always checks the server's certificate and
+  host name.
+- **Migrations** run at start, forward only, in one transaction under
+  a PostgreSQL advisory lock: replicas that start together migrate
+  once. The table `portitor_schema` names the image that owns the
+  database and its schema version; another image refuses it.
+- **Coordination.** Processes coordinate only through the database:
+  compare-and-update writes, rows written once
+  (`INSERT ... ON CONFLICT DO NOTHING`, for used token ids), and leases
+  of 30 seconds on work that runs (outbox messages, pushes, uploads,
+  scheduled jobs, deliveries, a transfer's data plane step). What 1.3
+  changed, item by item, is in ADR 0029, decision 6.
+<!-- 1.3: check after integration -->
+
 ### Gaia-X
 
 Gaia-X does not use DCP, so the two Gaia-X parts sit next to the DCP
@@ -620,13 +671,15 @@ adapters (ADR 0004; C4 diagrams above):
   entry, read with the DSP context only (as the catalog serves it), is
   validated against the shapes for its `dct:accessRights` value.
 - `DatasetStore` (`harvest.rs`): the read copy, the jobs and their
-  errors, in the connector's SQLite file (`store/harvest.rs`). A run
+  errors, in the connector's database (`store/harvest.rs`). A run
   commits in one transaction. `DatasetCopy` (`harvest/copy.rs`) is the copy
   in memory that the DSP code (`CatalogDatasets`) and `SignalingDataFlows`
   (`UpstreamSources`, `data_flows.rs`) read; it is replaced as a whole
   after a run that changed it. Since 1.2 the data plane does not read
   it: each start message names the dataset's source, and the flow keeps
-  it until it ends.
+  it until it ends. From 1.3 the catalog and the datasets the DSP code
+  needs are read from the database on each request, so every replica
+  answers from the same copy (ADR 0029, D4). <!-- 1.3: check after integration -->
 - `BundleSource` (`portitor-bundle`, `source.rs`): the authority's bundles. It names
   the newest version (`latest.json`) and gives one version, verified.
   `UrlSource` downloads over HTTPS; `FolderSource` reads a local folder.
@@ -675,7 +728,7 @@ strings and holder binding, and, if used, Gaia-X compliance and the
 dataset metadata bundle
 ([DEPLOYING.md](DEPLOYING.md#what-the-dataspace-decides-first)). Then:
 
-1. Issuer (`portitor-issuer`): its own volume, key and `did:web`
+1. Issuer (`portitor-issuer`): its own database, key and `did:web`
    document; its credential definitions; then register each participant
    (DID and claims) through its management API.
    If the dataspace checks dataset metadata: build and sign the
@@ -686,7 +739,8 @@ dataset metadata bundle
 
 Then for each participant:
 
-2. Storage: a volume for each image's SQLite file (PostgreSQL later).
+2. Storage: a PostgreSQL database and user for each image
+   ([DEPLOYING, Database](DEPLOYING.md#database)).
 3. Identity (`portitor-identity`): publish the `did:web` document over
    HTTPS, then ask the issuer for a membership credential (DCP issuance).
    For Gaia-X: get a certificate for the identity key and the
