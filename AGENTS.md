@@ -104,6 +104,13 @@ cargo vet --locked
   route or an environment variable listed in `docs/STABILITY.md`. A new
   one gets a line there in the same pull request. The
   `frozen_interface` tests of the three binaries check both.
+- **Several replicas** (ARCHITECTURE principle 14): for every change,
+  ask "does this still hold with two containers on one database?".
+  Never make correctness depend on a lock in one process, a copy in
+  memory, or a recovery that runs only at start. Coordinate through the
+  database (compare-and-swap, leases that expire); a busy entity
+  answers its caller and does not wait. A cache in one process may only
+  make things faster.
 - **Telemetry** ([ADR 0023](docs/adr/0023-observability.md)):
   OpenTelemetry code goes only in `crates/portitor-runtime/src/telemetry*`.
   A new metric is a function in `telemetry/metrics.rs` with fixed

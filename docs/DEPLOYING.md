@@ -144,7 +144,8 @@ done
 
 - **One container per database file.** Never run two replicas on the
   same `/data` volume. Several replicas need the PostgreSQL adapter
-  (planned, ADR 0006).
+  (planned for 1.3, ADR 0006,
+  [TD-08](RISKS_AND_TECHNICAL_DEBTS.md#td-08)).
 - Each image runs as user `65532`, has no shell and holds only the
   binary, the CA bundle and `/data`. Only `/data` needs to be writable:
   give it a persistent volume. Files you mount (keys, secrets, the

@@ -88,7 +88,8 @@ dataspace participants over HTTPS.
   TLS-terminating proxy, with the management ports on a private network.
 - Multi-instance safety: negotiations are kept in one SQLite file per
   process (ADR 0006); several replicas need the PostgreSQL adapter
-  *(planned)*.
+  *(planned for 1.3,
+  [TD-08](RISKS_AND_TECHNICAL_DEBTS.md#td-08))*.
 - Offers hidden by credentials: the catalog shows every offer to every
   caller with a trusted membership credential (DCP, ADR 0016); credential
   constraints (ADR 0019) are checked at negotiation and transfer only.
@@ -270,7 +271,7 @@ freeze.
 | F-05 | 4 | The STS (`/sts/token`) is served on the identity's public port; keeping it internal depends on the proxy's routing (DEPLOYING). The secret is long and compared in constant time, so guessing is not practical | low | A separate listen address for the STS, or a check in the deployment tests that the proxy does not route it | [R-42](RISKS_AND_TECHNICAL_DEBTS.md#r-42) |
 | F-06 | 1 | The identity's presentation API resolves the caller's DID before it checks `aud` and the access token that only our STS signs (`portitor-runtime/src/caller.rs`, `Callers::Anyone`), so anyone can make it fetch a `did.json` from a host of their choice | low | Check `aud` and the access token's signature before resolving | [R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17) |
 | F-07 | 1 | `neq` and `isNoneOf` hold if one credential of the type has another value (ADR 0019), and the holder chooses what it presents, so they cannot exclude a holder that has a second credential of that type | low | Say in ADR 0019 and DEPLOYING that negative operators are not deny lists | [R-43](RISKS_AND_TECHNICAL_DEBTS.md#r-43) |
-| F-08 | 1, 5 | `PORTITOR_TRUSTED_ISSUERS` is one list for every credential type (ADR 0019): any trusted issuer may issue a `MembershipCredential`. EDC limits each trusted issuer to its `supportedtypes` | low (one issuer today); grows with several data spaces and with the HDAB issuer of 1.4 | Part of [ADR 0024](adr/0024-several-data-spaces.md) (several data spaces) | [TD-03](RISKS_AND_TECHNICAL_DEBTS.md#td-03), [R-48](RISKS_AND_TECHNICAL_DEBTS.md#r-48) |
+| F-08 | 1, 5 | `PORTITOR_TRUSTED_ISSUERS` is one list for every credential type (ADR 0019): any trusted issuer may issue a `MembershipCredential`. EDC limits each trusted issuer to its `supportedtypes` | low (one issuer today); grows with several data spaces and with the HDAB issuer of 1.5 | Part of [ADR 0024](adr/0024-several-data-spaces.md) (several data spaces) | [TD-03](RISKS_AND_TECHNICAL_DEBTS.md#td-03), [R-48](RISKS_AND_TECHNICAL_DEBTS.md#r-48) |
 | F-09 | 1 | The issuer sends deliveries one after the other, up to 10 s each; a registered holder whose credential service hangs delays every other holder (bounded by `PORTITOR_ISSUER_MAX_ACTIVE_PER_HOLDER` and the retry waits) | low | Send to different holders side by side, a few at a time | [R-44](RISKS_AND_TECHNICAL_DEBTS.md#r-44) |
 | F-10 | 1, 3 | No limit per partner: one authenticated partner can use the 256 request slots, and downloads, once started, are not limited | low | Document rate limits per client at the reverse proxy in DEPLOYING; a limit in Portitor only if measured | [R-45](RISKS_AND_TECHNICAL_DEBTS.md#r-45) |
 

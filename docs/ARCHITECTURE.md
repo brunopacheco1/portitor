@@ -80,6 +80,24 @@ judged against it.
 13. **Simple over clever.** Prefer the standard library and a few
     well-maintained dependencies; each new dependency is justified in its
     pull request and passes the licence allow-list.
+14. **Asynchronous, with stateless APIs; coordination in the database.**
+    Correctness never depends on state held in one process: no lock in
+    one process, no copy in memory that must agree with another, no
+    recovery that runs only at start. So several containers can serve
+    one participant on one shared database. Processes coordinate through
+    the database: compare-and-swap writes and leases that expire, as
+    Eclipse EDC does with its lease columns and `nextNotLeased`. A busy
+    entity answers its caller and does not block it (DSP: HTTP 503 with
+    an error body, which EDC retries; a 4xx ends EDC's process). A cache
+    in one process is fine only to go faster: it never changes an
+    answer (maintainer, 2026-11-26). *Check:* a test runs two processes
+    on one database. Not met in 1.2: until
+    [1.3](ROADMAP.md#13-several-replicas-and-postgresql), each image
+    runs one replica per SQLite file (principle 8,
+    [TD-08](RISKS_AND_TECHNICAL_DEBTS.md#td-08)); the gaps are
+    [TD-09](RISKS_AND_TECHNICAL_DEBTS.md#td-09) and
+    [TD-50](RISKS_AND_TECHNICAL_DEBTS.md#td-50) to
+    [TD-58](RISKS_AND_TECHNICAL_DEBTS.md#td-58).
 
 ## Specification versions
 

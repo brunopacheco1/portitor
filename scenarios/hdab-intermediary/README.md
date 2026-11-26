@@ -103,7 +103,7 @@ In:
 
 Out, on purpose:
 
-- A data permit: none exists before 1.3, so any data user may take the
+- A data permit: none exists before 1.4, so any data user may take the
   HDAB's offer (step 5).
 - A secure processing environment (EHDS Art. 73): a fixed pipeline
   stands in.
@@ -112,7 +112,7 @@ Out, on purpose:
   source.
 - Push for the HDAB: its pipeline pulls, because it keeps nothing.
 - A link between the HDAB's agreement with Lux Biobank and its
-  agreements with data users (1.4, R-39).
+  agreements with data users (1.5, R-39).
 
 ## Components tested, and why
 
@@ -202,7 +202,7 @@ prints what it checks and stops at the first failure.
    file. A second transfer pulls again. Schuman also takes the pilot
    offer and transfers once.
 5. **A known gap.** The lab is a data user too, so the HDAB agrees with
-   it as well. There is no data permit to require until 1.3.
+   it as well. There is no data permit to require until 1.4.
 6. **Refusals.** Once the pilot offer has ended, a new transfer under it
    is refused. Then Digital Lux Trust revokes the HDAB's
    `MembershipCredential`, and the HDAB is out of the data space. Lux
@@ -240,13 +240,13 @@ questions. Here is what rc.1 shows.
 | Can the same data be reached through several channels? | Yes. One dataset at Lux Biobank with two offers gives two agreements: the lab's (step 1) and the HDAB's (step 2). Schuman reaches the same data only as counts, through the HDAB (step 4). |
 | Does the HDAB negotiate with Lux Biobank for every new query? | No. One agreement covers every pull. Each pull is a new transfer, and Lux Biobank checks the HDAB's credentials again at each one (steps 4 and 6). rc.1 sends no parameters with a fetch, so a different query needs its own dataset and offer at the HDAB. |
 | Does the HDAB negotiate with Lux Biobank for every new data user? | No. Each data user agrees with the HDAB only (steps 4 and 5). Nothing ties those agreements to the HDAB's agreement with Lux Biobank ([R-39](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#r-39)). |
-| Can the HDAB's policy be less strict, and what can never be wider? | The policies differ: Lux Biobank asks for an access body, the HDAB for any data user. The HDAB's end date (2027-12-31) is no later than its own agreement's, but only because it was written so by hand. Nothing checks it. Purpose cannot be stated until 1.3. Which users may take the counts cannot be limited either (step 5). |
+| Can the HDAB's policy be less strict, and what can never be wider? | The policies differ: Lux Biobank asks for an access body, the HDAB for any data user. The HDAB's end date (2027-12-31) is no later than its own agreement's, but only because it was written so by hand. Nothing checks it. Purpose cannot be stated until 1.4. Which users may take the counts cannot be limited either (step 5). |
 
 ## Findings
 
-- **No data permit** (1.3): any member with `role` = `data-user` can take
+- **No data permit** (1.4): any member with `role` = `data-user` can take
   the HDAB's offer, the lab too (step 5).
-- **No link between agreements** (1.4,
+- **No link between agreements** (1.5,
   [R-39](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#r-39)): the HDAB's
   offer is kept inside its own agreement by hand.
 - **Pull only** (up to 1.0, [TD-10](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-10),

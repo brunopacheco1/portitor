@@ -80,8 +80,8 @@ Out, on purpose:
   The EHDS would not allow that for these data (Art. 73), so this shows
   the checks only.
 - Sending the data where the permit says: that needs push transfers and
-  a destination check (1.1, 1.3).
-- An ODRL `purpose` constraint (1.3): the purpose is checked as a claim
+  a destination check (1.1, 1.4).
+- An ODRL `purpose` constraint (1.4): the purpose is checked as a claim
   of the permit.
 
 ## Components tested, and why
@@ -149,15 +149,15 @@ those of hdab-intermediary, so run one at a time.
 
 - **An issuer trusted for permits can issue memberships too**
   ([R-48](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#r-48), fix planned
-  for 1.3): trusted issuers are one list for every credential type
+  for 1.4): trusted issuers are one list for every credential type
   (step 5). The list is configuration, so an issuer also stays trusted
   when its owner leaves the data space.
 - **One revoked permit blocks all the others**
   ([TD-20](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-20), fix planned
-  for 1.3) until the data user deletes it, and the data user is told no reason (step 4).
+  for 1.4) until the data user deletes it, and the data user is told no reason (step 4).
 - **One set of claims per participant at the issuer**
   ([TD-46](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-46), fix planned
-  for 1.3): a second
+  for 1.4): a second
   permit needs the registration made again (step 3).
 - **One offer per permit.** Lux Biobank must add an offer, by editing
   its datasets file, for each permit the HDAB grants; here both are
