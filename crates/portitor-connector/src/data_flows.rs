@@ -425,6 +425,8 @@ mod tests {
             data_address: None,
             pending: None,
             flow_step: None,
+            state_before_step: None,
+            lease: None,
             version: 0,
         }
     }

@@ -86,7 +86,21 @@ fn transfer_failed(failure: &TransferFailure) -> Response {
         TransferFailure::NotFound(_) => problem(StatusCode::NOT_FOUND, "no such transfer"),
         TransferFailure::Store(e) => internal_error("transfer store", e),
         TransferFailure::DataPlane(e) => internal_error("data plane", e),
+        TransferFailure::Busy(_) => busy(),
     }
+}
+
+/// HTTP 503 with `Retry-After: 1`: another call is changing the transfer
+/// now (it holds the transfer's lease, TD-48); nothing was written.
+fn busy() -> Response {
+    let mut response = problem(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the transfer is being changed; retry",
+    );
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, header::HeaderValue::from_static("1"));
+    response
 }
 
 /// Start a negotiation as consumer.

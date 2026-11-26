@@ -25,6 +25,9 @@ use super::{FORBIDDEN, next_after, problem, state_name, transfer_failed};
 use crate::Negotiator;
 use portitor_runtime::api_key::Problem;
 
+/// The 503 answer of a route that changes a transfer as provider.
+const BUSY: &str = "Another call is changing the transfer now (from 1.2: it holds the transfer's lease in the database while its data plane step runs); nothing was written. Try again after Retry-After";
+
 /// A transfer this connector runs as provider.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -152,7 +155,8 @@ pub(super) async fn one(State(negotiator): State<Negotiator>, Path(pid): Path<St
 /// cut. The DSP termination is sent to the consumer in the background;
 /// the state becomes `TERMINATED` once the consumer acknowledges it, or
 /// when it cannot be reached. Asked again while the termination is on
-/// its way, it answers the same and sends nothing more.
+/// its way, it answers the same and sends nothing more. Answered 503
+/// while another call is changing the transfer (added in 1.2).
 #[utoipa::path(
     post,
     path = "/v1/provided-transfers/{providerPid}/termination",
@@ -163,6 +167,8 @@ pub(super) async fn one(State(negotiator): State<Negotiator>, Path(pid): Path<St
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
         (status = 403, description = FORBIDDEN, body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "Unknown transfer", body = Problem, content_type = "application/problem+json"),
+        (status = 503, description = BUSY, body = Problem, content_type = "application/problem+json",
+            headers(("Retry-After" = u32, description = "Seconds to wait before trying again: 1"))),
     ),
     security(("api_key" = [])),
     tag = "Provided transfers"

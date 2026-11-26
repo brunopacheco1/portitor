@@ -19,6 +19,10 @@
 //!    started on the other side; a termination may stay unanswered (DSP
 //!    allows it); anything else ends the process.
 //!
+//! Recording that a message arrived may find the provider's transfer
+//! leased by another call that changes it (TD-48): the recording is tried
+//! again after a short wait ([`retry_while_busy`]), not the sending.
+//!
 //! A panic (a bug) while a message is sent or recorded does not lose the
 //! message: the same message is sent again after a pause
 //! ([`send_until_counter_party_acts`]). That is safe for the reason a
@@ -30,6 +34,7 @@ use std::time::Duration;
 
 use portitor_dsp::guard::{Direction, MessageGuard};
 use portitor_dsp::policy::CredentialTypes;
+use portitor_dsp::transfer::provider::LEASE_SECONDS;
 use portitor_runtime::panics::{Panicked, catch_panic, next_pause};
 use portitor_runtime::telemetry::metrics;
 use serde_json::Value;
@@ -123,8 +128,9 @@ impl<'a> Message<'a> {
 pub(crate) trait Outbox: Send + Sync + 'static {
     /// A saved message.
     type Out: Send + Sync + 'static;
-    /// Why the store could not record it.
-    type Failure: std::fmt::Debug;
+    /// Why the store could not record it. `Send`: it is kept across the
+    /// wait of [`retry_while_busy`], which may go on on another thread.
+    type Failure: std::fmt::Debug + Send;
 
     /// How to send.
     fn link(&self) -> &Link;
@@ -188,6 +194,49 @@ pub(crate) trait Outbox: Send + Sync + 'static {
     /// not look at the message (`_out`).
     fn settled_without_delivery(&self, _out: &Self::Out) -> bool {
         false
+    }
+
+    /// Whether `failure` only says that another call is changing the
+    /// process now, so recording again a moment later may work. Only the
+    /// provider's transfer is leased (TD-48), so the default is `false`.
+    fn is_busy(_failure: &Self::Failure) -> bool {
+        false
+    }
+}
+
+/// The longest [`retry_while_busy`] waits in all: a little more than one
+/// lease, so that a lease left by a process that stopped has ended by the
+/// last try, and that try takes its step over (`portitor-dsp`,
+/// `transfer::provider::flow_steps`).
+pub(crate) const BUSY_WAIT_LIMIT: Duration = Duration::from_secs(LEASE_SECONDS + 5);
+
+/// Calls `call` again while it fails with a failure that `is_busy` says
+/// is only "busy" (another call holds the transfer's lease, TD-48),
+/// waiting in between: 100 ms, then twice as long each time, at most 5
+/// seconds, until [`BUSY_WAIT_LIMIT`] has passed. Returns the last answer.
+/// For our own calls in the background (the outbox, the end of a push);
+/// a partner's request is answered 503 at once instead.
+///
+/// The wait is `tokio::time::sleep`: it frees the thread for other tasks
+/// (a `std::thread::sleep` would block it).
+pub(crate) async fn retry_while_busy<T, F>(
+    is_busy: impl Fn(&F) -> bool,
+    mut call: impl FnMut() -> Result<T, F>,
+) -> Result<T, F> {
+    let mut wait = Duration::from_millis(100);
+    let mut waited = Duration::ZERO;
+    loop {
+        let answer = call();
+        let try_again = match &answer {
+            Err(failure) => is_busy(failure) && waited < BUSY_WAIT_LIMIT,
+            Ok(_) => false,
+        };
+        if !try_again {
+            return answer;
+        }
+        tokio::time::sleep(wait).await;
+        waited += wait;
+        wait = wait.saturating_mul(2).min(Duration::from_secs(5));
     }
 }
 
@@ -286,12 +335,14 @@ async fn send_and_record<O: Outbox>(outbox: &O, out: &O::Out) -> Option<O::Out> 
     let reached = |state| O::reached(out, state);
     let outcome = attempt(outbox.link(), outbox.kind(), &msg, &scopes, reached).await;
     let undelivered = outcome.undelivered();
-    let recorded = match outcome {
-        Outcome::Acknowledged(answer) => outbox.delivered(out, Some(&answer)),
+    let record = || match &outcome {
+        Outcome::Acknowledged(answer) => outbox.delivered(out, Some(answer)),
         Outcome::ArrivedBefore | Outcome::TerminationUnanswered => outbox.delivered(out, None),
         Outcome::NotStarted => outbox.not_started(out).map(|()| None),
         Outcome::Unreachable => outbox.abort(out),
     };
+    // only the recording is tried again, never the sending
+    let recorded = retry_while_busy(O::is_busy, record).await;
     match recorded {
         Ok(next) => {
             if undelivered {
@@ -1127,5 +1178,52 @@ mod tests {
         assert_eq!(recordings, 3);
         // pauses of 5 and 10 seconds
         assert_eq!(begun.elapsed(), Duration::from_secs(15));
+    }
+
+    /// A call refused as busy (another call holds the transfer's lease,
+    /// TD-48) is made again after 100 ms, then twice as long each time,
+    /// and its first other answer is the one returned.
+    #[tokio::test(start_paused = true)]
+    async fn a_busy_call_is_made_again_until_it_is_not_busy() {
+        let begun = tokio::time::Instant::now();
+        let mut calls = 0;
+        let answer: Result<&str, &str> = retry_while_busy(
+            |failure: &&str| *failure == "busy",
+            || {
+                calls += 1;
+                if calls < 4 { Err("busy") } else { Ok("done") }
+            },
+        )
+        .await;
+        assert_eq!(answer, Ok("done"));
+        assert_eq!(calls, 4);
+        // pauses of 100, 200 and 400 ms
+        assert_eq!(begun.elapsed(), Duration::from_millis(700));
+
+        // another failure is returned at once
+        let mut calls = 0;
+        let answer: Result<(), &str> = retry_while_busy(
+            |failure: &&str| *failure == "busy",
+            || {
+                calls += 1;
+                Err("store down")
+            },
+        )
+        .await;
+        assert_eq!((answer, calls), (Err("store down"), 1));
+    }
+
+    /// A call that stays busy is given up once a little more than one
+    /// lease has passed: by then a lease left by a process that stopped
+    /// has ended, and the last try took its step over.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_that_stays_busy_is_given_up_after_one_lease() {
+        let begun = tokio::time::Instant::now();
+        let answer: Result<(), &str> =
+            retry_while_busy(|failure: &&str| *failure == "busy", || Err("busy")).await;
+        assert_eq!(answer, Err("busy"));
+        assert!(begun.elapsed() >= BUSY_WAIT_LIMIT);
+        assert!(begun.elapsed() < BUSY_WAIT_LIMIT + Duration::from_secs(6));
+        assert!(BUSY_WAIT_LIMIT > Duration::from_secs(LEASE_SECONDS));
     }
 }

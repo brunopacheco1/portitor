@@ -214,6 +214,18 @@ const MIGRATIONS: &[&str] = &[
     // after that write and then emptied (ADR 0028, decision 6; TD-48;
     // `portitor-dsp`, `transfer::provider::flow_steps`). NULL: none waits
     "ALTER TABLE transfer ADD COLUMN flow_step TEXT",
+    // 1.2: the lease on a provider's transfer while its data plane step
+    // runs, and its state before the write that recorded the step, so any
+    // process that shares this file can run the step and report the
+    // change (TD-48; `portitor-dsp`, `transfer::provider::flow_steps`).
+    // `lease_holder`: the id of the process that holds it; `lease_until`:
+    // when it ends, in seconds since 1970 (as `expires_at`). NULL: none.
+    // The partial index serves the sweep, which looks for recorded steps
+    // every few seconds (`TransferStore::recorded_steps`)
+    "ALTER TABLE transfer ADD COLUMN state_before_step TEXT;
+     ALTER TABLE transfer ADD COLUMN lease_holder TEXT;
+     ALTER TABLE transfer ADD COLUMN lease_until INTEGER;
+     CREATE INDEX transfer_recorded_step ON transfer (provider_pid) WHERE flow_step IS NOT NULL",
 ];
 
 /// Adapter: negotiations in a `SQLite` file.
@@ -1151,6 +1163,63 @@ mod tests {
             (alone.agreement_id.as_str(), alone.counter_party_id.as_str()),
             ("", "")
         );
+    }
+
+    /// A file of 1.2 before the lease (16 migrations) with a transfer
+    /// whose data plane step is recorded, and one of 1.1 (13 migrations)
+    /// with a transfer: migration 17 adds the lease, which both read back
+    /// as none, so a recorded step counts as left over and is taken over
+    /// at once (TD-48). The sweep's query uses its partial index.
+    #[test]
+    fn a_recorded_step_from_before_the_lease_reads_as_left_over() {
+        use portitor_dsp::transfer::provider::{FlowStep, TransferStore};
+
+        const MIGRATIONS_BEFORE_THE_LEASE: usize = 16;
+        for (applied, flow_step) in [
+            (MIGRATIONS_OF_1_1, None),
+            (MIGRATIONS_BEFORE_THE_LEASE, Some("suspend")),
+        ] {
+            let mut conn = Connection::open_in_memory().unwrap();
+            portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..applied]).unwrap();
+            conn.execute(
+                "INSERT INTO transfer (provider_pid, consumer_pid, state, callback_address, \
+                 counter_party, agreement_id, dataset_id, format, pending, version) \
+                 VALUES ('urn:uuid:p', 'urn:uuid:c', 'SUSPENDED', 'https://c.example/cb', \
+                 'did:web:c.example', 'urn:uuid:a', 'd', 'HttpData-PULL', NULL, 3)",
+                [],
+            )
+            .unwrap();
+            if let Some(step) = flow_step {
+                conn.execute("UPDATE transfer SET flow_step = ?1", [step])
+                    .unwrap();
+            }
+            let store = setup(conn).unwrap();
+            let file: &dyn TransferStore = &store;
+            let transfer = file.get("urn:uuid:p").unwrap().unwrap();
+            assert_eq!((transfer.lease, transfer.state_before_step), (None, None));
+            assert_eq!(transfer.version, 3);
+            let expected_step = flow_step.and_then(FlowStep::from_name);
+            assert_eq!(transfer.flow_step, expected_step);
+            assert_eq!(
+                file.recorded_steps().unwrap().len(),
+                usize::from(flow_step.is_some())
+            );
+        }
+
+        let store = setup(Connection::open_in_memory().unwrap()).unwrap();
+        let plan: Vec<String> = store
+            .conn()
+            .prepare(
+                "EXPLAIN QUERY PLAN SELECT provider_pid FROM transfer
+                   WHERE flow_step IS NOT NULL ORDER BY provider_pid",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(3))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let index = "INDEX transfer_recorded_step";
+        assert!(plan.iter().any(|step| step.contains(index)), "{plan:?}");
     }
 }
 

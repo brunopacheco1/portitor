@@ -114,6 +114,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Ok(count) => tracing::info!(count, "sending pending negotiation messages again"),
         Err(failure) => return Err(format!("cannot read pending messages: {failure:?}").into()),
     }
+    // data plane steps left over by a process that stopped (TD-48); runs
+    // until the process stops, as the harvest schedule does
+    let _sweep = negotiator.schedule_transfer_sweep(portitor_connector::TRANSFER_SWEEP_EVERY);
     let bind = settings::text_from_env("PORTITOR_BIND")
         .unwrap_or_else(|| portitor_connector::DEFAULT_BIND.to_owned());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
@@ -139,6 +142,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         %bind,
         datasets = negotiator.catalog_size(),
         db = %config.db_file.display(),
+        // the lease holder in the database (TD-48): which process this is
+        process = portitor_connector::system::process_id(),
         "portitor-connector listening"
     );
     // the public routes: anyone can call them. The size limit is inside

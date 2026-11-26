@@ -161,6 +161,14 @@ pub const DEFAULT_BIND: &str = "0.0.0.0:8080";
 /// Default lifetime of a data access token: one hour.
 pub const DEFAULT_DATA_TOKEN_SECONDS: u64 = 3_600;
 
+/// How often the binary sweeps the transfers as provider for data plane
+/// steps left over ([`Negotiator::schedule_transfer_sweep`], TD-48). A
+/// third of a lease (`portitor_dsp::transfer::provider::LEASE_SECONDS`,
+/// 30 seconds), so such a step runs at most 40 seconds after its process
+/// stopped. The sweep reads one partial index, almost always empty. Not a
+/// setting: settings are frozen (`docs/STABILITY.md`).
+pub const TRANSFER_SWEEP_EVERY: Duration = Duration::from_secs(10);
+
 /// The largest value of a setting in seconds: one year (365 days).
 /// Larger values are refused, as a time that far ahead can overflow the
 /// clock types (a schedule `Instant`, a token expiry stored in `SQLite`).
@@ -529,6 +537,17 @@ impl Negotiator {
     #[must_use]
     pub fn schedule_harvest(&self, every: Duration) -> Option<tokio::task::JoinHandle<()>> {
         self.harvester.schedule(every)
+    }
+
+    /// Starts the sweep of the transfers as provider, every `every` in the
+    /// background: it runs the data plane steps that a process (this one
+    /// or another one sharing the database) left recorded once their
+    /// lease has ended, and sends the messages that waited for them
+    /// (TD-48). The binary uses [`TRANSFER_SWEEP_EVERY`]. Must be called
+    /// inside the Tokio runtime; aborting the handle stops it.
+    #[must_use]
+    pub fn schedule_transfer_sweep(&self, every: Duration) -> tokio::task::JoinHandle<()> {
+        self.transfers.schedule_sweep(every)
     }
 
     /// The dataset harvester, told by the bundle harvester about its runs

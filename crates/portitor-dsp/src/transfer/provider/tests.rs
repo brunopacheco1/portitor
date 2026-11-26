@@ -85,6 +85,14 @@ impl TransferStore for &Store {
             .cloned()
             .collect())
     }
+    fn recorded_steps(&self) -> Result<Vec<Transfer>, StoreError> {
+        let map = self.0.borrow();
+        Ok(map
+            .values()
+            .filter(|t| t.flow_step.is_some())
+            .cloned()
+            .collect())
+    }
     fn list(&self, after: Option<&str>, limit: usize) -> Result<Vec<Transfer>, StoreError> {
         let map = self.0.borrow();
         let after = after.unwrap_or_default();
@@ -278,16 +286,56 @@ impl CatalogDatasets for Catalog {
     }
 }
 
-#[derive(Default)]
-struct Env(Cell<u32>);
+/// Ids `urn:uuid:1`, `urn:uuid:2`, and so on (`ids`: the last one
+/// given), a clock that tests move (`seconds`), and the process id that
+/// leases are taken with (`process`).
+struct Env {
+    ids: Cell<u32>,
+    seconds: Cell<u64>,
+    process: &'static str,
+}
+
+/// The time every test starts at, in seconds.
+const START_SECONDS: u64 = 1_000_000;
+
+impl Env {
+    /// The environment of another process that shares the store.
+    fn of_process(process: &'static str) -> Self {
+        Self {
+            process,
+            ..Self::default()
+        }
+    }
+
+    /// Moves the clock on by `seconds`.
+    fn wait(&self, seconds: u64) {
+        self.seconds.set(self.seconds.get() + seconds);
+    }
+}
+
+impl Default for Env {
+    fn default() -> Self {
+        Self {
+            ids: Cell::new(0),
+            seconds: Cell::new(START_SECONDS),
+            process: "process-a",
+        }
+    }
+}
 
 impl Environment for Env {
     fn new_id(&self) -> String {
-        self.0.set(self.0.get() + 1);
-        format!("urn:uuid:{}", self.0.get())
+        self.ids.set(self.ids.get() + 1);
+        format!("urn:uuid:{}", self.ids.get())
     }
     fn now(&self) -> String {
         "2026-11-13T12:00:00Z".to_owned()
+    }
+    fn now_seconds(&self) -> u64 {
+        self.seconds.get()
+    }
+    fn process_id(&self) -> &str {
+        self.process
     }
 }
 
@@ -330,7 +378,7 @@ const IDS: (&str, &str) = (PID, "urn:uuid:c");
 
 fn reason(failure: &Failure) -> String {
     match failure {
-        Failure::BadRequest(e) | Failure::NotFound(e) => format!("{e:?}"),
+        Failure::BadRequest(e) | Failure::NotFound(e) | Failure::Busy(e) => format!("{e:?}"),
         other => format!("{other:?}"),
     }
 }
@@ -558,6 +606,9 @@ impl TransferStore for &Racing<'_> {
     fn pending(&self) -> Result<Vec<Transfer>, StoreError> {
         self.0.pending()
     }
+    fn recorded_steps(&self) -> Result<Vec<Transfer>, StoreError> {
+        self.0.recorded_steps()
+    }
     fn list(&self, after: Option<&str>, limit: usize) -> Result<Vec<Transfer>, StoreError> {
         self.0.list(after, limit)
     }
@@ -579,7 +630,10 @@ fn two_copies_of_a_request_at_once_give_one_transfer() {
         &flows,
         Always(TransferDecision::Start),
         Catalog,
-        Env(Cell::new(1)),
+        Env {
+            ids: Cell::new(1),
+            ..Env::default()
+        },
     );
     let (again, out) = late.request(&msg, CONSUMER, &none).unwrap();
     assert_eq!(again.provider_pid, first.provider_pid);
@@ -1694,6 +1748,12 @@ fn stopped_before_the_start(store: &Store) {
         data_address: None,
         pending: None,
         flow_step: Some(FlowStep::Start),
+        state_before_step: None,
+        // the process that stopped held it; it has ended
+        lease: Some(Lease {
+            holder: "process-gone".to_owned(),
+            until: START_SECONDS,
+        }),
         version: 1,
     };
     store.0.borrow_mut().insert(PID.to_owned(), saved);
@@ -1874,13 +1934,14 @@ fn a_refused_abort_keeps_the_message_pending() {
     assert_eq!(saved.flow_step, None);
 }
 
-/// A step left recorded by an earlier call (its recording failed) runs
-/// before the next write of its transfer. Here the end of a push recorded
-/// its completion, and then the consumer suspends: the completion reaches
-/// the data plane first, which then refuses the suspension, so the
-/// transfer stays as it was and completes, as in 1.1 (where the data plane
-/// completed the flow before the push's write). The flow and the transfer
-/// never disagree.
+/// A step left recorded by an earlier call (its process stopped, or its
+/// recording failed) runs before the next write of its transfer, once its
+/// lease has ended; until then the write is refused as busy. Here the end
+/// of a push recorded its completion, and then the consumer suspends: the
+/// completion reaches the data plane first, which then refuses the
+/// suspension, so the transfer stays as it was and completes, as in 1.1
+/// (where the data plane completed the flow before the push's write). The
+/// flow and the transfer never disagree.
 #[test]
 fn a_step_left_recorded_runs_before_the_next_write() {
     let (store, flows) = (Store::default(), Flows::default());
@@ -1890,7 +1951,17 @@ fn a_step_left_recorded_runs_before_the_next_write() {
         let saved = all.get_mut(PID).unwrap();
         saved.pending = Some(completion(saved));
         saved.flow_step = Some(FlowStep::Complete);
+        saved.state_before_step = Some(TransferState::Started);
+        saved.lease = Some(Lease {
+            holder: "process-gone".to_owned(),
+            until: START_SECONDS + LEASE_SECONDS,
+        });
     }
+    let busy = s.suspend(PID, IDS, CONSUMER).unwrap_err();
+    assert!(matches!(busy, Failure::Busy(_)), "{busy:?}");
+    assert_eq!(flows.calls().len(), 1, "nothing runs while the lease holds");
+
+    s.env.wait(LEASE_SECONDS);
     let refused = s.suspend(PID, IDS, CONSUMER).unwrap_err();
     assert!(matches!(refused, Failure::DataPlane(_)), "{refused:?}");
     assert_eq!(
@@ -1900,7 +1971,7 @@ fn a_step_left_recorded_runs_before_the_next_write() {
     );
     let saved = store.0.borrow()[PID].clone();
     assert_eq!(saved.state, TransferState::Started);
-    assert_eq!(saved.flow_step, None);
+    assert_eq!((saved.flow_step, saved.lease), (None, None));
     let completion = saved.pending.unwrap();
     assert_eq!(completion.transition, Transition::Complete);
     s.delivered(&completion).unwrap();
@@ -1909,7 +1980,9 @@ fn a_step_left_recorded_runs_before_the_next_write() {
 
 /// A step that ran is recorded as run, if need be at the second try. When
 /// both tries fail, the caller gets a store failure, the step stays
-/// recorded, and it runs again before the next write of the transfer.
+/// recorded with its lease, and it runs again before the next write of
+/// the transfer once the lease has ended; until then that write is
+/// refused as busy.
 #[test]
 fn a_step_that_ran_is_recorded_at_the_second_try_or_runs_again_later() {
     let (store, flows) = (Store::default(), Flows::default());
@@ -1930,11 +2003,11 @@ fn a_step_that_ran_is_recorded_at_the_second_try_or_runs_again_later() {
     let saved = store.0.borrow()[PID].clone();
     assert_eq!(saved.state, TransferState::Suspended, "the write landed");
     assert_eq!(saved.flow_step, Some(FlowStep::Suspend));
-    let restart: TransferStartMessage = serde_json::from_value(json!({
-        "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
-        "@type": "TransferStartMessage", "providerPid": PID, "consumerPid": "urn:uuid:c"
-    }))
-    .unwrap();
+    assert_eq!(saved.lease.unwrap().until, START_SECONDS + LEASE_SECONDS);
+    let restart = start_again_message();
+    let busy = s.start(PID, &restart, CONSUMER).unwrap_err();
+    assert!(matches!(busy, Failure::Busy(_)), "{busy:?}");
+    s.env.wait(LEASE_SECONDS);
     s.start(PID, &restart, CONSUMER).unwrap();
     assert_eq!(
         flows.calls()[1..],
@@ -1975,4 +2048,195 @@ fn a_transfer_that_fails_at_the_restart_does_not_stop_the_others() {
     assert_eq!(found.messages[0].provider_pid, "urn:uuid:2");
     assert_eq!(store.0.borrow()[PID].flow_step, Some(FlowStep::Start));
     assert_eq!(store.0.borrow()["urn:uuid:2"].flow_step, None);
+}
+
+/// The consumer's message that starts transfer [`PID`] again.
+fn start_again_message() -> TransferStartMessage {
+    serde_json::from_value(json!({
+        "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+        "@type": "TransferStartMessage", "providerPid": PID, "consumerPid": "urn:uuid:c"
+    }))
+    .unwrap()
+}
+
+// ---- the lease (TD-48, closed in 1.2): one call at a time through the
+// ---- database, for several processes that share it
+
+/// A data plane that calls `during` while it suspends a flow, then
+/// passes every call on to `flows`: what another process does while this
+/// one runs its step.
+struct CallsDuring<'a> {
+    flows: &'a Flows,
+    during: Box<dyn Fn() + 'a>,
+}
+
+impl DataFlows for &CallsDuring<'_> {
+    fn supports(&self, dataset_id: &str, format: &str) -> bool {
+        self.flows.supports(dataset_id, format)
+    }
+    fn start(&self, t: &Transfer) -> Result<Option<DataAddress>, String> {
+        self.flows.start(t)
+    }
+    fn restart(&self, t: &Transfer) -> Result<Option<DataAddress>, String> {
+        self.flows.restart(t)
+    }
+    fn suspend(&self, pid: &str) -> Result<(), String> {
+        (self.during)();
+        self.flows.suspend(pid)
+    }
+    fn resume(&self, pid: &str, to: Option<&DataAddress>) -> Result<(), String> {
+        self.flows.resume(pid, to)
+    }
+    fn complete(&self, pid: &str) -> Result<(), String> {
+        self.flows.complete(pid)
+    }
+    fn terminate(&self, pid: &str) -> Result<(), String> {
+        self.flows.terminate(pid)
+    }
+}
+
+/// Two processes (two containers) share one store. While process B runs
+/// the step of its write, process A's write of the same transfer is
+/// refused at once as busy (HTTP 503), and the data plane hears nothing
+/// from it. The lease is in the store, with B's id, the state before B's
+/// write and its end; B's next write empties it. Then A's write goes
+/// through.
+#[test]
+fn a_second_process_is_refused_while_the_first_holds_the_lease() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let process_a = started(&store, &flows);
+    let answer_of_a = RefCell::new(None);
+    let lease_seen = RefCell::new(None);
+    let during = CallsDuring {
+        flows: &flows,
+        during: Box::new(|| {
+            let saved = store.0.borrow()[PID].clone();
+            *lease_seen.borrow_mut() = Some((saved.lease, saved.state_before_step));
+            *answer_of_a.borrow_mut() = Some(process_a.terminate(PID, IDS, CONSUMER));
+        }),
+    };
+    let process_b = TransferService::new(
+        &store,
+        Agreed,
+        &during,
+        Always(TransferDecision::Wait),
+        Catalog,
+        Env::of_process("process-b"),
+    );
+
+    process_b.suspend(PID, IDS, CONSUMER).unwrap();
+
+    let refused = answer_of_a.borrow_mut().take().unwrap().unwrap_err();
+    assert!(
+        matches!(&refused, Failure::Busy(e) if e.code.as_deref() == Some("503")),
+        "{refused:?}"
+    );
+    assert!(reason(&refused).contains("retry"), "{refused:?}");
+    let expected_lease = Lease {
+        holder: "process-b".to_owned(),
+        until: START_SECONDS + LEASE_SECONDS,
+    };
+    assert_eq!(
+        lease_seen.borrow_mut().take().unwrap(),
+        (Some(expected_lease), Some(TransferState::Started))
+    );
+    assert_eq!(flows.calls()[1..], ["suspend urn:uuid:1"], "nothing from A");
+    let saved = store.0.borrow()[PID].clone();
+    assert_eq!(saved.state, TransferState::Suspended);
+    assert_eq!(
+        (saved.flow_step, saved.lease, saved.state_before_step),
+        (None, None, None)
+    );
+
+    process_a.terminate(PID, IDS, CONSUMER).unwrap();
+    assert_eq!(state(&store), TransferState::Terminated);
+}
+
+/// A step whose lease has ended (its process stopped) is taken over by
+/// the next call that changes the transfer, in any process: the step runs
+/// once, before that call's own step, and the sweeps that come later find
+/// nothing to run.
+#[test]
+fn an_ended_lease_is_taken_over_and_its_step_runs_once() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let process_a = started(&store, &flows);
+    {
+        let mut all = store.0.borrow_mut();
+        let saved = all.get_mut(PID).unwrap();
+        saved.state = TransferState::Suspended;
+        saved.flow_step = Some(FlowStep::Suspend);
+        saved.state_before_step = Some(TransferState::Started);
+        saved.lease = Some(Lease {
+            holder: "process-gone".to_owned(),
+            until: START_SECONDS,
+        });
+    }
+    let process_b = service(&store, &flows, TransferDecision::Wait);
+    process_b.env.wait(1);
+
+    process_b
+        .start(PID, &start_again_message(), CONSUMER)
+        .unwrap();
+    assert_eq!(
+        flows.calls()[1..],
+        ["suspend urn:uuid:1", "resume urn:uuid:1"],
+        "the step left over first, then the call's own"
+    );
+    assert_eq!(state(&store), TransferState::Started);
+    assert!(process_a.run_steps_left_over().unwrap().messages.is_empty());
+    assert!(process_b.run_steps_left_over().unwrap().messages.is_empty());
+    assert_eq!(flows.calls().len(), 3, "each step ran once");
+}
+
+/// The sweep runs a step left over once its lease has ended, even when no
+/// call comes for the transfer, and returns the message that waited for
+/// it. At the start, a step whose lease still holds is left out: the
+/// process that held it may be another one that is running it.
+#[test]
+fn the_sweep_runs_a_left_over_step_once_its_lease_has_ended() {
+    let (store, flows) = (Store::default(), Flows::default());
+    stopped_before_the_start(&store);
+    store.0.borrow_mut().get_mut(PID).unwrap().lease = Some(Lease {
+        holder: "process-gone".to_owned(),
+        until: START_SECONDS + LEASE_SECONDS,
+    });
+    let s = service(&store, &flows, TransferDecision::Start);
+
+    let at_start = s.pending().unwrap();
+    assert!(at_start.messages.is_empty() && at_start.not_taken_up.is_empty());
+    assert!(s.run_steps_left_over().unwrap().messages.is_empty());
+    assert!(flows.calls().is_empty(), "the lease still holds");
+
+    s.env.wait(LEASE_SECONDS);
+    let swept = s.run_steps_left_over().unwrap();
+    assert_eq!(flows.calls(), ["start urn:uuid:1"]);
+    assert_eq!(swept.messages.len(), 1);
+    assert_eq!(swept.messages[0].transition, Transition::Start);
+    let saved = store.0.borrow()[PID].clone();
+    assert_eq!((saved.flow_step, saved.lease), (None, None));
+
+    assert!(s.run_steps_left_over().unwrap().messages.is_empty());
+    assert_eq!(flows.calls(), ["start urn:uuid:1"]);
+}
+
+/// Two calls that find the same ended lease: only one takes it over (a
+/// compare-and-update); the other is refused as busy and runs nothing.
+#[test]
+fn only_one_call_takes_an_ended_lease_over() {
+    let (store, flows) = (Store::default(), Flows::default());
+    stopped_before_the_start(&store);
+    let s = service(&store, &flows, TransferDecision::Start);
+    let found = store.0.borrow()[PID].clone();
+    // another call takes it over first
+    let mut taken = found.clone();
+    taken.version += 1;
+    taken.lease = Some(Lease {
+        holder: "process-b".to_owned(),
+        until: START_SECONDS + LEASE_SECONDS,
+    });
+    store.0.borrow_mut().insert(PID.to_owned(), taken);
+
+    let found_late = s.take_up(vec![found]);
+    assert!(found_late.messages.is_empty() && found_late.not_taken_up.is_empty());
+    assert!(flows.calls().is_empty());
 }

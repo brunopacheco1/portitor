@@ -62,6 +62,13 @@ pub trait Environment {
     fn new_id(&self) -> String;
     /// The current time as XSD dateTime in UTC.
     fn now(&self) -> String;
+    /// The current time in seconds since 1970-01-01 UTC (Unix time): when
+    /// a lease on a provider's transfer ends (TD-48,
+    /// `transfer::provider::flow_steps`).
+    fn now_seconds(&self) -> u64;
+    /// An id of this process, random and made once when it starts: who
+    /// holds a lease on a provider's transfer (TD-48). Never a host name.
+    fn process_id(&self) -> &str;
 }
 
 /// The transition type of record `R`'s process.

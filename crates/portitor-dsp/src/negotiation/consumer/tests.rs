@@ -78,6 +78,13 @@ impl Environment for Env {
     fn now(&self) -> String {
         "2026-11-12T12:00:00Z".to_owned()
     }
+    fn now_seconds(&self) -> u64 {
+        // 2026-11-12T12:00:00Z, the time above
+        1_794_484_800
+    }
+    fn process_id(&self) -> &'static str {
+        "test-process"
+    }
 }
 
 struct Fixed(ConsumerDecision);

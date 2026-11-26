@@ -21,7 +21,8 @@
 //! The data plane is told after the transfer's write, from what was
 //! written, once (ADR 0028, decision 6): the write records the step, and
 //! the step runs right after it, before our message for that change is
-//! sent. How, and what happens when the data plane refuses: the module
+//! sent. How, what happens when the data plane refuses, and how a
+//! transfer is leased in the database while its step runs: the module
 //! `flow_steps`.
 //!
 //! A push transfer (`HttpData-PUSH`, ADR 0027) carries the consumer's
@@ -29,8 +30,6 @@
 //! transfer ends, and handed to the data plane when the flow starts. The
 //! data plane sends the data; [`TransferService::push_finished`] then
 //! completes or terminates the transfer.
-
-use std::sync::{Arc, Mutex};
 
 use crate::catalog::CatalogDatasets;
 use crate::negotiation::provider::{Negotiation, finalization_proved};
@@ -78,8 +77,30 @@ pub struct Transfer {
     /// The data plane step a write decided and that has not run yet
     /// (`flow_steps`). Our message waits until it has run.
     pub flow_step: Option<FlowStep>,
+    /// The state the transfer had before the write that recorded
+    /// `flow_step`: the connector reports the state change from it once
+    /// the step has run, whichever process runs it. `None` for a new
+    /// transfer, and while no step is recorded.
+    pub state_before_step: Option<TransferState>,
+    /// Who runs `flow_step` now, and until when (`flow_steps`): taken in
+    /// the write that records the step, emptied in the write that records
+    /// that it ran. `None` while no step is recorded.
+    pub lease: Option<Lease>,
     /// Changes on every write; writes compare it (optimistic locking).
     pub version: u64,
+}
+
+/// A lease on a transfer, kept in the database with it (`flow_steps`):
+/// while it holds, no other call changes the transfer, in this process or
+/// in another one that shares the database.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lease {
+    /// The process that holds it ([`Environment::process_id`]).
+    pub holder: String,
+    /// When it ends, in seconds since 1970-01-01 UTC
+    /// ([`Environment::now_seconds`]). From then on another call may take
+    /// the step over.
+    pub until: u64,
 }
 
 /// A step of the data flow, recorded with the transfer's write that
@@ -229,6 +250,14 @@ pub trait TransferStore {
     ///
     /// The store cannot be read.
     fn pending(&self) -> Result<Vec<Transfer>, StoreError>;
+
+    /// Every transfer with a data plane step not run yet (`flow_step`),
+    /// leased or not: what the periodic sweep looks at (`flow_steps`).
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be read.
+    fn recorded_steps(&self) -> Result<Vec<Transfer>, StoreError>;
 
     /// Up to `limit` transfers in provider pid order, those after `after`
     /// when it is given: one page for the management API.
@@ -395,6 +424,10 @@ pub enum Failure {
     Store(StoreError),
     /// HTTP 500: the data plane failed.
     DataPlane(String),
+    /// HTTP 503: another call is changing the transfer now (it holds the
+    /// transfer's lease, `flow_steps`); try again shortly. Nothing was
+    /// written.
+    Busy(TransferError),
 }
 
 /// The reason a transfer request is refused with when it names no
@@ -402,6 +435,13 @@ pub enum Failure {
 const NO_FINALIZED_AGREEMENT: &str = "no finalized agreement with this id for the caller";
 
 impl Failure {
+    /// Whether another call is changing the transfer now
+    /// ([`Failure::Busy`]): the same call may succeed a moment later.
+    #[must_use]
+    pub fn is_busy(&self) -> bool {
+        matches!(self, Failure::Busy(_))
+    }
+
     /// Whether a transfer request was refused because it names no
     /// finalized agreement of the caller (unknown id, another consumer's
     /// agreement, or a negotiation that is not finalized). The adapter
@@ -413,21 +453,26 @@ impl Failure {
                 .reason
                 .iter()
                 .any(|reason| reason.as_str() == Some(NO_FINALIZED_AGREEMENT)),
-            Failure::NotFound(_) | Failure::Store(_) | Failure::DataPlane(_) => false,
+            Failure::NotFound(_) | Failure::Store(_) | Failure::DataPlane(_) | Failure::Busy(_) => {
+                false
+            }
         }
     }
 }
 
 /// What [`TransferService::pending`] found to take up again after a
-/// restart.
+/// restart, or [`TransferService::run_steps_left_over`] in its sweep.
 #[derive(Debug, Default)]
 pub struct Pending {
     /// Our messages to send.
     pub messages: Vec<Outgoing>,
+    /// The transfers whose data plane step left over ran now, by
+    /// provider pid (the connector logs them).
+    pub steps_run: Vec<String>,
     /// The transfers whose data plane step could not run or be recorded
     /// now, by provider pid, with the failure. Their step stays recorded:
-    /// it runs before the next write of the transfer, or at the next
-    /// restart.
+    /// once its lease has ended it runs at the next call that changes the
+    /// transfer, at the next sweep, or at the next restart.
     pub not_taken_up: Vec<(String, Failure)>,
 }
 
@@ -444,10 +489,6 @@ pub struct TransferService<S, A, F, D, C, E> {
     decider: D,
     catalog: C,
     env: E,
-    /// Held from a transfer's write until the data plane step it recorded
-    /// has run, so writes and their steps run one at a time in this
-    /// process (`flow_steps`). Shared by clones of the service.
-    one_step_at_a_time: Arc<Mutex<()>>,
 }
 
 impl<S, A, F, D, C, E> TransferService<S, A, F, D, C, E>
@@ -468,7 +509,6 @@ where
             decider,
             catalog,
             env,
-            one_step_at_a_time: Arc::new(Mutex::new(())),
         }
     }
 
@@ -629,6 +669,8 @@ where
             data_address: msg.data_address.clone(),
             pending: None,
             flow_step: None,
+            state_before_step: None,
+            lease: None,
             version: 0,
         };
         self.decide_next(&mut transfer);
@@ -833,6 +875,12 @@ where
     /// when the process stopped run first (`flow_steps`); a message
     /// waits for its step.
     ///
+    /// A step whose lease still holds is left out: a call of another
+    /// process that shares the database may be running it, or the lease
+    /// is the one of the process that stopped. Its message follows its
+    /// step: sent by the call that holds the lease, or by the sweep once
+    /// the lease has ended ([`TransferService::run_steps_left_over`]).
+    ///
     /// A transfer whose step cannot run or be recorded now (the store
     /// failed) is left out, with its step still recorded, and listed in
     /// [`Pending::not_taken_up`]: one such transfer does not keep the
@@ -843,21 +891,7 @@ where
     /// The store cannot be read.
     pub fn pending(&self) -> Result<Pending, Failure> {
         let transfers = self.store.pending().map_err(Failure::Store)?;
-        let mut found = Pending::default();
-        for transfer in transfers {
-            let current = match self.run_step_found_after_restart(&transfer) {
-                Ok(current) => current,
-                Err(failure) => {
-                    let pid = transfer.provider_pid.clone();
-                    found.not_taken_up.push((pid, failure));
-                    continue;
-                }
-            };
-            if let Some(message) = ready_to_send(&current) {
-                found.messages.push(message);
-            }
-        }
-        Ok(found)
+        Ok(self.take_up(transfers))
     }
 
     /// Applies a consumer's message: checks the ids and the transition,
@@ -1076,6 +1110,7 @@ fn not_found(pid: &str, cpid: &str) -> Failure {
 mod flow_steps;
 mod own_steps;
 use flow_steps::IfRefused;
+pub use flow_steps::LEASE_SECONDS;
 pub use own_steps::MAX_PAGE;
 
 #[cfg(test)]
