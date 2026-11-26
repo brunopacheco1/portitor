@@ -23,6 +23,7 @@ use portitor_runtime::http::{
 };
 
 use crate::access::AccessGate;
+use crate::download::{self, AbortOnDrop};
 use crate::flows::{Flow, FlowStore, FlowStoreError};
 use crate::object_storage::ObjectStorage;
 use crate::running_flows::RunningFlows;
@@ -126,6 +127,19 @@ impl HttpDataPlane {
     #[must_use]
     pub fn running_flows(&self) -> Arc<RunningFlows> {
         Arc::clone(&self.running)
+    }
+
+    /// The membership checks of a running download or push of flow `id`
+    /// (`download.rs`); they stop when the value is dropped. `None`
+    /// without a gate: there is nothing to check again.
+    pub(crate) fn membership_watchdog(&self, id: &str) -> Option<AbortOnDrop> {
+        // no gate: `?` returns `None` here
+        let gate = self.gate.as_ref()?;
+        Some(download::watchdog(
+            Arc::clone(gate),
+            self.running_flows(),
+            id,
+        ))
     }
 
     /// A flow store failure as the answer to a signal.

@@ -149,15 +149,7 @@ pub async fn serve(
             // `Response::map` changes only the body; the status and the
             // headers stay.
             let response = response.map(|body| Body::new(AuditedBody::new(body, &id, parties)));
-            let watchdog = match &plane.gate {
-                Some(gate) => Some(download::watchdog(
-                    Arc::clone(gate),
-                    plane.running_flows(),
-                    &id,
-                )),
-                // no gate: nothing to check again
-                None => None,
-            };
+            let watchdog = plane.membership_watchdog(&id);
             download::cut_when_told(response, cut, watchdog)
         }
         Err(error) => {

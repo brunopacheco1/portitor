@@ -51,7 +51,6 @@ use portitor_dsp::transfer::DataAddress;
 
 use crate::access::Access;
 use crate::audit::{self, Outcome, Parties};
-use crate::download;
 use crate::plane::HttpDataPlane;
 use crate::running_flows::CutSignal;
 
@@ -125,7 +124,7 @@ impl HttpDataPlane {
     /// section 7.2). A revoked membership also ends the transfer.
     pub(crate) async fn check_membership_before_push(&self, id: &str) -> BeforePush {
         let Some(gate) = &self.gate else {
-            // no gate: the token alone decides, as in 1.0 (unit tests)
+            // no gate: nothing to check, as in 1.0 (unit tests)
             return BeforePush::Go;
         };
         match gate.check(id).await {
@@ -146,20 +145,6 @@ impl HttpDataPlane {
     /// (they change the state first, then cut): see the module doc.
     pub(crate) fn is_started(&self, id: &str) -> bool {
         matches!(self.flows.get(id), Ok(Some(flow)) if flow.state == DataFlowState::Started)
-    }
-
-    /// The membership checks of a running push of flow `id`, as for a
-    /// download; they stop when the value is dropped.
-    pub(crate) fn push_watchdog(&self, id: &str) -> Option<impl Send + use<>> {
-        match &self.gate {
-            Some(gate) => Some(download::watchdog(
-                Arc::clone(gate),
-                self.running_flows(),
-                id,
-            )),
-            // no gate: nothing to check again
-            None => None,
-        }
     }
 
     /// The push flows that are STARTED (after a restart, the pushes to
@@ -261,7 +246,7 @@ async fn send_until_cut(plane: &HttpDataPlane, job: &mut PushJob, idle: Duration
         }
     }
     // checks the membership again while the push runs
-    let _watchdog = plane.push_watchdog(&job.flow_id);
+    let _watchdog = plane.membership_watchdog(&job.flow_id);
     let counted = Arc::new(AtomicU64::new(0));
     // borrows of the job's fields: the post reads three of them while the
     // cut signal is watched (it needs `&mut`). The job's parties are for
