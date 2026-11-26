@@ -526,11 +526,11 @@ async fn run_push(provider: Arc<TransferProvider>, plane: Arc<HttpDataPlane>, mu
     let pushed = portitor_dataplane::push::send(&plane, &mut job).await;
     // the push is over: a later start again may send again
     drop(job);
-    portitor_dataplane::push::audit(&pid, &parties.agreement, &parties.counter_party, &pushed);
+    portitor_dataplane::push::audit(&pid, &parties, &pushed);
     let failure = match &pushed.sent {
         portitor_dataplane::push::Sent::Done => None,
         portitor_dataplane::push::Sent::Failed(reason) => Some(reason.as_str()),
-        portitor_dataplane::push::Sent::Cancelled => return,
+        portitor_dataplane::push::Sent::Cut => return,
     };
     provider.push_finished(&pid, failure).await;
 }

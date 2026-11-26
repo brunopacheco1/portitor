@@ -53,8 +53,8 @@ impl Flow {
     #[must_use]
     pub fn parties(&self) -> Parties {
         Parties {
-            agreement: self.agreement_id.clone(),
-            counter_party: self.counter_party_id.clone(),
+            agreement_id: self.agreement_id.clone(),
+            counter_party_id: self.counter_party_id.clone(),
         }
     }
 }

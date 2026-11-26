@@ -8,6 +8,12 @@
 //! does is in the other modules: `signaling.rs` (the Data Plane
 //! Signaling port), `serving.rs` (`GET /data/{flowId}`), `sources.rs`
 //! (reading a source) and `push.rs` (sending a push).
+//!
+//! Rust lets a type's methods be split over several `impl HttpDataPlane`
+//! blocks, in different files of the same crate. This file holds the one
+//! that builds the data plane; each of those four files holds one more
+//! with the methods of its task, and `signaling.rs` also holds
+//! `impl DataPlane for HttpDataPlane`.
 
 use std::sync::Arc;
 
@@ -17,6 +23,7 @@ use portitor_runtime::http::{
 };
 
 use crate::access::AccessGate;
+use crate::download::{self, AbortOnDrop};
 use crate::flows::{Flow, FlowStore, FlowStoreError};
 use crate::object_storage::ObjectStorage;
 use crate::running_flows::RunningFlows;
@@ -32,7 +39,7 @@ pub struct HttpDataPlane {
     /// How long a pull flow's token works, in seconds.
     pub(crate) token_seconds: u64,
     /// The client of upstream URLs (`sources.rs`).
-    pub(crate) client: HttpsClient,
+    pub(crate) source_client: HttpsClient,
     /// The object storage of `s3://` sources, if the connector has one.
     pub(crate) storage: Option<Arc<ObjectStorage>>,
     /// The client of pushes: to an address a partner chose, so plain
@@ -69,12 +76,12 @@ impl HttpDataPlane {
         public_url: &str,
         token_seconds: u64,
     ) -> Result<Self, String> {
-        let (client, _) = https_client(true)?;
+        let (source_client, _) = https_client(true)?;
         Ok(Self {
             flows,
             public_url: public_url.trim_end_matches('/').to_owned(),
             token_seconds,
-            client,
+            source_client,
             storage: None,
             push_client: https_streaming_client(false)?,
             running: Arc::new(RunningFlows::new()),
@@ -120,6 +127,19 @@ impl HttpDataPlane {
     #[must_use]
     pub fn running_flows(&self) -> Arc<RunningFlows> {
         Arc::clone(&self.running)
+    }
+
+    /// The membership checks of a running download or push of flow `id`
+    /// (`download.rs`); they stop when the value is dropped. `None`
+    /// without a gate: there is nothing to check again.
+    pub(crate) fn membership_watchdog(&self, id: &str) -> Option<AbortOnDrop> {
+        // no gate: `?` returns `None` here
+        let gate = self.gate.as_ref()?;
+        Some(download::watchdog(
+            Arc::clone(gate),
+            self.running_flows(),
+            id,
+        ))
     }
 
     /// A flow store failure as the answer to a signal.

@@ -39,24 +39,24 @@ pub(crate) fn start(
         store.clone(),
         Arc::clone(&ports.verifier),
     ));
-    let plane = HttpDataPlane::new(
+    // the two steps that can fail: building the HTTP clients
+    let built = HttpDataPlane::new(
         store.flows_only(),
         &config.public_url,
         config.data_token_seconds,
     )
-    .and_then(|plane| plane.with_push_over_http(config.allow_http))
-    .map(|plane| {
-        plane
-            .with_object_storage(ports.object_storage.clone())
-            .checking_membership_with(Arc::clone(&gate) as _)
-    });
-    let plane = match plane {
+    .and_then(|plane| plane.with_push_over_http(config.allow_http));
+    let plane = match built {
         Ok(plane) => plane,
         Err(e) => {
             tracing::error!(error = %e, "no data plane: transfers will be refused");
             return None;
         }
     };
+    // `as _`: the gate is turned into an `Arc<dyn AccessGate>`
+    let plane = plane
+        .with_object_storage(ports.object_storage.clone())
+        .checking_membership_with(Arc::clone(&gate) as _);
     let flows = data_flows::SignalingDataFlows::new(
         plane.clone(),
         &config.participant_id,

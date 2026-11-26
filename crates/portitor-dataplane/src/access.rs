@@ -34,7 +34,7 @@ pub enum Access {
 pub trait AccessGate: Send + Sync {
     /// Whether the consumer of flow `flow_id` may still get its data.
     /// A boxed task, so the data plane can hold any gate as
-    /// `Arc<dyn AccessGate>` (RUST-IDIOMS, "`BoxFuture`").
+    /// `Arc<dyn AccessGate>` (RUST-IDIOMS, "`BoxFuture` in a trait").
     fn check<'a>(&'a self, flow_id: &'a str) -> BoxFuture<'a, Access>;
 
     /// Ends the transfer of flow `flow_id`, whose consumer is no longer a
