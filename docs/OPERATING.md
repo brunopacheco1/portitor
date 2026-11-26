@@ -35,7 +35,8 @@ backups, key changes and upgrades.
   | `GET /api/check/startup`, `GET /api/check/health` | the same as readiness |
 
   Readiness of the connector:
-  - `database`: the SQLite file answers.
+  - `database`: the database answers (PostgreSQL, or the SQLite
+    file). <!-- 1.3: check after integration -->
   - `harvest` (the start harvest ran) and `bundle` (a version is in
     force; only with a bundle): start gates. The connector binds its
     ports only after both, so they cannot fail while it serves.
@@ -113,7 +114,7 @@ export on, `telemetry: exporting` (INFO).
 | `counter-party not reachable; process not started` (WARN) | The first request of a negotiation or transfer we started as consumer failed (tried as above); it ends without a message, as the provider never knew it | Same as above |
 | `termination not acknowledged` (WARN) | The partner did not take a termination; DSP allows this, the negotiation is terminated anyway | Nothing, unless it repeats for one partner |
 | `no CA certificates: https calls will fail` (WARN, at start) | The CA bundle was not found (for example `SSL_CERT_DIR` points to an empty folder) | Fix the mount or the variable |
-| `negotiation store failed` (ERROR) | The SQLite file could not be read or written; partners get HTTP 500 | Check disk space and the `/data` volume |
+| `negotiation store failed` (ERROR) | The database could not be read or written; partners get HTTP 500 | PostgreSQL: check that the server answers and the readiness check `database`. SQLite: check disk space and the `/data` volume |
 | `DSP request refused: caller not authenticated` (WARN) | A DSP request was refused: the caller got HTTP 404 on a negotiation or transfer route, HTTP 401 on a catalog route (`status` says which). `reason` says why (token, presentation, credential or status list); the caller is not told | If a partner should be admitted: check its credential, its issuer against `PORTITOR_TRUSTED_ISSUERS`, and clock skew (60 s allowed) |
 | A partner says a call got HTTP 404 `unauthorized`, or its side ended with `no such negotiation` although the process exists | The 404 for a caller that is not authenticated does not say why (DSP 2025-1; Eclipse EDC does the same) | Look in **your** log for the line above at that time. A 404 with reason `no such negotiation` or `no such transfer` and without that line means the process id is unknown, or belongs to another participant |
 | `counter-party not reachable; terminating` (WARN) with `HTTP 404` in `error` | The partner does not know the process, or it refused your credentials (a Portitor from 0.12 and Eclipse EDC answer 404 for both). The message is not sent again | Ask the partner for the reason in its log; check that your credential is valid and not revoked, and that the partner trusts its issuer |
@@ -183,14 +184,16 @@ export on, `telemetry: exporting` (INFO).
 | `credential request outcome unknown; kept open` (WARN) | No answer in time, a network error, or HTTP 408, 429 or 5xx from the issuer; the request stays open for a late delivery |
 | `repeated delivery acknowledged` (INFO) | The issuer sent an answer again that closed a request before; nothing was stored twice |
 | `the issuer gave no usable Location for the request` (WARN) | The issuer took the request but gave no status URL on its own host; the delivery is still accepted, only the issuer's status cannot be shown |
-| `identity store failed` (ERROR) | The SQLite file could not be read or written |
+| `identity store failed` (ERROR) | The database could not be read or written |
 | `certificate chain reloaded` (INFO) | A renewed certificate chain for the same key is in use |
 | `new certificate chain refused; the old one stays` (ERROR) | The chain file changed but cannot be used: unreadable, not PEM, or for another key; `reason` says which |
 | `Gaia-X compliance credential stored` (INFO) | A run succeeded; `valid_until` is when the compliance credential expires |
 | `Gaia-X compliance run failed; the stored credentials stay` (ERROR) | A run failed; `error` says why (the service refused, its answer did not check out, ...). It is tried again |
 
-Used token ids (`jti`) are kept in memory until their token expires
-(ADR 0016), so run one replica per database file.
+Used token ids (`jti`) are kept in the database until their token
+expires, so a token used on one replica is refused on the others
+([ADR 0029](adr/0029-several-replicas.md); before 1.3 they were kept in
+memory). <!-- 1.3: check after integration -->
 
 ### Issuer logs
 
@@ -406,11 +409,22 @@ attributes.
 
 ## Backup and restore
 
-The connector's database is `/data/portitor.db` plus, while it runs,
-`portitor.db-wal` and `portitor.db-shm`. The identity
+Keep the issuer's key backup separate from its database backup.
+
+**PostgreSQL.** Back up each component's database with the tools of
+PostgreSQL, for example `pg_dump --format=custom` while the components
+run, and restore with `pg_restore` into an empty database while they
+are stopped. Which tool fits your server (dumps, base backups,
+point-in-time recovery) is in the PostgreSQL manual, chapter "Backup
+and Restore" (<https://www.postgresql.org/docs/current/backup.html>).
+Replicas of a component share one database, so there is one backup per
+component, not one per container.
+
+**SQLite (deprecated).** The connector's database is
+`/data/portitor.db` plus, while it runs, `portitor.db-wal` and
+`portitor.db-shm`. The identity
 (`/data/portitor-identity.db*`) and the issuer
-(`/data/portitor-issuer.db*`) work the same way. Keep the issuer's key
-backup separate from its database backup.
+(`/data/portitor-issuer.db*`) work the same way.
 
 - **Simple and safe:** stop the container, copy all `portitor.db*` files,
   start it again.
@@ -459,7 +473,9 @@ the same way: the old key stays listed until it is revoked
      only. When the run succeeds, the Gaia-X credentials of the old key
      are replaced;
    - issuer: every credential it issued (their `validityDays`). Status
-     lists are signed again with the new key at start. To end sooner,
+     lists are signed again with the new key at start.
+     <!-- 1.3: check after integration: from 1.3 the signed lists are stored in the database (ADR 0029, D5); say when a list signed by the old key is signed again, before step 6 removes that key -->
+     To end sooner,
      reissue the credentials with the new key.
 6. Remove the file from the setting and restart. The old key id leaves
    the DID document; what the old key signed no longer verifies.
@@ -471,6 +487,35 @@ refused for that long after step 3 by a verifier that has not seen the
 new document. Do step 3 when the component is quiet. For the same
 reason a key removed in step 6 is still accepted for that long.
 
+### Rotating a key with several replicas
+
+With several containers of the identity or the issuer, a partner may
+read the DID document from any of them. Restarting them one by one with
+the steps above would let some show the old key only while others
+already sign with the new one. Do it in two rolling steps instead, so
+every replica lists both keys before any signs with the new one
+([ADR 0029](adr/0029-several-replicas.md), D7;
+[TD-58](RISKS_AND_TECHNICAL_DEBTS.md#td-58)):
+
+1. Make the new key (step 1 above) and write **its public key** to a
+   file: `openssl pkey -in new-key.pem -pubout -out new-key.pub.pem`.
+2. On every replica, keep the old key as the key file and list
+   `new-key.pub.pem` in `PORTITOR_IDENTITY_RETIRED_KEY_FILES` (or
+   `PORTITOR_ISSUER_RETIRED_KEY_FILES`). Restart the replicas one by
+   one. The new key is now listed on every replica and signs nothing.
+   The start checks allow this: the file holds a public key that is not
+   the current one.
+3. Wait `PORTITOR_DID_CACHE_SECONDS` of your partners (5 minutes by
+   default), so their caches hold the document with both keys.
+4. On every replica, mount `new-key.pem` as the key file and list the
+   old public key (`old-key.pub.pem`, step 2 above) as retired, instead
+   of the new one. With Gaia-X, mount the chain of the new key too.
+   Restart the replicas one by one. While some replicas still run the
+   old key, every replica lists both, and each accepts the access
+   tokens the others signed.
+5. Go on with steps 4 to 6 above: destroy the old private key, wait,
+   then remove the retired file and restart the replicas one by one.
+
 **A leaked or lost key.** Never list a leaked key as retired: anyone
 with it could sign in your name while it is listed. Change the key
 without a retired list; what the old key signed stops verifying, and
@@ -481,13 +526,22 @@ leaked) can be listed as retired, since only its public key is needed.
 
 1. Read the [CHANGELOG](../CHANGELOG.md) entries between your version and
    the new one.
-2. Back up `/data`.
-3. Replace the container with the new image. Database migrations run at
+2. Back up the database ([Backup and restore](#backup-and-restore)).
+3. Replace the containers with the new image. Database migrations run at
    start, forward only.
 4. Check the start log and the readiness check on the management port
    (`GET /api/check/readiness` answers HTTP 200;
    [Health and logs](#health-and-logs)). `/health` only shows that the
    process runs.
+
+With several replicas on PostgreSQL, the first replica of the new
+release that starts runs the migrations, under a lock in the database;
+replicas that start at the same time wait for it, then find nothing to
+do. Migrations run forward only, so a replica of the older release
+that starts after them refuses the database. Unless the notes of the
+release say that its replicas may run next to older ones, stop every
+replica of the older release, then start the new ones.
+<!-- 1.3: check after integration -->
 
 Rollback: an older version refuses a database that a newer version
 migrated (`database schema version N is newer than this Portitor`). Restore
@@ -496,8 +550,51 @@ after the backup is lost. This stays so in 1.x
 ([TD-22](RISKS_AND_TECHNICAL_DEBTS.md#td-22), [STABILITY](STABILITY.md#database)).
 
 Messages the connector was sending when it stopped are saved and sent
-again at start (ADR 0007), so an upgrade does not leave negotiations
-waiting. A partner may receive such a message twice; that is handled.
+again (ADR 0007): from 1.3 by any running replica once their lease
+ends, or at the next start, so an upgrade does not leave negotiations
+waiting. <!-- 1.3: check after integration --> A partner may receive such a message twice; that is handled.
+
+### From 1.2 to 1.3
+
+1.3 adds PostgreSQL and lets several containers of each component share
+one database ([ADR 0029](adr/0029-several-replicas.md)).
+<!-- 1.3: check after integration -->
+
+1. **Back up first.** Migrations run at start, forward only. To go back
+   to 1.2, restore the backup.
+2. **SQLite is deprecated.** A component on a SQLite file keeps
+   working, for one process, and logs at start `SQLite is deprecated
+   since 1.3 and is removed in 2.0`. A second process on the same file
+   now refuses to start. Nothing else to do until 2.0.
+3. **PostgreSQL is optional in 1.3** for an existing deployment. To use
+   it, read [From SQLite to PostgreSQL](#from-sqlite-to-postgresql)
+   first: there is no tool yet that copies your data.
+4. **Several replicas** need PostgreSQL
+   ([DEPLOYING, Database](DEPLOYING.md#database)), and the two-step
+   [key rotation](#rotating-a-key-with-several-replicas).
+
+### From SQLite to PostgreSQL
+
+The tool that copies a SQLite file into PostgreSQL comes in a later
+1.x release, before 2.0 removes SQLite
+([ROADMAP](ROADMAP.md#later-not-planned-for-a-release-yet)). Until
+then, a component moved to PostgreSQL starts with an empty database:
+
+- the connector forgets its negotiations, agreements, transfers and
+  data flows, while partners keep theirs. Existing agreements can no
+  longer be used, and running transfers stop;
+- the identity forgets its credentials: ask the issuers again
+  ([Getting a credential](DEPLOYING.md#getting-a-credential));
+- the issuer forgets its participants, the credentials it issued and
+  their status lists, so it can no longer revoke them.
+
+So move a component only if it can start over, for example a new
+dataspace or a test. Otherwise keep it on its SQLite file, with one
+container, until the copy tool exists. For a move: set
+`PORTITOR_DATABASE_URL` and `PORTITOR_DATABASE_PASSWORD_FILE`, and
+leave `PORTITOR_DB_FILE` unset (a component with both refuses to
+start).
+<!-- 1.3: check after integration -->
 
 ### From 1.1 to 1.2
 
