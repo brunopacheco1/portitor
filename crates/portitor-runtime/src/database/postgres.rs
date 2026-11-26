@@ -16,6 +16,7 @@
 //! A client's query only passes messages to its connection task, so
 //! waiting for it needs no tokio runtime on the calling thread.
 
+use std::cell::Cell;
 use std::future::Future;
 use std::pin::pin;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -39,8 +40,37 @@ const POOL_SIZE: usize = 10;
 /// `SQLite` busy timeout did.
 const WAIT_FOR_A_CONNECTION: Duration = Duration::from_secs(5);
 
-/// How long connecting may take.
+/// How long connecting may take, unless the URL says otherwise
+/// (`connect_timeout`, in seconds, as libpq reads it).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long one statement may run on the server, unless the URL's
+/// `options` set `statement_timeout`: as long as a lease
+/// ([`crate::leases::LEASE_SECONDS`]), since a call that takes longer has
+/// lost its lease anyway.
+const STATEMENT_TIMEOUT: &str = "30s";
+
+/// How long a call waits for the server's answer before it gives up and
+/// drops the connection: the statement timeout and 10 seconds for the
+/// network, so a slow statement ends with the server's own error first.
+/// It ends the wait on a connection that died without closing (a
+/// failover, a network cut), which would otherwise block the calling
+/// thread for good.
+const ANSWER_TIMEOUT: Duration = Duration::from_secs(40);
+
+/// How long sent data may stay unacknowledged before the connection is
+/// closed, unless the URL says otherwise (`tcp_user_timeout`, in
+/// milliseconds, as libpq reads it): a lease's length.
+const TCP_USER_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long a connection stays idle before TCP checks that the server is
+/// still there, and how often it checks then, unless the URL says
+/// otherwise (`keepalives_idle`, `keepalives_interval`, in seconds, as
+/// libpq reads them). With [`TCP_USER_TIMEOUT`], a pooled connection to
+/// a server that went away is closed within about 30 seconds, instead of
+/// the system's two hours.
+const KEEPALIVES_IDLE: Duration = Duration::from_secs(15);
+const KEEPALIVES_INTERVAL: Duration = Duration::from_secs(5);
 
 /// The lock every Portitor process takes while it migrates, so that
 /// replicas that start together migrate one after the other: the text
@@ -54,6 +84,10 @@ pub struct Settings {
     tls: Option<Arc<rustls::ClientConfig>>,
     /// The URL without its password, for logs and errors.
     shown: String,
+    /// A test database, dropped once the last copy of these settings is
+    /// gone ([`Settings::dropping_the_database`]).
+    #[cfg(any(test, feature = "test-support"))]
+    test_database: Option<Arc<TestDatabase>>,
 }
 
 impl std::fmt::Debug for Settings {
@@ -83,11 +117,21 @@ impl Settings {
     ///
     /// TLS: `sslmode` may be `verify-full` (the default when it is
     /// missing), `verify-ca` or `require`, which all mean the same here:
-    /// TLS, with the server's certificate checked against the system's CA
-    /// certificates (and `sslrootcert`, a PEM file, when given) and its
-    /// host name. `disable` turns TLS off. `prefer` and `allow` are
-    /// refused: they fall back to an unencrypted connection without
-    /// saying so.
+    /// TLS, with the server's certificate and host name checked. The
+    /// certificate must chain to a CA of `sslrootcert`, as in libpq: a PEM
+    /// file, whose CAs are then the only ones trusted, or `system`, the
+    /// system's CA certificates. Without `sslrootcert` the system's CA
+    /// certificates are used (libpq would read `~/.postgresql/root.crt`;
+    /// a container has none). `disable` turns TLS off. `prefer` and
+    /// `allow` are refused: they fall back to an unencrypted connection
+    /// without saying so.
+    ///
+    /// Timeouts, each as libpq reads it from the URL, with Portitor's
+    /// default when the URL does not set it: `connect_timeout` (seconds,
+    /// default 10), `tcp_user_timeout` (milliseconds, default 30000),
+    /// `keepalives_idle` and `keepalives_interval` (seconds, defaults 15
+    /// and 5), and `statement_timeout` in `options`
+    /// (`options=-c%20statement_timeout%3D60s`, default 30 s).
     ///
     /// # Errors
     /// The URL is not a `postgresql://` URI, holds a password (it goes in
@@ -95,7 +139,7 @@ impl Settings {
     /// refused, names no user, host or database, or `sslrootcert` cannot
     /// be read.
     pub fn from_url(url: &str, password: Option<String>) -> Result<Self, String> {
-        let (base, tls_options) = split_tls_options(url)?;
+        let (base, own) = split_own_options(url)?;
         let mut config: Config = base
             .parse()
             .map_err(|e| format!("PORTITOR_DATABASE_URL: {e}"))?;
@@ -113,21 +157,23 @@ impl Settings {
         if let Some(password) = password {
             config.password(password);
         }
-        config.connect_timeout(CONNECT_TIMEOUT);
         config.application_name("portitor");
-        let tls = if tls_options.disable {
+        set_timeouts(&mut config, &base, own.tcp_user_timeout);
+        let tls = if own.disable {
             config.ssl_mode(tokio_postgres::config::SslMode::Disable);
             None
         } else {
             config.ssl_mode(tokio_postgres::config::SslMode::Require);
             Some(super::postgres_tls::client_config(
-                tls_options.root_cert.as_deref(),
+                own.root_cert.as_deref(),
             )?)
         };
         Ok(Self {
             config,
             tls,
             shown: base_without_query(url),
+            #[cfg(any(test, feature = "test-support"))]
+            test_database: None,
         })
     }
 
@@ -145,23 +191,100 @@ impl Settings {
     pub fn password(&self) -> Option<&[u8]> {
         self.config.get_password()
     }
+
+    /// These settings, which drop the test database `name` from the
+    /// server of `admin` once the last copy of them (and every pool
+    /// opened with them) is gone, so test runs leave no databases behind.
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn dropping_the_database(mut self, admin: &Self, name: &str) -> Self {
+        self.test_database = Some(Arc::new(TestDatabase {
+            admin: admin.clone(),
+            name: name.to_owned(),
+        }));
+        self
+    }
 }
 
-/// The TLS options of the URL, which this module reads itself
-/// (`tokio-postgres` knows only `disable`, `prefer` and `require`).
-struct TlsOptions {
+/// A test database, dropped with the last settings that name it.
+#[cfg(any(test, feature = "test-support"))]
+struct TestDatabase {
+    admin: Settings,
+    name: String,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Drop for TestDatabase {
+    fn drop(&mut self) {
+        // FORCE (PostgreSQL 13 and later): also when a connection of a
+        // test is still open
+        let sql = format!("DROP DATABASE IF EXISTS {} WITH (FORCE)", self.name);
+        let dropped = Pool::start(&self.admin).and_then(|pool| pool.execute(&sql, &[]));
+        if let Err(e) = dropped {
+            eprintln!("cannot drop the test database {}: {e}", self.name);
+        }
+    }
+}
+
+/// Sets each timeout the URL `base` does not set to Portitor's default.
+/// `tcp_user_timeout` is what the URL said, read here in milliseconds as
+/// libpq does (`tokio-postgres` would read seconds).
+fn set_timeouts(config: &mut Config, base: &str, tcp_user_timeout: Option<Duration>) {
+    if !has_parameter(base, "connect_timeout") {
+        config.connect_timeout(CONNECT_TIMEOUT);
+    }
+    // 0 means "the system's default", as in libpq
+    match tcp_user_timeout {
+        None => {
+            config.tcp_user_timeout(TCP_USER_TIMEOUT);
+        }
+        Some(t) if t.is_zero() => {}
+        Some(t) => {
+            config.tcp_user_timeout(t);
+        }
+    }
+    if !has_parameter(base, "keepalives_idle") {
+        config.keepalives_idle(KEEPALIVES_IDLE);
+    }
+    if !has_parameter(base, "keepalives_interval") {
+        config.keepalives_interval(KEEPALIVES_INTERVAL);
+    }
+    let options = config.get_options().unwrap_or("").to_owned();
+    if !options.contains("statement_timeout") {
+        let ours = format!("-c statement_timeout={STATEMENT_TIMEOUT}");
+        config.options(format!("{options} {ours}").trim());
+    }
+}
+
+/// Whether the query of `url` has the parameter `name`.
+fn has_parameter(url: &str, name: &str) -> bool {
+    let query = url.split_once('?').map_or("", |(_, q)| q);
+    query
+        .split('&')
+        .any(|pair| pair.split_once('=').map_or(pair, |(key, _)| key) == name)
+}
+
+/// The URL options this module reads itself: `tokio-postgres` knows only
+/// the `sslmode`s `disable`, `prefer` and `require`, no `sslrootcert`,
+/// and reads `tcp_user_timeout` in seconds where libpq reads
+/// milliseconds.
+struct OwnOptions {
     disable: bool,
+    /// A PEM file, or `system`.
     root_cert: Option<String>,
+    tcp_user_timeout: Option<Duration>,
 }
 
-/// The URL without `sslmode` and `sslrootcert`, and what they said.
-fn split_tls_options(url: &str) -> Result<(String, TlsOptions), String> {
+/// The URL without `sslmode`, `sslrootcert` and `tcp_user_timeout`, and
+/// what they said.
+fn split_own_options(url: &str) -> Result<(String, OwnOptions), String> {
     if !(url.starts_with("postgresql://") || url.starts_with("postgres://")) {
         return Err("PORTITOR_DATABASE_URL must start with postgresql://".to_owned());
     }
-    let mut options = TlsOptions {
+    let mut options = OwnOptions {
         disable: false,
         root_cert: None,
+        tcp_user_timeout: None,
     };
     let Some((base, query)) = url.split_once('?') else {
         return Ok((url.to_owned(), options));
@@ -181,6 +304,12 @@ fn split_tls_options(url: &str) -> Result<(String, TlsOptions), String> {
                 }
             },
             "sslrootcert" => options.root_cert = Some(percent_decoded(value)?),
+            "tcp_user_timeout" => {
+                let millis: u64 = value.parse().map_err(|_| {
+                    format!("PORTITOR_DATABASE_URL: tcp_user_timeout={value} is not milliseconds")
+                })?;
+                options.tcp_user_timeout = Some(Duration::from_millis(millis));
+            }
             _ => kept.push(pair),
         }
     }
@@ -205,13 +334,15 @@ fn base_without_query(url: &str) -> String {
 
 /// A pool of PostgreSQL connections, for one process.
 pub struct Pool {
-    settings: Settings,
+    // dropped in this order: the connections, the database thread, then
+    // the settings (which may drop a test database)
+    idle: Mutex<Idle>,
+    returned: Condvar,
     /// The database thread's runtime, which drives the connections.
     runtime: tokio::runtime::Handle,
     /// Dropped with the pool: ends the database thread.
     _stop: tokio::sync::oneshot::Sender<()>,
-    idle: Mutex<Idle>,
-    returned: Condvar,
+    settings: Settings,
 }
 
 impl std::fmt::Debug for Pool {
@@ -262,7 +393,8 @@ impl Pool {
     /// The database refused it or could not be reached.
     pub fn query(&self, sql: &str, values: &[Value]) -> Result<Vec<Row>, DbError> {
         let mut taken = self.take()?;
-        PgRunner(taken.client()?).query(sql, values)
+        let (client, timed_out) = taken.parts()?;
+        PgRunner { client, timed_out }.query(sql, values)
     }
 
     /// Runs one statement and returns how many rows it changed.
@@ -271,7 +403,8 @@ impl Pool {
     /// The database refused it or could not be reached.
     pub fn execute(&self, sql: &str, values: &[Value]) -> Result<u64, DbError> {
         let mut taken = self.take()?;
-        PgRunner(taken.client()?).execute(sql, values)
+        let (client, timed_out) = taken.parts()?;
+        PgRunner { client, timed_out }.execute(sql, values)
     }
 
     /// [`super::Database::transaction`] on PostgreSQL.
@@ -283,7 +416,8 @@ impl Pool {
         loop {
             tries += 1;
             let mut taken = self.take()?;
-            match run_once(taken.client()?, work) {
+            let (client, timed_out) = taken.parts()?;
+            match run_once(client, timed_out, work) {
                 Err(e) if is_collision(&e) && tries < TRIES => {
                     // another transaction won; ours rolled back: run it again
                     std::thread::sleep(Duration::from_millis(5 * u64::from(tries)));
@@ -298,9 +432,14 @@ impl Pool {
     /// waits, then finds them applied.
     fn migrate(&self, migrations: &Migrations) -> Result<(), DbError> {
         let mut taken = self.take()?;
-        let client = taken.client()?;
+        let (client, _) = taken.parts()?;
+        // no time limit: waiting for another replica's migrations, or
+        // migrating a large database, may take longer than a statement may
         block_on(async {
             let tx = client.transaction().await.map_err(pg_error)?;
+            tx.batch_execute("SET LOCAL statement_timeout = 0")
+                .await
+                .map_err(pg_error)?;
             tx.execute("SELECT pg_advisory_xact_lock($1)", &[&MIGRATION_LOCK])
                 .await
                 .map_err(pg_error)?;
@@ -368,20 +507,14 @@ impl Pool {
                     // the server or the network closed it: forget it
                     idle.open -= 1;
                 } else {
-                    return Ok(Taken {
-                        pool: self,
-                        client: Some(client),
-                    });
+                    return Ok(Taken::new(self, client));
                 }
             }
             if idle.open < POOL_SIZE {
                 idle.open += 1;
                 drop(idle);
                 return match self.connect() {
-                    Ok(client) => Ok(Taken {
-                        pool: self,
-                        client: Some(client),
-                    }),
+                    Ok(client) => Ok(Taken::new(self, client)),
                     Err(e) => {
                         self.lock_idle().open -= 1;
                         Err(e)
@@ -454,6 +587,21 @@ pub fn create_database(admin: &Settings, name: &str) -> Result<(), DbError> {
         .map(|_| ())
 }
 
+/// Whether the database `name` exists on the server of `admin`, for
+/// tests.
+///
+/// # Errors
+/// The server cannot be reached.
+#[cfg(any(test, feature = "test-support"))]
+pub fn database_exists(admin: &Settings, name: &str) -> Result<bool, DbError> {
+    let pool = Pool::start(admin)?;
+    let rows = pool.query(
+        "SELECT 1 FROM pg_database WHERE datname = $1",
+        &[Value::from(name)],
+    )?;
+    Ok(!rows.is_empty())
+}
+
 /// Drives one connection's socket until it closes.
 async fn drive<F>(connection: F, shown: String)
 where
@@ -464,59 +612,116 @@ where
     }
 }
 
-/// A connection taken from the pool; given back when dropped.
+/// A connection taken from the pool; given back when dropped, unless
+/// the server did not answer it in time.
 struct Taken<'p> {
     pool: &'p Pool,
     /// Always `Some` until `drop` gives it back.
     client: Option<Client>,
+    /// Set when a call on it waited longer than [`ANSWER_TIMEOUT`]: the
+    /// connection may be dead, or still busy with that call, so it is
+    /// closed instead of given back.
+    timed_out: Cell<bool>,
 }
 
-impl Taken<'_> {
-    fn client(&mut self) -> Result<&mut Client, DbError> {
-        self.client
-            .as_mut()
-            .ok_or_else(|| DbError::new("database connection already given back"))
+impl<'p> Taken<'p> {
+    fn new(pool: &'p Pool, client: Client) -> Self {
+        Self {
+            pool,
+            client: Some(client),
+            timed_out: Cell::new(false),
+        }
+    }
+
+    /// The connection, and the flag its calls set when they time out.
+    fn parts(&mut self) -> Result<(&mut Client, &Cell<bool>), DbError> {
+        match self.client.as_mut() {
+            Some(client) => Ok((client, &self.timed_out)),
+            None => Err(DbError::new("database connection already given back")),
+        }
     }
 }
 
 impl Drop for Taken<'_> {
     fn drop(&mut self) {
-        if let Some(client) = self.client.take() {
-            self.pool.lock_idle().clients.push(client);
-            self.pool.returned.notify_one();
+        let Some(client) = self.client.take() else {
+            return;
+        };
+        let mut idle = self.pool.lock_idle();
+        if self.timed_out.get() {
+            // dropping the client closes the connection; a new one is
+            // opened in its place when needed
+            idle.open -= 1;
+            drop(client);
+        } else {
+            idle.clients.push(client);
         }
+        drop(idle);
+        self.pool.returned.notify_one();
     }
 }
 
+/// Waits for the server's answer to one call, at most
+/// [`ANSWER_TIMEOUT`]; on timeout sets `timed_out`, so the connection is
+/// not used again.
+fn answer<T>(
+    call: impl Future<Output = Result<T, tokio_postgres::Error>>,
+    timed_out: &Cell<bool>,
+) -> Result<T, DbError> {
+    answer_within(call, ANSWER_TIMEOUT, timed_out)
+}
+
+/// [`answer`], with the time to wait given (for its test).
+fn answer_within<T>(
+    call: impl Future<Output = Result<T, tokio_postgres::Error>>,
+    wait: Duration,
+    timed_out: &Cell<bool>,
+) -> Result<T, DbError> {
+    if let Some(result) = block_on_until(call, Instant::now() + wait) {
+        return result.map_err(pg_error);
+    }
+    timed_out.set(true);
+    Err(DbError::new(format!(
+        "the database did not answer within {}s",
+        wait.as_secs()
+    )))
+}
+
 /// Statements on one PostgreSQL client.
-struct PgRunner<'c>(&'c mut Client);
+struct PgRunner<'c> {
+    client: &'c mut Client,
+    timed_out: &'c Cell<bool>,
+}
 
 impl Executor for PgRunner<'_> {
     fn query(&mut self, sql: &str, values: &[Value]) -> Result<Vec<Row>, DbError> {
         let params = params(values);
-        let rows = block_on(self.0.query(sql, &params)).map_err(pg_error)?;
+        let rows = answer(self.client.query(sql, &params), self.timed_out)?;
         rows.iter().map(row_from_pg).collect()
     }
 
     fn execute(&mut self, sql: &str, values: &[Value]) -> Result<u64, DbError> {
         let params = params(values);
-        block_on(self.0.execute(sql, &params)).map_err(pg_error)
+        answer(self.client.execute(sql, &params), self.timed_out)
     }
 }
 
 /// Statements inside one PostgreSQL transaction.
-struct PgTx<'t, 'c>(&'t tokio_postgres::Transaction<'c>);
+struct PgTx<'t, 'c> {
+    tx: &'t tokio_postgres::Transaction<'c>,
+    timed_out: &'t Cell<bool>,
+}
 
 impl Executor for PgTx<'_, '_> {
     fn query(&mut self, sql: &str, values: &[Value]) -> Result<Vec<Row>, DbError> {
         let params = params(values);
-        let rows = block_on(self.0.query(sql, &params)).map_err(pg_error)?;
+        let rows = answer(self.tx.query(sql, &params), self.timed_out)?;
         rows.iter().map(row_from_pg).collect()
     }
 
     fn execute(&mut self, sql: &str, values: &[Value]) -> Result<u64, DbError> {
         let params = params(values);
-        block_on(self.0.execute(sql, &params)).map_err(pg_error)
+        answer(self.tx.execute(sql, &params), self.timed_out)
     }
 }
 
@@ -524,17 +729,16 @@ impl Executor for PgTx<'_, '_> {
 /// transaction is dropped without `commit`.
 fn run_once<T>(
     client: &mut Client,
+    timed_out: &Cell<bool>,
     work: &mut dyn FnMut(&mut dyn Executor) -> Result<T, DbError>,
 ) -> Result<T, DbError> {
-    let tx = block_on(
-        client
-            .build_transaction()
-            .isolation_level(tokio_postgres::IsolationLevel::Serializable)
-            .start(),
-    )
-    .map_err(pg_error)?;
-    let out = work(&mut PgTx(&tx))?;
-    block_on(tx.commit()).map_err(pg_error)?;
+    let starting = client
+        .build_transaction()
+        .isolation_level(tokio_postgres::IsolationLevel::Serializable)
+        .start();
+    let tx = answer(starting, timed_out)?;
+    let out = work(&mut PgTx { tx: &tx, timed_out })?;
+    answer(tx.commit(), timed_out)?;
     Ok(out)
 }
 
@@ -677,6 +881,23 @@ pub(super) fn block_on<F: Future>(future: F) -> F::Output {
     }
 }
 
+/// [`block_on`], but gives up at `deadline`: `None` then.
+fn block_on_until<F: Future>(future: F, deadline: Instant) -> Option<F::Output> {
+    let mut future = pin!(future);
+    let waker = Waker::from(Arc::new(Unpark(std::thread::current())));
+    let mut context = Context::from_waker(&waker);
+    loop {
+        if let Poll::Ready(out) = future.as_mut().poll(&mut context) {
+            return Some(out);
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return None;
+        }
+        std::thread::park_timeout(left);
+    }
+}
+
 /// Wakes the thread that waits in [`block_on`].
 struct Unpark(Thread);
 
@@ -687,5 +908,140 @@ impl Wake for Unpark {
 
     fn wake_by_ref(self: &Arc<Self>) {
         self.0.unpark();
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    fn read(url: &str) -> Result<Settings, String> {
+        Settings::from_url(url, None)
+    }
+
+    /// A URL with `sslrootcert` naming a file with a test CA; the file
+    /// lives as long as the returned directory.
+    fn with_root_cert(url: &str) -> (crate::testing::TempDir, String) {
+        let dir = crate::testing::TempDir::new("postgres-settings");
+        let path = dir.path().join("ca.pem");
+        std::fs::write(&path, super::super::postgres_tls::TEST_CA).unwrap();
+        let url = format!("{url}&sslrootcert={}", path.display());
+        (dir, url)
+    }
+
+    #[test]
+    fn a_password_in_the_url_is_refused() {
+        let err = read("postgresql://u:secret@h/db?sslmode=disable").unwrap_err();
+        assert!(err.contains("holds a password"), "{err}");
+        let err = read("postgresql://u@h/db?sslmode=disable&password=secret").unwrap_err();
+        assert!(err.contains("holds a password"), "{err}");
+    }
+
+    #[test]
+    fn user_host_and_database_are_required() {
+        let err = read("postgresql://h/db?sslmode=disable").unwrap_err();
+        assert!(err.contains("user and a database"), "{err}");
+        let err = read("postgresql://u@h?sslmode=disable").unwrap_err();
+        assert!(err.contains("user and a database"), "{err}");
+        let err = read("mysql://u@h/db").unwrap_err();
+        assert!(err.contains("postgresql://"), "{err}");
+    }
+
+    /// `prefer` and `allow` fall back to plain text without saying so.
+    #[test]
+    fn sslmodes_that_fall_back_to_plain_text_are_refused() {
+        for mode in ["prefer", "allow"] {
+            let err = read(&format!("postgresql://u@h/db?sslmode={mode}")).unwrap_err();
+            assert!(err.contains(&format!("sslmode={mode} is refused")), "{err}");
+        }
+    }
+
+    /// No `sslmode` means `verify-full`; `require` and `verify-ca` check
+    /// as much as `verify-full`; `disable` turns TLS off.
+    #[test]
+    fn tls_is_on_and_checked_unless_disabled() {
+        let (_dir, url) = with_root_cert("postgresql://u@h/db?application_name=x");
+        let missing = read(&url).unwrap();
+        assert!(missing.tls.is_some());
+        for mode in ["verify-full", "verify-ca", "require"] {
+            let given = read(&format!("{url}&sslmode={mode}")).unwrap();
+            assert_eq!(given, missing, "{mode}");
+        }
+        let disabled = read("postgresql://u@h/db?sslmode=disable").unwrap();
+        assert!(disabled.tls.is_none());
+        assert_eq!(
+            disabled.config.get_ssl_mode(),
+            tokio_postgres::config::SslMode::Disable
+        );
+    }
+
+    #[test]
+    fn sslrootcert_is_a_readable_file_or_system() {
+        let (_dir, url) = with_root_cert("postgresql://u@h/db?sslmode=verify-full");
+        assert!(read(&url).unwrap().tls.is_some());
+        let err = read("postgresql://u@h/db?sslrootcert=/nowhere/ca.pem").unwrap_err();
+        assert!(err.contains("sslrootcert /nowhere/ca.pem"), "{err}");
+        // the system's CAs, by name, as without sslrootcert
+        let system = read("postgresql://u@h/db?sslrootcert=system").unwrap();
+        assert!(system.tls.is_some());
+        // the query is not shown in logs
+        assert_eq!(system.shown(), "postgresql://u@h/db");
+    }
+
+    #[test]
+    fn timeouts_have_defaults() {
+        let settings = read("postgresql://u@h/db?sslmode=disable").unwrap();
+        let config = &settings.config;
+        assert_eq!(config.get_connect_timeout(), Some(&CONNECT_TIMEOUT));
+        assert_eq!(config.get_tcp_user_timeout(), Some(&TCP_USER_TIMEOUT));
+        assert!(config.get_keepalives());
+        assert_eq!(config.get_keepalives_idle(), KEEPALIVES_IDLE);
+        assert_eq!(config.get_keepalives_interval(), Some(KEEPALIVES_INTERVAL));
+        assert_eq!(config.get_options(), Some("-c statement_timeout=30s"));
+    }
+
+    /// As libpq reads them: seconds, but milliseconds for
+    /// `tcp_user_timeout`; `connect_timeout=0` waits without limit.
+    #[test]
+    fn timeouts_in_the_url_are_kept() {
+        let settings = read(
+            "postgresql://u@h/db?sslmode=disable&connect_timeout=0&tcp_user_timeout=2500\
+             &keepalives_idle=60&keepalives_interval=7\
+             &options=-c%20statement_timeout%3D5s",
+        )
+        .unwrap();
+        let config = &settings.config;
+        assert_eq!(config.get_connect_timeout(), None);
+        assert_eq!(
+            config.get_tcp_user_timeout(),
+            Some(&Duration::from_millis(2500))
+        );
+        assert_eq!(config.get_keepalives_idle(), Duration::from_secs(60));
+        assert_eq!(
+            config.get_keepalives_interval(),
+            Some(Duration::from_secs(7))
+        );
+        assert_eq!(config.get_options(), Some("-c statement_timeout=5s"));
+        // other options are kept, and the statement timeout added
+        let settings =
+            read("postgresql://u@h/db?sslmode=disable&options=-c%20work_mem%3D8MB").unwrap();
+        assert_eq!(
+            settings.config.get_options(),
+            Some("-c work_mem=8MB -c statement_timeout=30s")
+        );
+        let err = read("postgresql://u@h/db?sslmode=disable&tcp_user_timeout=soon").unwrap_err();
+        assert!(err.contains("tcp_user_timeout=soon"), "{err}");
+    }
+
+    /// A call the server does not answer ends, and marks its connection
+    /// so it is not given back to the pool.
+    #[test]
+    fn a_call_without_an_answer_times_out() {
+        let timed_out = Cell::new(false);
+        let never = std::future::pending::<Result<(), tokio_postgres::Error>>();
+        let err = answer_within(never, Duration::from_millis(20), &timed_out).unwrap_err();
+        assert!(err.message.contains("did not answer"), "{err}");
+        assert!(timed_out.get());
     }
 }

@@ -77,7 +77,9 @@ follows it and names the place in its code.
 - TLS: `sslmode=verify-full` is the default when `sslmode` is missing.
   `verify-full`, `verify-ca` and `require` all mean the same in
   Portitor: TLS, with the server's certificate **and** its host name
-  checked. `sslrootcert=<PEM file>` adds a private CA. `disable` turns
+  checked. `sslrootcert=<PEM file>` names a private CA, then the only
+  one trusted, as in libpq (`sslrootcert=system`: the system's CAs,
+  also the default). `disable` turns
   TLS off, for a private network only. `prefer` and `allow` are
   refused: they fall back to plain text without saying so.
 - Both `PORTITOR_DATABASE_URL` and `PORTITOR_DB_FILE` set: the
@@ -91,12 +93,15 @@ the host name is not offered.
 
 - `tokio-postgres` 0.7. TLS is Portitor's own glue on `tokio-rustls`,
   with the system's CA certificates (the image's bundle, or
-  `SSL_CERT_FILE` and `SSL_CERT_DIR`) and `sslrootcert`. Not
+  `SSL_CERT_FILE` and `SSL_CERT_DIR`), or those of `sslrootcert`. Not
   `tokio-postgres-rustls`, which brings its own bundled root store.
 - **The store ports stay synchronous.** A store call waits on the
   calling thread, as it waited for the SQLite lock before. A database
   thread of its own drives the sockets
-  (`crates/portitor-runtime/src/database/postgres.rs`). Asynchronous
+  (`crates/portitor-runtime/src/database/postgres.rs`). The wait is
+  bounded: a statement timeout (30 s) on the server, TCP keepalives and
+  a TCP user timeout on the socket, and 40 s for an answer, after which
+  the connection is closed (DEPLOYING, "Database"). Asynchronous
   store ports are on the roadmap ("Later").
 - **SQL is written once** for both databases, with `$1`, `$2`
   placeholders (rewritten for SQLite). Only the schema differs.

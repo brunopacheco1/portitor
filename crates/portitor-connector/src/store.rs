@@ -299,13 +299,19 @@ const SQLITE_MIGRATIONS: &[&str] = &[
 ///   meaning `SQLite` gives it for the paths the connector uses
 ///   (`'$."@id"'`), so the agreement lookups and their indexes are the same
 ///   SQL on both databases.
+///
+/// The keys the stores list in order and page by (`provider_pid >
+/// $1 ORDER BY provider_pid`) are `COLLATE "C"`: they sort by their
+/// bytes, as in `SQLite`, not by the server's language rules (`en_US` on
+/// many servers, which sorts `b` before `C`). On the column, not in each
+/// query, so that the primary key's index still serves the order.
 const POSTGRES_MIGRATIONS: &[&str] = &[
     // 1.3: the schema of 1.2 (the 17 SQLite migrations)
     r#"CREATE FUNCTION json_extract(document TEXT, path TEXT) RETURNS TEXT
         LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE
         AS $$ SELECT jsonb_path_query_first(document::jsonb, path::jsonpath) #>> '{}' $$;
     CREATE TABLE negotiation (
-        provider_pid     TEXT PRIMARY KEY,
+        provider_pid     TEXT COLLATE "C" PRIMARY KEY,
         consumer_pid     TEXT NOT NULL,
         state            TEXT NOT NULL,
         callback_address TEXT NOT NULL,
@@ -318,7 +324,7 @@ const POSTGRES_MIGRATIONS: &[&str] = &[
     CREATE INDEX negotiation_agreement
         ON negotiation (json_extract(agreement, '$."@id"'));
     CREATE TABLE consumer_negotiation (
-        consumer_pid     TEXT PRIMARY KEY,
+        consumer_pid     TEXT COLLATE "C" PRIMARY KEY,
         provider_pid     TEXT,
         state            TEXT NOT NULL,
         provider_address TEXT NOT NULL,
@@ -331,7 +337,7 @@ const POSTGRES_MIGRATIONS: &[&str] = &[
     CREATE INDEX consumer_negotiation_agreement
         ON consumer_negotiation (json_extract(agreement, '$."@id"'));
     CREATE TABLE transfer (
-        provider_pid      TEXT PRIMARY KEY,
+        provider_pid      TEXT COLLATE "C" PRIMARY KEY,
         consumer_pid      TEXT NOT NULL,
         state             TEXT NOT NULL,
         callback_address  TEXT NOT NULL,
@@ -350,7 +356,7 @@ const POSTGRES_MIGRATIONS: &[&str] = &[
     CREATE UNIQUE INDEX transfer_request ON transfer (counter_party, consumer_pid);
     CREATE INDEX transfer_recorded_step ON transfer (provider_pid) WHERE flow_step IS NOT NULL;
     CREATE TABLE data_flow (
-        id               TEXT PRIMARY KEY,
+        id               TEXT COLLATE "C" PRIMARY KEY,
         state            TEXT NOT NULL,
         dataset_id       TEXT NOT NULL,
         token_hash       TEXT NOT NULL,
@@ -365,7 +371,7 @@ const POSTGRES_MIGRATIONS: &[&str] = &[
         memberships TEXT
     );
     CREATE TABLE consumer_transfer (
-        consumer_pid     TEXT PRIMARY KEY,
+        consumer_pid     TEXT COLLATE "C" PRIMARY KEY,
         provider_pid     TEXT,
         state            TEXT NOT NULL,
         provider_address TEXT NOT NULL,
@@ -984,6 +990,13 @@ mod tests {
         );
         assert!(in_sqlite.len() > 90, "{in_sqlite:?}");
         assert_eq!(in_sqlite, in_postgres);
+        // and the same types, NOT NULL, primary keys and unique indexes,
+        // but for `transfer_request`, UNIQUE on PostgreSQL only (see
+        // POSTGRES_MIGRATIONS)
+        let mut tables = portitor_runtime::testing::schema::tables(&postgres);
+        let request = vec!["counter_party".to_owned(), "consumer_pid".to_owned()];
+        assert!(tables.get_mut("transfer").unwrap().unique.remove(&request));
+        assert_eq!(tables, portitor_runtime::testing::schema::tables(&sqlite));
     }
 
     fn sample(pid: &str, state: NegotiationState) -> Negotiation {
@@ -1147,6 +1160,26 @@ mod tests {
             pending: None,
             version: 0,
         }
+    }
+
+    /// Pages follow the bytes of the key on both databases, whatever the
+    /// PostgreSQL server's collation (`en_US` would put `a-3` before
+    /// `B-2`): the key columns are `COLLATE "C"`.
+    #[test]
+    fn negotiations_are_listed_in_byte_order() {
+        on_every_database(|store| {
+            let c: &dyn ConsumerStore = store;
+            for pid in ["b-1", "a-3", "B-2", "_x"] {
+                let mut n = consumer_sample(NegotiationState::Requested);
+                n.consumer_pid = pid.into();
+                c.insert(&n).unwrap();
+            }
+            let pids = |page: Vec<ConsumerNegotiation>| -> Vec<String> {
+                page.into_iter().map(|n| n.consumer_pid).collect()
+            };
+            assert_eq!(pids(c.list(None, 10).unwrap()), ["B-2", "_x", "a-3", "b-1"]);
+            assert_eq!(pids(c.list(Some("_x"), 10).unwrap()), ["a-3", "b-1"]);
+        });
     }
 
     #[test]
@@ -1547,6 +1580,67 @@ mod tests {
             (alone.agreement_id.as_str(), alone.counter_party_id.as_str()),
             ("", "")
         );
+    }
+
+    /// The migrations of 1.2 (the last release before PostgreSQL).
+    const MIGRATIONS_OF_1_2: usize = 17;
+
+    /// A file written by 1.2 opens with 1.3: its negotiations and its
+    /// transfer, with a data plane step recorded and no lease, read back;
+    /// the step is left over, so the sweep takes it over; the tables 1.3
+    /// added work in it (leases, token ids, the bundle version in use,
+    /// which a file of 1.2 does not have, so the cache folder's
+    /// `.in-use.json` says which version is in use:
+    /// `bundle_harvest::BundleHarvester::start`).
+    ///
+    /// The negotiations are written by this version's store on the
+    /// tables of 1.2 (1.3 added tables to the connector's schema, no
+    /// columns), the transfer as SQL text.
+    #[test]
+    fn a_file_of_1_2_opens_and_works() {
+        use crate::bundle_harvest::SharedBundleVersion;
+        use portitor_dsp::transfer::provider::TransferStore;
+        use portitor_runtime::leases::LeaseStore;
+        use portitor_runtime::used_tokens::UsedTokenStore;
+
+        let dir = portitor_runtime::testing::TempDir::new("connector-file-of-1-2");
+        let path = dir.path().join("connector.db");
+        let conn =
+            portitor_runtime::sqlite::open(Some(&path), &SQLITE_MIGRATIONS[..MIGRATIONS_OF_1_2])
+                .unwrap();
+        conn.execute(
+            "INSERT INTO transfer (provider_pid, consumer_pid, state, callback_address, \
+             counter_party, agreement_id, dataset_id, format, pending, version, flow_step) \
+             VALUES ('urn:uuid:t', 'urn:uuid:c', 'SUSPENDED', 'https://c.example/cb', \
+             'did:web:c.example', 'urn:uuid:a', 'd', 'HttpData-PULL', NULL, 3, 'suspend')",
+            [],
+        )
+        .unwrap();
+        let of_1_2 = on_connection(conn);
+        let negotiation = sample("urn:uuid:p", NegotiationState::Agreed);
+        NegotiationStore::insert(&of_1_2, &negotiation).unwrap();
+        let consumer_negotiation = consumer_sample(NegotiationState::Requested);
+        ConsumerStore::insert(&of_1_2, &consumer_negotiation).unwrap();
+        drop(of_1_2);
+
+        let store = ConnectorStore::open_sqlite_file(&path).unwrap();
+        let provider: &dyn NegotiationStore = &store;
+        assert_eq!(provider.get("urn:uuid:p").unwrap().unwrap(), negotiation);
+        let consumer: &dyn ConsumerStore = &store;
+        assert_eq!(
+            consumer.get("urn:uuid:c").unwrap().unwrap(),
+            consumer_negotiation
+        );
+        let transfers: &dyn TransferStore = &store;
+        let transfer = transfers.get("urn:uuid:t").unwrap().unwrap();
+        assert_eq!((transfer.version, transfer.lease), (3, None));
+        assert_eq!(transfers.recorded_steps().unwrap().len(), 1);
+        // the tables of 1.3
+        assert_eq!(store.bundle_in_use().unwrap(), None);
+        let database = store.database();
+        assert!(database.claim("push", "urn:uuid:t", "p-1", 60, 30).unwrap());
+        assert!(!database.claim("push", "urn:uuid:t", "p-2", 60, 30).unwrap());
+        assert!(store.use_token_id("jti-1", 200, 30).unwrap());
     }
 
     /// A file of 1.2 before the lease (16 migrations) with a transfer

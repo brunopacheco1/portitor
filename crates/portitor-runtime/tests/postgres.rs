@@ -209,9 +209,11 @@ async fn calls_from_inside_a_tokio_runtime_work() {
     assert_eq!(n, 1);
 }
 
-/// With `PORTITOR_TEST_DATABASE_TLS_URL` (a server with TLS and its CA
-/// in `sslrootcert`), the connection is encrypted and the certificate
-/// checked; a wrong host name is refused.
+/// With `PORTITOR_TEST_DATABASE_TLS_URL` (a server with TLS, its
+/// certificate from a test CA for `localhost`, that CA in `sslrootcert`;
+/// CI sets it), the connection is encrypted and the certificate checked:
+/// a wrong host name is refused, and so are the system's CAs
+/// (`sslrootcert=system`), which do not hold the test CA.
 #[test]
 fn tls_connections_check_the_server() {
     let Some(url) = portitor_runtime::settings::text_from_env("PORTITOR_TEST_DATABASE_TLS_URL")
@@ -235,4 +237,57 @@ fn tls_connections_check_the_server() {
         portitor_runtime::database::postgres::Settings::from_url(&wrong_host, None).unwrap();
     let err = open(&settings, &COUNTER).unwrap_err();
     assert!(err.message.contains("cannot connect"), "{err}");
+    let (base, _) = url.split_once('?').unwrap();
+    let system = format!("{base}?sslrootcert=system");
+    let settings = portitor_runtime::database::postgres::Settings::from_url(&system, None).unwrap();
+    let err = open(&settings, &COUNTER).unwrap_err();
+    assert!(err.message.contains("certificate"), "{err}");
+}
+
+/// A statement may run 30 seconds unless the URL says otherwise.
+#[test]
+fn statements_have_a_time_limit() {
+    let Some(db) = databases::fresh_postgres(&COUNTER) else {
+        return;
+    };
+    let limit: String = (&db)
+        .query_one("SHOW statement_timeout", values![])
+        .unwrap()
+        .unwrap()
+        .get(0)
+        .unwrap();
+    assert_eq!(limit, "30s");
+    let err = db
+        .transaction(|tx| {
+            tx.execute("SET LOCAL statement_timeout = 50", values![])?;
+            tx.query("SELECT pg_sleep(1)", values![])
+        })
+        .unwrap_err();
+    assert_eq!(err.code.as_deref(), Some("57014"), "{err}");
+}
+
+/// A test database is dropped from the server once its settings and the
+/// databases opened with them are gone, so test runs leave none behind.
+#[test]
+fn a_test_database_is_dropped_after_its_test() {
+    let Some(url) = databases::postgres_url() else {
+        return;
+    };
+    let settings = databases::fresh_postgres_settings(&url);
+    let db = open(&settings, &COUNTER).unwrap();
+    let name: String = (&db)
+        .query_one("SELECT current_database()::text", values![])
+        .unwrap()
+        .unwrap()
+        .get(0)
+        .unwrap();
+    assert!(name.starts_with("portitor_test_"), "{name}");
+    drop(settings);
+    // still open: the database stays
+    (&db).query("SELECT 1", values![]).unwrap();
+    drop(db);
+    let password = portitor_runtime::settings::text_from_env("PORTITOR_TEST_DATABASE_PASSWORD");
+    let admin = portitor_runtime::database::postgres::Settings::from_url(&url, password).unwrap();
+    let left = portitor_runtime::database::postgres::database_exists(&admin, &name).unwrap();
+    assert!(!left, "{name} is still there");
 }

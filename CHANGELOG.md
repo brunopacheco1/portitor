@@ -41,12 +41,26 @@ need PostgreSQL and the two-step key rotation. Details:
 - Settings `PORTITOR_DATABASE_URL` (a libpq URI; `sslmode`
   `verify-full` by default, `verify-ca` and `require` also check the
   host name, `disable` turns TLS off, `prefer` and `allow` are refused;
-  `sslrootcert` for a private CA) and `PORTITOR_DATABASE_PASSWORD_FILE`.
+  `sslrootcert`, as in libpq, a PEM file whose CAs are then the only
+  ones trusted, or `system`; without it the image's CAs) and
+  `PORTITOR_DATABASE_PASSWORD_FILE`.
+- Timeouts on PostgreSQL connections, each settable in the URL as in
+  libpq: `connect_timeout` (10 s), a `statement_timeout` (30 s, in
+  `options`), `tcp_user_timeout` (30 s) and TCP keepalives (after 15 s
+  idle, every 5 s). A call without an answer after 40 s fails and its
+  connection is closed, so a connection to a server that went away (a
+  failover, a network cut) no longer blocks a request or a lease
+  renewal without limit.
   A URL that holds a password is refused, and so is a start with both
   `PORTITOR_DATABASE_URL` and `PORTITOR_DB_FILE`
   ([DEPLOYING, Database](docs/DEPLOYING.md#database)).
-- CI runs the store tests on SQLite and on PostgreSQL 16 and 19
-  ([TESTING, PostgreSQL](docs/TESTING.md#postgresql)).
+- CI runs the store tests on SQLite and on PostgreSQL 16 and 19, and
+  the TLS test of the database layer on a PostgreSQL 16 with TLS
+  ([TESTING, PostgreSQL](docs/TESTING.md#postgresql)). The schema test
+  of each component compares column types, `NOT NULL`, primary keys and
+  unique indexes of the two databases, and a test per component opens a
+  SQLite file of 1.2 with 1.3. Test databases are dropped after their
+  test.
 - A replica test, `scenarios/two-party/run-replicas.sh`, run by CI on
   PostgreSQL 19: two processes of each image, each pair on one
   database, behind a round-robin proxy (`scripts/round-robin-proxy.py`).
@@ -140,6 +154,10 @@ change:
   the server's certificate and host name checked against a test CA made
   for each run (`scripts/demo-database.sh`), and the passwords in
   Compose secrets. Each scenario's changelog has the details.
+  `init-databases.sh` reads each password from its file inside `psql`,
+  never on a command line, and, when the server runs with TLS, lets
+  connections over the network in only with TLS (`hostssl` in
+  `pg_hba.conf`).
   `two-data-spaces`, which runs processes, uses PostgreSQL when
   `PORTITOR_TEST_DATABASE_URL` names a server (`scripts/test-databases.sh`).
 - The DSP TCK run in CI keeps the connector's state in PostgreSQL 19.
@@ -162,6 +180,13 @@ change:
   claims and records, not once per round: after a slow try, the next
   delivery's lease could end at once and another issuer container send
   it too.
+- On SQLite, a transaction takes the file's write lock when it starts
+  (`BEGIN IMMEDIATE`). A transaction that read and then wrote failed at
+  once with `database is locked` when the lease thread of 1.3 wrote the
+  file in between.
+- On PostgreSQL, the connector's keys that lists are paged by
+  (negotiations, transfers, data flows) sort by their bytes
+  (`COLLATE "C"`), as on SQLite, whatever the server's collation.
 
 ### Dependencies
 
