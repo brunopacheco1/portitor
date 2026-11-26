@@ -140,7 +140,10 @@ export on, `telemetry: exporting` (INFO).
 | `push not sent: the consumer's membership could not be checked now` (WARN, 1.1) | As provider: the membership check before or during a push could not finish (`reason`); the push fails and the transfer is terminated | Check the issuer's status list and DID document from the connector's network; the consumer asks for a new transfer |
 | `push: cannot start; the transfer is terminated` (WARN, 1.1) | As provider: a started push transfer has no source kept (only one started under 1.1 whose dataset had no `portitor:source` at the upgrade to 1.2), or the database failed (`error`); nothing is sent and the transfer is terminated | Check the `/data` volume. For a missing source: the consumer asks for a new transfer |
 | `push: the end of the transfer could not be saved` / `push: the started pushes cannot be read` (ERROR, 1.1) | As provider: the database failed while a push ended, or at start while looking for pushes to send again | Check disk space and the `/data` volume |
-| `transfer not taken up after the restart: its data plane step stays recorded and runs before its next change or at the next restart` (ERROR, 1.2) | As provider: at start, the database failed while running a data plane step left over from before the restart (`transfer`, `failure`). The connector starts; that step runs before the transfer's next change or at the next restart | Check disk space and the `/data` volume |
+| `transfer not taken up: its data plane step stays recorded and runs again at its next change, the next sweep or the next restart` (ERROR, 1.2) | As provider: at start or in the sweep (every 10 s), the database failed while running a data plane step left over (`transfer`, `failure`). The connector goes on; the step runs again later | Check disk space and the `/data` volume |
+| `data plane step left over ran; its lease had ended` (INFO, 1.2) | As provider: a data plane step recorded with a transfer's change had not run (its process stopped, or recording it failed); once its 30-second lease ended, the start or the sweep ran it (`transfer`), and the message that waited for it is sent | Nothing, unless it repeats: then look for the reason the step was left (a crash, or database errors) |
+| `transfer sweep: the transfers cannot be read` (ERROR, 1.2) | As provider: the sweep for steps left over could not read the database; it tries again in 10 seconds | Check disk space and the `/data` volume |
+| A partner says its transfer message got HTTP 503 with reason `the transfer is being changed; retry` (1.2) | Another call (in this process, or another one on the same database) was changing that transfer at that moment; nothing was written, and the answer carries `Retry-After: 1`. Eclipse EDC retries such answers. `POST /v1/provided-transfers/{providerPid}/termination` answers the same with a problem document | Nothing; retry. If it lasts longer than 30 seconds for one transfer, look for the ERROR lines above |
 | `push received: the object storage failed` (WARN, 1.1) | As consumer: a push arrived but could not be stored (`error` names a status or a cause, never a key); the sender got HTTP 502. The audit line says `failed` | Check the object storage, the push bucket and the connector's key |
 | `object storage: an unfinished upload could not be aborted` (WARN, 1.1) | An upload into the push bucket failed, and its parts could not be removed | Remove unfinished multipart uploads with your storage's tools, or set a lifecycle rule for them |
 | `harvesting datasets` (INFO, at start) | The datasets file and the interval in use | Nothing |
@@ -504,10 +507,13 @@ image ([ADR 0028](adr/0028-separate-pluggable-data-plane.md), step 1).
 No setting or route was added, removed or renamed. Nothing has to
 change in your configuration.
 
-1. **Back up `/data` first.** Migrations 14, 15 and 16 run at start,
-   forward only. They add the columns `data_flow.source`,
-   `data_flow.agreement_id`, `data_flow.counter_party_id` and
-   `transfer.flow_step`. Migration 14 gives each existing data flow the
+1. **Back up `/data` first.** Migrations 14, 15, 16 and 17 run at
+   start, forward only. They add the columns `data_flow.source`,
+   `data_flow.agreement_id`, `data_flow.counter_party_id`,
+   `transfer.flow_step`, and the lease of a transfer
+   (`transfer.state_before_step`, `transfer.lease_holder`,
+   `transfer.lease_until`, and the partial index
+   `transfer_recorded_step`). Migration 14 gives each existing data flow the
    `portitor:source` its dataset has in the harvest's read copy.
    Migration 15 gives it the agreement and the consumer of its
    transfer. To go back to 1.1, restore the backup.
@@ -529,12 +535,20 @@ change in your configuration.
    route above, so the consumer is told; it asks for a new transfer.
 4. **Fixed, provider: the data plane is told once, after the transfer
    is saved**
-   ([TD-48](RISKS_AND_TECHNICAL_DEBTS.md#td-48)). Nothing to do. New
-   log line: `transfer not taken up after the restart: its data plane
-   step stays recorded and runs before its next change or at the next
-   restart` (ERROR, `transfer`): the database failed for that transfer
-   at the start; the connector starts anyway. Check disk space and the
-   `/data` volume.
+   ([TD-48](RISKS_AND_TECHNICAL_DEBTS.md#td-48)). Nothing to do. While
+   its data plane step runs, a transfer is leased in the database for
+   at most 30 seconds. **New answer:** a partner's transfer message (or
+   your `POST /v1/provided-transfers/{providerPid}/termination`) that
+   comes in that moment gets HTTP 503 with `Retry-After: 1` and reason
+   `the transfer is being changed; retry`; nothing was written, and the
+   partner retries (Eclipse EDC does). In 1.1 it waited instead. A step
+   left over by a process that stopped runs within about 40 seconds
+   (sweep every 10 seconds). New log lines: `data plane step left over
+   ran; its lease had ended` (INFO), `transfer not taken up: ...`
+   (ERROR, at start or in the sweep) and `transfer sweep: the transfers
+   cannot be read` (ERROR); see the table above. `portitor-connector
+   listening` has a new field, `process`: the random id this process
+   leases transfers with.
 5. **Logs.** `audit: transfer store failed` is gone: the audit line now
    takes the agreement and the consumer from the data flow. The audit
    line itself (`data transfer done`, target `portitor::audit`) does

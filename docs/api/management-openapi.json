@@ -800,7 +800,7 @@
         "tags": [
           "Provided transfers"
         ],
-        "summary": "End a transfer this connector runs as provider. Access ends at once:\nthe data flow is terminated and every download of it that runs is\ncut. The DSP termination is sent to the consumer in the background;\nthe state becomes `TERMINATED` once the consumer acknowledges it, or\nwhen it cannot be reached. Asked again while the termination is on\nits way, it answers the same and sends nothing more.",
+        "summary": "End a transfer this connector runs as provider. Access ends at once:\nthe data flow is terminated and every download of it that runs is\ncut. The DSP termination is sent to the consumer in the background;\nthe state becomes `TERMINATED` once the consumer acknowledges it, or\nwhen it cannot be reached. Asked again while the termination is on\nits way, it answers the same and sends nothing more. Answered 503\nwhile another call is changing the transfer (added in 1.2).",
         "operationId": "terminate",
         "parameters": [
           {
@@ -856,6 +856,26 @@
           },
           "404": {
             "description": "Unknown transfer",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Another call is changing the transfer now (from 1.2: it holds the transfer's lease in the database while its data plane step runs); nothing was written. Try again after Retry-After",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                },
+                "description": "Seconds to wait before trying again: 1"
+              }
+            },
             "content": {
               "application/problem+json": {
                 "schema": {

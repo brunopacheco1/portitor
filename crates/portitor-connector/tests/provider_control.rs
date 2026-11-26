@@ -33,7 +33,8 @@ use portitor_connector::store::SqliteNegotiations;
 use portitor_connector::{Config, Ports};
 use portitor_dsp::negotiation::Agreement;
 use portitor_dsp::negotiation::provider::Negotiation;
-use portitor_dsp::transfer::provider::{Agreements, StoreError};
+use portitor_dsp::transfer::TransferState;
+use portitor_dsp::transfer::provider::{Agreements, FlowStep, Lease, StoreError, TransferStore};
 use portitor_runtime::BoxFuture;
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
@@ -137,6 +138,7 @@ async fn upstream() -> String {
 struct Provider {
     app: Router,
     management: Router,
+    negotiator: portitor_connector::Negotiator,
     sender: Arc<FakeSender>,
     revoked: Arc<AtomicBool>,
 }
@@ -177,10 +179,12 @@ fn provider_with(
     ports.transfers.agreements = Shared(Arc::new(OneAgreement));
     ports.harvest.source = Some(Arc::new(FixedSource::new(entries)));
     let (app, negotiator) = portitor_connector::build(&config(token_seconds), ports).unwrap();
-    let management = portitor_connector::management::router(negotiator, ApiKey::new(KEY).unwrap());
+    let management =
+        portitor_connector::management::router(negotiator.clone(), ApiKey::new(KEY).unwrap());
     Provider {
         app,
         management,
+        negotiator,
         sender,
         revoked,
     }
@@ -630,4 +634,99 @@ async fn a_provider_without_membership_may_still_end_our_transfer() {
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert_eq!(lines[0]["fields"]["process"], "urn:uuid:ct-1");
     assert_eq!(lines[0]["fields"]["caller"], PROVIDER);
+}
+
+/// Now, in seconds since 1970, as leases count it.
+fn now_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+/// Writes to `store`, as another process sharing the database would, that
+/// transfer `pid` is suspended by the consumer and its data plane step
+/// recorded but not run, with a lease that ends at `lease_until`.
+fn left_suspending(store: &SqliteNegotiations, pid: &str, lease_until: u64) {
+    let mut transfer = store.get(pid).unwrap().unwrap();
+    let expected = transfer.version;
+    transfer.version += 1;
+    transfer.state = TransferState::Suspended;
+    transfer.flow_step = Some(FlowStep::Suspend);
+    transfer.state_before_step = Some(TransferState::Started);
+    transfer.lease = Some(Lease {
+        holder: "urn:uuid:another-process".to_owned(),
+        until: lease_until,
+    });
+    assert!(store.replace_if(&transfer, expected).unwrap());
+}
+
+/// TD-48 (closed in 1.2): while another process holds the transfer's
+/// lease (its data plane step runs), a consumer's message is answered 503
+/// with the DSP error and `Retry-After`, and so is the provider's own
+/// termination on the management API; nothing changes. Once the lease
+/// has ended, the sweep runs the step left over: access stops, and the
+/// step is recorded as run.
+#[tokio::test]
+async fn a_leased_transfer_is_answered_503_and_the_sweep_takes_it_over() {
+    let store = Arc::new(SqliteNegotiations::in_memory().unwrap());
+    let p = provider_with(
+        &format!("{}/file", upstream().await),
+        Duration::from_secs(60),
+        3_600,
+        &store,
+    );
+    let (pid, path, token) = p.started_transfer().await;
+    left_suspending(&store, &pid, now_seconds() + 60);
+
+    let request = message_from(CONSUMER, "TransferTerminationMessage", &pid, "termination");
+    let response = p.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.headers()[header::RETRY_AFTER], "1");
+    let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    let error: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(error["@type"], "TransferError");
+    assert_eq!(error["code"], "503");
+    assert_eq!(error["providerPid"], pid.as_str());
+    assert_eq!(error["reason"][0], "the transfer is being changed; retry");
+
+    let uri = format!("/v1/provided-transfers/{pid}/termination");
+    let response = p
+        .management
+        .clone()
+        .oneshot(manage("POST", &uri))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.headers()[header::RETRY_AFTER], "1");
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "application/problem+json"
+    );
+    assert_eq!(
+        p.view(&pid).await.1["state"],
+        "SUSPENDED",
+        "nothing written"
+    );
+    assert_eq!(
+        p.fetch(&path, &token).await.0,
+        StatusCode::OK,
+        "no step ran"
+    );
+
+    // the lease ends; the sweep runs the step left over
+    left_suspending(&store, &pid, 1);
+    let sweep = p
+        .negotiator
+        .schedule_transfer_sweep(Duration::from_millis(10));
+    for _ in 0..400 {
+        if store.get(&pid).unwrap().unwrap().flow_step.is_none() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    sweep.abort();
+    let saved = store.get(&pid).unwrap().unwrap();
+    assert_eq!((saved.flow_step, saved.lease), (None, None));
+    assert_ne!(p.fetch(&path, &token).await.0, StatusCode::OK, "suspended");
 }

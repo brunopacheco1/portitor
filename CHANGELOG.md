@@ -68,31 +68,48 @@ transfer keeps the data source it started with. Upgrading from 1.1:
   read-change-write of a transfer, so a step could run although its
   write lost, or run twice. Now the write records the step it needs
   (`transfer.flow_step`), the same call runs it right after the write,
-  and our DSP message waits until it has run. Each write of a provider
-  transfer and its step run under one lock in the process, so no other
-  write can come between them; a step still recorded runs before the
-  next write of its transfer. The state change of a transfer is logged
-  and counted once its step has run, so a write taken back logs
-  nothing, as before. After a restart, recorded steps run before pending messages
-  are sent. A step the data plane refuses still ends the transfer when
-  it is the provider's own decision; for a consumer's message, an
-  undelivered message, the provider's own termination or the end of a
-  push, the write is taken back and the caller gets the failure, as
-  before. A transfer request whose insert fails or loses to a repeated
-  request no longer starts a data flow (before: started, then
-  terminated).
+  and our DSP message waits until it has run. While the step runs, the
+  transfer is leased in the database (holder: a random id of the
+  process; 30 seconds), taken in the write that records the step and
+  given back in the write that records that it ran. Another write of
+  that transfer, from this process or another one sharing the
+  database, is refused at once: a consumer's message gets HTTP 503 with
+  the DSP `TransferError` (code `503`, reason `the transfer is being
+  changed; retry`) and `Retry-After: 1`, and so does
+  `POST /v1/provided-transfers/{providerPid}/termination` (a problem
+  document). This 503 is new: in 1.1 such a message waited. Eclipse EDC
+  answers the same way and retries a 5xx; DSP 2025-1 itself names only
+  4xx refusals ([ADR 0007](docs/adr/0007-outbox-and-proof-of-delivery.md),
+  note added in 1.2). Our own background calls (recording an
+  acknowledgement, the end of a push, a membership that no longer
+  holds) try again for a little more than one lease instead. A step
+  whose lease has ended (its process stopped, or recording it failed)
+  is taken over by the next call that changes the transfer, by a sweep
+  every 10 seconds, and at start; running it twice is safe. The state
+  change of a transfer is logged and counted once its step has run,
+  from the state kept with the step in the database, so a write taken
+  back logs nothing, as before, and any process can report it. A step
+  the data plane refuses still ends the transfer when it is the
+  provider's own decision or a step taken over; for a consumer's
+  message, an undelivered message, the provider's own termination or
+  the end of a push, the write is taken back and the caller gets the
+  failure, as before. A transfer request whose insert fails or loses to
+  a repeated request no longer starts a data flow (before: started,
+  then terminated).
   Only when the database fails: if a step ran but recording that it
   ran failed twice, the caller gets an error although its write landed,
-  and the step runs again before the next write of the transfer or at
-  the next restart; a transfer that fails at the restart is skipped and
-  logged (`transfer not taken up after the restart`, ERROR) instead of
-  stopping the connector.
+  and the step runs again once its lease has ended; a transfer whose
+  step cannot be taken up is skipped and logged (`transfer not taken
+  up`, ERROR) instead of stopping the connector.
 
 ### Upgrade notes
 
-- Database migrations 14, 15 and 16 (forward only) add
+- Database migrations 14, 15, 16 and 17 (forward only) add
   `data_flow.source`, `data_flow.agreement_id` and
-  `data_flow.counter_party_id`, and `transfer.flow_step`. Flows of 1.1
+  `data_flow.counter_party_id`, `transfer.flow_step`, and the lease of a
+  transfer (`transfer.state_before_step`, `transfer.lease_holder`,
+  `transfer.lease_until`, and the partial index
+  `transfer_recorded_step`). Flows of 1.1
   get the source their dataset has in the harvest's read copy, and the
   agreement and consumer of their transfer. A 1.1 flow whose dataset had
   no `portitor:source` keeps none and is refused, as in 1.1: 401 for a
