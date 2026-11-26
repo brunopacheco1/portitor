@@ -253,10 +253,10 @@ The authority's bundle and its issuer, as seen by participants.
 
 The supply chain is not a runtime boundary; the row "Users' supply
 chain" above was checked: `cargo vet --locked` runs in
-`.github/workflows/dependencies.yml`, with N exemptions in
-`supply-chain/config.toml` ([R-04](RISKS_AND_TECHNICAL_DEBTS.md#r-04));
-1.3 adds the 32 crate versions of `tokio-postgres`.
-<!-- 1.3: fill after the cargo-vet decision -->
+`.github/workflows/dependencies.yml`, with 185 exemptions in
+`supply-chain/config.toml` and 57 crate versions covered by imported
+audits (2026-11-26; [R-04](RISKS_AND_TECHNICAL_DEBTS.md#r-04)). 1.3
+added the 32 crate versions of `tokio-postgres`, all exempted.
 
 #### Findings
 

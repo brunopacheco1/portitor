@@ -247,9 +247,11 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
 - **Next.** Review or exempt again each bump of an exempted crate, so
   the list shrinks. Count the exemptions at each release.
 - **1.3.** `tokio-postgres` (ADR 0029) brings 32 crate versions that
-  the imported audits do not cover. Whether they are exempted or
-  certified is with the maintainer. After that decision:
-  N exemptions in `supply-chain/config.toml`. <!-- 1.3: fill after the cargo-vet decision -->
+  the imported audits do not cover; they are exempted (maintainer,
+  2026-11-26), and so are the six versions audited before, because an
+  audit must mean a person read the code. On 2026-11-26: 57 crate
+  versions fully audited by the imported sets, 1 partly, 185 exempted
+  in `supply-chain/config.toml`; `audits.toml` is empty.
 
 <a id="r-05"></a>
 ### R-05 No written OpenSSF Baseline level 1 self-assessment
