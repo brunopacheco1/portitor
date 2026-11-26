@@ -110,13 +110,13 @@ if let Some(sent) = negotiation.pending.clone() { /* ... */ }
 call its content `sent`".
 
 ```rust
-let Some(token) = bearer(&headers) else {
+let Some(token) = bearer_token_in(&headers) else {
     return unauthorized();
 };
 ```
 
 `let ... else` says "this must be a `Some`; if not, leave now". After it,
-`token` is a plain value (`data_plane.rs`).
+`token` is a plain value (`serve` in `portitor-dataplane/src/serving.rs`).
 
 ```rust
 if let Some(participant) = caller
@@ -126,6 +126,22 @@ if let Some(participant) = caller
 
 A *let chain* (Rust 2024): `if let` and other conditions joined with
 `&&`. The body runs only if all of them hold (`transfer/provider.rs`).
+
+```rust
+match (&told, if_refused) {
+    (Ok(address), _) => add_start_message(now, step, address.clone()),
+    (Err(_), IfRefused::TakeBack { before }) if now.version == written.version => { /* ... */ }
+    (Err(reason), _) => { /* ... */ }
+}
+```
+
+A `match` on a *reference* (`&told`, and `if_refused`, which is a
+`&IfRefused`) takes nothing out of the value: each name in the pattern
+is a reference into it. `address` is a `&Option<DataAddress>`, so the
+code calls `.clone()` to get a value of its own. With `&mut` the names
+are `&mut` too: `if let Some(pending) = &mut old.pending` lets the code
+change `pending` in place (`flow_steps.rs`;
+`portitor-dsp/src/transfer/provider/tests.rs`).
 
 ## More patterns
 
@@ -306,6 +322,28 @@ to reach each store).
 Never write `.unwrap()` outside tests. It stops the program when the
 value is missing, and the linter refuses it.
 
+```rust
+let ended = Cell::new(false);
+let recorded = process::update(self, &lookup, |now| {
+    /* ... */
+    ended.set(false);
+    /* ... */ ended.set(true);
+    Ok(Write::Save)
+})?;
+if ended.get() { /* ... */ }
+```
+
+A closure that may run more than once and must tell its caller
+something. `process::update` runs the change again whenever another
+write came first, and the closure may only borrow what is around it,
+not change it (it is a `Fn`, not a `FnMut`). A `Cell` is a box whose
+content can be set through a shared borrow: `set` and `get` copy a
+small value in and out. Each run first resets it (`ended.set(false)`),
+so after the call it holds what the last run, the one that was written,
+decided. A `Cell` cannot be shared between threads (it is not `Sync`);
+here it lives only during one call (`after_write` in
+`portitor-dsp/src/transfer/provider/flow_steps.rs`).
+
 ## Traits: ports and adapters
 
 A `trait` lists methods that a type promises to have, like an interface.
@@ -444,8 +482,9 @@ impl UpstreamSources for BTreeMap<String, String> {
 
 A crate may implement its own trait for a type it did not write, even a
 standard one: here a plain map of dataset id to URL becomes an adapter
-of the data plane's `UpstreamSources` port, so unit tests need no fake
-type (`portitor-connector/src/data_plane.rs`). The reverse, someone
+of the connector's `UpstreamSources` port, which `SignalingDataFlows`
+reads to name each dataset's source in a start message, so unit tests
+need no fake type (`portitor-connector/src/harvest/copy.rs`). The reverse, someone
 else's trait for someone else's type, is not allowed.
 
 ```rust
@@ -459,6 +498,88 @@ let triples: Box<dyn Iterator<Item = Result<Triple, String>>> = match document.f
 The arms of a `match` must give one type, and each parser is its own
 iterator type. `Box<dyn Iterator<Item = X>>` is "some iterator of `X`,
 on the heap", one type that holds either (`portitor-shacl/src/graph.rs`).
+
+```rust
+pub trait ProviderFlowStore: FlowStore + MembershipStore {}
+
+impl<T: FlowStore + MembershipStore> ProviderFlowStore for T {}
+```
+
+A `dyn` type may name only one trait of its own, plus `Send` and
+`Sync`: `dyn FlowStore + MembershipStore` is not allowed. So
+`ProviderFlowStore` is a trait that only names the other two (they are
+its *supertraits*), and the second line, a *blanket impl*, says "every
+type that implements both implements this one too". No type writes
+`impl ProviderFlowStore` by hand. The connector keeps its flow store as
+`Shared<dyn ProviderFlowStore + Send + Sync>` (`AnyFlowStore` in
+`portitor-connector/src/ports.rs`): one value that is both the data
+plane's `FlowStore` and the control plane's `MembershipStore`.
+
+```rust
+pub fn flows_only(&self) -> Arc<dyn FlowStore + Send + Sync> {
+    Arc::clone(&self.0) as Arc<dyn FlowStore + Send + Sync>
+}
+```
+
+*Trait upcasting* (Rust 1.86; Portitor needs 1.89): a `dyn ProviderFlowStore` can be used as
+a `dyn FlowStore`, one of its supertraits, with `as`. The pointer is
+copied, the store is not: both point to the same SQLite file. The data
+plane gets only this view, so it cannot read the memberships
+(`flows_only` in `ports.rs`).
+
+```rust
+// plane.rs
+pub struct HttpDataPlane { /* ... */ }
+impl HttpDataPlane { pub fn new(/* ... */) /* ... */ }
+// serving.rs
+impl HttpDataPlane { pub fn authorize(/* ... */) /* ... */ }
+```
+
+One type may have `impl` blocks in several files of its crate. The
+struct `HttpDataPlane` is defined in `portitor-dataplane/src/plane.rs`;
+`signaling.rs`, `serving.rs`, `sources.rs` and `push.rs` each add the
+methods of their topic. To find a method, search the crate for
+`fn <name>`; the table in the crate's `lib.rs` says which file holds
+which topic.
+
+```rust
+impl DataPlane for &Plane { /* ... */ }
+```
+
+A trait implemented for a *reference* to a type, not for the type. The
+test data plane in `portitor-connector/src/data_flows.rs` is used as
+`SignalingDataFlows<&Plane>` (`flows_over`): the adapter holds a borrowed
+`&Plane`, and the test can still read `plane` afterwards to see which
+signals arrived.
+
+```rust
+impl MembershipGate {
+    pub async fn check(&self, flow_id: &str) -> Access { /* ... */ }
+}
+impl AccessGate for MembershipGate {
+    fn check<'a>(&'a self, flow_id: &'a str) -> BoxFuture<'a, Access> {
+        Box::pin(MembershipGate::check(self, flow_id))
+    }
+}
+```
+
+A type may have its own method and a trait method with the same name.
+`gate.check(id)` and `MembershipGate::check(self, id)` call the type's
+own method: Rust looks there first. The trait method is reached through
+the trait, here when the data plane calls it on an `Arc<dyn
+AccessGate>`. So the trait method above is not calling itself: it wraps
+the type's `async fn` in the box its trait asks for
+(`portitor-connector/src/flow_membership.rs`).
+
+### `BoxFuture` in a trait
+
+A trait whose objects are kept as `dyn Trait` cannot have an `async fn`
+yet. Its method returns a `BoxFuture` instead: a boxed task, written
+with `Box::pin(async move { ... })` (["`async`, `.await` and background
+tasks"](#async-await-and-background-tasks)). The data plane's
+`AccessGate` port does this, so the data plane can hold the control
+plane's gate as `Arc<dyn AccessGate>` without knowing its type
+(`portitor-dataplane/src/access.rs`).
 
 ## Sharing between threads: `Arc` and `Mutex`
 
@@ -491,7 +612,8 @@ on the heap", one type that holds either (`portitor-shacl/src/graph.rs`).
   receiving route count the bytes of a body as it passes:
   `body.map_frame(...)` sees each frame, and the closure adds its length
   with `fetch_add(n, Ordering::Relaxed)` (`post` in
-  `portitor-connector/src/push.rs`, `receive` in `receiving.rs`). The
+  `portitor-dataplane/src/push.rs`, `receive` in
+  `portitor-connector/src/receiving.rs`). The
   total is read once, after the body has ended, for the audit line.
   `Relaxed` is enough for a counter that nothing else depends on; use
   `SeqCst` everywhere else.
@@ -911,7 +1033,7 @@ let response = match tokio::time::timeout(UPSTREAM_TIMEOUT, sent).await {
 
 `timeout` wraps the task's own `Result` in one of its own, so there are
 two: the outer says whether it ended in time, the inner what the task
-gave (`fetch` in `data_plane.rs`).
+gave (`fetch` in `portitor-dataplane/src/sources.rs`).
 
 ```rust
 let (stop, stopped) = tokio::sync::watch::channel(false);
@@ -971,7 +1093,7 @@ switches: Mutex<BTreeMap<String, watch::Sender<()>>>
 let removed = self.switches().remove(flow_id);
 ```
 
-`RunningFlows` (`portitor-connector/src/running_flows.rs`) stops every
+`RunningFlows` (`portitor-dataplane/src/running_flows.rs`) stops every
 download of one data flow at once. Each download holds a
 `watch::Receiver` (in a `CutSignal`); `cut` removes the flow's
 `watch::Sender` from the map, and dropping it is the signal: every
@@ -992,7 +1114,7 @@ impl hyper::body::Body for CutBody {
 ```
 
 A response body is a stream of frames that the server asks for one at
-a time with `poll_frame`. `CutBody` (`data_plane/download.rs`) wraps the
+a time with `poll_frame`. `CutBody` (`portitor-dataplane/src/download.rs`) wraps the
 upstream's body: on each call it first looks at the cut signal, and if
 the flow was cut it answers with an error, which makes the server drop
 the connection. Otherwise it passes the upstream's frame on.
@@ -1302,7 +1424,7 @@ port's size limit and its own (`portitor-runtime/src/request_size.rs`).
   means "any type that implements `Trait`".
 - `impl Trait` as a return type means "some type that implements
   `Trait`; the caller needs to know no more". `-> Option<impl Send +
-  use<>>` (`push_watchdog` in `portitor-connector/src/data_plane.rs`)
+  use<>>` (`push_watchdog` in `portitor-dataplane/src/push.rs`)
   returns a value the caller only keeps and drops (dropping it stops
   the background checks), so its real type stays private. `use<>` says
   the value borrows nothing from the arguments (not `&self`, not `id`),
