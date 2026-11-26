@@ -108,6 +108,16 @@ jobs:
           scenarios/two-party/run-local.sh target/x86_64-unknown-linux-musl/release/portitor-connector \
             target/x86_64-unknown-linux-musl/release/portitor-identity \
             target/x86_64-unknown-linux-musl/release/portitor-issuer
+      # ADR 0029, section 7: two processes of each component on one PostgreSQL
+      # database each, every request spread over both; one process stopped in
+      # the middle, the other finishes its work
+      - name: Two processes of each component share a database; one stops, the other finishes
+        env:
+          PORTITOR_TEST_DATABASE_URL: postgresql://portitor@localhost:5419/postgres?sslmode=disable
+        run: |
+          scenarios/two-party/run-replicas.sh target/x86_64-unknown-linux-musl/release/portitor-connector \
+            target/x86_64-unknown-linux-musl/release/portitor-identity \
+            target/x86_64-unknown-linux-musl/release/portitor-issuer
       - name: Build images
         run: |
           mkdir -p dist/amd64

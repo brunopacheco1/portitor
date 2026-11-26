@@ -59,7 +59,11 @@ scenarios/two-data-spaces/run.sh separate
 
 It builds the debug binaries and runs them as processes, without
 containers, on ports 19070 to 19511. It needs Rust, curl, jq, openssl
-and python3. `KEEP=1` keeps the logs. It is not run by CI. Last run by
+and python3. `KEEP=1` keeps the logs. With `PORTITOR_TEST_DATABASE_URL`,
+a PostgreSQL server whose user may create databases (as for the store
+tests, [TESTING, "PostgreSQL"](../../docs/TESTING.md#postgresql)), each
+component gets a database of its own there, dropped at the end; it then
+needs `psql` too. Without it, each component keeps a SQLite file. It is not run by CI. Last run by
 hand that passed: 2026-11-20, both modes
 ([TESTING, "Two data spaces"](../../docs/TESTING.md#two-data-spaces)).
 

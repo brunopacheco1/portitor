@@ -127,6 +127,7 @@ Out, on purpose:
 | The consumer's receiving route (1.1) | The lab's connector checks the token and streams the body into its bucket (`PORTITOR_PUSH_BUCKET`) as object `{consumerPid}`; the transfer view shows `objectKey`. Without the token: 401. |
 | RustFS (`rustfs/rustfs:1.0.6`), the lab's object storage | Bucket `lab-genotypes`. The lab's connector reaches it with the standard `AWS_ENDPOINT_URL_S3`, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` settings. |
 | Status lists | Lux Biobank and Schuman refuse the HDAB once its membership is revoked. |
+| PostgreSQL (`postgres` 19) | One database and role per Portitor component, over TLS ([ADR 0029](../../docs/adr/0029-several-replicas.md)): the documented default from 1.3. A store bug that only PostgreSQL shows would show here. |
 
 ## Run it
 
@@ -145,7 +146,7 @@ It needs Docker or Podman with Docker Compose, bash 4.4 or later, curl
 7.75 or later (it signs the requests to the lab's bucket with
 `--aws-sigv4`), jq and openssl ([docs/TESTING.md, "Docker or Podman"](../../docs/TESTING.md#docker-or-podman)).
 [run.sh](run.sh) writes the keys into `run/`, makes the keys of the
-lab's object storage for this run, starts the 12 containers of
+lab's object storage for this run, starts the 13 containers of
 [compose.yaml](compose.yaml), has Digital Lux Trust register the four
 participants and issue their credentials, then runs
 [steps.sh](steps.sh), the steps below. Schuman's app runs only when a

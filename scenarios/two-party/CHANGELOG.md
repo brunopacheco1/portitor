@@ -10,6 +10,39 @@ How the scenario changed, newest first. Each entry names the Portitor
 version it ran on. The repository's [CHANGELOG](../../CHANGELOG.md) has
 the release notes these come from.
 
+## 2026-11-26, for 1.3.0
+
+- The Portitor components keep their state in PostgreSQL (1.3,
+  [ADR 0029](../../docs/adr/0029-several-replicas.md)): `compose.yaml`
+  has a `database` service (`postgres` 19, pinned by digest) with one
+  database and role per component, made by
+  `examples/postgres/init-databases.sh`. `run.sh` writes a test CA, the
+  server's certificate and one password per component into
+  `run/database/` (`scripts/demo-database.sh`); the components connect
+  with TLS, checking the certificate and the host name, and read their
+  password from a Compose secret. Images before 1.3 ignore
+  `PORTITOR_DATABASE_URL` and keep their SQLite file. The steps are
+  unchanged.
+- `steps.sh` reads the newest harvest run that read the datasets file
+  (`outcome` other than `unchanged`): a connector that starts later on
+  the same database, as a second replica does, finds the file
+  unchanged.
+- `run-replicas.sh` (new, run by CI): two processes of each component
+  on one database each, behind `scripts/round-robin-proxy.py`. It stops
+  a process in the middle of a negotiation, a transfer and a credential
+  delivery, checks that the other one finishes, then runs `steps.sh`
+  with every request spread over both. On this date the credential
+  delivery and the steps passed; the negotiation and the transfer
+  finished only after the stopped process started again, as the DSP
+  outbox still waits for its lease
+  ([TD-53](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-53)).
+- `replicas.yaml` (new): the provider as two connectors behind nginx,
+  for the test before a release. `run.sh` follows the logs of every
+  provider service for the audit lines.
+- Ran with images built from the 1.3 code, Docker 29.9.3 and Docker
+  Compose 5.7.1 on Linux: `run.sh`, and `run.sh` with `replicas.yaml`,
+  passed.
+
 ## 2026-11-26, for 1.2.0
 
 - `compose.yaml` names the 1.2.0 release images by default.

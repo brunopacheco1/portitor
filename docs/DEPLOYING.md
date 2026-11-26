@@ -248,6 +248,56 @@ The trusted CAs are those of the image, or of `SSL_CERT_DIR` and
 certificate from a private CA, add `sslrootcert=<PEM file>` to the URL
 and mount that file read-only.
 
+**In Docker Compose.** The scenarios run one PostgreSQL container for
+all components, each with its own database and role
+([scenarios/two-party/compose.yaml](../scenarios/two-party/compose.yaml)).
+[examples/postgres/init-databases.sh](../examples/postgres/init-databases.sh)
+makes the roles and databases when the server's data folder is new,
+with the passwords from secret files. For a connector, in short:
+
+```yaml
+services:
+  database:
+    image: docker.io/library/postgres:19.0-alpine3.24@sha256:<digest>
+    # TLS: PostgreSQL reads its key only when its own user owns it
+    entrypoint: ["/bin/sh", "-c", "install -m 600 -o postgres -g postgres /run/secrets/database-server-key /var/lib/postgresql/server.key && exec docker-entrypoint.sh \"$$@\"", "--"]
+    command: ["postgres", "-c", "ssl=on", "-c", "ssl_cert_file=/run/secrets/database-server-cert",
+              "-c", "ssl_key_file=/var/lib/postgresql/server.key"]
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/database-admin-password
+      PORTITOR_DATABASES: portitor_connector   # one role and database per name
+    secrets: [database-server-cert, database-server-key, database-admin-password,
+              portitor-connector-database-password]
+    volumes:
+      - ./init-databases.sh:/docker-entrypoint-initdb.d/portitor.sh:ro
+      - database-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
+  connector:
+    image: ghcr.io/brunopacheco1/portitor-connector@sha256:<digest>
+    environment:
+      PORTITOR_DATABASE_URL: postgresql://portitor_connector@database:5432/portitor_connector?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/portitor-connector-database-password
+      # and the settings of "Run the connector"
+    secrets: [database-ca, portitor-connector-database-password]
+    depends_on:
+      database: {condition: service_healthy}
+secrets:
+  database-ca: {file: /srv/portitor/database/ca.pem}
+  database-server-cert: {file: /srv/portitor/database/server.pem}   # names the host "database"
+  database-server-key: {file: /srv/portitor/database/server.key}
+  database-admin-password: {file: /srv/portitor/database/admin-password}
+  portitor-connector-database-password: {file: /srv/portitor/database/portitor-connector-password}
+volumes:
+  database-data:
+```
+
+The password file of `<name>` is mounted as
+`/run/secrets/<name>-database-password`, with `_` written `-`. Back up
+the `database-data` volume ([OPERATING](OPERATING.md#backup-and-restore)).
+The demo makes a test CA for each run (`scripts/demo-database.sh`); use
+your own CA's certificate for the server.
+
 <a id="several-replicas"></a>
 **Several replicas.** Run as many containers of a component as you
 need, all with the same settings and the same database, behind your

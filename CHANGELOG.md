@@ -40,6 +40,16 @@ route, setting and file format still works
   ([DEPLOYING, Database](docs/DEPLOYING.md#database)).
 - CI runs the store tests on SQLite and on PostgreSQL 16 and 19
   ([TESTING, PostgreSQL](docs/TESTING.md#postgresql)).
+- A replica test, `scenarios/two-party/run-replicas.sh`, run by CI on
+  PostgreSQL 19: two processes of each image, each pair on one
+  database, behind a round-robin proxy (`scripts/round-robin-proxy.py`).
+  It stops a process in the middle of a negotiation, a transfer and a
+  credential delivery and checks that the other process finishes, then
+  runs the two-party steps with every request spread over both
+  ([TESTING, Several replicas](docs/TESTING.md#several-replicas)).
+- `scenarios/two-party/replicas.yaml`: a Compose override that runs the
+  demo's provider as two connectors behind nginx, for the test before a
+  release ([TESTING](docs/TESTING.md#two-connectors-behind-nginx)).
 
 ### Deprecated
 
@@ -52,6 +62,17 @@ route, setting and file format still works
 ### Changed
 
 - A second process on the same SQLite file refuses to start. <!-- 1.3: check after integration -->
+- The demo, the quickstart and the scenarios in Docker Compose
+  (two-party, data-permits, hdab-intermediary, gaiax-compliance,
+  edc-interop) keep their state in PostgreSQL: one `postgres` 19
+  container (pinned by digest) with one database and role per
+  component, made by `examples/postgres/init-databases.sh`; TLS with
+  the server's certificate and host name checked against a test CA made
+  for each run (`scripts/demo-database.sh`), and the passwords in
+  Compose secrets. Each scenario's changelog has the details.
+  `two-data-spaces`, which runs processes, uses PostgreSQL when
+  `PORTITOR_TEST_DATABASE_URL` names a server (`scripts/test-databases.sh`).
+- The DSP TCK run in CI keeps the connector's state in PostgreSQL 19.
 - The images no longer set `PORTITOR_DB_FILE` (it would conflict with `PORTITOR_DATABASE_URL`). The SQLite defaults stay `/data/...`; the connector image now runs in the working directory `/data`, so a relative path in a connector setting is read from there.
 
 ### Fixed
@@ -89,7 +110,10 @@ route, setting and file format still works
   PostgreSQL, and SQLite deprecated. ARCHITECTURE: principle 14 met by
   design, and a "Storage" section. ROADMAP, RISKS_AND_TECHNICAL_DEBTS
   (TD-08, TD-09 and TD-50 to TD-58 in progress; new R-49 and TD-59),
-  TESTING (store tests on PostgreSQL), SECURITY-ASSURANCE.
+  TESTING (store tests on PostgreSQL; "What runs where" with the
+  replica test, the DSP TCK on PostgreSQL and the nginx test; the
+  scenarios' database), SECURITY-ASSURANCE. DEPLOYING: a Compose example
+  of the database.
 
 ## [1.2.0] - 2026-11-26
 

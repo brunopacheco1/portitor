@@ -69,6 +69,7 @@ Out, on purpose:
 | `portitor-connector` as provider | Serves a catalog EDC reads, checks EDC's credentials (membership, Gaia-X compliance, the EDC Issuer Service's test credential) and their status lists; pushes a dataset to the endpoint EDC names. |
 | EDC control plane, data plane, IdentityHub, Issuer Service (v1.0.0-RC8) | The other side: built from `runtimes/` with pinned versions, as EDC publishes no images. The test data plane (`runtimes/dataplane`) also receives the push and keeps what arrived. |
 | Gaia-X compliance service (gx-compliance v2.16.0, test mode) | Issues the compliance credentials ([examples/gaiax/compliance.yaml](../../examples/gaiax/compliance.yaml)). |
+| PostgreSQL (`postgres` 19) | One database and role per Portitor component, over TLS ([ADR 0029](../../docs/adr/0029-several-replicas.md)): the documented default from 1.3. A store bug that only PostgreSQL shows would show here. |
 
 ## Run it
 

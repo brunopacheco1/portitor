@@ -154,6 +154,8 @@ TEST_DATASET=https://portitor.example/datasets/portitor-interop-issuer
 # and a Portitor identity's onboarding: shared with scenarios/gaiax-compliance/run.sh
 # shellcheck source=scripts/gaiax-lib.sh
 source scripts/gaiax-lib.sh
+# shellcheck source=scripts/demo-database.sh
+source scripts/demo-database.sh # write_database_secrets
 DSP=dsp/2025-1
 EDC_PROTOCOL=dataspace-protocol-http:2025-1
 # the header of a request with a JSON body, and the jq path to a record's state
@@ -281,6 +283,9 @@ new_ec_key "$RUN/edc/identity-key.pem"
 # The EDC Issuer Service's key too: the key it would make itself is an
 # Ed25519 key, and Portitor verifies ES256 and PS256 only
 new_ec_key "$RUN/edc-issuer/identity-key.pem"
+# the Portitor components' database: a test CA, its certificate and one
+# password per component (EDC keeps its state in memory)
+write_database_secrets "$RUN/database" issuer portitor_identity portitor_connector
 
 step "Gaia-X: a test CA, its certificates, the test notary and the participants' files"
 # the TLS certificate covers every public name (config/tls.conf)

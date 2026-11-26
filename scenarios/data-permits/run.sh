@@ -48,6 +48,8 @@ declare -A IDENTITY_MANAGEMENT=([biobank]=http://127.0.0.1:18103 [schuman]=http:
 declare -A MANAGEMENT=([biobank]=http://127.0.0.1:18101 [schuman]=http://127.0.0.1:18131)
 # shellcheck source=scripts/scenario-lib.sh
 source scripts/scenario-lib.sh
+# shellcheck source=scripts/demo-database.sh
+source scripts/demo-database.sh # write_database_secrets
 
 # --- 1. keys, secrets, bundle -------------------------------------------------
 
@@ -59,6 +61,9 @@ rm -rf "$RUN"
 write_issuer_keys authority
 write_issuer_keys hdab-issuer
 for participant in "${PARTICIPANTS[@]}"; do write_participant_keys "$participant"; done
+# the database: a test CA, its certificate and one password per component
+write_database_secrets "$RUN/database" authority hdab_issuer biobank_identity biobank_connector \
+  schuman_identity schuman_connector
 
 cleanup() {
   status=$?

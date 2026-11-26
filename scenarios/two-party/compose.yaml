@@ -36,7 +36,17 @@
 # as DEMO_S3_ACCESS_KEY and DEMO_S3_SECRET_KEY; without them the
 # connectors have no object storage.
 #
-# Start order: the deployment order (DEPLOYING). The issuer starts first;
+# The database (ADR 0029): one PostgreSQL server, with one database and
+# role per component (examples/postgres/init-databases.sh). run.sh writes
+# a test CA, the server's certificate and the passwords into run/database/;
+# the components connect with TLS and check the server's certificate and
+# host name (sslmode=verify-full), and read their password from a secret.
+# The /data volumes still hold what stays per container (the connector's
+# bundle cache). Images before 1.3 do not read PORTITOR_DATABASE_URL and
+# keep using their SQLite file in /data.
+#
+# Start order: the deployment order (DEPLOYING). The database starts
+# first; then the issuer;
 # each identity once the issuer is healthy; each connector once its own
 # identity (and, for the provider, the issuer, which serves the bundle) is
 # healthy. "Healthy" is `<binary> health`, the component's own
@@ -51,6 +61,8 @@ name: portitor-demo
 x-identity: &identity
   image: ${PORTITOR_IDENTITY_IMAGE:-ghcr.io/brunopacheco1/portitor-identity:1.2.0}
   depends_on:
+    database:
+      condition: service_healthy
     issuer:
       condition: service_healthy
   healthcheck:
@@ -62,6 +74,47 @@ x-connector: &connector
   image: ${PORTITOR_IMAGE:-ghcr.io/brunopacheco1/portitor-connector:1.2.0}
 
 services:
+  # One PostgreSQL server for every component, each with its own database
+  # and role. The key is copied into the data volume first: PostgreSQL
+  # reads a key only when its own user owns it and nobody else may read it.
+  database:
+    image: docker.io/library/postgres:19.0-alpine3.24@sha256:cac45fb483caee3668946088a1c0532db89d5285c28dbfeac889b4068296e06f
+    entrypoint:
+      - /bin/sh
+      - -c
+      - install -m 600 -o postgres -g postgres /run/secrets/database-server-key /var/lib/postgresql/server.key && exec docker-entrypoint.sh "$$@"
+      - --
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/secrets/database-server-cert
+      - -c
+      - ssl_key_file=/var/lib/postgresql/server.key
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/database-admin-password
+      PORTITOR_DATABASES: issuer provider_identity provider_connector consumer_identity consumer_connector
+    secrets:
+      - database-server-cert
+      - database-server-key
+      - database-admin-password
+      - issuer-database-password
+      - provider-identity-database-password
+      - provider-connector-database-password
+      - consumer-identity-database-password
+      - consumer-connector-database-password
+    volumes:
+      - ../../examples/postgres/init-databases.sh:/docker-entrypoint-initdb.d/portitor.sh:ro
+      - database-data:/var/lib/postgresql
+    # over TCP: while the image runs the init script, its server listens
+    # on its socket only
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
   # The dataspace's authority: did:web:issuer%3A8070, its issuer service
   # (credential requests, status lists) and its management API, where
   # scenarios/two-party/run.sh registers the participants.
@@ -69,6 +122,8 @@ services:
     image: ${PORTITOR_ISSUER_IMAGE:-ghcr.io/brunopacheco1/portitor-issuer:1.2.0}
     environment:
       PORTITOR_PARTICIPANT_ID: did:web:issuer%3A8070
+      PORTITOR_DATABASE_URL: postgresql://issuer@database:5432/issuer?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/issuer-database-password
       PORTITOR_ISSUER_SERVICE_URL: http://issuer:8070/issuer
       PORTITOR_ISSUER_KEY_FILE: /run/secrets/issuer-key
       # MembershipCredential (claims memberOf, role) and
@@ -86,12 +141,17 @@ services:
     secrets:
       - issuer-key
       - issuer-management-key
+      - database-ca
+      - issuer-database-password
     volumes:
       - ../../examples/issuer-credentials.json:/config/issuer-credentials.json:ro
       - ./run/issuer/bundle:/config/bundle:ro
       - issuer-data:/data
     ports:
       - 127.0.0.1:18071:8071 # management API
+    depends_on:
+      database:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "/portitor-issuer", "health"]
       interval: 2s
@@ -126,6 +186,8 @@ services:
       # did:web:provider-identity%3A8090 is served at
       # http://provider-identity:8090/.well-known/did.json
       PORTITOR_PARTICIPANT_ID: did:web:provider-identity%3A8090
+      PORTITOR_DATABASE_URL: postgresql://provider_identity@database:5432/provider_identity?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/provider-identity-database-password
       PORTITOR_IDENTITY_KEY_FILE: /run/secrets/provider-identity-key
       PORTITOR_CREDENTIAL_SERVICE_URL: http://provider-identity:8090/cs
       PORTITOR_STS_CLIENT_SECRET_FILE: /run/secrets/provider-sts-secret
@@ -137,6 +199,8 @@ services:
       - provider-identity-key
       - provider-sts-secret
       - provider-identity-management-key
+      - database-ca
+      - provider-identity-database-password
     volumes:
       - provider-identity-data:/data
     ports:
@@ -148,6 +212,8 @@ services:
     environment:
       # the connector is its identity's participant
       PORTITOR_PARTICIPANT_ID: did:web:provider-identity%3A8090
+      PORTITOR_DATABASE_URL: postgresql://provider_connector@database:5432/provider_connector?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/provider-connector-database-password
       PORTITOR_STS_URL: http://provider-identity:8090/sts/token
       PORTITOR_STS_CLIENT_SECRET_FILE: /run/secrets/provider-sts-secret
       PORTITOR_TRUSTED_ISSUERS: did:web:issuer%3A8070
@@ -177,6 +243,8 @@ services:
     secrets:
       - provider-sts-secret
       - provider-management-key
+      - database-ca
+      - provider-connector-database-password
     volumes:
       # examples/healthdcat-datasets.json, or with S3=1 changed by s3-datasets.jq
       - ./run/datasets.json:/config/datasets.json:ro
@@ -186,6 +254,8 @@ services:
       - 127.0.0.1:18081:8081
     # the bundle and its own DID document are read at start
     depends_on:
+      database:
+        condition: service_healthy
       issuer:
         condition: service_healthy
       provider-identity:
@@ -201,6 +271,8 @@ services:
     <<: *identity
     environment:
       PORTITOR_PARTICIPANT_ID: did:web:consumer-identity%3A8090
+      PORTITOR_DATABASE_URL: postgresql://consumer_identity@database:5432/consumer_identity?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/consumer-identity-database-password
       PORTITOR_IDENTITY_KEY_FILE: /run/secrets/consumer-identity-key
       PORTITOR_CREDENTIAL_SERVICE_URL: http://consumer-identity:8090/cs
       PORTITOR_STS_CLIENT_SECRET_FILE: /run/secrets/consumer-sts-secret
@@ -212,6 +284,8 @@ services:
       - consumer-identity-key
       - consumer-sts-secret
       - consumer-identity-management-key
+      - database-ca
+      - consumer-identity-database-password
     volumes:
       - consumer-identity-data:/data
     ports:
@@ -222,6 +296,8 @@ services:
     <<: *connector
     environment:
       PORTITOR_PARTICIPANT_ID: did:web:consumer-identity%3A8090
+      PORTITOR_DATABASE_URL: postgresql://consumer_connector@database:5432/consumer_connector?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/consumer-connector-database-password
       PORTITOR_STS_URL: http://consumer-identity:8090/sts/token
       PORTITOR_STS_CLIENT_SECRET_FILE: /run/secrets/consumer-sts-secret
       PORTITOR_TRUSTED_ISSUERS: did:web:issuer%3A8070
@@ -241,18 +317,40 @@ services:
     secrets:
       - consumer-sts-secret
       - consumer-management-key
+      - database-ca
+      - consumer-connector-database-password
     volumes:
       - consumer-data:/data
     ports:
       - 127.0.0.1:18090:8080
       - 127.0.0.1:18091:8081
     depends_on:
+      database:
+        condition: service_healthy
       consumer-identity:
         condition: service_healthy
 
 # written by scenarios/two-party/run.sh; the images run as user 65532, which
 # must read them
 secrets:
+  database-ca:
+    file: ./run/database/ca.pem
+  database-server-cert:
+    file: ./run/database/server.pem
+  database-server-key:
+    file: ./run/database/server.key
+  database-admin-password:
+    file: ./run/database/admin-password
+  issuer-database-password:
+    file: ./run/database/issuer-password
+  provider-identity-database-password:
+    file: ./run/database/provider-identity-password
+  provider-connector-database-password:
+    file: ./run/database/provider-connector-password
+  consumer-identity-database-password:
+    file: ./run/database/consumer-identity-password
+  consumer-connector-database-password:
+    file: ./run/database/consumer-connector-password
   issuer-key:
     file: ./run/issuer/issuer-key.pem
   issuer-management-key:
@@ -275,6 +373,7 @@ secrets:
     file: ./run/consumer/management.key
 
 volumes:
+  database-data:
   issuer-data:
   provider-identity-data:
   provider-data:

@@ -62,11 +62,56 @@ x-app: &app
   profiles: [apps]
 
 services:
+  # One PostgreSQL server for every Portitor component, each with its own
+  # database and role (ADR 0029), as in ../two-party/compose.yaml: TLS with
+  # the server's certificate checked, the passwords in secrets.
+  database:
+    image: docker.io/library/postgres:19.0-alpine3.24@sha256:cac45fb483caee3668946088a1c0532db89d5285c28dbfeac889b4068296e06f
+    entrypoint:
+      - /bin/sh
+      - -c
+      - install -m 600 -o postgres -g postgres /run/secrets/database-server-key /var/lib/postgresql/server.key && exec docker-entrypoint.sh "$$@"
+      - --
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/secrets/database-server-cert
+      - -c
+      - ssl_key_file=/var/lib/postgresql/server.key
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/database-admin-password
+      PORTITOR_DATABASES: authority biobank_identity biobank_connector lab_identity lab_connector hdab_identity hdab_connector schuman_identity schuman_connector
+    secrets:
+      - database-server-cert
+      - database-server-key
+      - database-admin-password
+      - authority-database-password
+      - biobank-identity-database-password
+      - biobank-connector-database-password
+      - lab-identity-database-password
+      - lab-connector-database-password
+      - hdab-identity-database-password
+      - hdab-connector-database-password
+      - schuman-identity-database-password
+      - schuman-connector-database-password
+    volumes:
+      - ../../examples/postgres/init-databases.sh:/docker-entrypoint-initdb.d/portitor.sh:ro
+      - database-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
   # Digital Lux Trust: did:web:authority%3A8070, its issuer service and its
   # management API, where run.sh registers the participants
   authority:
     image: ${PORTITOR_ISSUER_IMAGE:-ghcr.io/brunopacheco1/portitor-issuer:1.2.0}
     environment:
+      PORTITOR_DATABASE_URL: postgresql://authority@database:5432/authority?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/authority-database-password
       PORTITOR_PARTICIPANT_ID: did:web:authority%3A8070
       PORTITOR_ISSUER_SERVICE_URL: http://authority:8070/issuer
       PORTITOR_ISSUER_KEY_FILE: /run/secrets/authority-key
@@ -82,6 +127,8 @@ services:
     secrets:
       - authority-key
       - authority-management-key
+      - database-ca
+      - authority-database-password
     volumes:
       - ../../examples/issuer-credentials.json:/config/issuer-credentials.json:ro
       - ./run/authority/bundle:/config/bundle:ro
@@ -93,6 +140,9 @@ services:
       interval: 2s
       timeout: 5s
       retries: 30
+    depends_on:
+      database:
+        condition: service_healthy
 
   # --- Lux Biobank: the health data holder -----------------------------------
 
@@ -105,6 +155,8 @@ services:
   biobank-identity:
     <<: *identity
     environment:
+      PORTITOR_DATABASE_URL: postgresql://biobank_identity@database:5432/biobank_identity?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/biobank-identity-database-password
       PORTITOR_PARTICIPANT_ID: did:web:biobank-identity%3A8090
       PORTITOR_IDENTITY_KEY_FILE: /run/secrets/biobank-identity-key
       PORTITOR_CREDENTIAL_SERVICE_URL: http://biobank-identity:8090/cs
@@ -117,6 +169,8 @@ services:
       - biobank-identity-key
       - biobank-sts-secret
       - biobank-identity-management-key
+      - database-ca
+      - biobank-identity-database-password
     volumes:
       - biobank-identity-data:/data
     ports:
@@ -125,6 +179,8 @@ services:
   biobank:
     <<: *connector
     environment:
+      PORTITOR_DATABASE_URL: postgresql://biobank_connector@database:5432/biobank_connector?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/biobank-connector-database-password
       PORTITOR_PARTICIPANT_ID: did:web:biobank-identity%3A8090
       PORTITOR_STS_URL: http://biobank-identity:8090/sts/token
       PORTITOR_STS_CLIENT_SECRET_FILE: /run/secrets/biobank-sts-secret
@@ -145,6 +201,8 @@ services:
     secrets:
       - biobank-sts-secret
       - biobank-management-key
+      - database-ca
+      - biobank-connector-database-password
     volumes:
       - biobank-data:/data
       - ./datasets/biobank.json:/config/datasets.json:ro
@@ -164,6 +222,8 @@ services:
   lab-identity:
     <<: *identity
     environment:
+      PORTITOR_DATABASE_URL: postgresql://lab_identity@database:5432/lab_identity?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/lab-identity-database-password
       PORTITOR_PARTICIPANT_ID: did:web:lab-identity%3A8090
       PORTITOR_IDENTITY_KEY_FILE: /run/secrets/lab-identity-key
       PORTITOR_CREDENTIAL_SERVICE_URL: http://lab-identity:8090/cs
@@ -176,6 +236,8 @@ services:
       - lab-identity-key
       - lab-sts-secret
       - lab-identity-management-key
+      - database-ca
+      - lab-identity-database-password
     volumes:
       - lab-identity-data:/data
     ports:
@@ -184,6 +246,8 @@ services:
   lab:
     <<: *connector
     environment:
+      PORTITOR_DATABASE_URL: postgresql://lab_connector@database:5432/lab_connector?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/lab-connector-database-password
       PORTITOR_PARTICIPANT_ID: did:web:lab-identity%3A8090
       PORTITOR_STS_URL: http://lab-identity:8090/sts/token
       PORTITOR_STS_CLIENT_SECRET_FILE: /run/secrets/lab-sts-secret
@@ -207,6 +271,8 @@ services:
     secrets:
       - lab-sts-secret
       - lab-management-key
+      - database-ca
+      - lab-connector-database-password
     volumes:
       - lab-data:/data
     ports:
@@ -237,6 +303,8 @@ services:
   hdab-identity:
     <<: *identity
     environment:
+      PORTITOR_DATABASE_URL: postgresql://hdab_identity@database:5432/hdab_identity?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/hdab-identity-database-password
       PORTITOR_PARTICIPANT_ID: did:web:hdab-identity%3A8090
       PORTITOR_IDENTITY_KEY_FILE: /run/secrets/hdab-identity-key
       PORTITOR_CREDENTIAL_SERVICE_URL: http://hdab-identity:8090/cs
@@ -249,6 +317,8 @@ services:
       - hdab-identity-key
       - hdab-sts-secret
       - hdab-identity-management-key
+      - database-ca
+      - hdab-identity-database-password
     volumes:
       - hdab-identity-data:/data
     ports:
@@ -257,6 +327,8 @@ services:
   hdab:
     <<: *connector
     environment:
+      PORTITOR_DATABASE_URL: postgresql://hdab_connector@database:5432/hdab_connector?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/hdab-connector-database-password
       PORTITOR_PARTICIPANT_ID: did:web:hdab-identity%3A8090
       PORTITOR_STS_URL: http://hdab-identity:8090/sts/token
       PORTITOR_STS_CLIENT_SECRET_FILE: /run/secrets/hdab-sts-secret
@@ -278,6 +350,8 @@ services:
     secrets:
       - hdab-sts-secret
       - hdab-management-key
+      - database-ca
+      - hdab-connector-database-password
     volumes:
       - hdab-data:/data
       # datasets/hdab.json, with the pilot offer run.sh adds
@@ -314,6 +388,8 @@ services:
   schuman-identity:
     <<: *identity
     environment:
+      PORTITOR_DATABASE_URL: postgresql://schuman_identity@database:5432/schuman_identity?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/schuman-identity-database-password
       PORTITOR_PARTICIPANT_ID: did:web:schuman-identity%3A8090
       PORTITOR_IDENTITY_KEY_FILE: /run/secrets/schuman-identity-key
       PORTITOR_CREDENTIAL_SERVICE_URL: http://schuman-identity:8090/cs
@@ -326,6 +402,8 @@ services:
       - schuman-identity-key
       - schuman-sts-secret
       - schuman-identity-management-key
+      - database-ca
+      - schuman-identity-database-password
     volumes:
       - schuman-identity-data:/data
     ports:
@@ -334,6 +412,8 @@ services:
   schuman:
     <<: *connector
     environment:
+      PORTITOR_DATABASE_URL: postgresql://schuman_connector@database:5432/schuman_connector?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/schuman-connector-database-password
       PORTITOR_PARTICIPANT_ID: did:web:schuman-identity%3A8090
       PORTITOR_STS_URL: http://schuman-identity:8090/sts/token
       PORTITOR_STS_CLIENT_SECRET_FILE: /run/secrets/schuman-sts-secret
@@ -351,6 +431,8 @@ services:
     secrets:
       - schuman-sts-secret
       - schuman-management-key
+      - database-ca
+      - schuman-connector-database-password
     volumes:
       - schuman-data:/data
     ports:
@@ -365,6 +447,32 @@ services:
 
 # written by run.sh; the images run as user 65532, which must read them
 secrets:
+  database-ca:
+    file: ./run/database/ca.pem
+  database-server-cert:
+    file: ./run/database/server.pem
+  database-server-key:
+    file: ./run/database/server.key
+  database-admin-password:
+    file: ./run/database/admin-password
+  authority-database-password:
+    file: ./run/database/authority-password
+  biobank-identity-database-password:
+    file: ./run/database/biobank-identity-password
+  biobank-connector-database-password:
+    file: ./run/database/biobank-connector-password
+  lab-identity-database-password:
+    file: ./run/database/lab-identity-password
+  lab-connector-database-password:
+    file: ./run/database/lab-connector-password
+  hdab-identity-database-password:
+    file: ./run/database/hdab-identity-password
+  hdab-connector-database-password:
+    file: ./run/database/hdab-connector-password
+  schuman-identity-database-password:
+    file: ./run/database/schuman-identity-password
+  schuman-connector-database-password:
+    file: ./run/database/schuman-connector-password
   authority-key:
     file: ./run/authority/issuer-key.pem
   authority-management-key:
@@ -403,6 +511,7 @@ secrets:
     file: ./run/schuman/management.key
 
 volumes:
+  database-data:
   authority-data:
   biobank-identity-data:
   biobank-data:

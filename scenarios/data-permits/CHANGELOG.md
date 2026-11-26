@@ -9,6 +9,22 @@ SPDX-License-Identifier: Apache-2.0
 How the scenario changed, newest first. Each entry names the Portitor
 version it ran on.
 
+## 2026-11-26, for 1.3.0
+
+- The Portitor components keep their state in PostgreSQL (1.3,
+  [ADR 0029](../../docs/adr/0029-several-replicas.md)): `compose.yaml`
+  has a `database` service (`postgres` 19, pinned by digest) with one
+  database and role per component, made by
+  `examples/postgres/init-databases.sh`. `run.sh` writes a test CA, the
+  server's certificate and one password per component into
+  `run/database/` (`scripts/demo-database.sh`); the components connect
+  with TLS, checking the certificate and the host name, and read their
+  password from a Compose secret. Images before 1.3 ignore
+  `PORTITOR_DATABASE_URL` and keep their SQLite file. The steps are
+  unchanged.
+- Ran with images built from the 1.3 code, Docker 29.9.3 and Docker
+  Compose 5.7.1 on Linux: passed.
+
 ## 2026-11-26, for 1.2.0
 
 - `compose.yaml` names the 1.2.0 release images by default.

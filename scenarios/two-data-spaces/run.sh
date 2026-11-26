@@ -32,6 +32,10 @@
 #
 # Builds the debug binaries. Needs curl, jq, openssl and python3. KEEP=1
 # keeps the logs. Exits non-zero if a check fails. Not run by CI.
+# PORTITOR_TEST_DATABASE_URL (a PostgreSQL server whose user may create
+# databases, as for the store tests; needs psql): each component gets a
+# database of its own there, dropped at the end (scripts/test-databases.sh).
+# Without it, each keeps a SQLite file.
 
 set -euo pipefail
 # shellcheck source=scripts/require-bash.sh
@@ -46,9 +50,12 @@ cargo build --quiet -p portitor-connector -p portitor-identity -p portitor-issue
 BIN=${CARGO_TARGET_DIR:-target}/debug
 WORK=$(mktemp -d)
 PIDS=()
+# shellcheck source=scripts/test-databases.sh
+source scripts/test-databases.sh # database_for: PostgreSQL with PORTITOR_TEST_DATABASE_URL, else SQLite
 cleanup() {
   for pid in "${PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done
   wait 2>/dev/null || true
+  test_databases_drop
   if [[ ${KEEP:-} == 1 ]]; then echo "logs kept in $WORK"; else rm -rf "$WORK"; fi
 }
 trap cleanup EXIT
@@ -79,10 +86,11 @@ start_issuer() { # name address management-address
   mkdir -p "$dir"
   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$dir/key.pem" 2>/dev/null
   openssl rand -hex 32 >"$dir/management.key"
+  database_for "$name" "$dir/issuer.db" || fail "the database of $name"
   env PORTITOR_PARTICIPANT_ID="$(did_web "$address")" PORTITOR_BIND="$address" \
     PORTITOR_ISSUER_SERVICE_URL="http://$address/issuer" PORTITOR_ISSUER_KEY_FILE="$dir/key.pem" \
     PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE=examples/issuer-credentials.json \
-    PORTITOR_DB_FILE="$dir/issuer.db" PORTITOR_MANAGEMENT_BIND="$management" \
+    "${DATABASE[@]}" PORTITOR_MANAGEMENT_BIND="$management" \
     PORTITOR_MANAGEMENT_API_KEY_FILE="$dir/management.key" PORTITOR_ALLOW_HTTP=true \
     "$BIN/portitor-issuer" >"$WORK/$name.log" 2>&1 &
   PIDS+=($!)
@@ -94,9 +102,10 @@ start_identity() { # name address management-address trusted-issuers
   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$dir/key.pem" 2>/dev/null
   openssl rand -hex 32 >"$dir/management.key"
   openssl rand -hex 32 >"$dir/sts-client-secret"
+  database_for "$name" "$dir/identity.db" || fail "the database of $name"
   env PORTITOR_PARTICIPANT_ID="$(did_web "$address")" PORTITOR_BIND="$address" \
     PORTITOR_CREDENTIAL_SERVICE_URL="http://$address/cs" PORTITOR_IDENTITY_KEY_FILE="$dir/key.pem" \
-    PORTITOR_DB_FILE="$dir/identity.db" PORTITOR_MANAGEMENT_BIND="$management" \
+    "${DATABASE[@]}" PORTITOR_MANAGEMENT_BIND="$management" \
     PORTITOR_MANAGEMENT_API_KEY_FILE="$dir/management.key" \
     PORTITOR_STS_CLIENT_SECRET_FILE="$dir/sts-client-secret" \
     PORTITOR_TRUSTED_ISSUERS="$trusted" PORTITOR_ALLOW_HTTP=true \
@@ -130,8 +139,9 @@ start_connector() { # name address management-address identity-name identity-add
   shift 6 # the rest: the more VAR=value settings
   mkdir -p "$WORK/$name"
   openssl rand -hex 32 >"$WORK/$name/management.key"
+  database_for "$name" "$WORK/$name/connector.db" || fail "the database of $name"
   env PORTITOR_PARTICIPANT_ID="$(did_web "$identity_address")" PORTITOR_BIND="$address" \
-    PORTITOR_PUBLIC_URL="http://$address" PORTITOR_DB_FILE="$WORK/$name/connector.db" \
+    PORTITOR_PUBLIC_URL="http://$address" "${DATABASE[@]}" \
     PORTITOR_STS_URL="http://$identity_address/sts/token" \
     PORTITOR_STS_CLIENT_SECRET_FILE="$WORK/$identity/sts-client-secret" \
     PORTITOR_TRUSTED_ISSUERS="$trusted" PORTITOR_ALLOW_HTTP=true \
