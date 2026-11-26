@@ -241,18 +241,20 @@ impl HeldAgreements for InMemoryConsumerNegotiations {
     }
 }
 
-/// Adapter: flows kept in memory (lost on restart; tests): the data
-/// plane's own in-memory flows (`.0`), and what the control plane keeps of
-/// each flow's consumer (`.1`, ADR 0027).
+/// Adapter: flows kept in memory (lost on restart; tests).
 #[derive(Debug, Clone, Default)]
-pub(crate) struct InMemoryFlows(
-    portitor_dataplane::test_store::InMemoryFlows,
-    Arc<Mutex<BTreeMap<String, StoredMembership>>>,
-);
+pub(crate) struct InMemoryFlows {
+    /// The data plane's own in-memory flows.
+    flows: portitor_dataplane::test_store::InMemoryFlows,
+    /// What the control plane keeps of each flow's consumer (ADR 0027).
+    memberships: Arc<Mutex<BTreeMap<String, StoredMembership>>>,
+}
 
 impl InMemoryFlows {
     fn members(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, StoredMembership>> {
-        self.1.lock().unwrap_or_else(PoisonError::into_inner)
+        self.memberships
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Marks flow `id` as one of 1.0, as the migration does.
@@ -264,10 +266,10 @@ impl InMemoryFlows {
 
 impl FlowStore for InMemoryFlows {
     fn get(&self, id: &str) -> Result<Option<Flow>, FlowStoreError> {
-        self.0.get(id)
+        self.flows.get(id)
     }
     fn insert(&self, flow: &Flow) -> Result<bool, FlowStoreError> {
-        self.0.insert(flow)
+        self.flows.insert(flow)
     }
     fn set_state(
         &self,
@@ -275,7 +277,7 @@ impl FlowStore for InMemoryFlows {
         from: DataFlowState,
         to: DataFlowState,
     ) -> Result<bool, FlowStoreError> {
-        self.0.set_state(id, from, to)
+        self.flows.set_state(id, from, to)
     }
     fn set_token(
         &self,
@@ -284,7 +286,7 @@ impl FlowStore for InMemoryFlows {
         token_hash: &str,
         expires_at: u64,
     ) -> Result<bool, FlowStoreError> {
-        self.0.set_token(id, state, token_hash, expires_at)
+        self.flows.set_token(id, state, token_hash, expires_at)
     }
     fn set_push_address(
         &self,
@@ -292,10 +294,10 @@ impl FlowStore for InMemoryFlows {
         state: DataFlowState,
         address: &DataAddress,
     ) -> Result<bool, FlowStoreError> {
-        self.0.set_push_address(id, state, address)
+        self.flows.set_push_address(id, state, address)
     }
     fn started_pushes(&self) -> Result<Vec<String>, FlowStoreError> {
-        self.0.started_pushes()
+        self.flows.started_pushes()
     }
 }
 

@@ -611,6 +611,11 @@ mod tests {
     use super::*;
     use portitor_dsp::negotiation::Agreement;
 
+    /// How many migrations a file written by 1.0 has.
+    const MIGRATIONS_OF_1_0: usize = 11;
+    /// How many migrations a file written by 1.1 has.
+    const MIGRATIONS_OF_1_1: usize = 13;
+
     /// Brings `conn` up to date, as `open` does.
     fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
         portitor_runtime::sqlite::migrate(conn, MIGRATIONS).map_err(StoreError)
@@ -1037,7 +1042,7 @@ mod tests {
         use crate::flow_membership::StoredMembership;
 
         let mut conn = Connection::open_in_memory().unwrap();
-        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..11]).unwrap();
+        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..MIGRATIONS_OF_1_0]).unwrap();
         conn.execute(
             "INSERT INTO data_flow (id, state, dataset_id, token_hash, expires_at) \
              VALUES ('urn:uuid:old', 'STARTED', 'd', 'ab', 1900000000)",
@@ -1064,7 +1069,7 @@ mod tests {
         use portitor_dataplane::FlowStore;
 
         let mut conn = Connection::open_in_memory().unwrap();
-        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..13]).unwrap();
+        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..MIGRATIONS_OF_1_1]).unwrap();
         for (dataset, upstream) in [
             ("d-url", Some("https://upstream.example/d")),
             ("d-s3", Some("s3://datasets/d.csv")),
@@ -1092,6 +1097,8 @@ mod tests {
             .unwrap();
         }
         let store = setup(conn).unwrap();
+        // `FlowStore::get`, not `store.get`: the store has several `get`
+        // methods (one per port it implements), so the port is named
         let source_of = |flow: &str| FlowStore::get(&store, flow).unwrap().unwrap().source;
         assert_eq!(
             source_of("urn:uuid:url").as_deref(),
@@ -1114,7 +1121,7 @@ mod tests {
         use portitor_dataplane::FlowStore;
 
         let mut conn = Connection::open_in_memory().unwrap();
-        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..13]).unwrap();
+        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..MIGRATIONS_OF_1_1]).unwrap();
         conn.execute(
             "INSERT INTO transfer (provider_pid, consumer_pid, state, callback_address, \
              counter_party, agreement_id, dataset_id, format, pending, version) \
@@ -1132,15 +1139,16 @@ mod tests {
             .unwrap();
         }
         let store = setup(conn).unwrap();
+        // the port is named, as above: the store has several `get` methods
         let parties_of = |flow: &str| FlowStore::get(&store, flow).unwrap().unwrap().parties();
         let found = parties_of("urn:uuid:p");
         assert_eq!(
-            (found.agreement.as_str(), found.counter_party.as_str()),
+            (found.agreement_id.as_str(), found.counter_party_id.as_str()),
             ("urn:uuid:a", "did:web:c.example")
         );
         let alone = parties_of("urn:uuid:alone");
         assert_eq!(
-            (alone.agreement.as_str(), alone.counter_party.as_str()),
+            (alone.agreement_id.as_str(), alone.counter_party_id.as_str()),
             ("", "")
         );
     }

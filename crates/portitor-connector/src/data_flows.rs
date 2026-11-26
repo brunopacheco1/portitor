@@ -37,10 +37,12 @@ const FORMATS: &[(&str, &str)] = &[
 
 /// The Data Plane Signaling profile for a DSP format, if supported.
 fn profile_of(format: &str) -> Option<&'static str> {
-    FORMATS
-        .iter()
-        .find(|(name, _)| *name == format)
-        .map(|(_, profile)| *profile)
+    for (name, profile) in FORMATS {
+        if *name == format {
+            return Some(*profile);
+        }
+    }
+    None
 }
 
 /// What a data plane needs besides Data Plane Signaling v1.0-RC4 so the
@@ -152,7 +154,7 @@ impl<P: DataPlane> SignalingDataFlows<P> {
 
     /// Turns the data plane's answer to a signal into the port's answer.
     /// A refusal is still success when the flow is already in `target`.
-    fn settle(
+    fn done_if_already_in(
         &self,
         pid: &str,
         target: DataFlowState,
@@ -160,12 +162,13 @@ impl<P: DataPlane> SignalingDataFlows<P> {
     ) -> Result<(), String> {
         match answer {
             Ok(()) => Ok(()),
-            Err(SignalError::NotAllowed(_)) if self.is_in(pid, target) => Ok(()),
+            Err(SignalError::NotAllowed(_)) if self.flow_is_in(pid, target) => Ok(()),
             Err(e) => Err(e.to_string()),
         }
     }
 
-    fn is_in(&self, pid: &str, state: DataFlowState) -> bool {
+    /// Whether the data plane says flow `pid` is in `state`.
+    fn flow_is_in(&self, pid: &str, state: DataFlowState) -> bool {
         self.plane.status(pid).is_ok_and(|s| s.state == state)
     }
 }
@@ -175,27 +178,33 @@ impl<P: DataPlane + NewAddress> DataFlows for SignalingDataFlows<P> {
         profile_of(format).is_some() && self.sources.upstream_of(dataset_id).is_some()
     }
 
-    fn start(&self, t: &Transfer) -> Result<Option<DataAddress>, String> {
-        let profile = profile_of(&t.format).ok_or("unsupported format")?;
+    fn start(&self, transfer: &Transfer) -> Result<Option<DataAddress>, String> {
+        let Some(profile) = profile_of(&transfer.format) else {
+            return Err("unsupported format".to_owned());
+        };
         let push = profile == HTTP_PUSH;
         let message = DataFlowStartMessage {
             flow: DataFlowBaseMessage {
                 message_id: new_uuid(),
                 participant_id: self.participant_id.clone(),
-                counter_party_id: t.counter_party.clone(),
+                counter_party_id: transfer.counter_party.clone(),
                 dataspace_context: self.dataspace_context.clone(),
-                data_flow_id: t.provider_pid.clone(),
-                agreement_id: t.agreement_id.clone(),
-                dataset_id: t.dataset_id.clone(),
+                data_flow_id: transfer.provider_pid.clone(),
+                agreement_id: transfer.agreement_id.clone(),
+                dataset_id: transfer.dataset_id.clone(),
                 profile: profile.to_owned(),
                 // the consumer's verified claims come with DCP (0.5)
                 claims: serde_json::Map::new(),
-                metadata: self.source_metadata(&t.dataset_id),
+                metadata: self.source_metadata(&transfer.dataset_id),
                 labels: Vec::new(),
             },
             // pull: the data plane makes the address (the spec forbids one
             // here); push: where the data plane sends the data
-            data_address: if push { t.data_address.clone() } else { None },
+            data_address: if push {
+                transfer.data_address.clone()
+            } else {
+                None
+            },
         };
         let status = match self.plane.start(&message) {
             Ok(status) => status,
@@ -204,7 +213,7 @@ impl<P: DataPlane + NewAddress> DataFlows for SignalingDataFlows<P> {
             // after the restart (`portitor-dsp`, `flow_steps`). Its token
             // was never sent, and only its hash is kept, so the flow gets
             // a new one, as when the provider starts it again.
-            Err(SignalError::DataFlowExists(_)) => return self.restart(t),
+            Err(SignalError::DataFlowExists(_)) => return self.restart(transfer),
             Err(e) => return Err(e.to_string()),
         };
         match (status.state, status.data_address) {
@@ -219,7 +228,7 @@ impl<P: DataPlane + NewAddress> DataFlows for SignalingDataFlows<P> {
 
     fn suspend(&self, pid: &str) -> Result<(), String> {
         let answer = self.plane.suspend(pid, &Self::reason("suspended over DSP"));
-        self.settle(pid, DataFlowState::Suspended, answer)
+        self.done_if_already_in(pid, DataFlowState::Suspended, answer)
     }
 
     fn resume(&self, pid: &str, address: Option<&DataAddress>) -> Result<(), String> {
@@ -228,13 +237,15 @@ impl<P: DataPlane + NewAddress> DataFlows for SignalingDataFlows<P> {
             // a push started again with a new token of the consumer's
             data_address: address.cloned(),
         };
+        // the status message is dropped: a resume gives no new address
+        // (the same token works again), so only success or failure counts
         let answer = self.plane.resume(pid, &message).map(|_| ());
-        self.settle(pid, DataFlowState::Started, answer)
+        self.done_if_already_in(pid, DataFlowState::Started, answer)
     }
 
-    fn restart(&self, t: &Transfer) -> Result<Option<DataAddress>, String> {
-        let pid = t.provider_pid.as_str();
-        if profile_of(&t.format) == Some(HTTP_PUSH) {
+    fn restart(&self, transfer: &Transfer) -> Result<Option<DataAddress>, String> {
+        let pid = transfer.provider_pid.as_str();
+        if profile_of(&transfer.format) == Some(HTTP_PUSH) {
             // the data goes to the consumer's address the flow keeps
             self.resume(pid, None)?;
             return Ok(None);
@@ -248,7 +259,7 @@ impl<P: DataPlane + NewAddress> DataFlows for SignalingDataFlows<P> {
 
     fn complete(&self, pid: &str) -> Result<(), String> {
         let answer = self.plane.completed(pid);
-        self.settle(pid, DataFlowState::Completed, answer)
+        self.done_if_already_in(pid, DataFlowState::Completed, answer)
     }
 
     fn terminate(&self, pid: &str) -> Result<(), String> {
@@ -258,7 +269,7 @@ impl<P: DataPlane + NewAddress> DataFlows for SignalingDataFlows<P> {
         {
             // a transfer that never started has no data flow to end
             Err(SignalError::UnknownDataFlow(_)) => Ok(()),
-            answer => self.settle(pid, DataFlowState::Terminated, answer),
+            answer => self.done_if_already_in(pid, DataFlowState::Terminated, answer),
         }
     }
 }
@@ -279,18 +290,23 @@ mod tests {
     use super::*;
 
     /// A data plane that keeps the state of each flow and follows the
-    /// spec's state machine. `.1`: what `start` answers; `.2`: the last
-    /// start message it got.
+    /// spec's state machine. `RefCell`: the `DataPlane` methods take
+    /// `&self`, yet this plane changes what it holds; a `RefCell` lets it
+    /// (it checks the borrows while the test runs).
     #[derive(Default)]
-    struct Plane(
-        RefCell<BTreeMap<String, DataFlowState>>,
-        RefCell<Option<DataFlowState>>,
-        RefCell<Option<DataFlowStartMessage>>,
-    );
+    struct Plane {
+        /// The state of each flow.
+        flows: RefCell<BTreeMap<String, DataFlowState>>,
+        /// What `start` answers; `None`: STARTED.
+        start_answer: RefCell<Option<DataFlowState>>,
+        /// The last start message it got.
+        last_start: RefCell<Option<DataFlowStartMessage>>,
+    }
 
     impl Plane {
-        fn go(&self, id: &str, to: DataFlowState) -> Result<(), SignalError> {
-            let mut flows = self.0.borrow_mut();
+        /// Moves flow `id` to `to`, if the state machine allows it.
+        fn move_flow(&self, id: &str, to: DataFlowState) -> Result<(), SignalError> {
+            let mut flows = self.flows.borrow_mut();
             let from = *flows
                 .get(id)
                 .ok_or_else(|| SignalError::UnknownDataFlow(id.to_owned()))?;
@@ -299,6 +315,9 @@ mod tests {
         }
     }
 
+    // For `&Plane`, not `Plane`: the adapter takes its data plane by
+    // value (`SignalingDataFlows::new(plane, ..)`), so it gets a reference
+    // and the test can still look inside the plane afterwards.
     impl DataPlane for &Plane {
         fn prepare(
             &self,
@@ -310,12 +329,12 @@ mod tests {
             // a push start carries the consumer's address, a pull start none
             assert_eq!(m.flow.profile == HTTP_PUSH, m.data_address.is_some());
             let push = m.flow.profile == HTTP_PUSH;
-            *self.2.borrow_mut() = Some(m.clone());
-            if self.0.borrow().contains_key(&m.flow.data_flow_id) {
+            *self.last_start.borrow_mut() = Some(m.clone());
+            if self.flows.borrow().contains_key(&m.flow.data_flow_id) {
                 return Err(SignalError::DataFlowExists(m.flow.data_flow_id.clone()));
             }
-            let state = self.1.borrow().unwrap_or(DataFlowState::Started);
-            self.0
+            let state = self.start_answer.borrow().unwrap_or(DataFlowState::Started);
+            self.flows
                 .borrow_mut()
                 .insert(m.flow.data_flow_id.clone(), state);
             Ok(DataFlowStatusMessage {
@@ -339,14 +358,14 @@ mod tests {
             Err(SignalError::Invalid("consumer side only".to_owned()))
         }
         fn suspend(&self, id: &str, _: &DataFlowSuspendMessage) -> Result<(), SignalError> {
-            self.go(id, DataFlowState::Suspended)
+            self.move_flow(id, DataFlowState::Suspended)
         }
         fn resume(
             &self,
             id: &str,
             _: &DataFlowResumeMessage,
         ) -> Result<DataFlowStatusMessage, SignalError> {
-            self.go(id, DataFlowState::Started)?;
+            self.move_flow(id, DataFlowState::Started)?;
             Ok(DataFlowStatusMessage {
                 message_id: "m".to_owned(),
                 data_flow_id: id.to_owned(),
@@ -356,14 +375,14 @@ mod tests {
             })
         }
         fn terminate(&self, id: &str, _: &DataFlowTerminateMessage) -> Result<(), SignalError> {
-            self.go(id, DataFlowState::Terminated)
+            self.move_flow(id, DataFlowState::Terminated)
         }
         fn completed(&self, id: &str) -> Result<(), SignalError> {
-            self.go(id, DataFlowState::Completed)
+            self.move_flow(id, DataFlowState::Completed)
         }
         fn status(&self, id: &str) -> Result<DataFlowStatusResponseMessage, SignalError> {
             let state = *self
-                .0
+                .flows
                 .borrow()
                 .get(id)
                 .ok_or_else(|| SignalError::UnknownDataFlow(id.to_owned()))?;
@@ -530,7 +549,7 @@ mod tests {
     #[test]
     fn only_an_immediate_start_is_supported() {
         let plane = Plane::default();
-        *plane.1.borrow_mut() = Some(DataFlowState::Starting);
+        *plane.start_answer.borrow_mut() = Some(DataFlowState::Starting);
         let flows = flows_over(&plane);
         assert!(
             flows
@@ -548,9 +567,9 @@ mod tests {
         let plane = Plane::default();
         let flows = flows_over(&plane);
         for transfer in [transfer("HttpData-PULL"), push_transfer()] {
-            plane.0.borrow_mut().clear();
+            plane.flows.borrow_mut().clear();
             flows.start(&transfer).unwrap();
-            let sent = plane.2.borrow_mut().take().unwrap();
+            let sent = plane.last_start.borrow_mut().take().unwrap();
             let metadata = serde_json::to_value(&sent.flow.metadata).unwrap();
             assert_eq!(
                 metadata,
@@ -576,7 +595,7 @@ mod tests {
         let mut other = transfer("HttpData-PULL");
         other.dataset_id = "other".to_owned();
         flows.start(&other).unwrap();
-        let sent = plane.2.borrow_mut().take().unwrap();
+        let sent = plane.last_start.borrow_mut().take().unwrap();
         assert_eq!(sent.flow.metadata, None);
     }
 
