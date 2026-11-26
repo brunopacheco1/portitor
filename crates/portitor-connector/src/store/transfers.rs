@@ -7,7 +7,9 @@
 
 use portitor_dsp::negotiation::provider::{Negotiation, NegotiationStore};
 use portitor_dsp::negotiation::{Agreement, NegotiationState};
-use portitor_dsp::transfer::provider::{Agreements, Outgoing, Transfer, TransferStore};
+use portitor_dsp::transfer::provider::{
+    Agreements, FlowStep, Lease, Outgoing, Transfer, TransferStore,
+};
 use portitor_dsp::transfer::{TransferState, Transition};
 use rusqlite::{Row, params};
 
@@ -17,7 +19,57 @@ use super::{
 };
 
 const TRANSFER_COLUMNS: &str = "provider_pid, consumer_pid, state, callback_address, \
-     counter_party, agreement_id, dataset_id, format, pending, version, data_address";
+     counter_party, agreement_id, dataset_id, format, pending, version, data_address, flow_step, \
+     state_before_step, lease_holder, lease_until";
+
+/// The data plane step not run yet, as stored: its name, for example
+/// `suspend` (migration 16).
+fn flow_step_text(transfer: &Transfer) -> Option<&'static str> {
+    transfer.flow_step.map(FlowStep::name)
+}
+
+fn parsed_flow_step(text: Option<String>) -> Result<Option<FlowStep>, StoreError> {
+    let Some(text) = text else {
+        return Ok(None);
+    };
+    match FlowStep::from_name(&text) {
+        Some(step) => Ok(Some(step)),
+        None => Err(StoreError(format!("stored data plane step {text}"))),
+    }
+}
+
+/// The state before the write that recorded the step, as stored: its DSP
+/// name, or NULL (migration 17).
+fn state_before_step_text(transfer: &Transfer) -> Result<Option<String>, StoreError> {
+    transfer
+        .state_before_step
+        .map(transfer_state_text)
+        .transpose()
+}
+
+/// The lease as stored: its holder and its end in seconds since 1970, or
+/// two NULLs (migration 17).
+fn lease_columns(transfer: &Transfer) -> (Option<&str>, Option<i64>) {
+    match &transfer.lease {
+        Some(lease) => (
+            Some(lease.holder.as_str()),
+            Some(i64::try_from(lease.until).unwrap_or(i64::MAX)),
+        ),
+        None => (None, None),
+    }
+}
+
+/// The lease read back from its two columns. Only both together make
+/// one; a negative end (never written) counts as ended long ago.
+fn parsed_lease(holder: Option<String>, until: Option<i64>) -> Option<Lease> {
+    match (holder, until) {
+        (Some(holder), Some(until)) => Some(Lease {
+            holder,
+            until: u64::try_from(until).unwrap_or(0),
+        }),
+        _ => None,
+    }
+}
 
 /// The consumer's push address as stored: its DSP JSON (ADR 0027).
 fn address_text(transfer: &Transfer) -> Result<Option<String>, StoreError> {
@@ -94,6 +146,12 @@ fn transfer_from_row(row: &Row<'_>) -> Result<Transfer, StoreError> {
         pending,
         version: parsed_version(col(row, 9)?)?,
         data_address,
+        flow_step: parsed_flow_step(col(row, 11)?)?,
+        state_before_step: match col::<Option<String>>(row, 12)? {
+            Some(text) => Some(parsed_transfer_state(text)?),
+            None => None,
+        },
+        lease: parsed_lease(col(row, 13)?, col(row, 14)?),
         provider_pid,
     })
 }
@@ -134,11 +192,12 @@ impl TransferStore for SqliteNegotiations {
         // requests and must still open.
         let sql = format!(
             "INSERT INTO transfer ({TRANSFER_COLUMNS})
-             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
              WHERE NOT EXISTS (
                  SELECT 1 FROM transfer WHERE counter_party = ?5 AND consumer_pid = ?2
              )"
         );
+        let (lease_holder, lease_until) = lease_columns(transfer);
         let inserted = self
             .conn()
             .execute(
@@ -155,6 +214,10 @@ impl TransferStore for SqliteNegotiations {
                     pending_text(transfer.pending.as_ref())?,
                     version(transfer.version)?,
                     address_text(transfer)?,
+                    flow_step_text(transfer),
+                    state_before_step_text(transfer)?,
+                    lease_holder,
+                    lease_until,
                 ],
             )
             .map_err(err)?;
@@ -164,11 +227,14 @@ impl TransferStore for SqliteNegotiations {
     fn replace_if(&self, transfer: &Transfer, expected: u64) -> Result<bool, StoreError> {
         // compare-and-update in one statement: a concurrent change makes
         // the WHERE clause miss and nothing is written. Only the fields a
-        // transfer step changes are written.
+        // transfer step changes are written. The lease is taken and given
+        // back in this same statement (TD-48): nothing else writes it.
+        let (lease_holder, lease_until) = lease_columns(transfer);
         let changed = self
             .conn()
             .execute(
-                "UPDATE transfer SET state = ?2, pending = ?3, version = ?4, data_address = ?6
+                "UPDATE transfer SET state = ?2, pending = ?3, version = ?4, data_address = ?6,
+                     flow_step = ?7, state_before_step = ?8, lease_holder = ?9, lease_until = ?10
                  WHERE provider_pid = ?1 AND version = ?5",
                 params![
                     transfer.provider_pid,
@@ -177,6 +243,10 @@ impl TransferStore for SqliteNegotiations {
                     version(transfer.version)?,
                     version(expected)?,
                     address_text(transfer)?,
+                    flow_step_text(transfer),
+                    state_before_step_text(transfer)?,
+                    lease_holder,
+                    lease_until,
                 ],
             )
             .map_err(err)?;
@@ -185,7 +255,20 @@ impl TransferStore for SqliteNegotiations {
 
     fn pending(&self) -> Result<Vec<Transfer>, StoreError> {
         let sql = format!(
-            "SELECT {TRANSFER_COLUMNS} FROM transfer WHERE pending IS NOT NULL
+            "SELECT {TRANSFER_COLUMNS} FROM transfer
+             WHERE pending IS NOT NULL OR flow_step IS NOT NULL
+             ORDER BY provider_pid"
+        );
+        self.query(&sql, [], transfer_from_row)
+    }
+
+    fn recorded_steps(&self) -> Result<Vec<Transfer>, StoreError> {
+        // served by the partial index `transfer_recorded_step` (migration
+        // 17): the sweep reads it every few seconds, and it is almost
+        // always empty
+        let sql = format!(
+            "SELECT {TRANSFER_COLUMNS} FROM transfer
+             WHERE flow_step IS NOT NULL
              ORDER BY provider_pid"
         );
         self.query(&sql, [], transfer_from_row)
@@ -266,6 +349,9 @@ mod tests {
             format: "HttpData-PULL".to_owned(),
             data_address: None,
             pending,
+            flow_step: None,
+            state_before_step: None,
+            lease: None,
             version: 0,
         }
     }
@@ -299,6 +385,60 @@ mod tests {
         assert!(!db.replace_if(&started, 0).unwrap(), "version 0 is gone");
         assert_eq!(db.get("urn:uuid:p").unwrap(), Some(started));
         assert!(db.pending().unwrap().is_empty());
+    }
+
+    /// The data plane step not run yet is kept with the transfer, with its
+    /// lease and the state before its write, and a transfer that has one
+    /// is taken up again after a restart and by the sweep, also without a
+    /// pending message (ADR 0028, decision 6; TD-48).
+    #[test]
+    fn a_recorded_data_plane_step_round_trips_and_is_taken_up_again() {
+        let file = SqliteNegotiations::in_memory().unwrap();
+        let db: &dyn TransferStore = &file;
+        let mut t = stored_transfer(None);
+        t.flow_step = Some(FlowStep::Start);
+        t.lease = Some(Lease {
+            holder: "urn:uuid:process".to_owned(),
+            until: 1_800_000_030,
+        });
+        assert!(db.insert(&t).unwrap());
+        assert_eq!(db.get("urn:uuid:p").unwrap(), Some(t.clone()));
+        assert_eq!(db.pending().unwrap(), std::slice::from_ref(&t));
+        assert_eq!(db.recorded_steps().unwrap(), std::slice::from_ref(&t));
+
+        let all_steps = [
+            FlowStep::Restart,
+            FlowStep::Resume,
+            FlowStep::ResumeWithAddress,
+            FlowStep::Suspend,
+            FlowStep::Complete,
+            FlowStep::Terminate,
+        ];
+        for step in all_steps {
+            let mut next = db.get("urn:uuid:p").unwrap().unwrap();
+            let expected = next.version;
+            next.flow_step = Some(step);
+            next.state_before_step = Some(TransferState::Started);
+            next.lease = Some(Lease {
+                holder: "urn:uuid:other-process".to_owned(),
+                until: 1_800_000_060,
+            });
+            next.version += 1;
+            assert!(db.replace_if(&next, expected).unwrap());
+            assert_eq!(db.get("urn:uuid:p").unwrap(), Some(next));
+        }
+
+        // the step ran: nothing to take up any more
+        let mut ran = db.get("urn:uuid:p").unwrap().unwrap();
+        let expected = ran.version;
+        ran.flow_step = None;
+        ran.state_before_step = None;
+        ran.lease = None;
+        ran.version += 1;
+        assert!(db.replace_if(&ran, expected).unwrap());
+        assert_eq!(db.get("urn:uuid:p").unwrap(), Some(ran));
+        assert!(db.pending().unwrap().is_empty());
+        assert!(db.recorded_steps().unwrap().is_empty());
     }
 
     /// DSP 2025-1, "Transfer Request Message": idempotent on

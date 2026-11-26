@@ -144,3 +144,13 @@ v1.0.2, above); the connector's own tests and the two-party scenario do.
   fetch the data until the transfer ends or the token expires.
 - The consumer side has no data plane of its own: no push transfers into
   Portitor, no caching of data.
+
+## Note added in 1.2 (2026-11-26)
+
+"The data plane is told first, as ADR 0013 says" (The provider's own
+steps) no longer holds. From 1.2 the provider saves the step first and
+tells the data plane right after the write, once (ADR 0013, note added
+in 1.2; [TD-48](../RISKS_AND_TECHNICAL_DEBTS.md#td-48)). When the
+provider starts a pull transfer again, the new token still comes from
+`NewAddress`, and the start message that carries it is written after
+the data plane gave it.

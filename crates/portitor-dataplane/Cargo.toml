@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: Portitor contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "portitor-dataplane"
+description = "Portitor's built-in data plane: HTTP pull and push, object storage, behind Data Plane Signaling v1.0-RC4 (ADR 0028)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+axum.workspace = true
+# base64url of the access tokens
+base64.workspace = true
+# the Data Plane Signaling messages, state machine and ports
+portitor-dps = { path = "../portitor-dps" }
+# the DataAddress type only: Data Plane Signaling reuses the DSP one
+portitor-dsp = { path = "../portitor-dsp" }
+# outbound HTTP, the clock, ids, traces (shared adapters)
+portitor-runtime = { path = "../portitor-runtime" }
+http-body-util.workspace = true
+hyper.workspace = true
+ring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+tracing-subscriber.workspace = true
+# in-memory traces for the trace context test (ADR 0023)
+portitor-runtime = { path = "../portitor-runtime", features = ["test-support"] }
+
+[features]
+# InMemoryFlows, a flow store for the tests of crates that use this one
+test-support = []
+
+[lints]
+workspace = true

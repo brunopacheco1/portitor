@@ -118,9 +118,9 @@ pub fn transfer_done(
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Parties {
     /// The agreement id; empty when it could not be found.
-    pub agreement: String,
+    pub agreement_id: String,
     /// The other participant's DID; empty when it could not be found.
-    pub counter_party: String,
+    pub counter_party_id: String,
 }
 
 /// A streamed HTTP body that counts the bytes passing through it and
@@ -164,8 +164,8 @@ impl<B: Body> AuditedBody<B> {
         self.written = true;
         transfer_done(
             &self.flow,
-            &self.parties.agreement,
-            &self.parties.counter_party,
+            &self.parties.agreement_id,
+            &self.parties.counter_party_id,
             Direction::Sent,
             self.bytes,
             outcome,
@@ -307,8 +307,8 @@ mod tests {
 
     fn parties() -> Parties {
         Parties {
-            agreement: "urn:uuid:agreement-1".to_owned(),
-            counter_party: "did:web:consumer.example".to_owned(),
+            agreement_id: "urn:uuid:agreement-1".to_owned(),
+            counter_party_id: "did:web:consumer.example".to_owned(),
         }
     }
 

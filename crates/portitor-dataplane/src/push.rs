@@ -45,10 +45,14 @@ use portitor_runtime::telemetry::http::{ClientCall, Peer};
 use tokio::time::Instant;
 use tracing::Instrument as _;
 
+use portitor_dps::port::SignalError;
+use portitor_dps::state::DataFlowState;
 use portitor_dsp::transfer::DataAddress;
 
-use crate::audit::{self, Outcome};
-use crate::data_plane::{HttpDataPlane, PushJob};
+use crate::access::Access;
+use crate::audit::{self, Outcome, Parties};
+use crate::plane::HttpDataPlane;
+use crate::running_flows::CutSignal;
 
 /// The media type sent when neither the source nor the consumer's address
 /// names one.
@@ -60,6 +64,112 @@ const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
 /// route uses it too, for a body that stops coming.
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// A push to send: what [`HttpDataPlane::push_job`] hands to the sender.
+#[derive(Debug)]
+pub struct PushJob {
+    /// The data flow (the transfer's provider pid).
+    pub flow_id: String,
+    /// The dataset's source.
+    pub source: String,
+    /// The consumer's data address. Never logged.
+    pub address: DataAddress,
+    /// The agreement and the consumer, for the audit line.
+    pub parties: Parties,
+    /// Held while the push runs; fires on suspend or terminate.
+    pub cut: CutSignal,
+}
+
+impl HttpDataPlane {
+    /// The push to send now for flow `id`, if it is a push flow that is
+    /// STARTED and none of its pushes runs already. The caller sends it
+    /// ([`send`]) and keeps the job until it is done: its cut signal
+    /// tells the data plane a push of this flow runs.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn push_job(&self, id: &str) -> Result<Option<PushJob>, SignalError> {
+        // watch first, check second, as a download does
+        // (`running_flows` module doc)
+        let Some(cut) = self.running.watch_if_idle(id) else {
+            // already being sent
+            return Ok(None);
+        };
+        let flow = self.flow(id)?;
+        let parties = flow.parties();
+        let Some(address) = flow.push_address else {
+            return Ok(None);
+        };
+        if flow.state != DataFlowState::Started {
+            return Ok(None);
+        }
+        // a flow of 1.1 whose source could not be filled in has none
+        // (`Flow::source`)
+        let Some(source) = flow.source else {
+            return Err(SignalError::Invalid(format!(
+                "dataset {} has no source",
+                flow.dataset_id
+            )));
+        };
+        Ok(Some(PushJob {
+            flow_id: flow.id,
+            source,
+            address,
+            parties,
+            cut,
+        }))
+    }
+
+    /// The membership check before a push of flow `id` (ADR 0027,
+    /// section 7.2). A revoked membership also ends the transfer.
+    pub(crate) async fn check_membership_before_push(&self, id: &str) -> BeforePush {
+        let Some(gate) = &self.gate else {
+            // no gate: nothing to check, as in 1.0 (unit tests)
+            return BeforePush::Go;
+        };
+        match gate.check(id).await {
+            Access::Granted => BeforePush::Go,
+            Access::Unchecked(reason) => {
+                tracing::warn!(flow = %id, %reason, "push not sent: the consumer's membership could not be checked now");
+                BeforePush::Unchecked
+            }
+            Access::Revoked(reason) => {
+                gate.end_transfer(id, &reason);
+                BeforePush::Revoked
+            }
+        }
+    }
+
+    /// Whether flow `id` is still STARTED. A push that was cut while its
+    /// flow is still STARTED was not cut by a suspension or a termination
+    /// (they change the state first, then cut): see the module doc.
+    pub(crate) fn is_started(&self, id: &str) -> bool {
+        matches!(self.flows.get(id), Ok(Some(flow)) if flow.state == DataFlowState::Started)
+    }
+
+    /// The push flows that are STARTED (after a restart, the pushes to
+    /// send again).
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn started_pushes(&self) -> Result<Vec<String>, SignalError> {
+        self.flows.started_pushes().map_err(Self::store_failed)
+    }
+}
+
+/// What [`HttpDataPlane::check_membership_before_push`] allows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BeforePush {
+    /// The consumer is still a member (or there is no gate): send.
+    Go,
+    /// The membership was revoked: do not send; the transfer is being
+    /// ended.
+    Revoked,
+    /// The check could not finish now: do not send; the push fails.
+    Unchecked,
+}
+
 /// How a push ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Sent {
@@ -67,8 +177,9 @@ pub enum Sent {
     Done,
     /// It failed; the reason names no URL and no token.
     Failed(String),
-    /// Suspend or terminate cut it.
-    Cancelled,
+    /// Suspend, terminate or a revoked membership cut it: the audit
+    /// line's outcome `cut` ([`Outcome::Cut`]).
+    Cut,
 }
 
 /// How a push ended, and how many bytes of data went out.
@@ -87,16 +198,16 @@ impl Pushed {
         match self.sent {
             Sent::Done => Outcome::Complete,
             Sent::Failed(_) => Outcome::Failed,
-            Sent::Cancelled => Outcome::Cut,
+            Sent::Cut => Outcome::Cut,
         }
     }
 }
 
-/// Sends `job` with `plane`'s client, until it is done or its flow is
+/// Sends `job` with `plane`'s push client, until it is done or its flow is
 /// cut.
 pub async fn send(plane: &HttpDataPlane, job: &mut PushJob) -> Pushed {
     let mut pushed = send_until_cut(plane, job, IDLE_TIMEOUT).await;
-    if pushed.sent == Sent::Cancelled && plane.is_started(&job.flow_id) {
+    if pushed.sent == Sent::Cut && plane.is_started(&job.flow_id) {
         // cut, but the flow is still STARTED: no suspension or termination
         // cut it (they change the state first), but a membership check
         // that could not finish. Nothing would send the data now, so the
@@ -108,39 +219,52 @@ pub async fn send(plane: &HttpDataPlane, job: &mut PushJob) -> Pushed {
 }
 
 /// [`send`], with `idle` as the longest time without progress. A cut
-/// gives [`Sent::Cancelled`].
+/// gives [`Sent::Cut`].
 async fn send_until_cut(plane: &HttpDataPlane, job: &mut PushJob, idle: Duration) -> Pushed {
     if job.cut.is_cut() {
         // cut before it began, while it waited for the consumer
         return Pushed {
-            sent: Sent::Cancelled,
+            sent: Sent::Cut,
             bytes: 0,
         };
     }
-    if let Err(outcome) = plane.push_membership(&job.flow_id).await {
-        let sent = if outcome == Outcome::Cut {
-            // the membership was revoked: the transfer is being ended
-            Sent::Cancelled
-        } else {
-            Sent::Failed("the consumer's membership could not be checked".to_owned())
-        };
-        return Pushed { sent, bytes: 0 };
+    match plane.check_membership_before_push(&job.flow_id).await {
+        BeforePush::Go => {}
+        BeforePush::Revoked => {
+            // the transfer is being ended
+            return Pushed {
+                sent: Sent::Cut,
+                bytes: 0,
+            };
+        }
+        BeforePush::Unchecked => {
+            let reason = "the consumer's membership could not be checked";
+            return Pushed {
+                sent: Sent::Failed(reason.to_owned()),
+                bytes: 0,
+            };
+        }
     }
     // checks the membership again while the push runs
-    let _watchdog = plane.push_watchdog(&job.flow_id);
+    let _watchdog = plane.membership_watchdog(&job.flow_id);
     let counted = Arc::new(AtomicU64::new(0));
-    let PushJob {
-        flow_id,
-        source,
-        address,
-        cut,
-    } = job;
-    let sent = tokio::select! {
-        result = post(plane, flow_id, source, address, Arc::clone(&counted), idle) => match result {
-            Ok(()) => Sent::Done,
-            Err(reason) => Sent::Failed(reason),
-        },
-        () = cut.cut() => Sent::Cancelled,
+    // borrows of the job's fields: the post reads three of them while the
+    // cut signal is watched (it needs `&mut`). The job's parties are for
+    // the audit line, which the caller writes once the push is over.
+    let flow_id = &job.flow_id;
+    let source = &job.source;
+    let address = &job.address;
+    let cut = &mut job.cut;
+    // `None`: the flow was cut before the post finished, and the post was
+    // dropped
+    let posted = tokio::select! {
+        result = post(plane, flow_id, source, address, Arc::clone(&counted), idle) => Some(result),
+        () = cut.cut() => None,
+    };
+    let sent = match posted {
+        Some(Ok(())) => Sent::Done,
+        Some(Err(reason)) => Sent::Failed(reason),
+        None => Sent::Cut,
     };
     Pushed {
         sent,
@@ -250,13 +374,13 @@ async fn post(
     }
 }
 
-/// Writes the audit line of a push sent for transfer `flow` under
-/// `agreement` to `counter_party`.
-pub fn audit(flow: &str, agreement: &str, counter_party: &str, pushed: &Pushed) {
+/// Writes the audit line of a push sent for transfer `flow` to
+/// `parties` ([`PushJob::parties`]).
+pub fn audit(flow: &str, parties: &Parties, pushed: &Pushed) {
     audit::transfer_done(
         flow,
-        agreement,
-        counter_party,
+        &parties.agreement_id,
+        &parties.counter_party_id,
         audit::Direction::Sent,
         pushed.bytes,
         pushed.outcome(),
@@ -266,8 +390,6 @@ pub fn audit(flow: &str, agreement: &str, counter_party: &str, pushed: &Pushed) 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use portitor_dsp::transfer::{DataAddressType, HTTP_PUSH_ENDPOINT_TYPE};
 
     use super::*;
@@ -301,10 +423,8 @@ mod tests {
     #[tokio::test]
     async fn a_push_without_progress_fails() {
         let source = source().await;
-        let sources = BTreeMap::from([("d1".to_owned(), source.clone())]);
-        let flows =
-            crate::ports::Shared(Arc::new(crate::test_stores::InMemoryFlows::default()) as _);
-        let plane = HttpDataPlane::new(flows, Arc::new(sources), "https://provider.example", 60)
+        let flows = Arc::new(crate::test_store::InMemoryFlows::default());
+        let plane = HttpDataPlane::new(flows, "https://provider.example", 60)
             .unwrap()
             .with_push_over_http(true)
             .unwrap();

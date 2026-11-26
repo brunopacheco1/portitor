@@ -21,4 +21,11 @@ impl Environment for CountingEnv {
     fn now(&self) -> String {
         "2026-11-13T12:00:00Z".to_owned()
     }
+    fn now_seconds(&self) -> u64 {
+        // 2026-11-13T12:00:00Z, the time above
+        1_794_571_200
+    }
+    fn process_id(&self) -> &'static str {
+        "test-process"
+    }
 }

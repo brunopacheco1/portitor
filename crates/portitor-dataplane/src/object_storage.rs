@@ -29,8 +29,8 @@ use hyper::body::{Bytes, Incoming};
 use hyper::{Method, header};
 use portitor_runtime::settings;
 
-use crate::http_client::{HttpsClient, https_client};
-use crate::system::now_secs;
+use portitor_runtime::http::{HttpsClient, https_client};
+use portitor_runtime::system::now_secs;
 
 pub mod sigv4;
 mod xml;

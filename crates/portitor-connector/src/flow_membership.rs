@@ -8,8 +8,9 @@
 //! When the consumer asks for a transfer, the DSP caller check has just
 //! verified its `MembershipCredential`s ([`crate::auth::Membership`]).
 //! The provider keeps them with the transfer's data flow
-//! ([`FlowStore::keep_memberships`], keyed by the provider pid, which is
-//! also the flow id). [`MembershipGate::check`] checks them again, without
+//! ([`MembershipStore::keep_memberships`], keyed by the provider pid,
+//! which is also the flow id). [`MembershipGate::check_memberships`]
+//! checks them again, without
 //! the consumer, through the caller verifier
 //! ([`crate::auth::CallerVerifier::check_membership`]): the issuer is
 //! still trusted, the credential has not expired, and no status bit is
@@ -34,7 +35,8 @@
 //! kept: the migration marks them [`StoredMembership::StartedBefore1_1`].
 //! They are served as in 1.0, until their token expires (at most
 //! `PORTITOR_DATA_TOKEN_SECONDS`), and logged once. They never get a new
-//! token (`HttpDataPlane::new_address` refuses), so this ends. A flow of 1.1 with
+//! token (`SignalingDataFlows::refuse_flow_of_1_0` in `data_flows.rs`
+//! refuses to start them again), so this ends. A flow of 1.1 with
 //! nothing kept (the write failed, or the caller verifier gave no
 //! membership) is refused: fail closed.
 
@@ -42,8 +44,12 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
+use portitor_dataplane::FlowStoreError;
+pub use portitor_dataplane::access::Access;
+use portitor_dataplane::access::AccessGate;
+use portitor_runtime::BoxFuture;
+
 use crate::auth::{AnyVerifier, Membership, VerifyError};
-use crate::data_plane::{FlowStore, FlowStoreError};
 use crate::ports::AnyFlowStore;
 
 /// What the flow store keeps of a flow's consumer.
@@ -57,17 +63,25 @@ pub enum StoredMembership {
     Kept(Vec<Membership>),
 }
 
-/// The answer of [`MembershipGate::check`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Access {
-    /// The consumer is still a member: serve.
-    Granted,
-    /// The check could not finish now, for this reason: refuse, keep the
-    /// transfer.
-    Unchecked(String),
-    /// The consumer is no longer a member, for this reason: refuse and end
-    /// the transfer.
-    Revoked(String),
+/// Port: what the control plane keeps of each flow's consumer: its
+/// memberships when it asked for the transfer (ADR 0027, section 7.2).
+/// Kept by the provider's transfer service, read by [`MembershipGate`].
+pub trait MembershipStore {
+    /// What is kept of the consumer of flow `id`.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be read.
+    fn memberships(&self, id: &str) -> Result<StoredMembership, FlowStoreError>;
+
+    /// Keeps `memberships` for flow `id` (the transfer's provider pid),
+    /// unless something is kept for it already. Written before the flow
+    /// starts, or just after: its token is sent only later.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be written.
+    fn keep_memberships(&self, id: &str, memberships: &[Membership]) -> Result<(), FlowStoreError>;
 }
 
 /// Ends a transfer on the provider's side: the DSP termination is sent
@@ -123,7 +137,7 @@ impl MembershipGate {
     /// Whether the consumer of flow `flow_id` may still get its data
     /// (module doc). Every membership kept must pass: the caller check
     /// refuses a presentation with one failing credential too (ADR 0016).
-    pub async fn check(&self, flow_id: &str) -> Access {
+    pub async fn check_memberships(&self, flow_id: &str) -> Access {
         let memberships = match self.flows.memberships(flow_id) {
             Ok(StoredMembership::Kept(memberships)) => memberships,
             Ok(StoredMembership::StartedBefore1_1) => {
@@ -178,6 +192,21 @@ impl MembershipGate {
                 "data flow started before 1.1: no membership kept; served until its token expires"
             );
         }
+    }
+}
+
+/// The data plane asks the gate through its port (ADR 0028, decision 5).
+impl AccessGate for MembershipGate {
+    fn check<'a>(&'a self, flow_id: &'a str) -> BoxFuture<'a, Access> {
+        Box::pin(self.check_memberships(flow_id))
+    }
+
+    fn end_transfer(&self, flow_id: &str, reason: &str) {
+        MembershipGate::end_transfer(self, flow_id, reason);
+    }
+
+    fn recheck_interval(&self) -> Duration {
+        MembershipGate::recheck_interval(self)
     }
 }
 
@@ -249,9 +278,11 @@ mod tests {
         flows
             .keep_memberships("f1", &[membership("did:web:issuer")])
             .unwrap();
-        assert_eq!(gate.check("f1").await, Access::Granted);
+        assert_eq!(gate.check_memberships("f1").await, Access::Granted);
         issuer.revoked.store(true, Ordering::SeqCst);
-        assert!(matches!(gate.check("f1").await, Access::Revoked(r) if r.contains("revoked")));
+        assert!(
+            matches!(gate.check_memberships("f1").await, Access::Revoked(r) if r.contains("revoked"))
+        );
     }
 
     #[tokio::test]
@@ -259,18 +290,27 @@ mod tests {
         let (gate, flows, _) = gate();
         let both = [membership("did:web:issuer"), membership("did:web:down")];
         flows.keep_memberships("f1", &both).unwrap();
-        assert!(matches!(gate.check("f1").await, Access::Unchecked(_)));
+        assert!(matches!(
+            gate.check_memberships("f1").await,
+            Access::Unchecked(_)
+        ));
     }
 
     #[tokio::test]
     async fn a_flow_without_memberships_is_refused_and_one_of_1_0_is_served() {
         let (gate, flows, _) = gate();
-        assert!(matches!(gate.check("unknown").await, Access::Revoked(_)));
+        assert!(matches!(
+            gate.check_memberships("unknown").await,
+            Access::Revoked(_)
+        ));
         flows.keep_memberships("empty", &[]).unwrap();
-        assert!(matches!(gate.check("empty").await, Access::Revoked(_)));
+        assert!(matches!(
+            gate.check_memberships("empty").await,
+            Access::Revoked(_)
+        ));
         flows.started_before_1_1("old");
-        assert_eq!(gate.check("old").await, Access::Granted);
-        assert_eq!(gate.check("old").await, Access::Granted);
+        assert_eq!(gate.check_memberships("old").await, Access::Granted);
+        assert_eq!(gate.check_memberships("old").await, Access::Granted);
         assert_eq!(gate.logged_before_1_1.lock().unwrap().len(), 1);
     }
 

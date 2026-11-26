@@ -26,7 +26,7 @@ a policy (Gaia-X Trust Framework).
 [![REUSE status](https://api.reuse.software/badge/github.com/brunopacheco1/portitor)](https://api.reuse.software/info/github.com/brunopacheco1/portitor)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](CODE_OF_CONDUCT.md)
 
-Status: 1.1, stable. The HTTP routes and the settings change only in
+Status: 1.2, stable. The HTTP routes and the settings change only in
 2.0 ([docs/STABILITY.md](docs/STABILITY.md)). It is tested against
 the DSP and DCP conformance kits, Eclipse EDC and a local Gaia-X
 compliance service, but has not yet run in a production deployment.

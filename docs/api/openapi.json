@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Portitor connector",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
@@ -882,7 +882,7 @@
             }
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/TransferBusy"
           }
         },
         "security": [
@@ -970,7 +970,7 @@
             }
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/TransferBusy"
           }
         },
         "security": [
@@ -1058,7 +1058,7 @@
             }
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/TransferBusy"
           }
         },
         "security": [
@@ -1147,7 +1147,7 @@
             }
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/TransferBusy"
           }
         },
         "security": [
@@ -2201,6 +2201,30 @@
       "Unavailable": {
         "description": "The caller could not be checked now, because a service the check needs (a DID document, a credential service, a status list, this connector's own STS) did not answer; or the request took longer than 60 seconds. Try again later",
         "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "TransferBusy": {
+        "description": "As Unavailable (a problem document: the caller could not be checked now, or the request took longer than 60 seconds); or, from 1.2, another call is changing the transfer now: it holds the transfer's lease in the database while its data plane step runs (TD-48). Nothing was written; the answer is the endpoint's DSP error with code \"503\" and reason \"the transfer is being changed; retry\", with Retry-After: 1. DSP 2025-1 says only that a refused message answers 4xx; Eclipse EDC answers a process it is changing with 503 too, because its consumers retry a 5xx and end the transfer on a 4xx (ADR 0007, note added in 1.2). Try again later",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds to wait before trying again: 1, for a transfer that is being changed",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../../crates/portitor-dsp/tests/schemas/transfer-error-schema.json"
+            }
+          },
           "application/problem+json": {
             "schema": {
               "$ref": "#/components/schemas/Problem"

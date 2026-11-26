@@ -38,6 +38,7 @@ and debts each release raised or closed are in
 | 0.14 | 2026-11-21 | v0.14.0 | Release candidate for 1.0: shorter documentation with [OPERATING](OPERATING.md); Roman website; EDC Issuer Service in the EDC test; CI scope and gates; CodeQL gate; OpenSSF Baseline level 1 self-assessment | [0.14.0](../CHANGELOG.md#0140---2026-11-21) |
 | 1.0 | 2026-11-24 | v1.0.0 | Stable: the 0.14 release candidate, tried as v1.0.0-rc.1 on 2026-11-22; routes and settings kept until 2.0 ([STABILITY](STABILITY.md)); the demos as self-contained scenarios, with two health scenarios | [1.0.0](../CHANGELOG.md#100---2026-11-24) |
 | 1.1 | 2026-11-25 | v1.1.0 | Push transfers by the Data Plane Signaling HTTP profile into the consumer's object storage; `s3://` dataset sources; the provider can always end access (provider routes, membership checked on every request, running downloads cut); suspend and start as consumer; audit line per transfer; ADR 0027 | [1.1.0](../CHANGELOG.md#110---2026-11-25) |
+| 1.2 | 2026-11-26 | v1.2.0 | The built-in data plane in its own crate, `portitor-dataplane`, behind ports (no route, setting or image change); the source travels in the DPS start message's `metadata` and stays with the flow; the data plane is told once, after the transfer's write (TD-48); ADR 0028 step 1 | [1.2.0](../CHANGELOG.md#120---2026-11-26) |
 
 Older documents cite sections of this file that the table replaced, for
 example "ROADMAP 0.11, Decisions on the 0.11 plan". Their full text is in
@@ -78,6 +79,25 @@ Decisions about the plan itself that no ADR or changelog entry holds.
   is in [RISKS_AND_TECHNICAL_DEBTS](RISKS_AND_TECHNICAL_DEBTS.md#upstream-reports).
 - **Reviews before each release** since 0.4: engineering and testing,
   readability, documentation ([RELEASING](RELEASING.md#documentation-review)).
+- **1.2 is step 1 of the separate data plane** (maintainer, 2026-11-25).
+  Untying the built-in data plane
+  ([ADR 0028](adr/0028-separate-pluggable-data-plane.md), step 1) gets
+  its own release, as the
+  [spike](spikes/1.x-separate-data-plane.md) asked. Done first, the
+  permit checks during a transfer are written once, in the control
+  plane. Every release planned from 1.2 on moved up by one: purpose and
+  data permit became 1.3, and the last planned release is now 1.10.
+  Documents written before this date use the old numbers.
+- **1.3 is several replicas and PostgreSQL** (maintainer, 2026-11-26).
+  The connector is asynchronous and its APIs are stateless; correctness
+  must not depend on state held in one process
+  ([ARCHITECTURE, principle 14](ARCHITECTURE.md#architecture-principles)).
+  A code review on 2026-11-26 found where 1.2 does not meet this yet
+  ([TD-08](RISKS_AND_TECHNICAL_DEBTS.md#td-08) and the items it links).
+  That work gets its own release right after 1.2. Every release planned
+  from 1.3 on moved up by one again: purpose and data permit became
+  1.4, and the last planned release is now 1.11. Documents written
+  before this date use the old numbers.
 
 ### Still open from released versions
 
@@ -188,16 +208,16 @@ and each format is taken from a specification, EDC or Simpl-Open, never
 invented. Each 1.x release ships when its exit criteria pass, not on a
 date.
 
-Together, 1.0 to 1.9 are what the project intends to do in the next
-twelve months, to the end of 2027 (maintainer, 2026-11-21): 1.0 to 1.5
-below, then the EHDS participant functions and the Simpl-Open tests of
-"2027" (1.6 to 1.9). What it does not intend to do in that time is in
-"2027", "What Portitor does not plan to do in this year", in "Later" and
-in [STABILITY, "What 1.0 does not do"](STABILITY.md#what-10-does-not-do).
+Together, 1.0 to 1.11 are what the project intends to do in the next
+twelve months, to the end of 2027 (maintainer, 2026-11-21; renumbered
+2026-11-25 and 2026-11-26): 1.0 to 1.7 below, then the EHDS participant functions and
+the Simpl-Open tests of "2027" (1.8 to 1.11). What it does not intend
+to do in that time is in "2027", "What Portitor does not plan to do in
+this year", in "Later" and in [STABILITY, "What 1.0 does not do"](STABILITY.md#what-10-does-not-do).
 
-The health dataspace demo (see below) grows one step per release, from
-1.1 to 1.3. It is a manual test, run with Compose and a runbook, not a
-CI job (maintainer, 2026-11-15).
+The health dataspace demo (see below) grows one step at a time, in
+1.1, 1.4 and 1.5. It is a manual test, run with Compose and a runbook,
+not a CI job (maintainer, 2026-11-15).
 
 ### 1.0 Stable (released 2026-11-24 as v1.0.0)
 
@@ -266,7 +286,68 @@ CI job (maintainer, 2026-11-15).
     the genotypes into the lab's own RustFS bucket. Written; to be run
     by hand with 1.1 images.
 
-### 1.2 Purpose and data permit in policies
+### 1.2 Untangle the data plane (ADR 0028, step 1; released 2026-11-26 as v1.2.0)
+
+- The built-in data plane moves to its own crate, `portitor-dataplane`.
+  The connector links it in as before; no route, setting or image
+  changes ([ADR 0028](adr/0028-separate-pluggable-data-plane.md),
+  decisions 4 and 7).
+- The data plane no longer reads the control plane's stores. It asks
+  the control plane through ports, among them for the membership check,
+  still on every request as in 1.1.
+- The source of the dataset goes to the data plane in the `metadata` of
+  the DPS start message, as `portitor:source`. So a source URL changed
+  by a re-harvest reaches only new transfers.
+- Signals to the data plane go out after the transfer's write, recorded
+  with it as the outbox records our messages, never inside the retried
+  update
+  ([TD-48](RISKS_AND_TECHNICAL_DEBTS.md#td-48)).
+- The data plane code (1,114 lines in one file in 1.1) is split so no file is above 1,000 lines
+  ([R-01](RISKS_AND_TECHNICAL_DEBTS.md#r-01)).
+- Exit: all tests, the DSP and DCP TCKs and the EDC interop test pass
+  unchanged; `cargo tree` shows that the data plane crate does not
+  depend on the connector; the [BENCHMARKS](BENCHMARKS.md#data-plane)
+  "Data plane" results are within 10 % of 1.1.
+- Main risk: a change of behaviour nobody sees in the transfer service
+  and the outbox.
+
+### 1.3 Several replicas and PostgreSQL
+
+Several containers serve one participant on one shared database
+(maintainer, 2026-11-26;
+[ARCHITECTURE, principle 14](ARCHITECTURE.md#architecture-principles)).
+
+- An ADR "Several replicas" sets one pattern for all three images:
+  coordination goes through the database, with compare-and-swap writes
+  and leases that expire, as Eclipse EDC does with its lease columns and
+  `nextNotLeased`; a busy entity answers its caller and does not block
+  it (DSP: HTTP 503 with an error body, which EDC retries; a 4xx ends
+  EDC's process); a cache in one process only makes things faster and
+  never changes an answer.
+- The PostgreSQL adapter on the same ports and migrations
+  ([TD-08](RISKS_AND_TECHNICAL_DEBTS.md#td-08)).
+- The gaps the 2026-11-26 code review found, closed with that pattern:
+  used token ids in the database
+  ([TD-09](RISKS_AND_TECHNICAL_DEBTS.md#td-09)); the dataset read copy
+  ([TD-50](RISKS_AND_TECHNICAL_DEBTS.md#td-50)); the issuer's status
+  lists ([TD-51](RISKS_AND_TECHNICAL_DEBTS.md#td-51)); cuts of running
+  downloads and pushes ([TD-52](RISKS_AND_TECHNICAL_DEBTS.md#td-52));
+  the DSP outbox ([TD-53](RISKS_AND_TECHNICAL_DEBTS.md#td-53)); pushes
+  resumed only at start
+  ([TD-54](RISKS_AND_TECHNICAL_DEBTS.md#td-54)); the rules bundle copy
+  ([TD-55](RISKS_AND_TECHNICAL_DEBTS.md#td-55)); scheduled jobs
+  ([TD-56](RISKS_AND_TECHNICAL_DEBTS.md#td-56)); the issuer's
+  credential outbox ([TD-57](RISKS_AND_TECHNICAL_DEBTS.md#td-57)); the
+  DID document during a key rotation
+  ([TD-58](RISKS_AND_TECHNICAL_DEBTS.md#td-58)).
+- Exit: a test runs two processes of each image on one PostgreSQL
+  database, with requests spread over both, and the scenarios pass; one
+  process is stopped in the middle and the other finishes its work; the
+  DSP and DCP TCKs and the EDC interop test pass unchanged.
+- Main risk: a piece of state held in one process that the review did
+  not find; the two-process test is the guard.
+
+### 1.4 Purpose and data permit in policies
 
 - An ODRL `purpose` constraint (a left operand of the ODRL 2.2
   vocabulary), with purposes named by Data Privacy Vocabulary (DPV)
@@ -286,7 +367,7 @@ CI job (maintainer, 2026-11-15).
     ([TD-46](RISKS_AND_TECHNICAL_DEBTS.md#td-46));
   - the identity reads status lists and stops presenting a revoked
     credential, so one revoked permit no longer blocks the others
-    ([TD-20](RISKS_AND_TECHNICAL_DEBTS.md#td-20), moved from 1.4).
+    ([TD-20](RISKS_AND_TECHNICAL_DEBTS.md#td-20), moved from 1.6).
 - As consumer, accept a provider's offer with credential constraints
   ([TD-11](RISKS_AND_TECHNICAL_DEBTS.md#td-11)); the catalog hides offers
   the caller cannot meet ([TD-13](RISKS_AND_TECHNICAL_DEBTS.md#td-13)).
@@ -305,7 +386,7 @@ CI job (maintainer, 2026-11-15).
 - Main risk: DPV purposes may not map one to one to the purposes of the
   EHDS (Article 53).
 
-### 1.3 Data user and HDAB: the HDAB and Schuman Clinical Research
+### 1.5 Data user and HDAB: the HDAB and Schuman Clinical Research
 
 - The HDAB plays the health data access body towards Schuman Clinical
   Research, the data user; the lab and Lux Biobank stay a peer to peer
@@ -336,7 +417,7 @@ CI job (maintainer, 2026-11-15).
 - Main risk: our design for dependent agreements may not match what EDC
   or Simpl-Open do later.
 
-### 1.4 Keys and credentials
+### 1.6 Keys and credentials
 
 - A signer port with an OpenBao transit adapter (P-256 signing, versioned
   keys; the private key never leaves OpenBao), optional
@@ -349,7 +430,7 @@ CI job (maintainer, 2026-11-15).
 - Exit: a key change in OpenBao with no verification gap (tested).
 - Main risk: OpenBao must stay optional.
 
-### 1.5 Users and the data plane
+### 1.7 Users and the data plane
 
 - Code from the TD-02 and TD-04 ADRs: how a person or an application of
   a participant proves who it is, and whether the data plane checks
@@ -408,13 +489,13 @@ rejects. It runs beside the releases.
 | Topic | Needed by |
 | --- | --- |
 | Several dataspaces ([TD-03](RISKS_AND_TECHNICAL_DEBTS.md#td-03)) | Accepted in 0.13 ([ADR 0024](adr/0024-several-data-spaces.md)) |
-| Users and roles ([TD-04](RISKS_AND_TECHNICAL_DEBTS.md#td-04)) | Accepted in 0.13 ([ADR 0025](adr/0025-users-and-roles.md)); code in 1.5 |
-| Who calls the data plane ([TD-02](RISKS_AND_TECHNICAL_DEBTS.md#td-02)) | 1.5 |
+| Users and roles ([TD-04](RISKS_AND_TECHNICAL_DEBTS.md#td-04)) | Accepted in 0.13 ([ADR 0025](adr/0025-users-and-roles.md)); code in 1.7 |
+| Who calls the data plane ([TD-02](RISKS_AND_TECHNICAL_DEBTS.md#td-02)) | 1.7 |
 | S3 data address | Answered in 1.1: none is needed ([ADR 0027](adr/0027-push-transfers-and-object-storage.md)) |
-| Agreements that depend on an upstream agreement | 1.3 |
-| Consent | 1.5 |
+| Agreements that depend on an upstream agreement | 1.5 |
+| Consent | 1.7 |
 | How schemas are published ([TD-01](RISKS_AND_TECHNICAL_DEBTS.md#td-01)) | with TD-03 |
-| A dataspace's policy rules as SHACL shapes in the bundle (maintainer, 2026-11-18; [TD-32](RISKS_AND_TECHNICAL_DEBTS.md#td-32)) | 1.2 |
+| A dataspace's policy rules as SHACL shapes in the bundle (maintainer, 2026-11-18; [TD-32](RISKS_AND_TECHNICAL_DEBTS.md#td-32)) | 1.4 |
 | Spike: the contract negotiation state machine written out in DSP terms, every state and every transition, and a check that the stored data matches it (maintainer, 2026-11-21) | Done 2026-11-25 ([spike](spikes/1.x-negotiation-state-machine.md)): states and stored data match DSP; gaps G1 to G6 and their next steps are in the spike, release not chosen |
 
 ### The health dataspace demo
@@ -449,7 +530,8 @@ The demo must answer, by running it:
 Step 0 runs on v1.0.0-rc.1 as it is, with pull transfers and synthetic
 genotypes, and gives the first answers:
 the [hdab-intermediary](../scenarios/hdab-intermediary/README.md)
-scenario (maintainer, 2026-11-23). Steps 1 to 3 update it as 1.1 to 1.3 land.
+scenario (maintainer, 2026-11-23). Steps 1 to 3 update it as 1.1, 1.4
+and 1.5 land.
 
 Checked against the EHDS (Regulation (EU) 2025/327, 2026-11-15): for
 secondary use a data user applies to the HDAB, which issues a data
@@ -465,14 +547,14 @@ data holder are compared, with pros and cons (maintainer, 2026-11-23).
 
 | Scenario | What it shows | Runs on |
 | --- | --- | --- |
-| The HDAB as permit authority | The HDAB only issues the data permit; the holder checks it at negotiation and sends the data where the permit says | 1.1 and 1.2, plus a destination check no release has yet |
-| The HDAB on a data user's behalf | The HDAB negotiates with the holder for a data user | research first: a delegation the holder can check (1.3) |
+| The HDAB as permit authority | The HDAB only issues the data permit; the holder checks it at negotiation and sends the data where the permit says | 1.1 and 1.4, plus a destination check no release has yet |
+| The HDAB on a data user's behalf | The HDAB negotiates with the holder for a data user | research first: a delegation the holder can check (1.5) |
 | A mixed data space | One participant runs Eclipse EDC instead of Portitor, in the health story | 1.0 |
 | The holder withdraws its dataset | New negotiations fail, existing agreements keep their data (ADR 0020) | 1.0 |
 | Cross-border | A data user in another Member State, with its own authority, issuer and bundle; how HealthData@EU links national nodes is read first | partly 1.0 (several trusted issuers) |
 | A foreign issuer (maintainer, 2026-11-24) | Lux Biobank trusts an issuer of another Member State next to Digital Lux Trust, and what that issuer may then issue ([R-48](RISKS_AND_TECHNICAL_DEBTS.md#r-48)) | 1.0 |
 | A holder without its own connector | A small holder puts its data with the HDAB, which publishes it; the legal side is read first | 1.0 |
-| Opt-out | A person's opt-out of secondary use (EHDS Art. 71) changes the data before it leaves | 1.8, research first |
+| Opt-out | A person's opt-out of secondary use (EHDS Art. 71) changes the data before it leaves | 1.10, research first |
 
 #### Ways to link data user, HDAB and holder (maintainer, 2026-11-23)
 
@@ -486,9 +568,9 @@ what worked and what did not, and a demo or an ADR where it earns one
 | --- | --- | --- | --- |
 | 1 | A. The HDAB as intermediary | the HDAB; data to the HDAB, results to the user | done: `scenarios/hdab-intermediary` |
 | 2 | F. Permit-gated peer to peer | the user's credential; data to the user (non-personal data only, EHDS Art. 73(2)) | explored on 1.0: `scenarios/data-permits`, placeholder permit claims; findings [R-48](RISKS_AND_TECHNICAL_DEBTS.md#r-48), [TD-20](RISKS_AND_TECHNICAL_DEBTS.md#td-20), [TD-46](RISKS_AND_TECHNICAL_DEBTS.md#td-46) |
-| 3 | C. Permit credential, data to the SPE | the user's permit; data into the SPE the permit names | needs 1.1, 1.2 and a destination check |
-| 4 | E. The trusted holder runs the SPE (EHDS Art. 72) | the user's permit; data stays, results leave | needs 1.2; the SPE is outside Portitor |
-| 5 | B. Chained agreements | the HDAB; its offers held inside its agreement | 1.3, research and ADR (R-39) |
+| 3 | C. Permit credential, data to the SPE | the user's permit; data into the SPE the permit names | needs 1.1, 1.4 and a destination check |
+| 4 | E. The trusted holder runs the SPE (EHDS Art. 72) | the user's permit; data stays, results leave | needs 1.4; the SPE is outside Portitor |
+| 5 | B. Chained agreements | the HDAB; its offers held inside its agreement | 1.5, research and ADR (R-39) |
 | 6 | D. The HDAB on the user's behalf | a delegation and the user's permit | research and ADR; refused today (ADR 0013) |
 
 ## 2027: EHDS participant functions and Simpl-Open tests (proposal, 2026-11-21)
@@ -496,7 +578,7 @@ what worked and what did not, and a demo or an ADR where it earns one
 The maintainer asked for the roadmap to cover what a participant of an
 EHDS-interoperable dataspace may need, with tests against Simpl-Open,
 as about one year of work (maintainer, 2026-11-21). This section is that
-year: the releases after 1.5, to the end of 2027. Like the 1.x plan, each
+year: the releases after 1.7, to the end of 2027. Like the 1.x plan, each
 release ships when its exit criteria pass, not on a date, and each
 feature starts with research and an ADR.
 
@@ -521,7 +603,7 @@ peer to peer (DSP and DCP, where Portitor sits) and the HDAB and
 HealthData@EU (AS4, applications and permits). Portitor's place is the
 first, with clean hand-overs to the second.
 
-### 1.6 Data holder: describe datasets the EHDS way
+### 1.8 Data holder: describe datasets the EHDS way
 
 - Dataset descriptions that meet the minimum metadata of the Art. 77(4)
   implementing act, in HealthDCAT-AP, checked with its SHACL shapes
@@ -536,7 +618,7 @@ first, with clean hand-overs to the second.
 - Main risk: the implementing act is adopted after this release; the
   ADR then follows the draft and says so.
 
-### 1.7 Simpl-Open tests
+### 1.9 Simpl-Open tests
 
 Replaces the "Simpl-Open" item of "Later": no shared sandbox exists, so
 the test runs Simpl-Open locally from its public code. The plan follows
@@ -562,7 +644,7 @@ the maintainer's answers to [ADR 0017](adr/0017-simpl-open.md#maintainers-answer
   the file is built. Before step 2: the maintainer reviews the "trusted
   Simpl gateway" adapter again (ADR 0017, answer 3, deferred) and it
   gets its own ADR.
-- Step 3, users: the user-to-system test of 1.5 run again against the
+- Step 3, users: the user-to-system test of 1.7 run again against the
   newest Simpl-Open release.
 - A CI job only if the Simpl-Open stack fits a runner; otherwise a
   runbook, like the demo. Step 1 should fit; step 2 is checked once the
@@ -575,16 +657,16 @@ the maintainer's answers to [ADR 0017](adr/0017-simpl-open.md#maintainers-answer
   the Compose file can break with each Simpl-Open release, or a needed
   component may not run outside Kubernetes. Then step 2 waits, and the
   step that failed is written down.
-- Watch, at each Simpl-Open release until 1.7 starts (maintainer,
+- Watch, at each Simpl-Open release until 1.9 starts (maintainer,
   2026-11-21): which protocol "SSI Tier 2" (planned for Innsbruck, 5.0)
   uses between agents. Today Simpl-Open uses OpenID4VP only for people
   signing in (Tier 1, a Keycloak extension with a walt.id verifier).
   If agents move to DCP, the gateway adapter is no longer needed; if
   they move to OpenID4VP, ADR 0017 is reviewed.
 
-### 1.8 Data user and HDAB: permits, requests and the SPE
+### 1.10 Data user and HDAB: permits, requests and the SPE
 
-Builds on 1.2 (data permit as credential) and 1.3 (the HDAB and Schuman Clinical Research).
+Builds on 1.4 (data permit as credential) and 1.5 (the HDAB and Schuman Clinical Research).
 
 - Data permit life cycle: validity, change and withdrawal of a permit
   (Art. 68) end the agreements and transfers that rely on it, through
@@ -601,19 +683,19 @@ Builds on 1.2 (data permit as credential) and 1.3 (the HDAB and Schuman Clinical
 - Main risk: national rules on opt-out differ; there may be nothing
   common to build.
 
-### 1.9 Hand-over to HealthData@EU
+### 1.11 Hand-over to HealthData@EU
 
 Research first; code only if the ADR finds a hand-over worth building.
 
 - How a Portitor participant meets HealthData@EU: does the HDAB need
-  anything from it beyond the HealthDCAT-AP descriptions of 1.6? Read
+  anything from it beyond the HealthDCAT-AP descriptions of 1.8? Read
   D7.3 in full, the central platform's code and its test framework.
 - Options to weigh: none (the HDAB does it all), the HDAB harvesting
   Portitor's DSP catalog, or Portitor talking to an AS4 access point.
   AS4 is not planned: a second protocol stack is a large step and needs
   the maintainer's yes.
 - Exit: the ADR, accepted or rejected; the ITB conformance tests, if
-  public, run against what 1.6 publishes.
+  public, run against what 1.8 publishes.
 - Main risk: HealthData@EU and the dataspace protocols stay apart, so a
   bridge serves no one yet.
 
@@ -622,7 +704,7 @@ Research first; code only if the ADR finds a hand-over worth building.
 - Run an HDAB, a national contact point or an application portal for
   data users.
 - Build a secure processing environment.
-- Speak AS4 or run a Domibus access point, unless the 1.9 ADR is
+- Speak AS4 or run a Domibus access point, unless the 1.11 ADR is
   accepted.
 - Define its own metadata, label or permit format: each comes from the
   EHDS acts, HealthDCAT-AP, DCP, EDC or Simpl-Open.
@@ -643,14 +725,24 @@ Research first; code only if the ADR finds a hand-over worth building.
   [TD-48](RISKS_AND_TECHNICAL_DEBTS.md#td-48)); signaling over HTTP and
   registration; the separate image; interop with an outside data plane
   and an EDC control plane. Closes
-  [TD-17](RISKS_AND_TECHNICAL_DEBTS.md#td-17). Step 1 goes in a 1.x release
-  when it fits; steps 2 to 4 later in 1.x, or after Data Plane
-  Signaling 1.0 is released (maintainer, 2026-11-25).
+  [TD-17](RISKS_AND_TECHNICAL_DEBTS.md#td-17). Step 1 is planned for 1.2
+  (above); steps 2 to 4 later in 1.x, or after Data Plane Signaling 1.0
+  is released (maintainer, 2026-11-25).
+- Two options from the 2026-11-26 discussion of locks in one process
+  (maintainer, 2026-11-26), not chosen yet:
+  - a fully asynchronous data plane step: the connector accepts the
+    request, records the step, and a worker runs it; a refusal by the
+    data plane becomes a termination of the transfer. Needed for
+    [ADR 0028](adr/0028-separate-pluggable-data-plane.md)'s data plane
+    over HTTP (step 2), where a step waits on the network;
+  - a lease on every write of a transfer or a negotiation, together
+    with the outbox loop of 1.3
+    ([TD-53](RISKS_AND_TECHNICAL_DEBTS.md#td-53)).
 - Revise agreements when the scope of the data changes, for example a
   data subject objects to a use, or the consumer asks to change the
   scope of the first agreement (maintainer, 2026-11-14). Until then an
   agreement keeps working after its dataset leaves the source. Planned
-  with consent in 1.5, if the consent ADR finds a standard.
+  with consent in 1.7, if the consent ADR finds a standard.
 - More harvest sources for datasets ([ADR 0020](adr/0020-dataset-harvest.md)),
   such as a DCAT-AP endpoint or CKAN; which catalogues to support is
   decided later (maintainer, 2026-11-14).
@@ -680,7 +772,7 @@ Research first; code only if the ADR finds a hand-over worth building.
     authority's CA and binds the caller's identity attributes to it
     ([ADR 0017](adr/0017-simpl-open.md));
   - consent enforcement: honouring a data subject's consent (and its
-    withdrawal) when data is shared (researched for 1.5, above);
+    withdrawal) when data is shared (researched for 1.7, above);
   - a configurable API gateway in front of the participant's services,
     like Simpl-Open's Tier 1 and Tier 2 gateways (attribute-based access).
 

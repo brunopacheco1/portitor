@@ -204,3 +204,34 @@ and terminate now cut downloads of the flow that are already running.
   "start again", which the caller retries.
 - Push transfers, provider-initiated suspend and complete from the
   management API, and a separate data plane process are later work.
+
+## Note added in 1.2 (2026-11-26)
+
+The text above is kept as it was decided. From 1.2 three parts of it
+no longer hold ([ADR 0028](0028-separate-pluggable-data-plane.md),
+decision 6 and step 1;
+[TD-48](../RISKS_AND_TECHNICAL_DEBTS.md#td-48)):
+
+- **Starting** and **Keeping the data plane in step**: the control plane
+  no longer signals the data plane first and saves after. The write
+  that changes a transfer records the data plane step it needs
+  (`transfer.flow_step`); right after that write, the same call runs
+  the step, one step at a time (the transfer is leased in the database
+  meanwhile; [ADR 0007](0007-outbox-and-proof-of-delivery.md), note on
+  the lease), and records that it ran. A start
+  message gets the data address in that second write, and is sent only
+  then. A write that loses to another write runs no step, so a save
+  that fails starts no data flow (before: started, then terminated). A
+  step the data plane refuses ends the transfer when it is the
+  provider's own decision; for a consumer's message the write is taken
+  back and the caller gets an error, as before. After a restart,
+  recorded steps run before pending messages are sent
+  (`portitor-dsp/src/transfer/provider/flow_steps.rs`).
+- **The data**: the data plane no longer looks the source up in the
+  harvest's read copy when the data is fetched. The control plane sends
+  it in the `metadata` of the Data Plane Signaling start message
+  (`portitor:source`), and the flow keeps it until it ends. A source
+  changed in the datasets file reaches only new transfers.
+- The consequence "A data plane signal and the transfer save are not
+  one transaction" still holds, but a stop between the two now leaves
+  the step recorded, and it runs at the next start.

@@ -61,7 +61,7 @@ declare -A MANAGEMENT=([biobank]=http://127.0.0.1:18101 [lab]=http://127.0.0.1:1
 source scripts/scenario-lib.sh
 
 # step 1 needs push (1.1): stop now with a 1.0 connector image, such as
-# the default that compose.yaml names until 1.1.0 is released
+# an image named in PORTITOR_IMAGE
 DEFAULT_IMAGE=$(sed -n 's/^ *image: [$]{PORTITOR_IMAGE:-\([^}]*\)}.*/\1/p' "$DIR/compose.yaml")
 CONNECTOR_IMAGE=${PORTITOR_IMAGE:-$DEFAULT_IMAGE}
 if [[ $CONNECTOR_IMAGE == *:1.0 || $CONNECTOR_IMAGE == *:1.0.* ]]; then

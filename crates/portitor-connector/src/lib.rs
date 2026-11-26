@@ -17,17 +17,14 @@
 //!   (ADR 0007).
 //! - [`catalog_reader`]: reading a provider's catalog as consumer, for
 //!   the management API.
-//! - [`data_plane`], [`data_flows`]: the built-in HTTP data plane (pull,
-//!   and the consumer's address for push) and the Data Plane Signaling
-//!   link to it (ADR 0013).
-//! - [`push`], [`receiving`], [`object_storage`]: push transfers (ADR
-//!   0027): the provider's sender, the consumer's receiving route, and
-//!   the S3 client both use.
-//! - [`audit`]: the audit line of each data transfer (`data transfer
-//!   done`, ADR 0027).
-//! - [`running_flows`], [`flow_membership`]: what stops a running
-//!   download, and the consumer's membership checked again on every use
-//!   of a data flow (ADR 0027, sections 5 and 7).
+//! - [`data_plane`], [`data_flows`]: how the built-in data plane (crate
+//!   `portitor-dataplane`, ADR 0028) is started and its route served, and
+//!   the Data Plane Signaling link to it (ADR 0013).
+//! - [`receiving`]: the consumer's route that receives a push (ADR 0027),
+//!   with the data plane crate's S3 client and audit line.
+//! - [`flow_membership`]: the consumer's membership checked again on
+//!   every use of a data flow (ADR 0027, section 7), the control plane's
+//!   side of the data plane's `AccessGate` port.
 //! - [`harvest`]: datasets come from a source (the datasets file) into a
 //!   read copy, checked entry by entry; every run is a stored job
 //!   (ADR 0020).
@@ -66,7 +63,6 @@ use portitor_runtime::request_size::small_message;
 use portitor_runtime::settings::{self, RemovedSetting};
 use serde::Serialize;
 
-pub mod audit;
 pub mod auth;
 pub mod catalog_reader;
 pub mod consumer;
@@ -80,12 +76,9 @@ pub mod http_client;
 mod inbound;
 pub mod management;
 pub mod negotiation;
-pub mod object_storage;
 mod outbox;
 pub mod ports;
-pub mod push;
 pub mod receiving;
-pub mod running_flows;
 // the signed schema and vocabulary bundle (ADR 0005): where it comes
 // from and its read copy are in `portitor-bundle` (its settings are read
 // by `portitor_bundle::source::BundleConfig`, not by `Config`); here, the
@@ -167,6 +160,14 @@ pub const DEFAULT_BIND: &str = "0.0.0.0:8080";
 
 /// Default lifetime of a data access token: one hour.
 pub const DEFAULT_DATA_TOKEN_SECONDS: u64 = 3_600;
+
+/// How often the binary sweeps the transfers as provider for data plane
+/// steps left over ([`Negotiator::schedule_transfer_sweep`], TD-48). A
+/// third of a lease (`portitor_dsp::transfer::provider::LEASE_SECONDS`,
+/// 30 seconds), so such a step runs at most 40 seconds after its process
+/// stopped. The sweep reads one partial index, almost always empty. Not a
+/// setting: settings are frozen (`docs/STABILITY.md`).
+pub const TRANSFER_SWEEP_EVERY: Duration = Duration::from_secs(10);
 
 /// The largest value of a setting in seconds: one year (365 days).
 /// Larger values are refused, as a time that far ahead can overflow the
@@ -538,6 +539,17 @@ impl Negotiator {
         self.harvester.schedule(every)
     }
 
+    /// Starts the sweep of the transfers as provider, every `every` in the
+    /// background: it runs the data plane steps that a process (this one
+    /// or another one sharing the database) left recorded once their
+    /// lease has ended, and sends the messages that waited for them
+    /// (TD-48). The binary uses [`TRANSFER_SWEEP_EVERY`]. Must be called
+    /// inside the Tokio runtime; aborting the handle stops it.
+    #[must_use]
+    pub fn schedule_transfer_sweep(&self, every: Duration) -> tokio::task::JoinHandle<()> {
+        self.transfers.schedule_sweep(every)
+    }
+
     /// The dataset harvester, told by the bundle harvester about its runs
     /// and new rules.
     #[must_use]
@@ -722,7 +734,7 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         &ports,
         config.allow_http,
     ));
-    let (data_plane, gate) = match data_plane::setup::start(config, &mut ports, &datasets) {
+    let (data_plane, gate) = match data_plane::start(config, &mut ports, &datasets) {
         Some((plane, gate)) => (Some(plane), Some(gate)),
         None => (None, None),
     };
@@ -768,7 +780,7 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         .route("/.well-known/dspace-version", get(version))
         .route("/health", get(|| async { "ok" }))
         .with_state(Arc::clone(&state))
-        .merge(data_plane::setup::routes(data_plane));
+        .merge(data_plane::routes(data_plane));
     // every DSP endpoint: the caller must be authenticated (ADR 0016).
     // The routes of messages that are small by specification (catalog
     // request, negotiation event, verification and termination, transfer

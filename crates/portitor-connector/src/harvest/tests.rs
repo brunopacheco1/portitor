@@ -13,8 +13,8 @@ use portitor_dsp::catalog::CatalogDatasets;
 use portitor_dsp::policy::CredentialTypes;
 use serde_json::{Value, json};
 
+use super::UpstreamSources;
 use super::*;
-use crate::data_plane::UpstreamSources;
 
 const SERVICE: &str = "https://p.example/dsp/2025-1";
 
@@ -210,7 +210,6 @@ fn a_bad_upstream_or_a_non_object_rejects_only_that_entry() {
 /// 0027, section 3); an `s3:` URI without a key is refused.
 #[test]
 fn an_object_storage_source_is_accepted() {
-    use crate::data_plane::UpstreamSources as _;
     let store = memory();
     let mut in_storage = entry("a");
     in_storage["portitor:source"] = json!("s3://provider-data/health/a.csv");

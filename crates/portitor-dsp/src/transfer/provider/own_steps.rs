@@ -7,19 +7,22 @@
 //! data plane when a consumer's membership no longer holds (section 7.2).
 //!
 //! A termination by the provider follows ADR 0014, "The provider's own
-//! steps": the data plane is told first, so access ends at once, then the
-//! termination is kept as the pending message and the outbox sends it.
+//! steps": access ends at once, then the outbox sends the termination.
+//! The termination is saved as the pending message, with the data flow's
+//! termination as the step to run; the step runs right after that write,
+//! before the call returns, and the message waits for it (`flow_steps`).
 //! One difference from the consumer's own steps: a message of ours still
 //! on its way does not stop it. The termination replaces that message
 //! (as when a message cannot be delivered, `abort`), because ending
 //! access must not wait for a partner that may not answer. The outbox
 //! ignores a report about the replaced message: it is no longer pending.
 
-use crate::process::{self, Lookup, Records, Write};
+use crate::process::{Lookup, Records, Write};
 
 use super::{
-    Agreements, CatalogDatasets, DataFlows, Environment, Failure, Outgoing, Transfer,
-    TransferDecider, TransferService, TransferStore, Transition, bad, termination,
+    Agreements, CatalogDatasets, DataFlows, Environment, Failure, FlowStep, IfRefused, Outgoing,
+    Transfer, TransferDecider, TransferService, TransferStore, Transition, bad, ready_to_send,
+    termination,
 };
 
 /// The most transfers one page of [`TransferService::list`] holds.
@@ -59,18 +62,22 @@ where
     /// flow is terminated (which stops every running download), and the
     /// termination becomes the message to send (module doc). Returns the
     /// transfer as saved, and the termination to send; `None` when a
-    /// termination of ours was already on its way.
+    /// termination of ours was already on its way. The data flow is
+    /// terminated then too: ending access must not depend on what came
+    /// before.
     ///
     /// # Errors
     ///
     /// Unknown transfer, a transfer that has ended (HTTP 400), data plane
-    /// or store failure.
+    /// or store failure. When the data plane refuses, the transfer stays
+    /// as it was.
     pub fn terminate_own(
         &self,
         provider_pid: &str,
         reason: &str,
     ) -> Result<(Transfer, Option<Outgoing>), Failure> {
-        let saved = process::update(self, &Lookup::own(provider_pid), |transfer| {
+        let lookup = Lookup::own(provider_pid);
+        let stepped = self.write_then_run_step(&lookup, IfRefused::TakeBack, |transfer| {
             if transfer.state.is_terminal() {
                 return Err(bad(
                     provider_pid,
@@ -78,27 +85,31 @@ where
                     "the transfer has ended",
                 ));
             }
-            // the data plane first: access ends now, whatever follows
-            self.flows
-                .terminate(provider_pid)
-                .map_err(Failure::DataPlane)?;
-            let ending = transfer
-                .pending
-                .as_ref()
-                .is_some_and(|sent| sent.transition == Transition::Terminate);
-            if ending {
-                return Ok(Write::Skip);
+            // access ends right after this write, whatever follows
+            transfer.flow_step = Some(FlowStep::Terminate);
+            if !termination_on_its_way(transfer) {
+                transfer.pending = Some(termination(transfer, reason));
             }
-            transfer.pending = Some(termination(transfer, reason));
             Ok(Write::Save)
         })?;
-        match saved {
-            Some(transfer) => {
-                let out = transfer.pending.clone();
-                Ok((transfer, out))
-            }
-            // our termination was on its way already
-            None => Ok((self.transfer(provider_pid)?, None)),
-        }
+        // the change above never skips; `None` is handled anyway
+        let Some(stepped) = stepped else {
+            return Ok((self.transfer(provider_pid)?, None));
+        };
+        // our termination was on its way already: it is not sent again
+        let out = if termination_on_its_way(&stepped.before) {
+            None
+        } else {
+            ready_to_send(&stepped.current)
+        };
+        Ok((stepped.written, out))
+    }
+}
+
+/// Whether our termination of `transfer` is on its way already.
+fn termination_on_its_way(transfer: &Transfer) -> bool {
+    match &transfer.pending {
+        Some(sent) => sent.transition == Transition::Terminate,
+        None => false,
     }
 }

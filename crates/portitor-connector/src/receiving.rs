@@ -13,12 +13,12 @@
 //!   new token, which replaces the old one.
 //! - `POST /push/{consumerPid}` (and `PUT`) checks the token, then
 //!   streams the body into the push bucket as object `{consumerPid}`
-//!   ([`crate::object_storage::ObjectStorage::upload`]). A second request
+//!   ([`portitor_dataplane::object_storage::ObjectStorage::upload`]). A second request
 //!   replaces the object. The token works only while the transfer is
 //!   `REQUESTED` or `STARTED`. Every refusal gets the same 401, as on
 //!   `/data`.
 //! - Each request that passed the token check writes the audit line
-//!   `data transfer done` ([`crate::audit`]).
+//!   `data transfer done` ([`portitor_dataplane::audit`]).
 //!
 //! The binary serves these routes outside the public port's body size
 //! and time limits (a dataset can be large); the token is checked before
@@ -29,8 +29,8 @@
 //! - At most [`MAX_CONCURRENT_UPLOADS`] uploads at once, for all
 //!   transfers; one more gets 503, as the public port answers when it is
 //!   too busy. Each upload holds up to one part
-//!   ([`crate::object_storage::PART_BYTES`], 8 MiB) in memory.
-//! - A body that sends nothing for [`crate::push::IDLE_TIMEOUT`] is
+//!   ([`portitor_dataplane::object_storage::PART_BYTES`], 8 MiB) in memory.
+//! - A body that sends nothing for [`portitor_dataplane::push::IDLE_TIMEOUT`] is
 //!   treated as one that broke off: the upload is aborted, the answer is
 //!   400 and the audit line says `cut`.
 
@@ -57,12 +57,12 @@ use portitor_dsp::transfer::{
 use portitor_runtime::http::bearer_token_in;
 
 use crate::Config;
-use crate::audit::{self, Outcome};
 use crate::consumer_transfer::TransferConsumer;
-use crate::data_plane::{hash, new_token, unauthorized};
-use crate::object_storage::{ObjectStorage, StorageError};
 use crate::ports::{Ports, Shared};
 use crate::system::now_secs;
+use portitor_dataplane::audit::{self, Outcome};
+use portitor_dataplane::object_storage::{ObjectStorage, StorageError};
+use portitor_dataplane::{hash, new_token, unauthorized};
 
 /// The path of the receiving route, before `/{consumerPid}`.
 pub const PUSH_PATH: &str = "/push";
@@ -370,7 +370,7 @@ pub(crate) async fn receive(
     });
     let body = Body::new(StopsWhenIdle::new(
         Body::new(counted),
-        crate::push::IDLE_TIMEOUT,
+        portitor_dataplane::push::IDLE_TIMEOUT,
     ));
     let stored = receiver
         .storage

@@ -188,6 +188,44 @@ const MIGRATIONS: &[&str] = &[
         expires_at   INTEGER NOT NULL,
         object_key   TEXT
      )",
+    // 1.2: each data flow keeps its dataset's source, which the start
+    // message names from now on (ADR 0028, step 1; `store/data_flows.rs`).
+    // A flow of 1.1 gets the source its dataset has in the harvest's read
+    // copy (the `dataset` table of this file) now; a flow whose dataset
+    // has none there keeps NULL and is not served, as 1.1 did not serve it
+    "ALTER TABLE data_flow ADD COLUMN source TEXT;
+     UPDATE data_flow
+        SET source = (SELECT upstream FROM dataset WHERE dataset.id = data_flow.dataset_id)",
+    // 1.2: each data flow keeps the agreement and the consumer its start
+    // message names, for the audit line (ADR 0028, step 1). A flow of 1.1
+    // gets them from its transfer as provider (the flow id is the
+    // transfer's provider pid) now; a flow without a transfer keeps empty
+    // texts, which the audit line of 1.1 wrote for it too
+    "ALTER TABLE data_flow ADD COLUMN agreement_id TEXT NOT NULL DEFAULT '';
+     ALTER TABLE data_flow ADD COLUMN counter_party_id TEXT NOT NULL DEFAULT '';
+     UPDATE data_flow
+        SET agreement_id = COALESCE(
+                (SELECT transfer.agreement_id FROM transfer
+                  WHERE transfer.provider_pid = data_flow.id), ''),
+            counter_party_id = COALESCE(
+                (SELECT transfer.counter_party FROM transfer
+                  WHERE transfer.provider_pid = data_flow.id), '')",
+    // 1.2: the data plane step a provider's transfer write decided, run
+    // after that write and then emptied (ADR 0028, decision 6; TD-48;
+    // `portitor-dsp`, `transfer::provider::flow_steps`). NULL: none waits
+    "ALTER TABLE transfer ADD COLUMN flow_step TEXT",
+    // 1.2: the lease on a provider's transfer while its data plane step
+    // runs, and its state before the write that recorded the step, so any
+    // process that shares this file can run the step and report the
+    // change (TD-48; `portitor-dsp`, `transfer::provider::flow_steps`).
+    // `lease_holder`: the id of the process that holds it; `lease_until`:
+    // when it ends, in seconds since 1970 (as `expires_at`). NULL: none.
+    // The partial index serves the sweep, which looks for recorded steps
+    // every few seconds (`TransferStore::recorded_steps`)
+    "ALTER TABLE transfer ADD COLUMN state_before_step TEXT;
+     ALTER TABLE transfer ADD COLUMN lease_holder TEXT;
+     ALTER TABLE transfer ADD COLUMN lease_until INTEGER;
+     CREATE INDEX transfer_recorded_step ON transfer (provider_pid) WHERE flow_step IS NOT NULL",
 ];
 
 /// Adapter: negotiations in a `SQLite` file.
@@ -584,6 +622,11 @@ impl ConsumerStore for SqliteNegotiations {
 mod tests {
     use super::*;
     use portitor_dsp::negotiation::Agreement;
+
+    /// How many migrations a file written by 1.0 has.
+    const MIGRATIONS_OF_1_0: usize = 11;
+    /// How many migrations a file written by 1.1 has.
+    const MIGRATIONS_OF_1_1: usize = 13;
 
     /// Brings `conn` up to date, as `open` does.
     fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
@@ -1007,11 +1050,11 @@ mod tests {
     /// and a new flow has nothing kept until the transfer keeps it.
     #[test]
     fn a_flow_from_1_0_is_marked_as_started_before_1_1() {
-        use crate::data_plane::FlowStore;
+        use crate::flow_membership::MembershipStore as _;
         use crate::flow_membership::StoredMembership;
 
         let mut conn = Connection::open_in_memory().unwrap();
-        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..11]).unwrap();
+        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..MIGRATIONS_OF_1_0]).unwrap();
         conn.execute(
             "INSERT INTO data_flow (id, state, dataset_id, token_hash, expires_at) \
              VALUES ('urn:uuid:old', 'STARTED', 'd', 'ab', 1900000000)",
@@ -1027,6 +1070,156 @@ mod tests {
             store.memberships("urn:uuid:new").unwrap(),
             StoredMembership::Missing
         );
+    }
+
+    /// A file written by 1.1 (13 migrations) with data flows: 1.2 gives
+    /// each the source its dataset has in the harvest's read copy
+    /// (migration 14). A flow whose dataset has no source there, or is
+    /// not there at all, keeps none and is not served.
+    #[test]
+    fn a_flow_from_1_1_gets_the_source_of_its_dataset() {
+        use portitor_dataplane::FlowStore;
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..MIGRATIONS_OF_1_1]).unwrap();
+        for (dataset, upstream) in [
+            ("d-url", Some("https://upstream.example/d")),
+            ("d-s3", Some("s3://datasets/d.csv")),
+            ("d-none", None),
+        ] {
+            conn.execute(
+                "INSERT INTO dataset (id, entry, content, upstream, content_sha256, state, \
+                 conforms_to, first_seen, last_changed, last_job) \
+                 VALUES (?1, '{}', '{}', ?2, 'ab', 'withdrawn', NULL, 1, 1, 1)",
+                params![dataset, upstream],
+            )
+            .unwrap();
+        }
+        for (flow, dataset) in [
+            ("urn:uuid:url", "d-url"),
+            ("urn:uuid:s3", "d-s3"),
+            ("urn:uuid:none", "d-none"),
+            ("urn:uuid:unknown", "d-unknown"),
+        ] {
+            conn.execute(
+                "INSERT INTO data_flow (id, state, dataset_id, token_hash, expires_at) \
+                 VALUES (?1, 'STARTED', ?2, 'ab', 1900000000)",
+                params![flow, dataset],
+            )
+            .unwrap();
+        }
+        let store = setup(conn).unwrap();
+        // `FlowStore::get`, not `store.get`: the store has several `get`
+        // methods (one per port it implements), so the port is named
+        let source_of = |flow: &str| FlowStore::get(&store, flow).unwrap().unwrap().source;
+        assert_eq!(
+            source_of("urn:uuid:url").as_deref(),
+            Some("https://upstream.example/d")
+        );
+        assert_eq!(
+            source_of("urn:uuid:s3").as_deref(),
+            Some("s3://datasets/d.csv")
+        );
+        assert_eq!(source_of("urn:uuid:none"), None);
+        assert_eq!(source_of("urn:uuid:unknown"), None);
+    }
+
+    /// A file written by 1.1 (13 migrations) with data flows: 1.2 gives
+    /// each the agreement and the consumer of its transfer as provider
+    /// (migration 15), for the audit line. A flow without a transfer gets
+    /// empty texts, as its audit line had in 1.1.
+    #[test]
+    fn a_flow_from_1_1_gets_the_parties_of_its_transfer() {
+        use portitor_dataplane::FlowStore;
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..MIGRATIONS_OF_1_1]).unwrap();
+        conn.execute(
+            "INSERT INTO transfer (provider_pid, consumer_pid, state, callback_address, \
+             counter_party, agreement_id, dataset_id, format, pending, version) \
+             VALUES ('urn:uuid:p', 'urn:uuid:c', 'STARTED', 'https://c.example/cb', \
+             'did:web:c.example', 'urn:uuid:a', 'd', 'HttpData-PULL', NULL, 1)",
+            [],
+        )
+        .unwrap();
+        for flow in ["urn:uuid:p", "urn:uuid:alone"] {
+            conn.execute(
+                "INSERT INTO data_flow (id, state, dataset_id, token_hash, expires_at) \
+                 VALUES (?1, 'STARTED', 'd', 'ab', 1900000000)",
+                params![flow],
+            )
+            .unwrap();
+        }
+        let store = setup(conn).unwrap();
+        // the port is named, as above: the store has several `get` methods
+        let parties_of = |flow: &str| FlowStore::get(&store, flow).unwrap().unwrap().parties();
+        let found = parties_of("urn:uuid:p");
+        assert_eq!(
+            (found.agreement_id.as_str(), found.counter_party_id.as_str()),
+            ("urn:uuid:a", "did:web:c.example")
+        );
+        let alone = parties_of("urn:uuid:alone");
+        assert_eq!(
+            (alone.agreement_id.as_str(), alone.counter_party_id.as_str()),
+            ("", "")
+        );
+    }
+
+    /// A file of 1.2 before the lease (16 migrations) with a transfer
+    /// whose data plane step is recorded, and one of 1.1 (13 migrations)
+    /// with a transfer: migration 17 adds the lease, which both read back
+    /// as none, so a recorded step counts as left over and is taken over
+    /// at once (TD-48). The sweep's query uses its partial index.
+    #[test]
+    fn a_recorded_step_from_before_the_lease_reads_as_left_over() {
+        use portitor_dsp::transfer::provider::{FlowStep, TransferStore};
+
+        const MIGRATIONS_BEFORE_THE_LEASE: usize = 16;
+        for (applied, flow_step) in [
+            (MIGRATIONS_OF_1_1, None),
+            (MIGRATIONS_BEFORE_THE_LEASE, Some("suspend")),
+        ] {
+            let mut conn = Connection::open_in_memory().unwrap();
+            portitor_runtime::sqlite::migrate(&mut conn, &MIGRATIONS[..applied]).unwrap();
+            conn.execute(
+                "INSERT INTO transfer (provider_pid, consumer_pid, state, callback_address, \
+                 counter_party, agreement_id, dataset_id, format, pending, version) \
+                 VALUES ('urn:uuid:p', 'urn:uuid:c', 'SUSPENDED', 'https://c.example/cb', \
+                 'did:web:c.example', 'urn:uuid:a', 'd', 'HttpData-PULL', NULL, 3)",
+                [],
+            )
+            .unwrap();
+            if let Some(step) = flow_step {
+                conn.execute("UPDATE transfer SET flow_step = ?1", [step])
+                    .unwrap();
+            }
+            let store = setup(conn).unwrap();
+            let file: &dyn TransferStore = &store;
+            let transfer = file.get("urn:uuid:p").unwrap().unwrap();
+            assert_eq!((transfer.lease, transfer.state_before_step), (None, None));
+            assert_eq!(transfer.version, 3);
+            let expected_step = flow_step.and_then(FlowStep::from_name);
+            assert_eq!(transfer.flow_step, expected_step);
+            assert_eq!(
+                file.recorded_steps().unwrap().len(),
+                usize::from(flow_step.is_some())
+            );
+        }
+
+        let store = setup(Connection::open_in_memory().unwrap()).unwrap();
+        let plan: Vec<String> = store
+            .conn()
+            .prepare(
+                "EXPLAIN QUERY PLAN SELECT provider_pid FROM transfer
+                   WHERE flow_step IS NOT NULL ORDER BY provider_pid",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(3))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let index = "INDEX transfer_recorded_step";
+        assert!(plan.iter().any(|step| step.contains(index)), "{plan:?}");
     }
 }
 

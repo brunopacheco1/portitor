@@ -41,7 +41,7 @@ Out, on purpose:
 
 - More than one provider or consumer, and chained transfers: see the
   health scenarios ([index](../README.md)).
-- Purpose or data permits (1.2).
+- Purpose or data permits (1.4).
 - Push to an endpoint other than a Portitor consumer's receiving route.
 - Gaia-X compliance and other connectors: the Gaia-X and EDC interop
   tests cover them ([TESTING](../../docs/TESTING.md)).

@@ -21,6 +21,8 @@ portitor-bundle = { path = "../portitor-bundle" }
 portitor-dcp = { path = "../portitor-dcp" }
 portitor-dsp = { path = "../portitor-dsp" }
 portitor-dps = { path = "../portitor-dps" }
+# the built-in data plane, linked in (ADR 0028)
+portitor-dataplane = { path = "../portitor-dataplane" }
 portitor-runtime = { path = "../portitor-runtime" }
 # the SHACL engine for the bundle's rules (ADR 0005)
 portitor-shacl = { path = "../portitor-shacl" }
@@ -35,6 +37,8 @@ tracing.workspace = true
 utoipa.workspace = true
 
 [dev-dependencies]
+# the in-memory flow store of the data plane crate
+portitor-dataplane = { path = "../portitor-dataplane", features = ["test-support"] }
 # in-memory traces for the trace context tests (ADR 0023)
 portitor-runtime = { path = "../portitor-runtime", features = ["test-support"] }
 jsonschema.workspace = true

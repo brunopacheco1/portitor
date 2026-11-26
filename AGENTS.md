@@ -47,7 +47,8 @@ Today's crates:
 - `crates/portitor-dps`: Data Plane Signaling v1.0-RC4: data flow messages, state machine, and the two ports between control plane and data plane.
 - `crates/portitor-shacl`: our own SHACL Core subset (ADR 0005) on Oxigraph's RDF crates: loads shapes and code lists, turns JSON-LD into RDF with local contexts only, validates. Pure, no I/O; refuses SHACL terms it does not implement.
 - `crates/portitor-runtime`: adapters shared by the binaries: outbound HTTP, did:web resolution with a cache, the management API key, SQLite files and migrations, logging and shutdown, the system clock, the health checks (`health.rs`), what happens on a panic (`panics.rs`: HTTP 500 for a handler, supervised background tasks; start a long-running task with `spawn_supervised`, not `tokio::spawn`), and traces and metrics with OpenTelemetry (`telemetry.rs`, `telemetry/`).
-- `crates/portitor-connector`: the connector binary (HTTP adapter and routes), one image (ADR 0003). Harvests datasets into a read copy (ADR 0020) and pulls the authority's signed bundle the same way (`bundle_harvest.rs`: `BundleHarvester`, `BundleCopy`, no rollback).
+- `crates/portitor-dataplane`: the built-in data plane (ADR 0028, step 1, 1.2): HTTP pull (`GET /data/{flowId}`), the push sender, object storage, running-flow cuts and the audit line, behind the Data Plane Signaling `DataPlane` port. It asks the control plane through its own ports (`AccessGate` for the membership check) and must not depend on `portitor-connector` (CI checks it with `cargo tree`).
+- `crates/portitor-connector`: the connector binary (HTTP adapter and routes), one image (ADR 0003). Harvests datasets into a read copy (ADR 0020) and pulls the authority's signed bundle the same way (`bundle_harvest.rs`: `BundleHarvester`, `BundleCopy`, no rollback). Links the data plane in (`data_plane.rs`) and implements its `AccessGate` (`flow_membership.rs`).
 - `crates/portitor-bundle`: adapter crate for the authority's signed bundle on a participant's side, reusable by any service: `source.rs` (`BundleSource` port, `UrlSource`, `FolderSource`, `PORTITOR_BUNDLE_*` settings) and `store.rs` (`BundleStore` port, `CacheFolder`: disk cache and version in use). How schemas are collected and stored is technical debt (`docs/RISKS_AND_TECHNICAL_DEBTS.md`, TD-01).
 - `crates/portitor-identity`: the identity component binary (ADR 0015): DID document, STS, credential service (presentation, Storage and offer APIs), management API, SQLite store, X.509 certificate chain and Gaia-X onboarding (ADR 0021); its own image.
 - `crates/portitor-issuer`: the issuer component binary (ADR 0018), run once per dataspace by its authority: DID document, DCP issuer service (metadata, credential requests and status), delivery outbox, status lists, management API, SQLite store; its own image. Also `portitor-issuer bundle build`, which signs a schema and vocabulary bundle offline, and the read-only bundle route.
@@ -103,6 +104,13 @@ cargo vet --locked
   route or an environment variable listed in `docs/STABILITY.md`. A new
   one gets a line there in the same pull request. The
   `frozen_interface` tests of the three binaries check both.
+- **Several replicas** (ARCHITECTURE principle 14): for every change,
+  ask "does this still hold with two containers on one database?".
+  Never make correctness depend on a lock in one process, a copy in
+  memory, or a recovery that runs only at start. Coordinate through the
+  database (compare-and-swap, leases that expire); a busy entity
+  answers its caller and does not wait. A cache in one process may only
+  make things faster.
 - **Telemetry** ([ADR 0023](docs/adr/0023-observability.md)):
   OpenTelemetry code goes only in `crates/portitor-runtime/src/telemetry*`.
   A new metric is a function in `telemetry/metrics.rs` with fixed

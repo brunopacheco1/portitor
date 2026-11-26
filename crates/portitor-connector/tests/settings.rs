@@ -16,7 +16,8 @@
 use portitor_bundle::source::BundleConfig;
 use portitor_connector::auth::AuthSettings;
 use portitor_connector::management::{DEFAULT_MANAGEMENT_BIND, ManagementConfig};
-use portitor_connector::{Config, REMOVED_SETTINGS, object_storage};
+use portitor_connector::{Config, REMOVED_SETTINGS};
+use portitor_dataplane::object_storage;
 use portitor_runtime::request_size::RequestLimits;
 use portitor_runtime::testing::settings_rule::{
     Case, Read, SWITCH_TRUTH_TABLE, check_binary_refuses_to_start, check_removed, check_rule,

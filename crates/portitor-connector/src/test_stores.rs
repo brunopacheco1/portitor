@@ -25,11 +25,11 @@ use portitor_dsp::transfer::consumer::{
 };
 
 use crate::auth::Membership;
-use crate::data_plane::{Flow, FlowStore, FlowStoreError};
-use crate::flow_membership::StoredMembership;
+use crate::flow_membership::{MembershipStore, StoredMembership};
 use crate::http_client::Sender;
 use crate::ports::Ports;
 use crate::store::SqliteNegotiations;
+use portitor_dataplane::{Flow, FlowStore, FlowStoreError};
 
 impl Ports {
     /// The ports for a unit test: every store in a new in-memory `SQLite`
@@ -241,22 +241,20 @@ impl HeldAgreements for InMemoryConsumerNegotiations {
     }
 }
 
-/// Adapter: flows kept in memory (lost on restart; tests). `.1`: what is
-/// kept of each flow's consumer (ADR 0027).
+/// Adapter: flows kept in memory (lost on restart; tests).
 #[derive(Debug, Clone, Default)]
-pub(crate) struct InMemoryFlows(
-    Arc<Mutex<BTreeMap<String, Flow>>>,
-    Arc<Mutex<BTreeMap<String, StoredMembership>>>,
-);
+pub(crate) struct InMemoryFlows {
+    /// The data plane's own in-memory flows.
+    flows: portitor_dataplane::test_store::InMemoryFlows,
+    /// What the control plane keeps of each flow's consumer (ADR 0027).
+    memberships: Arc<Mutex<BTreeMap<String, StoredMembership>>>,
+}
 
 impl InMemoryFlows {
-    fn map(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Flow>> {
-        // every write is a single insert, so a panic cannot leave half a flow
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
     fn members(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, StoredMembership>> {
-        self.1.lock().unwrap_or_else(PoisonError::into_inner)
+        self.memberships
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Marks flow `id` as one of 1.0, as the migration does.
@@ -268,37 +266,19 @@ impl InMemoryFlows {
 
 impl FlowStore for InMemoryFlows {
     fn get(&self, id: &str) -> Result<Option<Flow>, FlowStoreError> {
-        Ok(self.map().get(id).cloned())
+        self.flows.get(id)
     }
-
     fn insert(&self, flow: &Flow) -> Result<bool, FlowStoreError> {
-        let mut map = self.map();
-        if map.contains_key(&flow.id) {
-            return Ok(false);
-        }
-        map.insert(flow.id.clone(), flow.clone());
-        Ok(true)
+        self.flows.insert(flow)
     }
-
     fn set_state(
         &self,
         id: &str,
         from: DataFlowState,
         to: DataFlowState,
     ) -> Result<bool, FlowStoreError> {
-        let mut map = self.map();
-        match map.get_mut(id) {
-            Some(flow) if flow.state == from => {
-                flow.state = to;
-                if to.is_final() {
-                    flow.push_address = None;
-                }
-                Ok(true)
-            }
-            _ => Ok(false),
-        }
+        self.flows.set_state(id, from, to)
     }
-
     fn set_token(
         &self,
         id: &str,
@@ -306,41 +286,22 @@ impl FlowStore for InMemoryFlows {
         token_hash: &str,
         expires_at: u64,
     ) -> Result<bool, FlowStoreError> {
-        let mut map = self.map();
-        match map.get_mut(id) {
-            Some(flow) if flow.state == state => {
-                token_hash.clone_into(&mut flow.token_hash);
-                flow.expires_at = expires_at;
-                Ok(true)
-            }
-            _ => Ok(false),
-        }
+        self.flows.set_token(id, state, token_hash, expires_at)
     }
-
     fn set_push_address(
         &self,
         id: &str,
         state: DataFlowState,
         address: &DataAddress,
     ) -> Result<bool, FlowStoreError> {
-        let mut map = self.map();
-        match map.get_mut(id) {
-            Some(flow) if flow.state == state && flow.push_address.is_some() => {
-                flow.push_address = Some(address.clone());
-                Ok(true)
-            }
-            _ => Ok(false),
-        }
+        self.flows.set_push_address(id, state, address)
     }
-
     fn started_pushes(&self) -> Result<Vec<String>, FlowStoreError> {
-        let map = self.map();
-        let started = map
-            .values()
-            .filter(|f| f.state == DataFlowState::Started && f.push_address.is_some());
-        Ok(started.map(|f| f.id.clone()).collect())
+        self.flows.started_pushes()
     }
+}
 
+impl MembershipStore for InMemoryFlows {
     fn memberships(&self, id: &str) -> Result<StoredMembership, FlowStoreError> {
         let found = self.members().get(id).cloned();
         Ok(found.unwrap_or(StoredMembership::Missing))

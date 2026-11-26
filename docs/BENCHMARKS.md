@@ -129,6 +129,19 @@ What this says:
   from 43 ms to 0.4 ms. Not changed in 0.12; pulls larger than a
   network packet are not affected.
 
+**1.2 compared with 1.1** (2026-11-26, the 1.2 exit criterion: within
+10 %). The same machine (4 CPUs, a cloud container), the release
+binaries of 1.1.0 (`ef7f4ca`) and of the 1.2 branch, `parallel` run
+five times each, in turns, so 15 runs per load and version: 100 pulls
+4,516 MB/s with 1.1 and 4,547 MB/s with 1.2 (medians, +0.7 %), first
+byte p50 44 ms and 47 ms; 1,000 pulls 2,060 MB/s and 2,157 MB/s
+(medians; runs spread from about 900 to 4,100 MB/s on both, so only
+"no worse" can be read from them); no pull failed. One pull of 2 GiB:
+2,490 and 2,532 MB/s. The long pull and the TD-40 load gave the same
+results with both. The data plane's path for a request did not change
+in 1.2 except that it reads the source from its own flow instead of
+the dataset copy.
+
 ### Stored history
 
 `scripts/bench.sh history`. A new negotiation, a transfer start, a

@@ -31,12 +31,12 @@ use portitor_dsp::transfer::provider::{
 use portitor_dsp::transfer::{DataAddress, TransferState};
 
 use crate::auth::{CallerVerifier, Membership, NoTokens, Prover, RefuseAll};
-use crate::data_plane::{Flow, FlowStore, FlowStoreError};
-use crate::flow_membership::StoredMembership;
+use crate::flow_membership::{MembershipStore, StoredMembership};
 use crate::http_client::Sender;
 use crate::state_events::{self, Role};
 use crate::store::SqliteNegotiations;
 use crate::transfer::NoDataFlows;
+use portitor_dataplane::{Flow, FlowStore, FlowStoreError};
 
 /// How often and how fast to retry a message the consumer did not take.
 #[derive(Debug, Clone, Copy)]
@@ -97,8 +97,8 @@ pub struct Ports {
     /// The connector's S3-compatible object storage (ADR 0027): the
     /// provider's `s3://` sources, and where a consumer's pushed data
     /// lands. [`Ports::new`] starts without; the binary sets it from the
-    /// `AWS_*` settings ([`crate::object_storage::Settings`]).
-    pub object_storage: Option<Arc<crate::object_storage::ObjectStorage>>,
+    /// `AWS_*` settings ([`portitor_dataplane::object_storage::Settings`]).
+    pub object_storage: Option<Arc<portitor_dataplane::object_storage::ObjectStorage>>,
     /// The credential types that policies may use (ADR 0019): which scopes
     /// to ask for, and grant, for an offer's credential constraints.
     /// [`crate::build`] sets it from [`crate::Config::credential_types`].
@@ -128,7 +128,7 @@ impl Ports {
         Self {
             store: Shared(Arc::clone(store) as _),
             transfers: TransferPorts {
-                store: Shared(Arc::clone(store) as _),
+                store: AnyTransferStore::new(Arc::clone(store) as _),
                 agreements: Shared(Arc::clone(store) as _),
                 flows: Shared(Arc::new(NoDataFlows)),
                 decider: default_transfer_decider(),
@@ -169,7 +169,7 @@ impl Ports {
         // (`_`: "the type this field expects").
         self.store = Shared(Arc::clone(store) as _);
         self.consumer_store = Shared(Arc::clone(store) as _);
-        self.transfers.store = Shared(Arc::clone(store) as _);
+        self.transfers.store = AnyTransferStore::new(Arc::clone(store) as _);
         self.transfers.agreements = Shared(Arc::clone(store) as _);
         self.consumer_transfers.store = Shared(Arc::clone(store) as _);
         self.consumer_transfers.held = Shared(Arc::clone(store) as _);
@@ -401,8 +401,28 @@ impl ConsumerDecider for AnyConsumerDecider {
     }
 }
 
-/// The transfer store chosen at start.
-pub type AnyTransferStore = Shared<dyn TransferStore + Send + Sync>;
+/// The transfer store chosen at start, as provider. Unlike the other
+/// stores it is not a plain [`Shared`]: it reports a transfer's state
+/// change only once the data plane step its write recorded has run
+/// (`impl TransferStore` below).
+#[derive(Clone)]
+pub struct AnyTransferStore {
+    store: Arc<dyn TransferStore + Send + Sync>,
+}
+
+impl AnyTransferStore {
+    /// Reports the state changes of the transfers kept in `store`.
+    #[must_use]
+    pub fn new(store: Arc<dyn TransferStore + Send + Sync>) -> Self {
+        Self { store }
+    }
+}
+
+impl std::fmt::Debug for AnyTransferStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AnyTransferStore")
+    }
+}
 
 /// The agreements chosen at start (the negotiation store's).
 pub type AnyAgreements = Shared<dyn Agreements + Send + Sync>;
@@ -413,42 +433,70 @@ pub type AnyDataFlows = Shared<dyn DataFlows + Send + Sync>;
 /// The transfer policy chosen at start.
 pub type AnyTransferDecider = Shared<dyn TransferDecider + Send + Sync>;
 
+/// A transfer's state change is reported once the data plane step that
+/// its write recorded has run (`portitor-dsp`,
+/// `transfer::provider::flow_steps`), from the state it had before that
+/// write. That state is kept in the database with the step
+/// (`Transfer::state_before_step`), so the change is reported by whichever
+/// process runs the step: the one whose call wrote it, or another one
+/// that took it over after its lease ended (TD-48). A write that the data
+/// plane's refusal takes back is then reported by neither write: the
+/// transfer is in the same state as before (as in 1.1, which wrote
+/// nothing), and `state_events::transfer_saved` reports no change to the
+/// same state.
 impl TransferStore for AnyTransferStore {
     fn get(&self, provider_pid: &str) -> Result<Option<Transfer>, StoreError> {
-        self.0.get(provider_pid)
+        self.store.get(provider_pid)
     }
     fn requested(
         &self,
         counter_party: &str,
         consumer_pid: &str,
     ) -> Result<Option<Transfer>, StoreError> {
-        self.0.requested(counter_party, consumer_pid)
+        self.store.requested(counter_party, consumer_pid)
     }
     fn insert(&self, transfer: &Transfer) -> Result<bool, StoreError> {
-        let inserted = self.0.insert(transfer)?;
-        // a repeated request adds nothing, so there is no state change
-        if inserted {
+        let inserted = self.store.insert(transfer)?;
+        // a repeated request adds nothing, so there is no state change; a
+        // new transfer with a step is reported once the step has run
+        if inserted && transfer.flow_step.is_none() {
             transfer_saved_as_provider(transfer, None);
         }
         Ok(inserted)
     }
     fn replace_if(&self, transfer: &Transfer, expected: u64) -> Result<bool, StoreError> {
         // read first: see the comment above `impl NegotiationStore`
-        let previous = self.0.get(&transfer.provider_pid)?;
-        let replaced = self.0.replace_if(transfer, expected)?;
-        if replaced
-            && let Some(previous) = previous
-            && previous.version == expected
-        {
-            transfer_saved_as_provider(transfer, Some(previous.state));
+        let previous = self.store.get(&transfer.provider_pid)?;
+        let replaced = self.store.replace_if(transfer, expected)?;
+        let Some(previous) = previous else {
+            return Ok(replaced);
+        };
+        if !replaced || previous.version != expected {
+            return Ok(replaced);
         }
+        if transfer.flow_step.is_some() {
+            // the step has not run yet: it may be refused and this write
+            // taken back. Reported once it has run (below)
+            return Ok(replaced);
+        }
+        let before = if previous.flow_step.is_some() {
+            // this write records that a step ran: the change is the one of
+            // the write that recorded the step
+            previous.state_before_step
+        } else {
+            Some(previous.state)
+        };
+        transfer_saved_as_provider(transfer, before);
         Ok(replaced)
     }
     fn pending(&self) -> Result<Vec<Transfer>, StoreError> {
-        self.0.pending()
+        self.store.pending()
+    }
+    fn recorded_steps(&self) -> Result<Vec<Transfer>, StoreError> {
+        self.store.recorded_steps()
     }
     fn list(&self, after: Option<&str>, limit: usize) -> Result<Vec<Transfer>, StoreError> {
-        self.0.list(after, limit)
+        self.store.list(after, limit)
     }
 }
 
@@ -588,8 +636,24 @@ impl HeldAgreements for AnyHeldAgreements {
     }
 }
 
+/// What the connector needs of a flow store: the data plane's flows, and
+/// the consumer's memberships the control plane keeps with each flow. The
+/// `SQLite` file has both; any type with both is one (the empty `impl`
+/// below gives it the name).
+pub trait ProviderFlowStore: FlowStore + MembershipStore {}
+
+impl<T: FlowStore + MembershipStore> ProviderFlowStore for T {}
+
 /// The flow store chosen at start.
-pub type AnyFlowStore = Shared<dyn FlowStore + Send + Sync>;
+pub type AnyFlowStore = Shared<dyn ProviderFlowStore + Send + Sync>;
+
+impl AnyFlowStore {
+    /// The same store, as the data plane sees it: its flows only.
+    #[must_use]
+    pub fn flows_only(&self) -> Arc<dyn FlowStore + Send + Sync> {
+        Arc::clone(&self.0) as Arc<dyn FlowStore + Send + Sync>
+    }
+}
 
 impl FlowStore for AnyFlowStore {
     fn get(&self, id: &str) -> Result<Option<Flow>, FlowStoreError> {
@@ -626,10 +690,213 @@ impl FlowStore for AnyFlowStore {
     fn started_pushes(&self) -> Result<Vec<String>, FlowStoreError> {
         self.0.started_pushes()
     }
+}
+
+impl MembershipStore for AnyFlowStore {
     fn memberships(&self, id: &str) -> Result<StoredMembership, FlowStoreError> {
         self.0.memberships(id)
     }
     fn keep_memberships(&self, id: &str, memberships: &[Membership]) -> Result<(), FlowStoreError> {
         self.0.keep_memberships(id, memberships)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use std::io::Write;
+    use std::sync::Mutex;
+
+    use portitor_dsp::transfer::provider::{StartAtOnce, TransferService};
+    use portitor_runtime::telemetry::STATE_EVENTS;
+    use serde_json::Value;
+
+    use super::*;
+    use crate::harvest::DatasetCopy;
+    use crate::system::SystemEnvironment;
+
+    const PID: &str = "urn:uuid:p";
+    const CONSUMER: &str = "did:web:consumer.example";
+
+    /// The log, as the subscriber writes it.
+    #[derive(Clone, Default)]
+    struct Log(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Log {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A data plane that takes every step, or refuses every step.
+    struct DataPlane {
+        refuses: bool,
+    }
+
+    impl DataPlane {
+        fn answer(&self) -> Result<(), String> {
+            if self.refuses {
+                Err("data plane down".to_owned())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl DataFlows for DataPlane {
+        fn supports(&self, _: &str, _: &str) -> bool {
+            true
+        }
+        fn start(&self, _: &Transfer) -> Result<Option<DataAddress>, String> {
+            self.answer().map(|()| None)
+        }
+        fn suspend(&self, _: &str) -> Result<(), String> {
+            self.answer()
+        }
+        fn resume(&self, _: &str, _: Option<&DataAddress>) -> Result<(), String> {
+            self.answer()
+        }
+        fn restart(&self, _: &Transfer) -> Result<Option<DataAddress>, String> {
+            self.answer().map(|()| None)
+        }
+        fn complete(&self, _: &str) -> Result<(), String> {
+            self.answer()
+        }
+        fn terminate(&self, _: &str) -> Result<(), String> {
+            self.answer()
+        }
+    }
+
+    /// A transfer that is `STARTED`, with nothing pending.
+    fn started() -> Transfer {
+        Transfer {
+            provider_pid: PID.to_owned(),
+            consumer_pid: "urn:uuid:c".to_owned(),
+            state: TransferState::Started,
+            callback_address: "https://consumer.example/cb".to_owned(),
+            counter_party: CONSUMER.to_owned(),
+            agreement_id: "a1".to_owned(),
+            dataset_id: "d1".to_owned(),
+            format: "HttpData-PULL".to_owned(),
+            data_address: None,
+            pending: None,
+            flow_step: None,
+            state_before_step: None,
+            lease: None,
+            version: 0,
+        }
+    }
+
+    /// A provider's transfer service on `sqlite`, as one process of the
+    /// connector runs it, with a data plane that `refuses` every step or
+    /// takes it.
+    fn service_on(
+        sqlite: &Arc<SqliteNegotiations>,
+        refuses: bool,
+    ) -> TransferService<
+        AnyTransferStore,
+        AnyAgreements,
+        DataPlane,
+        StartAtOnce,
+        DatasetCopy,
+        SystemEnvironment,
+    > {
+        let store = AnyTransferStore::new(Arc::clone(sqlite) as _);
+        let agreements: AnyAgreements = Shared(Arc::clone(sqlite) as _);
+        TransferService::new(
+            store,
+            agreements,
+            DataPlane { refuses },
+            StartAtOnce,
+            DatasetCopy::default(),
+            SystemEnvironment,
+        )
+    }
+
+    /// The state events logged while `action` runs.
+    fn state_events_while(action: impl FnOnce()) -> Vec<Value> {
+        portitor_runtime::telemetry::testing::keep_a_second_subscriber();
+        let log = Log::default();
+        let writer = log.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, action);
+        let text = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+        let mut events = Vec::new();
+        for line in text.lines() {
+            let line: Value = serde_json::from_str(line).unwrap();
+            if line["target"] == STATE_EVENTS {
+                events.push(line);
+            }
+        }
+        events
+    }
+
+    /// The state events logged while the consumer terminates a `STARTED`
+    /// transfer, with a data plane that `refuses` the step or takes it.
+    fn state_events_of_a_termination(refuses: bool) -> Vec<Value> {
+        let sqlite = Arc::new(SqliteNegotiations::in_memory().unwrap());
+        let service = service_on(&sqlite, refuses);
+        AnyTransferStore::new(Arc::clone(&sqlite) as _)
+            .insert(&started())
+            .unwrap();
+        state_events_while(|| {
+            let answer = service.terminate(PID, (PID, "urn:uuid:c"), CONSUMER);
+            assert_eq!(answer.is_err(), refuses, "{answer:?}");
+        })
+    }
+
+    /// A consumer's step that the data plane refuses takes its write back
+    /// (`flow_steps`): neither write is reported, so nothing counts in
+    /// `portitor.transfer.ended`, which `state_events::transfer_saved`
+    /// counts with the event. A step taken is reported once.
+    #[test]
+    fn a_refused_consumer_step_reports_no_state_change() {
+        assert_eq!(state_events_of_a_termination(true), Vec::<Value>::new());
+        let events = state_events_of_a_termination(false);
+        assert_eq!(events.len(), 1, "{events:?}");
+        let fields = &events[0]["fields"];
+        assert_eq!(fields["portitor.dsp.previous_state"], "STARTED");
+        assert_eq!(fields["portitor.dsp.state"], "TERMINATED");
+    }
+
+    /// A step left recorded by another process (it wrote the consumer's
+    /// suspension, then stopped) is run here, by the sweep, once its lease
+    /// has ended: the change is reported once, from the state kept with
+    /// the step in the database, not from anything in this process's
+    /// memory (TD-48).
+    #[test]
+    fn a_step_run_by_another_process_reports_its_change_once() {
+        use portitor_dsp::transfer::provider::{FlowStep, Lease};
+
+        let sqlite = Arc::new(SqliteNegotiations::in_memory().unwrap());
+        let mut left_over = started();
+        left_over.state = TransferState::Suspended;
+        left_over.flow_step = Some(FlowStep::Suspend);
+        left_over.state_before_step = Some(TransferState::Started);
+        left_over.lease = Some(Lease {
+            holder: "urn:uuid:a-process-that-stopped".to_owned(),
+            until: 1,
+        });
+        let file: &dyn TransferStore = sqlite.as_ref();
+        file.insert(&left_over).unwrap();
+        let service = service_on(&sqlite, false);
+
+        let events = state_events_while(|| {
+            let swept = service.run_steps_left_over().unwrap();
+            assert_eq!(swept.steps_run, [PID]);
+        });
+        assert_eq!(events.len(), 1, "{events:?}");
+        let fields = &events[0]["fields"];
+        assert_eq!(fields["portitor.dsp.previous_state"], "STARTED");
+        assert_eq!(fields["portitor.dsp.state"], "SUSPENDED");
+        let saved = file.get(PID).unwrap().unwrap();
+        assert_eq!((saved.flow_step, saved.lease), (None, None));
     }
 }

@@ -13,38 +13,45 @@
 //! memberships, kept with each new transfer for the data plane; and the
 //! termination of a transfer whose consumer is no longer a member
 //! ([`EndsThroughProvider`]).
+//!
+//! From 1.2: a transfer that another call is changing (it holds the
+//! transfer's lease in the database, TD-48) is answered 503 with
+//! `Retry-After` ([`failed`]); our own calls in the background try again
+//! ([`outbox::retry_while_busy`]); and a sweep runs the data plane steps
+//! left over by a process that stopped ([`TransferProvider::schedule_sweep`]).
 
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use portitor_dsp::policy::{CallerCredentials, credential_scopes};
 use portitor_dsp::transfer::provider::{
-    DataFlows, Failure, Handled, Outgoing, Transfer, TransferService,
+    DataFlows, Failure, Handled, Outgoing, Pending, Transfer, TransferService,
 };
 use portitor_dsp::transfer::{
     DataAddress, TransferCompletionMessage, TransferError, TransferProcess, TransferRequestMessage,
     TransferStartMessage, TransferState, TransferSuspensionMessage, TransferTerminationMessage,
     Transition,
 };
+use portitor_runtime::panics::spawn_supervised;
 use portitor_runtime::telemetry::metrics;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::auth::{AnyVerifier, Caller, credentials_for};
-use crate::data_plane::FlowStore as _;
-use crate::data_plane::{HttpDataPlane, PushJob};
 use crate::flow_membership::EndsTransfers;
+use crate::flow_membership::MembershipStore as _;
 use crate::harvest::DatasetCopy;
 use crate::http_client::outbound_url_allowed;
-use crate::outbox::{self, Link, Message, Outbox};
+use crate::outbox::{self, Link, Message, Outbox, retry_while_busy};
 use crate::ports::{
     AnyAgreements, AnyDataFlows, AnyFlowStore, AnyTransferDecider, AnyTransferStore,
 };
 use crate::system::SystemEnvironment;
+use portitor_dataplane::{HttpDataPlane, PushJob};
 
 /// The data plane until one is configured (0.4 PR 4): it supports no
 /// format, so every transfer request is refused with a clear reason.
@@ -178,8 +185,27 @@ impl TransferProvider {
 
     /// The push of `provider_pid` ended: complete or terminate the
     /// transfer, and send that message.
+    ///
+    /// Another call may be changing the transfer (it holds its lease,
+    /// TD-48): the push's end is tried again for a little more than one
+    /// lease ([`retry_while_busy`]). The sweep cannot do it later, as the
+    /// end of a push is recorded nowhere else; and by the last try a lease
+    /// of a process that stopped has ended, so that try takes its step
+    /// over. Should it still fail, the error below is logged, the transfer
+    /// stays `STARTED`, and the push is sent again at the next restart
+    /// ([`TransferProvider::resume`]).
     async fn push_finished(self: Arc<Self>, provider_pid: &str, failure: Option<&str>) {
-        match self.service.push_finished(provider_pid, failure) {
+        // the failure in a `Box`, to keep the answer small while it waits
+        let ended = retry_while_busy::<_, Box<Failure>>(
+            |failure| failure.is_busy(),
+            || {
+                self.service
+                    .push_finished(provider_pid, failure)
+                    .map_err(Box::new)
+            },
+        )
+        .await;
+        match ended {
             Ok(Some(out)) => outbox::deliver(self, out).await,
             Ok(None) => {}
             Err(failure) => {
@@ -283,11 +309,72 @@ impl TransferProvider {
     }
 
     /// Sends every message saved as pending, for example after a restart.
-    /// Returns how many.
+    /// Returns how many. A transfer whose data plane step cannot be taken
+    /// up now is logged (ERROR) and left out; the others go on.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be read.
     pub(crate) fn resume(self: &Arc<Self>) -> Result<usize, Box<Failure>> {
         let pending = self.service.pending().map_err(Box::new)?;
+        log_steps_taken_up(&pending);
         self.resume_pushes();
-        Ok(outbox::resume(self, pending))
+        Ok(outbox::resume(self, pending.messages))
+    }
+
+    /// Starts the sweep: every `every`, in the background, the data plane
+    /// steps left over whose lease has ended run, and their messages are
+    /// sent (`portitor-dsp`, `transfer::provider::flow_steps`; TD-48). So
+    /// a step left by a process that stopped, or whose recording failed,
+    /// runs soon even when no call comes for its transfer; it does not
+    /// wait for a restart. The first sweep is `every` after now: the
+    /// start ([`TransferProvider::resume`]) does the first one. Must be
+    /// called inside the Tokio runtime.
+    pub(crate) fn schedule_sweep(self: &Arc<Self>, every: Duration) -> tokio::task::JoinHandle<()> {
+        let provider = Arc::clone(self);
+        // supervised, as every task that runs as long as the process: the
+        // closure makes the task anew after a panic
+        let sweep = move || {
+            let provider = Arc::clone(&provider);
+            async move {
+                let first = tokio::time::Instant::now() + every;
+                let mut ticks = tokio::time::interval_at(first, every);
+                // a tick missed while a sweep was going on is skipped
+                ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    ticks.tick().await;
+                    provider.sweep().await;
+                }
+            }
+        };
+        spawn_supervised("transfer_step_sweep", sweep)
+    }
+
+    /// One sweep ([`TransferProvider::schedule_sweep`]).
+    async fn sweep(self: &Arc<Self>) {
+        let provider = Arc::clone(self);
+        // SQLite and the built-in data plane: blocking work, so on a
+        // thread for it
+        let swept = tokio::task::spawn_blocking(move || {
+            provider.service.run_steps_left_over().map_err(Box::new)
+        });
+        let found = match swept.await {
+            Ok(Ok(found)) => found,
+            Ok(Err(failure)) => {
+                tracing::error!(?failure, "transfer sweep: the transfers cannot be read");
+                return;
+            }
+            // a panic: logged and counted; the next tick sweeps again
+            Err(error) => {
+                tracing::error!(%error, "transfer sweep stopped unexpectedly");
+                metrics::task_panicked("transfer_step_sweep");
+                return;
+            }
+        };
+        log_steps_taken_up(&found);
+        for out in found.messages {
+            tokio::spawn(outbox::deliver(Arc::clone(self), out));
+        }
     }
 
     /// Sends again, from the start, the pushes a restart cut: transfers
@@ -331,9 +418,33 @@ impl TransferProvider {
     }
 }
 
+/// Logs what the start or a sweep did with the data plane steps left
+/// over: one INFO line per step run, one ERROR line per transfer whose
+/// step could not run or be recorded (it stays recorded).
+fn log_steps_taken_up(found: &Pending) {
+    for provider_pid in &found.steps_run {
+        tracing::info!(
+            transfer = %provider_pid,
+            "data plane step left over ran; its lease had ended"
+        );
+    }
+    for (provider_pid, failure) in &found.not_taken_up {
+        tracing::error!(
+            transfer = %provider_pid,
+            ?failure,
+            "transfer not taken up: its data plane step stays recorded and runs again at its \
+             next change, the next sweep or the next restart"
+        );
+    }
+}
+
 impl Outbox for TransferProvider {
     type Out = Outgoing;
     type Failure = Failure;
+
+    fn is_busy(failure: &Failure) -> bool {
+        failure.is_busy()
+    }
 
     fn link(&self) -> &Link {
         &self.link
@@ -395,7 +506,22 @@ pub(crate) fn failed(failure: Failure) -> Response {
         Failure::NotFound(e) => (StatusCode::NOT_FOUND, Json(e)).into_response(),
         Failure::Store(e) => internal("transfer store", &e.to_string()),
         Failure::DataPlane(e) => internal("data plane", &e),
+        Failure::Busy(e) => busy(e),
     }
+}
+
+/// HTTP 503 with the DSP error, and `Retry-After: 1`: another call is
+/// changing the transfer (it holds its lease, TD-48); nothing was
+/// written. DSP 2025-1 says only that a refused message "MUST return an
+/// appropriate HTTP 4xx"; Eclipse EDC answers a leased process with 503,
+/// because its consumers end the transfer on any 4xx and retry on a 5xx
+/// (ADR 0007, note added in 1.2).
+pub(crate) fn busy(e: TransferError) -> Response {
+    let mut response = (StatusCode::SERVICE_UNAVAILABLE, Json(e)).into_response();
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+    response
 }
 
 type Provider = State<Arc<TransferProvider>>;
@@ -518,23 +644,19 @@ async fn until_consumer_started(link: &Link, status_url: &str, audience: &str) {
 /// Sends `job` (a push of `provider`'s), writes the audit line, then
 /// completes or terminates the transfer. A push that suspend or terminate
 /// cut leaves the transfer as they made it; any other cut is a failure
-/// ([`crate::push::send`]).
+/// ([`portitor_dataplane::push::send`]).
 async fn run_push(provider: Arc<TransferProvider>, plane: Arc<HttpDataPlane>, mut job: PushJob) {
     let pid = job.flow_id.clone();
-    let transfer = provider.service.transfer(&pid).ok();
-    let pushed = crate::push::send(&plane, &mut job).await;
+    // the agreement and the consumer the flow kept from its start message
+    let parties = job.parties.clone();
+    let pushed = portitor_dataplane::push::send(&plane, &mut job).await;
     // the push is over: a later start again may send again
     drop(job);
-    let (agreement, counter_party) = match &transfer {
-        Some(t) => (t.agreement_id.as_str(), t.counter_party.as_str()),
-        // the transfer could not be read: the audit line names no one
-        None => ("", ""),
-    };
-    crate::push::audit(&pid, agreement, counter_party, &pushed);
+    portitor_dataplane::push::audit(&pid, &parties, &pushed);
     let failure = match &pushed.sent {
-        crate::push::Sent::Done => None,
-        crate::push::Sent::Failed(reason) => Some(reason.as_str()),
-        crate::push::Sent::Cancelled => return,
+        portitor_dataplane::push::Sent::Done => None,
+        portitor_dataplane::push::Sent::Failed(reason) => Some(reason.as_str()),
+        portitor_dataplane::push::Sent::Cut => return,
     };
     provider.push_finished(&pid, failure).await;
 }
@@ -624,6 +746,24 @@ impl EndsTransfers for EndsThroughProvider {
         let why = format!("the consumer's membership no longer holds: {reason}");
         match provider.terminate_own(provider_pid, &why) {
             Ok(_) => {}
+            // another call is changing the transfer (TD-48): tried again
+            // in the background; access is refused meanwhile by the gate
+            Err(failure) if failure.is_busy() => {
+                let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+                    return;
+                };
+                let pid = provider_pid.to_owned();
+                runtime.spawn(async move {
+                    let ended = retry_while_busy::<_, Box<Failure>>(
+                        |failure| failure.is_busy(),
+                        || provider.terminate_own(&pid, &why),
+                    )
+                    .await;
+                    if let Err(failure) = ended {
+                        tracing::info!(transfer = %pid, failure = ?failure, "transfer not ended again");
+                    }
+                });
+            }
             // a second request after the first ended it
             Err(failure) => {
                 tracing::info!(transfer = %provider_pid, failure = ?failure, "transfer not ended again");

@@ -217,3 +217,61 @@ process was settled without it (`Outbox::settled_without_delivery` and
 `count_if_given_up` in `portitor-connector/src/outbox.rs`;
 [TD-44](../RISKS_AND_TECHNICAL_DEBTS.md#td-44)). The rule itself is
 unchanged.
+
+## Note added in 1.2 (2026-11-26)
+
+The provider's transfers now use the same pattern for the data plane:
+the write that changes a transfer also records the data plane step it
+needs (`transfer.flow_step`), and a pending message is sent only once
+that step has run. At start, recorded steps run before the pending
+messages are sent again (`portitor-dsp/src/transfer/provider/flow_steps.rs`;
+ADR 0028, decision 6;
+[TD-48](../RISKS_AND_TECHNICAL_DEBTS.md#td-48)). The rules above are
+unchanged.
+
+## Note added in 1.2: a lease while the data plane step runs (2026-11-26)
+
+Maintainer's decision, option A of three: the provider's transfer is
+leased in the database while its data plane step runs, instead of a
+lock in the process (the first 1.2 draft). A lock in one process
+prevents nothing when several containers share one database, and it
+made calls wait; the principle now is that correctness never depends
+on state in one process, and processes coordinate through the
+database.
+
+- The write that records the step takes the lease in the same
+  compare-and-update: `transfer.lease_holder` (a random id of the
+  process, made at start, never a host name) and `transfer.lease_until`
+  (30 seconds later, a constant). The write that records that the step
+  ran empties both. The state before the write is kept with the step
+  (`transfer.state_before_step`), so whichever process runs the step
+  reports the state change (migration 17).
+- Any other write while the lease holds is refused at once: a DSP
+  message gets HTTP 503 with the endpoint's `TransferError` (code
+  `503`, reason `the transfer is being changed; retry`) and
+  `Retry-After: 1`; the management route that ends a transfer answers
+  503 with a problem document. Our own calls in the background (the
+  acknowledgement recorded by the outbox, the end of a push, a
+  membership that no longer holds) try again with a growing pause for
+  a little more than one lease.
+- A lease that has ended with its step still recorded is taken over
+  (again a compare-and-update) by the next call that changes the
+  transfer, by a sweep every 10 seconds, and at start. Running a step
+  twice is safe (`flow_steps.rs`, point 4).
+
+Precedent: Eclipse EDC v1.0.0-RC8 (commit 2a5e560) leases an entity in
+the database while it changes it (`extensions/common/sql/sql-lease`,
+`StatefulEntityWriteCheck`: holder and expiry). A DSP message for a
+leased transfer process is answered `ServiceResult.unavailable`
+(`TransferProcessProtocolServiceImpl.java`, `leaseResult`), which
+`DspRequestHandlerImpl.java` (line 296) turns into a 5xx because "a 5xx
+tells the counter-party to retry the message, a 4xx ends its
+negotiation or transfer process". EDC as consumer ends the process on
+any 4xx, 409 and 429 included, and retries a 5xx (5 HTTP tries from
+500 ms, then its state machine's retries for about 4 minutes).
+
+Gap: DSP 2025-1 says only that a refused message "MUST return an
+appropriate HTTP 4xx"; it names no answer for "try again". 503 is EDC's
+convention, which Portitor follows so that EDC partners retry instead
+of ending the transfer. The rules above (outbox, proof of delivery) are
+unchanged.

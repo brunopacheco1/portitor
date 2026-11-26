@@ -5,7 +5,9 @@
 //! The state changes of negotiations and transfers, as log lines, span
 //! events and metrics (ADR 0023). The stores' [`Shared`](crate::ports::Shared)
 //! wrappers call these functions on every write, so every change is seen
-//! once, whichever service or adapter made it.
+//! once, whichever service or adapter made it. Transfers as provider go
+//! through [`AnyTransferStore`](crate::ports::AnyTransferStore), which
+//! reports a change once the data plane step its write recorded has run.
 //!
 //! Each change is one event with the target
 //! [`STATE_EVENTS`](portitor_runtime::telemetry::STATE_EVENTS): a JSON

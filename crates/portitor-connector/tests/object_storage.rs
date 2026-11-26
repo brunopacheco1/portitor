@@ -10,7 +10,7 @@
 use axum::body::Body;
 use http_body_util::BodyExt as _;
 use hyper::body::Bytes;
-use portitor_connector::object_storage::{ObjectStorage, PART_BYTES, Settings, StorageError};
+use portitor_dataplane::object_storage::{ObjectStorage, PART_BYTES, Settings, StorageError};
 
 mod common;
 use common::fake_s3;
