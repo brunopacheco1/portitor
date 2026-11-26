@@ -93,7 +93,7 @@ specification and link here.
 | Decentralized Claims Protocol (DCP) | v1.0.1 | its JSON Schemas in `crates/portitor-dcp/tests/schemas` and the test that reads them, `crates/portitor-dcp/tests/spec.rs`; the code comments cite v1.0.1 sections |
 | Eclipse Data Plane Signaling | v1.0-RC4 (tag of 2026-08-27) | `crates/portitor-dps/src/lib.rs` |
 | Data Plane Signaling HTTP Transfer Profile (push, 1.1) | Draft, not tagged; last changed 2026-09-25, read on 2026-11-24 | `HTTP_PUSH_ENDPOINT_TYPE` in `crates/portitor-dsp/src/transfer.rs`; [ADR 0027](adr/0027-push-transfers-and-object-storage.md) |
-| AWS Signature Version 4 (object storage, 1.1) | The AWS test suite cases in the unit tests; RustFS 1.0.6 in the two-party scenario | `crates/portitor-connector/src/object_storage/sigv4.rs`; `scenarios/two-party/compose.yaml` |
+| AWS Signature Version 4 (object storage, 1.1) | The AWS test suite cases in the unit tests; RustFS 1.0.6 in the two-party scenario | `crates/portitor-dataplane/src/object_storage/sigv4.rs`; `scenarios/two-party/compose.yaml` |
 | DSP TCK | v1.0.2, built from a pinned commit | `DSP_TCK_REF` and `DSP_TCK_COMMIT` in `.github/workflows/tck.yml` |
 | DCP TCK | 1.2.1, the released jar, by SHA-256 | `DCP_TCK_JAR` and `DCP_TCK_SHA256` in the same file |
 | Eclipse EDC (Connector and IdentityHub), interop test | 1.0.0-RC8 | `edcVersion` in `scenarios/edc-interop/runtimes/gradle.properties` |
@@ -279,6 +279,11 @@ push flow, sent by `send` (`push.rs`); it reads `s3://` sources through
 `ObjectStorage`, cuts running downloads and pushes through
 `RunningFlows`, and checks the consumer's membership again through
 `MembershipGate` ([ADR 0027](adr/0027-push-transfers-and-object-storage.md)).
+Since 1.2 the data plane is the crate `portitor-dataplane`: the start
+message names the dataset's source in its `metadata`
+(`portitor:source`), the flow keeps it, and the data plane asks the
+control plane's `MembershipGate` through its own port, `AccessGate`
+([ADR 0028](adr/0028-separate-pluggable-data-plane.md), step 1).
 
 ![C4 Code: provider transfer process](diagrams/c4-transfer-code.drawio.svg)
 
@@ -321,7 +326,7 @@ port to a Gaia-X compliance service, checks the answer and stores it
 
 How the connector harvests its datasets into a read copy: the source,
 a check of each entry, one transaction per run, then the copy that the
-catalog and the data plane read ([ADR 0020](adr/0020-dataset-harvest.md)).
+catalog and the transfers' start messages read ([ADR 0020](adr/0020-dataset-harvest.md)).
 
 ![C4 Code: dataset harvest](diagrams/c4-harvest-code.drawio.svg)
 
@@ -388,7 +393,7 @@ ports.
 |---|---|---|---|---|
 | 1 | Database: one SQLite file per image today; PostgreSQL (external, not built by Portitor) later | State of negotiations, transfers, credentials | Mandatory | none |
 | 2 | `portitor-identity` | Holds the participant's DID, keys and credentials; asks issuers for credentials; answers presentation queries. Optionally it publishes the X.509 chain of its key and gets its Gaia-X compliance credential from a Gaia-X compliance service ([ADR 0021](adr/0021-gaia-x-onboarding.md)) | Mandatory for each participant, unless an external DCP wallet is used. Simpl-Open does not use DCP between participants; how Portitor would join a Simpl-Open data space is in [ADR 0017](adr/0017-simpl-open.md) | DCP (credential service) |
-| 3 | `portitor-connector` | Control plane: catalog (datasets harvested into a read copy), contract negotiation, transfer; verifies DCP presentations, including Gaia-X compliance credentials ([ADR 0022](adr/0022-gaia-x-compliance-in-policies.md)); checks datasets and DSP messages against the authority's SHACL shapes. The data plane is its own module, linked into the connector ([below](#data-plane-inside-the-connector-or-separate)) | Mandatory | DSP, DCP (verifier) |
+| 3 | `portitor-connector` | Control plane: catalog (datasets harvested into a read copy), contract negotiation, transfer; verifies DCP presentations, including Gaia-X compliance credentials ([ADR 0022](adr/0022-gaia-x-compliance-in-policies.md)); checks datasets and DSP messages against the authority's SHACL shapes. The data plane is its own crate, `portitor-dataplane`, linked into the connector ([below](#data-plane-inside-the-connector-or-separate)) | Mandatory | DSP, DCP (verifier) |
 | 4 | `portitor-issuer` ([ADR 0018](adr/0018-issuer-component.md)) | Issues and revokes credentials (for example membership) to the participants the authority registered; publishes their status lists. It also serves the signed schema and vocabulary bundle, which `portitor-issuer bundle build` signs offline ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)) | Optional: one per dataspace, run by the dataspace authority, never on a participant's host | DCP (issuance) |
 
 ### Images and crates
@@ -429,7 +434,12 @@ image keeps its state in its own SQLite file under `/data`.
  crates (-> means "uses"):
 
    portitor-connector --> portitor-dsp, portitor-dps, portitor-dcp,
-                          portitor-shacl, portitor-bundle, portitor-runtime
+                          portitor-shacl, portitor-bundle,
+                          portitor-dataplane, portitor-runtime
+   portitor-dataplane --> portitor-dps, portitor-dsp, portitor-runtime
+                                                (adapter: the built-in
+                                                 data plane, 1.2; never
+                                                 the connector)
    portitor-bundle    --> portitor-dcp, portitor-runtime
                                                 (adapters: the authority's
                                                  bundle, fetched and kept)
@@ -465,6 +475,13 @@ does not say:
   document.
 - `portitor-runtime`: library of adapters the binaries share, so they are
   not copied.
+- `portitor-dataplane` (1.2): the built-in data plane, linked into the
+  connector: HTTP pull, the push sender, object storage, running-flow
+  cuts and the audit line. The connector talks to it through the Data
+  Plane Signaling `DataPlane` port; it asks the connector through its
+  own ports (`AccessGate`, the membership check). It does not depend on
+  `portitor-connector`, and CI checks that
+  ([ADR 0028](adr/0028-separate-pluggable-data-plane.md), step 1).
 - `portitor-bundle`: adapter library for the authority's signed
   bundle on a participant's side: `BundleSource` (download or folder,
   verified) and `BundleStore` (the read copy on disk and the version in
@@ -580,9 +597,11 @@ adapters (ADR 0004; C4 diagrams above):
 - `DatasetStore` (`harvest.rs`): the read copy, the jobs and their
   errors, in the connector's SQLite file (`store/harvest.rs`). A run
   commits in one transaction. `DatasetCopy` (`harvest/copy.rs`) is the copy
-  in memory that the DSP code (`CatalogDatasets`) and the data plane
-  (`UpstreamSources`) read; it is replaced as a whole after a run that
-  changed it.
+  in memory that the DSP code (`CatalogDatasets`) and `SignalingDataFlows`
+  (`UpstreamSources`, `data_flows.rs`) read; it is replaced as a whole
+  after a run that changed it. Since 1.2 the data plane does not read
+  it: each start message names the dataset's source, and the flow keeps
+  it until it ends.
 - `BundleSource` (`portitor-bundle`, `source.rs`): the authority's bundles. It names
   the newest version (`latest.json`) and gives one version, verified.
   `UrlSource` downloads over HTTPS; `FolderSource` reads a local folder.
@@ -701,6 +720,12 @@ only DSP and the data endpoint, never our internal split.
 Since 1.1 the built-in data plane also pushes over HTTP and reads
 S3-compatible object storage, still inside the connector's process
 ([ADR 0027](adr/0027-push-transfers-and-object-storage.md)).
+[ADR 0028](adr/0028-separate-pluggable-data-plane.md) (2026-11-25) plans
+to make it a data plane like any other, over Data Plane Signaling. Its
+step 1 is done in 1.2: the data plane is the crate `portitor-dataplane`,
+still linked into the connector, and it reads none of the control
+plane's stores. CI checks with `cargo tree` that it does not depend on
+`portitor-connector`.
 
 **In code.** The domain crate `portitor-dps` holds the signaling
 messages, the data flow state machine and two ports: `DataPlane` (what the
