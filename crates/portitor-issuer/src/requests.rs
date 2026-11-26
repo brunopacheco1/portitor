@@ -52,7 +52,9 @@ async fn caller(issuer: &Issuer, headers: &HeaderMap) -> Result<Claims, Response
     let audience = Audience {
         did: &issuer.did,
         leeway: LEEWAY,
-        used_token_ids: &issuer.used_token_ids,
+        // the store keeps them, for every replica (TD-09); `&*` borrows
+        // the store the shared pointer points to
+        used_token_ids: &*issuer.store,
     };
     let registered = |claims: &Claims| is_registered(issuer, &claims.sub);
     // `&*` turns the shared pointer (`Arc<dyn Directory>`) into a plain

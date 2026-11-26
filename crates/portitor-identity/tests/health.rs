@@ -9,7 +9,7 @@
 
 mod common;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::Router;
@@ -17,8 +17,10 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use common::*;
 use portitor_identity::health::readiness_checks;
-use portitor_identity::store::SqliteStore;
+use portitor_identity::store::DatabaseStore;
+use portitor_runtime::database::DatabaseSetting;
 use portitor_runtime::health::management_app;
+use portitor_runtime::testing::databases;
 use serde_json::{Value, json};
 
 /// A `SQLite` file of its own for the test `name`.
@@ -35,10 +37,16 @@ fn get(path: &str) -> Request<Body> {
     Request::get(path).body(Body::empty()).unwrap()
 }
 
-/// The management port of `world`, its checks reading `db_file`, with the
-/// management API (`with_api`) or without.
-fn port(world: &World, db_file: PathBuf, with_api: bool) -> Router {
-    let checks = Arc::new(readiness_checks(&world.identity, db_file));
+/// The store in the `SQLite` file `db_file`.
+fn open(db_file: &Path) -> DatabaseStore {
+    DatabaseStore::open(&DatabaseSetting::SqliteFile(db_file.to_owned())).unwrap()
+}
+
+/// The management port of `world`, its checks reading `store`, opened
+/// from `setting`, with the management API (`with_api`) or without.
+fn port(world: &World, setting: DatabaseSetting, store: &DatabaseStore, with_api: bool) -> Router {
+    let database = Arc::clone(store.database());
+    let checks = Arc::new(readiness_checks(&world.identity, setting, database));
     let api = with_api.then(|| world.management.clone());
     management_app(checks, api)
 }
@@ -61,8 +69,13 @@ fn components(body: &Value) -> Vec<(String, bool)> {
 async fn ready_when_its_file_key_and_document_are() {
     let world = World::new();
     let file = db_file("ready");
-    let _store = SqliteStore::open(&file).unwrap();
-    let app = port(&world, file.clone(), true);
+    let store = open(&file);
+    let app = port(
+        &world,
+        DatabaseSetting::SqliteFile(file.clone()),
+        &store,
+        true,
+    );
     for path in [
         "/api/check/readiness",
         "/api/check/startup",
@@ -87,8 +100,13 @@ async fn ready_when_its_file_key_and_document_are() {
 async fn not_ready_when_its_sqlite_file_is_gone() {
     let world = World::new();
     let file = db_file("gone");
-    let store = SqliteStore::open(&file).unwrap();
-    let app = port(&world, file.clone(), false);
+    let store = open(&file);
+    let app = port(
+        &world,
+        DatabaseSetting::SqliteFile(file.clone()),
+        &store,
+        false,
+    );
     assert_eq!(
         call(&app, get("/api/check/readiness")).await.0,
         StatusCode::OK
@@ -116,9 +134,14 @@ async fn not_ready_when_its_sqlite_file_is_gone() {
 async fn the_checks_are_open_and_the_api_keeps_its_key() {
     let world = World::new();
     let file = db_file("open");
-    let _store = SqliteStore::open(&file).unwrap();
+    let store = open(&file);
     // with the management API: the checks need no key, the API does
-    let full = port(&world, file.clone(), true);
+    let full = port(
+        &world,
+        DatabaseSetting::SqliteFile(file.clone()),
+        &store,
+        true,
+    );
     assert_eq!(
         call(&full, get("/api/check/liveness")).await.0,
         StatusCode::OK
@@ -138,7 +161,12 @@ async fn the_checks_are_open_and_the_api_keeps_its_key() {
     assert_eq!(call(&full, authed).await.0, StatusCode::OK);
     assert_eq!(call(&full, get("/health")).await.0, StatusCode::OK);
     // without it: the checks only
-    let checks_only = port(&world, file.clone(), false);
+    let checks_only = port(
+        &world,
+        DatabaseSetting::SqliteFile(file.clone()),
+        &store,
+        false,
+    );
     assert_eq!(
         call(&checks_only, get("/api/check/readiness")).await.0,
         StatusCode::OK
@@ -217,4 +245,19 @@ fn a_did_cache_time_out_of_bounds_stops_the_start() {
             "{value}: {logged}"
         );
     }
+}
+
+/// On PostgreSQL the `database` check asks the server.
+#[tokio::test]
+async fn ready_on_postgres() {
+    let Some(url) = databases::postgres_url() else {
+        return;
+    };
+    let world = World::new();
+    let setting = DatabaseSetting::Postgres(Box::new(databases::fresh_postgres_settings(&url)));
+    let store = DatabaseStore::open(&setting).unwrap();
+    let app = port(&world, setting, &store, false);
+    let (status, body) = call(&app, get("/api/check/readiness")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(components(&body)[0], ("database".to_owned(), true));
 }

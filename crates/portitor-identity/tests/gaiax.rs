@@ -28,7 +28,7 @@ use portitor_dcp::gaiax::digest_sri_of;
 use portitor_dcp::{DidDocument, Jws, Purpose, SigningKey};
 use portitor_identity::config::{Config, GaiaxConfig};
 use portitor_identity::gaiax::{GaiaxCompliance, HttpGaiaxCompliance, renewal_due, run_now};
-use portitor_identity::store::{RunOutcome, SqliteStore};
+use portitor_identity::store::{DatabaseStore, RunOutcome};
 use portitor_runtime::BoxFuture;
 use portitor_runtime::system::{new_uuid, now_secs, xsd_date_time};
 use serde_json::{Map, Value, json};
@@ -269,7 +269,7 @@ async fn setup_through(
     let adapter = HttpGaiaxCompliance::new(&url, true).unwrap();
     let world = World::try_with(
         &files.config(&url, compliance_did),
-        Arc::new(SqliteStore::in_memory().unwrap()),
+        Arc::new(DatabaseStore::in_memory().unwrap()),
         SigningKey::from_pem(KEY).unwrap(),
         Some(port_around(adapter)),
     )
@@ -691,7 +691,7 @@ async fn a_did_with_a_path_keeps_its_path() {
     };
     let world = World::try_with(
         &config,
-        Arc::new(SqliteStore::in_memory().unwrap()),
+        Arc::new(DatabaseStore::in_memory().unwrap()),
         SigningKey::from_pem(KEY).unwrap(),
         Some(Arc::new(adapter)),
     )
@@ -724,7 +724,7 @@ async fn a_chain_for_another_key_stops_the_start() {
     let adapter = HttpGaiaxCompliance::new("http://127.0.0.1:1", true).unwrap();
     let refused = World::try_with(
         &files.config("http://127.0.0.1:1", COMPLIANCE),
-        Arc::new(SqliteStore::in_memory().unwrap()),
+        Arc::new(DatabaseStore::in_memory().unwrap()),
         SigningKey::from_pem(KEY).unwrap(),
         Some(Arc::new(adapter)),
     )
@@ -745,7 +745,7 @@ async fn a_bad_participant_file_stops_the_start() {
         let adapter = HttpGaiaxCompliance::new("http://127.0.0.1:1", true).unwrap();
         World::try_with(
             &files.config("http://127.0.0.1:1", COMPLIANCE),
-            Arc::new(SqliteStore::in_memory().unwrap()),
+            Arc::new(DatabaseStore::in_memory().unwrap()),
             SigningKey::from_pem(KEY).unwrap(),
             Some(Arc::new(adapter)),
         )

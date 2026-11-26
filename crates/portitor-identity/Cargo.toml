@@ -16,7 +16,6 @@ publish = false
 axum.workspace = true
 portitor-dcp = { path = "../portitor-dcp" }
 portitor-runtime = { path = "../portitor-runtime" }
-rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -30,6 +29,8 @@ portitor-runtime = { path = "../portitor-runtime", features = ["test-support"] }
 # x509::p256_public_key_pem writes the retired key files of the key rotation tests
 portitor-dcp = { path = "../portitor-dcp", features = ["test-support"] }
 base64.workspace = true
+# the store tests reach the SQLite connection (poison tests, old files)
+rusqlite.workspace = true
 tower = { version = "0.5", features = ["util"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 

@@ -909,17 +909,20 @@ fn status_list_cache_seconds(value: Option<&str>) -> Result<u64, String> {
 }
 
 /// The DCP adapters for `settings`: the verifier and the prover, both
-/// using our STS. Before it returns, it checks that our identity is the
-/// one configured ([`dcp::DcpVerifier::check_own_identity`]).
+/// using our STS; the verifier records the callers' token ids in
+/// `used_token_ids` (the connector's database, TD-09). Before it returns,
+/// it checks that our identity is the one configured
+/// ([`dcp::DcpVerifier::check_own_identity`]).
 ///
 /// # Errors
 ///
 /// The HTTP client cannot be built, or the identity check failed.
 pub async fn dcp_adapters(
     settings: &AuthSettings,
+    used_token_ids: Arc<dyn portitor_runtime::used_tokens::UsedTokenStore>,
 ) -> Result<(Arc<dyn CallerVerifier>, Arc<dyn Prover>), String> {
     let sts: Arc<dyn sts::SecureTokenService> = Arc::new(sts::StsClient::new(settings)?);
-    let verifier = dcp::DcpVerifier::new(settings, Arc::clone(&sts))?;
+    let verifier = dcp::DcpVerifier::new(settings, Arc::clone(&sts), used_token_ids)?;
     verifier.check_own_identity().await?;
     let prover = sts::StsProver::new(sts, settings.scopes.clone());
     Ok((Arc::new(verifier), Arc::new(prover)))

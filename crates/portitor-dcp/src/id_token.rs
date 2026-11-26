@@ -64,8 +64,10 @@ pub const MAX_TOKEN_LIFETIME: u64 = 3_600;
 pub const DEFAULT_MAX_TOKEN_IDS: usize = 100_000;
 
 /// Remembers used `jti` values until the token they came from has
-/// expired; after that the token is refused for its age anyway (ADR 0016:
-/// in memory, one replica per store).
+/// expired; after that the token is refused for its age anyway. In
+/// memory, so for one process only: since 1.3 the components keep the
+/// ids they accept in their database instead (TD-09), and this cache
+/// serves tests and checks of tokens that are never presented anywhere.
 ///
 /// The cache holds at most a fixed number of ids. When it is full, new
 /// tokens are refused (not old ids forgotten, which would let a token be
@@ -142,6 +144,26 @@ impl JtiCache {
     }
 }
 
+/// Where the used token ids are remembered (step 6 of
+/// [`validate_self_issued`]): in memory ([`JtiCache`]), or in a database
+/// table that every replica of a component shares (TD-09,
+/// `portitor_runtime::used_tokens`).
+pub trait UsedTokenIds {
+    /// Records `jti` as used until `until` (seconds since 1970); `now` is
+    /// the time of the check.
+    ///
+    /// # Errors
+    /// `jti` was used before and is not yet forgotten, or it cannot be
+    /// recorded.
+    fn remember(&mut self, jti: &str, until: u64, now: u64) -> Result<(), Error>;
+}
+
+impl UsedTokenIds for JtiCache {
+    fn remember(&mut self, jti: &str, until: u64, now: u64) -> Result<(), Error> {
+        JtiCache::remember(self, jti, until, now)
+    }
+}
+
 /// Validates a self-issued ID token, following DCP 1.0 "Validating
 /// Self-Issued ID Tokens" step by step. `doc` is the resolved DID document
 /// of the token's `sub`; `now` is seconds since epoch; `leeway` is the
@@ -156,7 +178,7 @@ pub fn validate_self_issued(
     verifier_did: &str,
     now: u64,
     leeway: u64,
-    used_token_ids: &mut JtiCache,
+    used_token_ids: &mut dyn UsedTokenIds,
 ) -> Result<Claims, Error> {
     let jws = Jws::parse(token)?;
     let claims = claims_of(&jws)?;

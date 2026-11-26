@@ -17,7 +17,7 @@ use portitor_dcp::{Claims, DidDocument, Relationship, Service, SigningKey, Verif
 use portitor_identity::config::Config;
 use portitor_identity::gaiax::GaiaxCompliance;
 use portitor_identity::issuance::{IssuerClient, SendError};
-use portitor_identity::store::{IdentityStore, SqliteStore};
+use portitor_identity::store::{DatabaseStore, IdentityStore};
 use portitor_identity::{Identity, Ports};
 use portitor_runtime::BoxFuture;
 use portitor_runtime::api_key::ApiKey;
@@ -253,7 +253,7 @@ pub fn config() -> Config {
         retired_key_files: Vec::new(),
         bind: "unused".to_owned(),
         credential_service_url: "https://holder.example/cs".to_owned(),
-        db_file: "unused".into(),
+        database: portitor_runtime::database::DatabaseSetting::SqliteFile("unused".into()),
         management: portitor_identity::config::ManagementConfig::health_only(
             portitor_identity::config::DEFAULT_MANAGEMENT_BIND,
         ),
@@ -274,7 +274,7 @@ impl World {
 
     /// A world whose identity component has `config`.
     pub fn with(config: &Config) -> Self {
-        Self::with_store(config, Arc::new(SqliteStore::in_memory().unwrap()))
+        Self::with_store(config, Arc::new(DatabaseStore::in_memory().unwrap()))
     }
 
     /// A world whose identity component has `config` and `store`.

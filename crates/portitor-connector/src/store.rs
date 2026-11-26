@@ -23,6 +23,7 @@ mod data_flows;
 mod harvest;
 mod push_receipts;
 mod transfers;
+mod used_tokens;
 use serde::{Deserialize, Serialize};
 pub use transfers::finalized_agreement;
 
@@ -226,6 +227,15 @@ const MIGRATIONS: &[&str] = &[
      ALTER TABLE transfer ADD COLUMN lease_holder TEXT;
      ALTER TABLE transfer ADD COLUMN lease_until INTEGER;
      CREATE INDEX transfer_recorded_step ON transfer (provider_pid) WHERE flow_step IS NOT NULL",
+    // 1.3: the token ids used by callers, until their token expires, so
+    // that a token is taken once by every process of the connector
+    // (TD-09; `store/used_tokens.rs`, `portitor_runtime::used_tokens`)
+    // 1.3 integration: add used_token to the connector PostgreSQL migrations
+    "CREATE TABLE used_token (
+        token_id   TEXT PRIMARY KEY,
+        expires_at INTEGER NOT NULL
+     );
+     CREATE INDEX used_token_expires_at ON used_token (expires_at)",
 ];
 
 /// Adapter: negotiations in a `SQLite` file.

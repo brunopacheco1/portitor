@@ -265,8 +265,10 @@ pub struct Migrations {
     pub postgres: &'static [&'static str],
 }
 
-/// Where a component keeps its state, from its settings.
-#[derive(Debug, Clone)]
+/// Where a component keeps its state, from its settings. Two settings
+/// are equal when they name the same file, or connect to the same
+/// database the same way (for the tests of a component's settings).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DatabaseSetting {
     /// `PORTITOR_DB_FILE` (or its default): a `SQLite` file, one process.
     SqliteFile(PathBuf),

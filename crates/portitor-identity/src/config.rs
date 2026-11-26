@@ -8,6 +8,9 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use portitor_runtime::database;
+pub use portitor_runtime::database::DatabaseSetting;
+
 use portitor_runtime::settings::{
     self, ALLOW_HTTP_CALLBACKS, RemovedSetting, comma_list, refuse_removed,
 };
@@ -23,7 +26,8 @@ pub const DEFAULT_BIND: &str = "0.0.0.0:8090";
 /// says otherwise: on this machine only.
 pub const DEFAULT_MANAGEMENT_BIND: &str = "127.0.0.1:8091";
 
-/// The `SQLite` file unless `PORTITOR_DB_FILE` says otherwise.
+/// The `SQLite` file unless `PORTITOR_DB_FILE` (or
+/// `PORTITOR_DATABASE_URL`) says otherwise.
 pub const DEFAULT_DB_FILE: &str = "/data/portitor-identity.db";
 
 /// The settings the identity no longer has. When one of them is set, the
@@ -53,8 +57,10 @@ pub struct Config {
     /// The credential service's public base URL
     /// (`PORTITOR_CREDENTIAL_SERVICE_URL`).
     pub credential_service_url: String,
-    /// The `SQLite` file (`PORTITOR_DB_FILE`).
-    pub db_file: PathBuf,
+    /// The database: PostgreSQL (`PORTITOR_DATABASE_URL` and
+    /// `PORTITOR_DATABASE_PASSWORD_FILE`), or the `SQLite` file
+    /// (`PORTITOR_DB_FILE`, [`DEFAULT_DB_FILE`] when not set).
+    pub database: DatabaseSetting,
     /// The management port: always the health checks, and the management
     /// API when `PORTITOR_MANAGEMENT_API_KEY_FILE` is set.
     pub management: ManagementConfig,
@@ -164,15 +170,15 @@ impl Config {
         let certificate_chain_file =
             text("PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE").map(PathBuf::from);
         let gaiax = gaiax_config(&text, certificate_chain_file.is_some(), allow_http)?;
+        let database = database::setting(&var, DEFAULT_DB_FILE)
+            .map_err(|e| invalid("PORTITOR_DATABASE_URL", &e))?;
         Ok(Self {
             participant_id,
             key_file,
             retired_key_files,
             bind: text("PORTITOR_BIND").unwrap_or_else(|| DEFAULT_BIND.to_owned()),
             credential_service_url,
-            db_file: PathBuf::from(
-                text("PORTITOR_DB_FILE").unwrap_or_else(|| DEFAULT_DB_FILE.to_owned()),
-            ),
+            database,
             management,
             sts_client_id,
             sts_client_secret_file,
@@ -349,6 +355,8 @@ mod tests {
         for optional in [
             "PORTITOR_BIND",
             "PORTITOR_DB_FILE",
+            "PORTITOR_DATABASE_URL",
+            "PORTITOR_DATABASE_PASSWORD_FILE",
             "PORTITOR_STS_CLIENT_ID",
             "PORTITOR_SCOPE_TYPE_ALIASES",
             "PORTITOR_IDENTITY_RETIRED_KEY_FILES",
@@ -380,7 +388,10 @@ mod tests {
     fn defaults() {
         let config = read(MINIMAL).unwrap();
         assert_eq!(config.bind, "0.0.0.0:8090");
-        assert_eq!(config.db_file, PathBuf::from("/data/portitor-identity.db"));
+        assert_eq!(
+            config.database,
+            DatabaseSetting::SqliteFile(PathBuf::from("/data/portitor-identity.db"))
+        );
         assert_eq!(config.sts_client_id, "did:web:identity.example");
         assert_eq!(
             config.trusted_issuers,

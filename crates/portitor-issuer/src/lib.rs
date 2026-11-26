@@ -24,16 +24,17 @@
 //! The public routes are in [`router`].
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use axum::Router;
 use axum::routing::{get, post};
 use portitor_dcp::message::IssuerMetadata;
-use portitor_dcp::{JtiCache, Jwk, SigningKey};
+use portitor_dcp::{Jwk, SigningKey};
 use portitor_runtime::did_document::{key_id, read_retired_keys};
 use portitor_runtime::directory::Directory;
 use portitor_runtime::http::Sender;
 use portitor_runtime::request_size::small_message;
+use portitor_runtime::system::new_uuid;
 
 pub mod bundle_build;
 pub mod bundles;
@@ -50,7 +51,6 @@ pub mod store;
 
 use config::Config;
 use definitions::Definition;
-use status_lists::StatusLists;
 use store::IssuerStore;
 
 /// Allowed clock difference with other parties, in seconds. Less than a
@@ -84,8 +84,10 @@ pub struct Issuer {
     store: Arc<dyn IssuerStore>,
     directory: Arc<dyn Directory>,
     sender: Arc<dyn Sender>,
-    used_token_ids: Mutex<JtiCache>,
-    status_lists: StatusLists,
+    /// This process's id, made at start: it names the holder of a lease
+    /// on a delivery (TD-57). Random: two containers, or a container
+    /// started again, are other processes.
+    process_id: String,
     /// Wakes the outbox when a delivery is added.
     outbox: tokio::sync::Notify,
     /// The folder of built bundles served at `/bundles/...`
@@ -117,7 +119,8 @@ pub struct Ports {
 impl Issuer {
     /// Builds the component from its settings, its key and its credential
     /// definitions, reads the retired public keys, and signs the status
-    /// lists (with `key`: a retired key never signs).
+    /// lists that the store does not have yet, or has signed by another
+    /// key (with `key`: a retired key never signs).
     ///
     /// # Errors
     /// The DID or the issuer service URL is invalid, a retired key file is
@@ -157,13 +160,12 @@ impl Issuer {
             store: ports.store,
             directory: ports.directory,
             sender: ports.sender,
-            used_token_ids: Mutex::new(JtiCache::default()),
-            status_lists: StatusLists::default(),
+            process_id: new_uuid(),
             outbox: tokio::sync::Notify::new(),
             bundle_dir: config.bundle_dir.clone(),
             bundle_manifests: bundles::ManifestCache::default(),
         };
-        status_lists::sign_all(&issuer)?;
+        status_lists::sign_if_needed(&issuer)?;
         Ok(issuer)
     }
 

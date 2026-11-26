@@ -4,58 +4,31 @@
 
 //! The issuer's status lists (ADR 0018): one Bitstring Status List
 //! credential per profile, 131,072 entries, purpose `revocation`, served
-//! at `<issuer service>/status-lists/vc11` and `.../vc20`. The lists are
-//! built from the revoked credentials in the store and signed at start
-//! and after each revocation; the signed lists are kept in memory.
+//! at `<issuer service>/status-lists/vc11` and `.../vc20`.
+//!
+//! A list is built from the revoked credentials in the store. The process
+//! that revokes a credential signs the new list and stores it with the
+//! revocation, in one transaction, as Eclipse EDC's `IssuerService` does
+//! (TD-51). Every process serves the list from the store, so a revocation
+//! made on one replica is served by all of them at once. At start a
+//! process signs a list only when the store has none, or has one signed
+//! by another key (after a key rotation).
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use portitor_dcp::credential::Profile;
 use portitor_dcp::issuance::{sign_status_list, status_list_with};
-use portitor_runtime::api_key::problem;
+use portitor_runtime::api_key::{internal_error, problem};
 use portitor_runtime::system::now_secs;
 
 use crate::Issuer;
+use crate::store::SignedStatusList;
 
 /// The media type of a status list credential (a JWT, VC Data Model 2.0).
 pub const MEDIA_TYPE: &str = "application/vc+jwt";
-
-/// The signed status list credentials, one per profile.
-#[derive(Debug, Default)]
-pub struct StatusLists {
-    signed: Mutex<Signed>,
-    /// Held for a whole [`refresh`] (read the store, sign, keep): two
-    /// revocations at once could otherwise each sign a list without the
-    /// other's bit, and the older one be kept last.
-    refreshing: Mutex<()>,
-}
-
-#[derive(Debug, Default)]
-struct Signed {
-    vc11: String,
-    vc20: String,
-}
-
-impl StatusLists {
-    pub(crate) fn get(&self, profile: Profile) -> String {
-        let signed = self.signed.lock().unwrap_or_else(PoisonError::into_inner);
-        match profile {
-            Profile::Vc11 => signed.vc11.clone(),
-            Profile::Vc20 => signed.vc20.clone(),
-        }
-    }
-
-    fn set(&self, profile: Profile, jwt: String) {
-        let mut signed = self.signed.lock().unwrap_or_else(PoisonError::into_inner);
-        match profile {
-            Profile::Vc11 => signed.vc11 = jwt,
-            Profile::Vc20 => signed.vc20 = jwt,
-        }
-    }
-}
 
 /// Every profile; each has its own status list.
 pub(crate) const PROFILES: [Profile; 2] = [Profile::Vc11, Profile::Vc20];
@@ -85,50 +58,61 @@ pub fn url(issuer: &Issuer, profile: Profile) -> String {
     format!("{}/status-lists/{}", issuer.service_url, name(profile))
 }
 
-/// Signs both lists from the store.
+/// Signs the list of `profile` with the issuer's key, the positions in
+/// `revoked` set. The store calls it inside its transaction
+/// (`crate::store::SignStatusList`).
+///
+/// # Errors
+/// A position is outside the list, or signing fails.
+pub(crate) fn sign(
+    issuer: &Issuer,
+    profile: Profile,
+    revoked: &[u64],
+) -> Result<SignedStatusList, String> {
+    let bits = status_list_with(revoked).map_err(|e| e.to_string())?;
+    let credential = sign_status_list(issuer.signer(), &url(issuer, profile), &bits, now_secs())
+        .map_err(|e| e.to_string())?;
+    Ok(SignedStatusList {
+        credential,
+        kid: issuer.kid.clone(),
+    })
+}
+
+/// At start: signs and stores each list the store does not have yet, or
+/// has signed by another key.
 ///
 /// # Errors
 /// The store or signing fails.
-pub(crate) fn sign_all(issuer: &Issuer) -> Result<(), String> {
+pub(crate) fn sign_if_needed(issuer: &Issuer) -> Result<(), String> {
+    let mut sign_list = |profile, revoked: &[u64]| sign(issuer, profile, revoked);
     for profile in PROFILES {
-        refresh(issuer, profile)?;
+        let signed = issuer
+            .store
+            .sign_status_list_if_needed(profile, &issuer.kid, &mut sign_list)
+            .map_err(|e| e.to_string())?;
+        if signed {
+            tracing::info!(list = name(profile), "status list signed and stored");
+        }
     }
     Ok(())
 }
 
-/// Signs the list of `profile` again, from the revoked credentials in
-/// the store. One refresh at a time, so the list kept last always has
-/// every revocation stored before it started.
-///
-/// # Errors
-/// The store or signing fails.
-pub(crate) fn refresh(issuer: &Issuer, profile: Profile) -> Result<(), String> {
-    // no `await` while it is held; a panic while held left no half state
-    let _one_at_a_time = issuer
-        .status_lists
-        .refreshing
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    let revoked = issuer
-        .store
-        .revoked_indexes(profile)
-        .map_err(|e| e.to_string())?;
-    let bits = status_list_with(&revoked).map_err(|e| e.to_string())?;
-    let jwt = sign_status_list(issuer.signer(), &url(issuer, profile), &bits, now_secs())
-        .map_err(|e| e.to_string())?;
-    issuer.status_lists.set(profile, jwt);
-    Ok(())
-}
-
 /// `GET <issuer service>/status-lists/{name}`: the signed list, as
-/// `application/vc+jwt`.
+/// `application/vc+jwt`, read from the store.
 pub(crate) async fn serve(State(issuer): State<Arc<Issuer>>, Path(list): Path<String>) -> Response {
     let Some(profile) = from_name(&list) else {
         return problem(StatusCode::NOT_FOUND, "no such status list");
     };
-    (
-        [(header::CONTENT_TYPE, MEDIA_TYPE)],
-        issuer.status_lists.get(profile),
-    )
-        .into_response()
+    match issuer.store.status_list(profile) {
+        Ok(Some(signed)) => {
+            ([(header::CONTENT_TYPE, MEDIA_TYPE)], signed.credential).into_response()
+        }
+        // signed at start, so only a store emptied behind the issuer's
+        // back has none
+        Ok(None) => problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "status list not signed yet",
+        ),
+        Err(e) => internal_error("status list", &e),
+    }
 }

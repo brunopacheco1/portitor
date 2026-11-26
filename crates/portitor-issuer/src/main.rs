@@ -9,9 +9,10 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use portitor_dcp::SigningKey;
-use portitor_issuer::config::{Config, DEFAULT_MANAGEMENT_BIND, ManagementConfig};
-use portitor_issuer::store::SqliteStore;
+use portitor_issuer::config::{Config, DEFAULT_MANAGEMENT_BIND, DatabaseSetting, ManagementConfig};
+use portitor_issuer::store::{DatabaseStore, MIGRATIONS};
 use portitor_issuer::{Issuer, Ports, definitions};
+use portitor_runtime::database::{Database, SQLITE_DEPRECATED};
 use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::health;
 use portitor_runtime::http::HttpSender;
@@ -73,8 +74,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let key = read_key(&config)?;
     let definitions = read_definitions(&config)?;
-    let store = SqliteStore::open(&config.db_file)
-        .map_err(|e| format!("cannot open {}: {e}", config.db_file.display()))?;
+    let database = Arc::new(open_database(&config)?);
+    let store = DatabaseStore::new(Arc::clone(&database));
     // how long a holder's DID document is reused (R-41)
     let did_cache_seconds = portitor_runtime::did::cache_seconds_from_env()?;
     let ports = Ports {
@@ -109,7 +110,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // the management API only with its key
     let checks = Arc::new(portitor_issuer::health::readiness_checks(
         &issuer,
-        config.db_file.clone(),
+        config.database.clone(),
+        database,
     ));
     let (management_listener, management_app) =
         management_port(&config.management, checks, |key| {
@@ -125,7 +127,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         did = %issuer.did(),
         kid = %issuer.kid(),
         issuer_service = %config.issuer_service_url,
-        db = %config.db_file.display(),
+        db = %shown(&config),
         "portitor-issuer listening"
     );
     // the outbox runs until the process stops; supervised: started again
@@ -140,6 +142,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app = with_limits(app, REQUEST_TIMEOUT, MAX_CONCURRENT_REQUESTS);
     serve((listener, app), Some(management)).await?;
     Ok(())
+}
+
+/// Opens the database and brings its schema up to date; warns once
+/// when it is a `SQLite` file (deprecated since 1.3).
+fn open_database(config: &Config) -> Result<Database, String> {
+    let database = Database::open(&config.database, &MIGRATIONS)
+        .map_err(|e| format!("cannot open the database {}: {e}", shown(config)))?;
+    if !database.is_postgres() {
+        tracing::warn!("{SQLITE_DEPRECATED}");
+    }
+    Ok(database)
+}
+
+/// The database, for the log: the `SQLite` file, or the PostgreSQL URL
+/// without its query.
+fn shown(config: &Config) -> String {
+    match &config.database {
+        DatabaseSetting::SqliteFile(path) => path.display().to_string(),
+        DatabaseSetting::Postgres(settings) => settings.shown().to_owned(),
+    }
 }
 
 /// The issuer's key, from the PEM file.

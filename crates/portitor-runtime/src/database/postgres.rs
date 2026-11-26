@@ -64,6 +64,18 @@ impl std::fmt::Debug for Settings {
     }
 }
 
+/// Equal when they connect the same way: the same connection settings,
+/// URL, and TLS on or off.
+impl PartialEq for Settings {
+    fn eq(&self, other: &Self) -> bool {
+        self.config == other.config
+            && self.shown == other.shown
+            && self.tls.is_some() == other.tls.is_some()
+    }
+}
+
+impl Eq for Settings {}
+
 impl Settings {
     /// Reads a PostgreSQL connection URI
     /// (`postgresql://user@host:5432/database?sslmode=verify-full`, the
