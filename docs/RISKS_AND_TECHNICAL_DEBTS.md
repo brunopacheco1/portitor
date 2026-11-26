@@ -171,7 +171,8 @@ for an accepted residual risk); the yearly risk review re-reads those.
 
 Counts on 2026-11-26, on the 1.3 branch: 37 risks and 50 technical
 debts are not closed (Open 50, Mitigated 22, Accepted 15), of which 11
-are in progress for 1.3; 12 risks and 19 technical debts are closed.
+(TD-08, TD-09, TD-50 to TD-58) are done on the 1.3 branch and close at
+the release; 12 risks and 19 technical debts are closed.
 
 ## Risks
 
@@ -964,10 +965,16 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
 - **Why it matters.** No horizontal scaling or failover; ARCHITECTURE
   principles 8 and 14 are not fully met.
 - **Current state: Open; in progress (1.3)** (was Accepted, maintainer,
-  2026-11-12; planned for 1.3 by the maintainer, 2026-11-26). The
-  database layer for both databases is on the 1.3 branch
-  (`crates/portitor-runtime/src/database.rs` and `database/`); the
-  stores do not use it yet.
+  2026-11-12; planned for 1.3 by the maintainer, 2026-11-26). Done on
+  the 1.3 branch: the database layer for both databases
+  (`crates/portitor-runtime/src/database.rs` and `database/`), and the
+  stores of all three images on it (`ConnectorStore` in the
+  connector's `store.rs`, `DatabaseStore` in the `store.rs` of the
+  identity and the issuer). A second process on a SQLite file refuses
+  to start (`database/sqlite_lease.rs`). Tested: every store test runs
+  on SQLite and on PostgreSQL in CI, and
+  `scenarios/two-party/run-replicas.sh` runs two processes of each
+  image on one PostgreSQL database. The status changes at the release.
 - **Next.** [ADR 0029](adr/0029-several-replicas.md) (Accepted
   2026-11-26): PostgreSQL 16 to 19 behind the same synchronous ports,
   with `tokio-postgres`; one SQL text; `SERIALIZABLE` transactions
@@ -976,24 +983,30 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   (`portitor_schema`); `PORTITOR_DATABASE_URL` and
   `PORTITOR_DATABASE_PASSWORD_FILE`. A second process on a SQLite file
   refuses to start. SQLite is deprecated ([TD-59](#td-59)). The items
-  above as in ADR 0029, decision 6.
+  above as in ADR 0029, decision 6. Done on the 1.3 branch; close at
+  the 1.3 release.
 
 <a id="td-09"></a>
 ### TD-09 Used token ids are kept in memory only
 
-- **What.** The `jti` replay list lives in memory, at most 100,000
-  entries (ADR 0015, ADR 0016), in each of the three images: the
+- **What.** In 1.2 the `jti` replay list lived in memory, at most
+  100,000 entries (ADR 0015, ADR 0016), in each of the three images: the
   connector (`crates/portitor-connector/src/auth/dcp.rs`), the identity
   and the issuer (`used_token_ids` in their `lib.rs`).
 - **Why it matters.** A restart forgets them; with two replicas, a
   token used on one is accepted again on the other.
 - **Current state: Open; in progress (1.3)** (was Accepted,
   maintainer, 0.5 review: tokens live at most an hour, so the window is
-  small; planned for 1.3 by the maintainer, 2026-11-26).
-- **Next.** ADR 0029: a table `used_token (token_id, expires_at)` in all
-  three images, kept until the token expires. One
+  small; planned for 1.3 by the maintainer, 2026-11-26). Done on the
+  1.3 branch: a table `used_token (token_id, expires_at)` in the
+  database of all three images, kept until the token expires
+  (`crates/portitor-runtime/src/used_tokens.rs`). One
   `INSERT ... ON CONFLICT DO NOTHING` decides whether a token was used
-  before, as EDC's `edc_jti_validation` table does.
+  before, as EDC's `edc_jti_validation` table does. Expired rows are
+  deleted before each insert. Test:
+  `of_two_replicas_only_one_accepts_a_token`. The status changes at
+  the release.
+- **Next.** Close at the 1.3 release.
 
 <a id="td-10"></a>
 ### TD-10 Transfers: no token renewal; whole sources and whole pushes only
@@ -1435,19 +1448,29 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
 <a id="td-51"></a>
 ### TD-51 The issuer's signed status lists live in the memory of one process
 
-- **What.** The issuer signs its status lists at start and after a
-  revocation, in the process that revoked, and keeps them in memory
+- **What.** In 1.2 the issuer signed its status lists at start and
+  after a revocation, in the process that revoked, and kept them in
+  memory
   (`StatusLists`, `refresh` in
   `crates/portitor-issuer/src/status_lists.rs`).
 - **Why it matters.** Another issuer replica never serves the
   revocation, so a revoked credential still looks valid when its
   status list is read from that replica.
 - **Current state: Open; in progress (1.3)** (code review,
-  2026-11-26). Fine with one replica.
-- **Next.** ADR 0029, D5: the process that revokes signs the new
-  status list in the same transaction and stores it in the database;
-  every replica serves it from there, as EDC IssuerService does. (The
-  earlier plan, a revocation counter, was not chosen.)
+  2026-11-26). Fine with one replica. Done on the 1.3 branch (ADR 0029,
+  D5): the process that revokes signs the new status list in the same
+  transaction and stores it in the database (table `status_list`, with
+  the id of the key that signed it); every replica serves it from
+  there, as EDC IssuerService does. At start a process signs a list
+  only when none is stored or another key signed it (a key rotation;
+  `sign_status_list_if_needed` in
+  `crates/portitor-issuer/src/store.rs`). Tests:
+  `a_status_list_is_stored_with_each_revocation`,
+  `two_replicas_share_the_outbox_and_the_status_lists` and
+  `two_replicas_on_postgres_share_the_outbox_and_the_lists`. (The
+  earlier plan, a revocation counter, was not chosen.) The status
+  changes at the release.
+- **Next.** Close at the 1.3 release.
 
 <a id="td-52"></a>
 ### TD-52 A cut of a running download or push reaches only its own process
@@ -1586,15 +1609,24 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
 <a id="td-57"></a>
 ### TD-57 The issuer's credential outbox does not claim a delivery before it sends it
 
-- **What.** The issuer reads the due deliveries and sends them
+- **What.** In 1.2 the issuer read the due deliveries and sent them
   (`send_due_at` in `crates/portitor-issuer/src/delivery.rs`) without
   marking them as taken.
 - **Why it matters.** With two issuer replicas, both send the same
   credential to the holder.
 - **Current state: Open; in progress (1.3)** (code review,
-  2026-11-26). Fine with one replica.
-- **Next.** ADR 0029: a lease on each delivery before it is sent, as
-  for the DSP outbox ([TD-53](#td-53)).
+  2026-11-26). Fine with one replica. Done on the 1.3 branch: a process
+  claims a delivery before it sends it, with one compare-and-swap
+  update of the outbox row (columns `lease_holder` and `lease_until`,
+  30 seconds; `claim_due_delivery` in
+  `crates/portitor-issuer/src/store.rs`). The lease ends when the try
+  is recorded; a process that stops leaves it to run out, then another
+  process takes the delivery over. A try that outlasts its lease may be
+  sent twice, which the holder takes (same `issuerPid`). Tests:
+  `a_delivery_is_held_by_one_process_until_its_lease_ends` and
+  `two_replicas_on_postgres_share_the_outbox_and_the_lists`. The status
+  changes at the release.
+- **Next.** Close at the 1.3 release.
 
 <a id="td-58"></a>
 ### TD-58 The DID document is built at start
@@ -1606,8 +1638,10 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   yet restarted show the old document, so a partner can read a document
   without the new key.
 - **Current state: Open; in progress (1.3)** (code review,
-  2026-11-26). Fine with one replica.
-- **Next.** ADR 0029, D7: no code. A two-step rolling rotation in
+  2026-11-26). Fine with one replica. Done on the 1.3 branch, in the
+  docs only (ADR 0029, D7): the DID document is still built at start.
+- **Next.** Close at the 1.3 release. No code: a two-step rolling
+  rotation in
   [OPERATING](OPERATING.md#rotating-a-key-with-several-replicas): first
   list the new public key as retired on every replica, then switch the
   key file and list the old public key as retired; a rolling restart

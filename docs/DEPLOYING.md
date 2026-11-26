@@ -326,7 +326,6 @@ container dies. So:
   container at once;
 - each process opens at most 10 connections to the database. Allow for
   that in the server's `max_connections`.
-<!-- 1.3: check after integration -->
 
 **SQLite (deprecated).** Without `PORTITOR_DATABASE_URL`, a component
 uses the SQLite file `PORTITOR_DB_FILE` (default in
@@ -337,11 +336,10 @@ with `the SQLite file ... is in use by another process`. The process
 that uses the file holds a lease row in it, renewed every 10 seconds
 and removed when it stops; after a crash, a new process can start once
 the lease has ended, at most 30 seconds later.
-There is no tool yet to copy a SQLite file into PostgreSQL; it comes in
-a later 1.x release, before 2.0. Moving to PostgreSQL before then
-starts from an empty database; see
+There is no tool yet to copy a SQLite file into PostgreSQL; it is
+planned for 1.4 ([TD-59](RISKS_AND_TECHNICAL_DEBTS.md#td-59)). Moving
+to PostgreSQL before then starts from an empty database; see
 [OPERATING](OPERATING.md#from-sqlite-to-postgresql).
-<!-- 1.3: check after integration -->
 
 ### Settings of every component
 

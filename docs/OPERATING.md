@@ -35,8 +35,9 @@ backups, key changes and upgrades.
   | `GET /api/check/startup`, `GET /api/check/health` | the same as readiness |
 
   Readiness of the connector:
-  - `database`: the database answers (PostgreSQL, or the SQLite
-    file). <!-- 1.3: check after integration -->
+  - `database`: the database answers. PostgreSQL answers a query on a
+    connection of the pool, as a request would; a SQLite file is opened
+    and read on its own, so a file the volume lost is seen.
   - `harvest` (the start harvest ran) and `bundle` (a version is in
     force; only with a bundle): start gates. The connector binds its
     ports only after both, so they cannot fail while it serves.
@@ -199,7 +200,7 @@ export on, `telemetry: exporting` (INFO).
 Used token ids (`jti`) are kept in the database until their token
 expires, so a token used on one replica is refused on the others
 ([ADR 0029](adr/0029-several-replicas.md); before 1.3 they were kept in
-memory). <!-- 1.3: check after integration -->
+memory). This holds for all three components, and after a restart too.
 
 ### Issuer logs
 
@@ -478,11 +479,17 @@ the same way: the old key stays listed until it is revoked
      the signing key, and the chain is published for the current key
      only. When the run succeeds, the Gaia-X credentials of the old key
      are replaced;
-   - issuer: every credential it issued (their `validityDays`). Status
-     lists are signed again with the new key at start.
-     <!-- 1.3: check after integration: from 1.3 the signed lists are stored in the database (ADR 0029, D5); say when a list signed by the old key is signed again, before step 6 removes that key -->
-     To end sooner,
-     reissue the credentials with the new key.
+   - issuer: every credential it issued (their `validityDays`). To end
+     sooner, reissue the credentials with the new key. The status lists
+     need no wait. They are kept in the database with the id of the key
+     that signed them. An issuer that starts with the new key (step 3)
+     signs each list again when another key signed it, and logs
+     `status list signed and stored`; a revocation also signs its list
+     again. So from step 3 on, the lists carry the new key, long before
+     step 6 removes the old one. With several replicas, this happens
+     when the replicas restart with the new key (step 4 below); the
+     last replica that restarts signs again a list that a replica with
+     the old key signed in the meantime.
 6. Remove the file from the setting and restart. The old key id leaves
    the DID document; what the old key signed no longer verifies.
 
@@ -547,7 +554,6 @@ do. Migrations run forward only, so a replica of the older release
 that starts after them refuses the database. Unless the notes of the
 release say that its replicas may run next to older ones, stop every
 replica of the older release, then start the new ones.
-<!-- 1.3: check after integration -->
 
 Rollback: an older version refuses a database that a newer version
 migrated (`database schema version N is newer than this Portitor`). Restore
@@ -557,14 +563,14 @@ after the backup is lost. This stays so in 1.x
 
 Messages the connector was sending when it stopped are saved and sent
 again (ADR 0007): from 1.3 by any running replica once their lease
-ends, or at the next start, so an upgrade does not leave negotiations
-waiting. <!-- 1.3: check after integration --> A partner may receive such a message twice; that is handled.
+of 30 seconds ends (each process looks for them every second), or at
+the next start, so an upgrade does not leave negotiations waiting. A
+partner may receive such a message twice; that is handled.
 
 ### From 1.2 to 1.3
 
 1.3 adds PostgreSQL and lets several containers of each component share
 one database ([ADR 0029](adr/0029-several-replicas.md)).
-<!-- 1.3: check after integration -->
 
 1. **Back up first.** Migrations run at start, forward only. To go back
    to 1.2, restore the backup.
@@ -606,7 +612,6 @@ container, until the copy tool exists. For a move: set
 `PORTITOR_DATABASE_URL` and `PORTITOR_DATABASE_PASSWORD_FILE`, and
 leave `PORTITOR_DB_FILE` unset (a component with both refuses to
 start).
-<!-- 1.3: check after integration -->
 
 ### From 1.1 to 1.2
 

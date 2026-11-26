@@ -86,10 +86,10 @@ dataspace participants over HTTPS.
 - TLS termination inside the services: it stays the operator's job
   ([ADR 0026](adr/0026-tls-termination.md), 2026-11-20). Run them behind a
   TLS-terminating proxy, with the management ports on a private network.
-- Multi-instance safety: from 1.3 several replicas share one
-  PostgreSQL database ([ADR 0029](adr/0029-several-replicas.md)); a
-  SQLite file (deprecated) serves one process.
-  <!-- 1.3: check after integration -->
+- Several processes on one SQLite file: a SQLite file (deprecated)
+  serves one process, and a second process on the same file refuses to
+  start. Several replicas need PostgreSQL, from 1.3
+  ([ADR 0029](adr/0029-several-replicas.md)).
 - Offers hidden by credentials: the catalog shows every offer to every
   caller with a trusted membership credential (DCP, ADR 0016); credential
   constraints (ADR 0019) are checked at negotiation and transfer only.

@@ -96,9 +96,13 @@ judged against it.
     ([ADR 0029](adr/0029-several-replicas.md)): the places where 1.2
     kept state in one process ([TD-09](RISKS_AND_TECHNICAL_DEBTS.md#td-09),
     [TD-50](RISKS_AND_TECHNICAL_DEBTS.md#td-50) to
-    [TD-58](RISKS_AND_TECHNICAL_DEBTS.md#td-58)) now go through the
-    database. On a SQLite file (deprecated) there is one process, so
-    the principle holds trivially. <!-- 1.3: check after integration -->
+    [TD-57](RISKS_AND_TECHNICAL_DEBTS.md#td-57)) now go through the
+    database. The DID document is still built at start, so a key
+    rotation with several replicas takes two rolling restarts
+    ([TD-58](RISKS_AND_TECHNICAL_DEBTS.md#td-58),
+    [OPERATING](OPERATING.md#rotating-a-key-with-several-replicas)).
+    On a SQLite file (deprecated) one process runs, and a second one
+    refuses to start, so the principle holds trivially.
 
 ## Specification versions
 
@@ -202,11 +206,11 @@ and the offline machine that builds and signs the bundles.
 
 ![Deployment: a participant and the dataspace authority](diagrams/deployment.drawio.svg)
 
-The C2, C3 and deployment diagrams still draw each image's database as
-a SQLite file on `/data`. From 1.3 it is a PostgreSQL database outside
-the containers, shared by the replicas of an image
-([Storage](#storage)); the diagrams are redrawn in 1.3.
-<!-- 1.3: check after integration -->
+In the C2, C3 and deployment diagrams, each image's database is a
+PostgreSQL database, shared by the replicas of the image, or a SQLite
+file on `/data` (deprecated, one process) ([Storage](#storage)). The
+deployment diagram does not draw the PostgreSQL server: it runs
+outside the containers, where the operator chooses.
 
 Three dynamic diagrams, as sequences with numbered messages. Joining a
 dataspace: the authority registers the participant's DID, the identity
@@ -433,7 +437,8 @@ dependency and not a Portitor image, or, deprecated, in a SQLite file
 Each release ships three images, built from one `Dockerfile` (one build
 target per image) and released, signed and attested together
 ([RELEASING.md](RELEASING.md)). Each image keeps its state in its own
-database ([Storage](#storage)); the drawing shows the SQLite files.
+database ([Storage](#storage)): PostgreSQL, or a SQLite file
+(deprecated). The drawing shows the SQLite files.
 
 ```
  one participant runs both:
@@ -620,9 +625,12 @@ is in `portitor-runtime` (`src/database.rs` and `src/database/`;
   compare-and-update writes, rows written once
   (`INSERT ... ON CONFLICT DO NOTHING`, for used token ids), and leases
   of 30 seconds on work that runs (outbox messages, pushes, uploads,
-  scheduled jobs, deliveries, a transfer's data plane step). What 1.3
-  changed, item by item, is in ADR 0029, decision 6.
-<!-- 1.3: check after integration -->
+  scheduled jobs, deliveries, a transfer's data plane step). The
+  catalog and each dataset are read from the database on each request.
+  Each running download or push reads its flow's state every
+  5 seconds, and each connector process reads the bundle version in
+  use every 5 seconds. What 1.3 changed, item by item, is in ADR 0029,
+  decision 6.
 
 ### Gaia-X
 
