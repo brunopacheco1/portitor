@@ -219,8 +219,8 @@ fn address(pid: &str, token: &str) -> DataAddress {
 }
 
 impl DataFlows for &Flows {
-    fn supports(&self, _: &str, format: &str) -> bool {
-        format == "HttpData-PULL" || format == "HttpData-PUSH"
+    fn supports(&self, _: &str, format: &str) -> Result<bool, String> {
+        Ok(format == "HttpData-PULL" || format == "HttpData-PUSH")
     }
     /// A pull flow gives an address; a push flow (one with the consumer's
     /// address) none.
@@ -265,24 +265,24 @@ impl DataFlows for &Flows {
 struct Catalog;
 
 impl CatalogDatasets for Catalog {
-    fn all(&self) -> Vec<Dataset> {
-        self.get("d1").into_iter().collect()
+    fn all(&self) -> Result<Vec<Dataset>, StoreError> {
+        Ok(self.get("d1")?.into_iter().collect())
     }
-    fn get(&self, id: &str) -> Option<Dataset> {
+    fn get(&self, id: &str) -> Result<Option<Dataset>, StoreError> {
         let distribution = |format: &str| Distribution {
             kind: DistributionType,
             format: format.to_owned(),
             access_service: "svc".to_owned(),
             metadata: crate::Metadata::default(),
         };
-        (id == "d1").then(|| Dataset {
+        Ok((id == "d1").then(|| Dataset {
             context: None,
             id: id.to_owned(),
             kind: DatasetType,
             has_policy: vec![],
             distribution: vec![distribution("HttpData-PULL"), distribution("HttpData-PUSH")],
             metadata: crate::Metadata::default(),
-        })
+        }))
     }
 }
 
@@ -2071,7 +2071,7 @@ struct CallsDuring<'a> {
 }
 
 impl DataFlows for &CallsDuring<'_> {
-    fn supports(&self, dataset_id: &str, format: &str) -> bool {
+    fn supports(&self, dataset_id: &str, format: &str) -> Result<bool, String> {
         self.flows.supports(dataset_id, format)
     }
     fn start(&self, t: &Transfer) -> Result<Option<DataAddress>, String> {

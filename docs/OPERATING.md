@@ -163,6 +163,9 @@ export on, `telemetry: exporting` (INFO).
 | `bundle: the newest version cannot be taken; keeping the version in use` (ERROR, at start) | With `latest`: the newest version could not be downloaded, failed a check or is older than the one in use; the cached version in use before is kept | Check the reason in the log line or in `GET /v1/harvest-jobs`; ask the authority |
 | `bundle: no new version taken; keeping the version in use` (WARN) | A scheduled check failed for the same reasons; nothing changed | As above; the next check tries again |
 | `bundle: new version in use; checking the stored datasets again` (INFO) | A newer version was put in use without a restart | Nothing; watch the next harvest jobs for hidden datasets |
+| `bundle: another process of this connector took a new version; now in use here too` (INFO, 1.3) | Another replica took a newer version and recorded it in the database; this process moved to it (`from`, `to`) within 5 seconds, from its cache folder or downloaded, and checks the stored datasets again unless that replica did already | Nothing |
+| `bundle: cannot move to the version in use; keeping version ...` (ERROR, 1.3) | The version recorded in the database cannot be read from this container's cache folder nor downloaded (`error`); this process keeps checking with its own version and tries again in 5 seconds | Check the network to the authority and `PORTITOR_BUNDLE_CACHE_DIR` on this container |
+| `catalog: the stored datasets cannot be read` (ERROR, 1.3) | A catalog or dataset request could not read the datasets from the database (they are read on each request); the partner got HTTP 500 | Check that the database answers (readiness check `database`) |
 | `bundle verified, but not written to the cache` (WARN) | The cache folder is not writable | Check `PORTITOR_BUNDLE_CACHE_DIR` and the volume |
 | `bundle rules in force` (INFO, at start) | The bundle's `version`, `profile`, the `access_rights` it has dataset shapes for, and whether it has `message_shapes` | Nothing |
 | `bundle shapes: ignored by the SHACL engine` (INFO or WARN, at start) | A SHACL term the engine ignores (`sh:extends`, `sh:shape`, `sh:property` without `sh:path` at INFO: expected for HealthDCAT-AP and DCAT-AP; anything else at WARN) | Nothing at INFO; at WARN, ask the authority |
@@ -565,7 +568,13 @@ one database ([ADR 0029](adr/0029-several-replicas.md)).
 2. **SQLite is deprecated.** A component on a SQLite file keeps
    working, for one process, and logs at start `SQLite is deprecated
    since 1.3 and is removed in 2.0`. A second process on the same file
-   now refuses to start. Nothing else to do until 2.0.
+   now refuses to start, with `the SQLite file ... is in use by another
+   process`. The first process holds a lease row in the file (table
+   `portitor_process_lease`), renews it every 10 seconds and removes it
+   when it stops. After a crash the row stays until its lease ends: a
+   new process can start at most 30 seconds later (a container that is
+   restarted at once stops with that error once or twice). Nothing else
+   to do until 2.0.
 3. **PostgreSQL is optional in 1.3** for an existing deployment. To use
    it, read [From SQLite to PostgreSQL](#from-sqlite-to-postgresql)
    first: there is no tool yet that copies your data.

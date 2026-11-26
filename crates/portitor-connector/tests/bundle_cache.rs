@@ -27,6 +27,7 @@ use portitor_bundle::source::{
 use portitor_bundle::store::CacheFolder;
 use portitor_connector::bundle_harvest::{BundleHarvester, Started};
 use portitor_connector::harvest::JobOutcome;
+use portitor_connector::store::ConnectorStore;
 use portitor_dcp::SigningKey;
 use portitor_dcp::bundle::{BundleError, MAX_FILE_BYTES};
 use portitor_issuer::bundle_build::{Options, build};
@@ -213,7 +214,10 @@ fn source(settings: &BundleConfig) -> Arc<dyn BundleSource> {
 /// A connector start: the bundle harvester takes the version.
 async fn start(settings: &BundleConfig) -> Result<Started, String> {
     let store = Arc::new(CacheFolder::new(&settings.cache_dir));
-    BundleHarvester::start(settings.clone(), source(settings), store).await
+    // a new, empty database each time: the version in use comes from
+    // the cache folder, as for a database of 1.2
+    let database = Arc::new(ConnectorStore::in_memory().unwrap());
+    BundleHarvester::start(settings.clone(), source(settings), store, database).await
 }
 
 #[tokio::test]

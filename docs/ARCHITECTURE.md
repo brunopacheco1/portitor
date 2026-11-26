@@ -670,16 +670,16 @@ adapters (ADR 0004; C4 diagrams above):
   bundle that has dataset shapes, `ShaclDatasetCheck` (`shacl.rs`): the
   entry, read with the DSP context only (as the catalog serves it), is
   validated against the shapes for its `dct:accessRights` value.
-- `DatasetStore` (`harvest.rs`): the read copy, the jobs and their
-  errors, in the connector's database (`store/harvest.rs`). A run
-  commits in one transaction. `DatasetCopy` (`harvest/copy.rs`) is the copy
-  in memory that the DSP code (`CatalogDatasets`) and `SignalingDataFlows`
-  (`UpstreamSources`, `data_flows.rs`) read; it is replaced as a whole
-  after a run that changed it. Since 1.2 the data plane does not read
-  it: each start message names the dataset's source, and the flow keeps
-  it until it ends. From 1.3 the catalog and the datasets the DSP code
-  needs are read from the database on each request, so every replica
-  answers from the same copy (ADR 0029, D4). <!-- 1.3: check after integration -->
+- `DatasetStore` (`harvest.rs`): the stored datasets, the jobs and
+  their errors, in the connector's database (`store/harvest.rs`). A run
+  commits in one transaction. `StoredCatalog` (`harvest/catalog.rs`) is
+  what the DSP code (`CatalogDatasets`) and `SignalingDataFlows`
+  (`UpstreamSources`, `data_flows.rs`) read: from 1.3 the catalog and
+  each dataset they need are read from the database on each request, as
+  EDC reads its asset index, so every replica answers from the same
+  datasets and sees a run as soon as it is committed (ADR 0029, D4).
+  Since 1.2 the data plane does not read them: each start message names
+  the dataset's source, and the flow keeps it until it ends.
 - `BundleSource` (`portitor-bundle`, `source.rs`): the authority's bundles. It names
   the newest version (`latest.json`) and gives one version, verified.
   `UrlSource` downloads over HTTPS; `FolderSource` reads a local folder.
@@ -687,7 +687,11 @@ adapters (ADR 0004; C4 diagrams above):
   and every digest.
 - `BundleStore` (`portitor-bundle`, `store.rs`): the read copy of the bundle on
   disk and the version in use. `CacheFolder` keeps one version folder
-  and `.in-use.json`.
+  and `.in-use.json`, in each container. From 1.3 the connector's
+  version in use is the one in its database (`SharedBundleVersion`,
+  `store/bundle_in_use.rs`; TD-55): a process that takes a new version
+  records it there, and every process moves to it at start and then
+  every 5 seconds (`BundleHarvester::follow`).
 - `BundleHarvester` (`bundle_harvest.rs`) takes the configured version
   at start and looks for a newer one on a schedule, the bundle side of
   `DatasetHarvester`. It never takes a version issued before the one in

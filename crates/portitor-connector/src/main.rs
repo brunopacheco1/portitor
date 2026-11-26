@@ -88,7 +88,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // the callers' token ids go into the connector's database (TD-09)
     let used_token_ids: Arc<dyn UsedTokenStore> = Arc::clone(&store) as _;
     (ports.verifier, ports.prover) = auth_adapters(settings, used_token_ids).await?;
-    let bundle = start_bundle_harvest(&config, &mut ports).await?;
+    let bundle = start_bundle_harvest(&config, &mut ports, &store).await?;
     // `build` runs the first harvest before it returns: blocking work (a
     // file read, the database, SHACL) on this async task, done once at start
     // before anything is served, like the bundle read above
@@ -101,6 +101,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         listener.record(start_job);
         let harvester = Arc::new(harvester);
         bundle_harvester = Some(Arc::clone(&harvester));
+        // the other processes of the connector may take a new version:
+        // this one moves to it (TD-55)
+        let _follow = harvester.follow_database(Arc::clone(&listener));
         if harvester.schedule(listener).is_some() {
             tracing::info!(
                 refresh_seconds = harvester.refresh_seconds(),
@@ -145,7 +148,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let management_app = with_limits(management_app, REQUEST_TIMEOUT, MAX_CONCURRENT_REQUESTS);
     tracing::info!(
         %bind,
-        datasets = negotiator.catalog_size(),
+        datasets = negotiator.catalog_size().map_err(|e| e.0)?,
         db = %database_name(&config.database),
         // the lease holder in the database (TD-48): which process this is
         process = portitor_connector::system::process_id(),
@@ -210,9 +213,11 @@ fn object_storage() -> Result<Option<Arc<portitor_dataplane::object_storage::Obj
     Ok(Some(Arc::new(ObjectStorage::new(settings)?)))
 }
 
-/// Takes the authority's signed bundle (ADR 0005), and applies its rules
-/// to `ports` through the bundle harvester's copy: the SHACL check of
-/// each harvested dataset and the guard on DSP messages. No bundle
+/// Takes the authority's signed bundle (ADR 0005), or the version recorded
+/// in `database` when another process of the connector took a newer one
+/// (TD-55), and applies its rules to `ports` through the bundle
+/// harvester's copy: the SHACL check of each harvested dataset and the
+/// guard on DSP messages. No bundle
 /// configured: nothing changes (no SHACL checks, no message guard).
 ///
 /// # Errors
@@ -221,6 +226,7 @@ fn object_storage() -> Result<Option<Arc<portitor_dataplane::object_storage::Obj
 async fn start_bundle_harvest(
     config: &portitor_connector::Config,
     ports: &mut portitor_connector::Ports,
+    database: &Arc<ConnectorStore>,
 ) -> Result<
     Option<(BundleHarvester, portitor_connector::harvest::JobRecord)>,
     Box<dyn std::error::Error>,
@@ -237,7 +243,9 @@ async fn start_bundle_harvest(
     )?);
     let source = source_for(&bundle_config, directory)?;
     let store = Arc::new(CacheFolder::new(&bundle_config.cache_dir));
-    let started = BundleHarvester::start(bundle_config, source, store).await?;
+    // the version in use is the connector's, in its database (TD-55)
+    let shared = Arc::clone(database) as _;
+    let started = BundleHarvester::start(bundle_config, source, store, shared).await?;
     ports.use_bundle_rules(&started.harvester.copy());
     Ok(Some((started.harvester, started.job)))
 }

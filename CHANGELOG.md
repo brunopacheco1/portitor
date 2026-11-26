@@ -51,7 +51,25 @@ route, setting and file format still works
 
 ### Changed
 
-- A second process on the same SQLite file refuses to start. <!-- 1.3: check after integration -->
+- A second process on the same SQLite file refuses to start, with `the
+  SQLite file ... is in use by another process`. The process that uses
+  the file holds a lease row in it (`portitor_process_lease`, made by
+  `portitor-runtime` in all three images), renewed every 10 seconds and
+  removed when it stops; after a crash the next process starts at most
+  30 seconds later (ADR 0029, D3).
+- The connector reads the catalog, and each dataset that an offer, an
+  agreement, a transfer request or a data flow start needs, from the
+  database on each request (TD-50, ADR 0029 D4); the copy of the
+  datasets in memory is gone. When the database cannot be read, a
+  catalog or dataset request gets HTTP 500 (`internal error`), and a
+  contract or transfer request HTTP 500 instead of a refusal. The
+  catalog's content and order are unchanged.
+- The connector's bundle version in use is recorded in its database
+  (table `bundle_in_use`; TD-55): the process that takes a new version
+  records it, and every other process moves to it at start and within
+  5 seconds after, from its own cache folder or downloaded. A version
+  issued before the recorded one is never recorded, except a fixed
+  `PORTITOR_BUNDLE_VERSION`.
 - The images no longer set `PORTITOR_DB_FILE` (it would conflict with `PORTITOR_DATABASE_URL`). The SQLite defaults stay `/data/...`; the connector image now runs in the working directory `/data`, so a relative path in a connector setting is read from there.
 
 ### Fixed

@@ -266,7 +266,14 @@ container dies. So:
   lock; the others wait for it;
 - the connector's bundle cache folder stays per container
   (`PORTITOR_BUNDLE_CACHE_DIR`); the bundle version in use is in the
-  database;
+  database. The container that takes a new version records it there,
+  and the others move to it within 5 seconds (from their own cache
+  folder, or downloaded from the authority). Give all containers the
+  same bundle settings: a fixed `PORTITOR_BUNDLE_VERSION` is used as
+  set, whatever the database records;
+- the catalog and each dataset are read from the database on each
+  request, so a harvest that one container ran is served by every
+  container at once;
 - each process opens at most 10 connections to the database. Allow for
   that in the server's `max_connections`.
 <!-- 1.3: check after integration -->
@@ -275,7 +282,11 @@ container dies. So:
 uses the SQLite file `PORTITOR_DB_FILE` (default in
 [Settings of every component](#settings-of-every-component)), and logs
 at start: `SQLite is deprecated since 1.3 and is removed in 2.0`. One
-process per file: a second process on the same file refuses to start.
+process per file: a second process on the same file refuses to start,
+with `the SQLite file ... is in use by another process`. The process
+that uses the file holds a lease row in it, renewed every 10 seconds
+and removed when it stops; after a crash, a new process can start once
+the lease has ended, at most 30 seconds later.
 There is no tool yet to copy a SQLite file into PostgreSQL; it comes in
 a later 1.x release, before 2.0. Moving to PostgreSQL before then
 starts from an empty database; see

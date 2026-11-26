@@ -1401,21 +1401,34 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
 <a id="td-50"></a>
 ### TD-50 Each connector process holds its own copy of the datasets
 
-- **What.** The read copy of the datasets (`DatasetCopy` in
-  `crates/portitor-connector/src/harvest/copy.rs`) is loaded into
+- **What.** In 1.2 the read copy of the datasets (`DatasetCopy` in
+  `crates/portitor-connector/src/harvest/copy.rs`) was loaded into
   memory at start and after this process's own harvest commit
   (`reload` in `crates/portitor-connector/src/harvest.rs`). Nothing
-  tells another process that the stored copy changed.
+  told another process that the stored copy changed.
 - **Why it matters.** With two containers, the one that did not run the
   harvest keeps offering a withdrawn dataset, with its old policy and
   source, until it restarts.
 - **Current state: Open; in progress (1.3)** (code review,
-  2026-11-26). Fine with one replica.
+  2026-11-26). Fine with one replica. Done on the 1.3 branch: the copy
+  in memory is gone. `StoredCatalog`
+  (`crates/portitor-connector/src/harvest/catalog.rs`) reads the
+  catalog, and each dataset that an offer, an agreement, a transfer
+  request or a data flow start needs, from the database on each
+  request (`DatasetStore::catalog` and `DatasetStore::dataset`,
+  `store/harvest.rs`). The catalog keeps its content and its order (the
+  bytes of the ids, also on PostgreSQL). A database that cannot be read
+  gives HTTP 500, not an empty catalog or a refusal. Test: a harvest
+  written through one store is in the next answer of another store on
+  the same PostgreSQL database
+  (`a_harvest_through_one_store_is_seen_through_another_on_postgres`).
+  The status changes at the release.
 - **Next.** ADR 0029, D4 (option B, maintainer, 2026-11-26): the
   catalog, and each dataset the DSP code needs, is read from the
   database on each request, as EDC reads its catalog from its asset
   index. No copy in memory decides an answer. (The first
-  recommendation, a copy generation number, was not chosen.)
+  recommendation, a copy generation number, was not chosen.) Done on
+  the 1.3 branch.
 
 <a id="td-51"></a>
 ### TD-51 The issuer's signed status lists live in the memory of one process
@@ -1498,10 +1511,21 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   the bundle on its own schedule, so for a while they can check
   datasets and messages against different rules.
 - **Current state: Open; in progress (1.3)** (code review,
-  2026-11-26). Fine with one replica.
+  2026-11-26). Fine with one replica. Done on the 1.3 branch: the
+  version in use is a row of the connector's database (`bundle_in_use`,
+  `crates/portitor-connector/src/store/bundle_in_use.rs`). The process
+  that takes a newer version records it there in one transaction (a
+  version issued before the recorded one is never recorded, except a
+  fixed `PORTITOR_BUNDLE_VERSION`). Every process takes the recorded
+  version at start, before it serves, and looks at the record every
+  5 seconds (`BundleHarvester::follow`), moving to it from its own cache
+  folder or by downloading it. So another process checks with the
+  version before for at most 5 seconds and the time it takes to load
+  the new one. The rules themselves stay in each process's memory, one
+  set per version. The status changes at the release.
 - **Next.** ADR 0029 (S3): the bundle version in use moves to the
   database, and each process moves to it. The cache folder stays per
-  container.
+  container. Done on the 1.3 branch.
 
 <a id="td-56"></a>
 ### TD-56 Scheduled jobs run once in every container

@@ -136,12 +136,18 @@ impl<P: DataPlane> SignalingDataFlows<P> {
     /// The start message's `metadata`: the dataset's source, under
     /// [`SOURCE_METADATA_KEY`] (maintainer's decision D2; Data Plane
     /// Signaling v1.0-RC4 gives `metadata` no fixed shape). `None` when the
-    /// dataset has none: the data plane then refuses the start.
-    fn source_metadata(&self, dataset_id: &str) -> Option<serde_json::Map<String, Value>> {
-        let source = self.sources.upstream_of(dataset_id)?;
+    /// dataset has none: the data plane then refuses the start. An error
+    /// when the dataset cannot be read now.
+    fn source_metadata(
+        &self,
+        dataset_id: &str,
+    ) -> Result<Option<serde_json::Map<String, Value>>, String> {
+        let Some(source) = self.sources.upstream_of(dataset_id)? else {
+            return Ok(None);
+        };
         let mut metadata = serde_json::Map::new();
         metadata.insert(SOURCE_METADATA_KEY.to_owned(), Value::String(source));
-        Some(metadata)
+        Ok(Some(metadata))
     }
 
     /// A reason message with a fresh id.
@@ -174,8 +180,11 @@ impl<P: DataPlane> SignalingDataFlows<P> {
 }
 
 impl<P: DataPlane + NewAddress> DataFlows for SignalingDataFlows<P> {
-    fn supports(&self, dataset_id: &str, format: &str) -> bool {
-        profile_of(format).is_some() && self.sources.upstream_of(dataset_id).is_some()
+    fn supports(&self, dataset_id: &str, format: &str) -> Result<bool, String> {
+        if profile_of(format).is_none() {
+            return Ok(false);
+        }
+        Ok(self.sources.upstream_of(dataset_id)?.is_some())
     }
 
     fn start(&self, transfer: &Transfer) -> Result<Option<DataAddress>, String> {
@@ -195,7 +204,7 @@ impl<P: DataPlane + NewAddress> DataFlows for SignalingDataFlows<P> {
                 profile: profile.to_owned(),
                 // the consumer's verified claims come with DCP (0.5)
                 claims: serde_json::Map::new(),
-                metadata: self.source_metadata(&transfer.dataset_id),
+                metadata: self.source_metadata(&transfer.dataset_id)?,
                 labels: Vec::new(),
             },
             // pull: the data plane makes the address (the spec forbids one
@@ -447,10 +456,13 @@ mod tests {
     fn supports_http_pull_and_push_of_known_datasets_only() {
         let plane = Plane::default();
         let flows = flows_over(&plane);
-        assert!(flows.supports("d", "HttpData-PULL"));
-        assert!(flows.supports("d", "HttpData-PUSH"));
-        assert!(!flows.supports("d", "S3-PUSH"));
-        assert!(!flows.supports("other", "HttpData-PULL"), "no data for it");
+        assert!(flows.supports("d", "HttpData-PULL").unwrap());
+        assert!(flows.supports("d", "HttpData-PUSH").unwrap());
+        assert!(!flows.supports("d", "S3-PUSH").unwrap());
+        assert!(
+            !flows.supports("other", "HttpData-PULL").unwrap(),
+            "no data for it"
+        );
         assert!(flows.start(&transfer("S3-PUSH")).is_err());
     }
 

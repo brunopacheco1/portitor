@@ -63,10 +63,10 @@ impl NegotiationStore for &Store {
 struct Catalog;
 
 impl CatalogDatasets for Catalog {
-    fn all(&self) -> Vec<Dataset> {
-        self.get("d1").into_iter().collect()
+    fn all(&self) -> Result<Vec<Dataset>, StoreError> {
+        Ok(self.get("d1")?.into_iter().collect())
     }
-    fn get(&self, id: &str) -> Option<Dataset> {
+    fn get(&self, id: &str) -> Result<Option<Dataset>, StoreError> {
         // d2's offer expired before the test clock (2026-11-12)
         let mut expired = offer(None);
         expired.permission[0].constraint = vec![
@@ -79,9 +79,9 @@ impl CatalogDatasets for Catalog {
             "d1" => offer(None),
             "d2" => expired,
             "d3" => providers_only(None),
-            _ => return None,
+            _ => return Ok(None),
         };
-        Some(Dataset {
+        Ok(Some(Dataset {
             context: None,
             id: id.to_owned(),
             kind: DatasetType,
@@ -93,7 +93,7 @@ impl CatalogDatasets for Catalog {
                 metadata: crate::Metadata::default(),
             }],
             metadata: crate::Metadata::default(),
-        })
+        }))
     }
 }
 
@@ -854,4 +854,37 @@ fn an_acknowledgement_written_first_makes_the_settling_write_lose() {
     assert_eq!(finalized.state, NegotiationState::Finalized);
     assert!(!(&store).replace_if(&settled, verified.version).unwrap());
     assert_eq!(store.0.borrow()[&pid], finalized);
+}
+
+/// A catalog that cannot be read now (its database is down).
+struct Unreadable;
+
+impl CatalogDatasets for Unreadable {
+    fn all(&self) -> Result<Vec<Dataset>, StoreError> {
+        Err(StoreError("database down".to_owned()))
+    }
+    fn get(&self, _: &str) -> Result<Option<Dataset>, StoreError> {
+        Err(StoreError("database down".to_owned()))
+    }
+}
+
+/// A catalog that cannot be read is a store failure (HTTP 500), not a
+/// refusal of the offer (HTTP 400), which would end the consumer's
+/// negotiation: the datasets are read from the database on each request
+/// (ADR 0029, D4).
+#[test]
+fn a_catalog_that_cannot_be_read_is_a_store_failure() {
+    let store = Store::default();
+    let p = ProviderService::new(
+        &store,
+        AgreeToCatalogOffers,
+        Unreadable,
+        Env::default(),
+        "did:web:provider".to_owned(),
+    );
+    let failure = p
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap_err();
+    assert!(matches!(failure, Failure::Store(_)), "{failure:?}");
+    assert!(store.0.borrow().is_empty(), "nothing was stored");
 }

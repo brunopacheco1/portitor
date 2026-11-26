@@ -12,8 +12,9 @@ use crate::database::{Database, Executor};
 use crate::values;
 
 /// Each table of `db` with the names of its columns, both sorted. The
-/// bookkeeping tables are left out: `portitor_schema` (PostgreSQL) and
-/// `sqlite_sequence` (`SQLite`, for `AUTOINCREMENT`).
+/// bookkeeping tables are left out: `portitor_schema` (PostgreSQL),
+/// `sqlite_sequence` (`SQLite`, for `AUTOINCREMENT`) and
+/// `portitor_process_lease` (`SQLite` files, `database::sqlite_lease`).
 ///
 /// # Panics
 /// The database cannot be read.
@@ -26,7 +27,8 @@ pub fn columns(db: &Database) -> BTreeMap<String, BTreeSet<String>> {
     } else {
         // `pragma_table_info` is the table form of `PRAGMA table_info`
         "SELECT m.name, c.name FROM sqlite_master m, pragma_table_info(m.name) c
-             WHERE m.type = 'table' AND m.name <> 'sqlite_sequence'"
+             WHERE m.type = 'table'
+                 AND m.name NOT IN ('sqlite_sequence', 'portitor_process_lease')"
     };
     let mut db = db;
     let rows = match db.query(sql, values![]) {

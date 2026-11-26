@@ -329,7 +329,7 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
             pending: None,
             version: 0,
         };
-        negotiation.pending = self.next(&negotiation, credentials);
+        negotiation.pending = self.next(&negotiation, credentials)?;
         self.store.insert(&negotiation).map_err(Failure::Store)?;
         Ok((ack(&negotiation), negotiation.pending))
     }
@@ -425,7 +425,7 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
             negotiation
                 .apply_sent(sent)
                 .map_err(|e| transition_failure(negotiation, e))?;
-            negotiation.pending = self.next(negotiation, &none);
+            negotiation.pending = self.next(negotiation, &none)?;
             Ok(Write::Save)
         })?;
         Ok(saved.and_then(|negotiation| negotiation.pending))
@@ -500,18 +500,24 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
         let lookup = Lookup::from_caller(pid, cpid, caller);
         let saved = process::update(self, &lookup, |negotiation| {
             receive(negotiation)?;
-            negotiation.pending = self.next(negotiation, credentials);
+            negotiation.pending = self.next(negotiation, credentials)?;
             Ok(Write::Save)
         })?;
         let negotiation = saved.ok_or_else(|| not_found(pid, cpid))?;
         Ok((ack(&negotiation), negotiation.pending))
     }
 
-    fn next(&self, negotiation: &Negotiation, credentials: &CallerCredentials) -> Option<Outgoing> {
+    /// The message to send next, if any. Fails only when the catalog
+    /// cannot be read to check an agreement.
+    fn next(
+        &self,
+        negotiation: &Negotiation,
+        credentials: &CallerCredentials,
+    ) -> Result<Option<Outgoing>, Failure> {
         if negotiation.state.is_terminal() {
-            return None;
+            return Ok(None);
         }
-        match self.decider.decide(negotiation) {
+        let outgoing = match self.decider.decide(negotiation) {
             Decision::Wait => None,
             Decision::Terminate => {
                 Some(Self::termination(negotiation, "terminated by the provider"))
@@ -519,12 +525,13 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
             Decision::Offer => Some(Self::offer(negotiation)),
             // never agree to terms that are not the catalog's, or whose
             // constraints do not hold now for this caller (ADR 0009, 0019)
-            Decision::Agree => Some(match self.agreeable(negotiation, credentials) {
+            Decision::Agree => Some(match self.agreeable(negotiation, credentials)? {
                 Ok(()) => self.agreement(negotiation),
                 Err(reason) => Self::termination(negotiation, &reason),
             }),
             Decision::Finalize => Some(Self::finalization(negotiation)),
-        }
+        };
+        Ok(outgoing)
     }
 
     fn offer(negotiation: &Negotiation) -> Outgoing {
@@ -585,26 +592,33 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
     }
 
     /// The negotiated offer has the terms of the catalog offer with its id,
-    /// and its permissions hold now for a caller with `credentials`.
+    /// and its permissions hold now for a caller with `credentials`. The
+    /// outer `Err`: the catalog cannot be read; the inner one: why the
+    /// offer cannot be agreed to.
     fn agreeable(
         &self,
         negotiation: &Negotiation,
         credentials: &CallerCredentials,
-    ) -> Result<(), String> {
-        let listed = self
+    ) -> Result<Result<(), String>, Failure> {
+        let dataset = self
             .catalog
             .get(negotiation.dataset_id())
-            .and_then(|d| {
-                d.has_policy
-                    .into_iter()
-                    .find(|o| o.id == negotiation.offer.id)
-            })
-            .ok_or("the offer is no longer in the catalog")?;
+            .map_err(Failure::Store)?;
+        let listed = dataset.and_then(|d| {
+            d.has_policy
+                .into_iter()
+                .find(|o| o.id == negotiation.offer.id)
+        });
+        let Some(listed) = listed else {
+            return Ok(Err("the offer is no longer in the catalog".to_owned()));
+        };
         if !crate::policy::same_terms(&listed, &negotiation.offer) {
-            return Err("the offer's terms differ from the catalog".to_owned());
+            return Ok(Err("the offer's terms differ from the catalog".to_owned()));
         }
-        crate::policy::permissions_hold(&negotiation.offer, &self.env.now(), credentials)
-            .map_err(|e| e.to_string())
+        let holds =
+            crate::policy::permissions_hold(&negotiation.offer, &self.env.now(), credentials)
+                .map_err(|e| e.to_string());
+        Ok(holds)
     }
 
     /// The offer must name a dataset of this provider and one of its
@@ -623,10 +637,8 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
         if let Err(reason) = crate::policy::check_parties(offer, &self.participant_id, caller) {
             return Err(bad(pid, cpid, reason));
         }
-        let known = self
-            .catalog
-            .get(target)
-            .is_some_and(|d| d.has_policy.iter().any(|o| o.id == offer.id));
+        let dataset = self.catalog.get(target).map_err(Failure::Store)?;
+        let known = dataset.is_some_and(|d| d.has_policy.iter().any(|o| o.id == offer.id));
         if known {
             Ok(())
         } else {

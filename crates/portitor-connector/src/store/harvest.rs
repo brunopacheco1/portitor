@@ -5,6 +5,7 @@
 //! The harvest's read copy, jobs and entry errors, in the same database
 //! (ADR 0020). A run's changes are written in one transaction.
 
+use portitor_dsp::Dataset;
 use portitor_runtime::database::{DbError, Executor, Row, Value};
 use portitor_runtime::values;
 
@@ -260,10 +261,39 @@ fn write_dataset(tx: &mut dyn Executor, values: &[Value]) -> Result<(), DbError>
     Ok(())
 }
 
+/// The catalog's form of a dataset, from its `content` column.
+fn content_from_row(row: &Row) -> Result<(String, Dataset), StoreError> {
+    let id: String = col(row, 0)?;
+    let content = parsed("dataset", &col::<String>(row, 1)?)?;
+    Ok((id, content))
+}
+
 impl DatasetStore for ConnectorStore {
     fn datasets(&self) -> Result<Vec<StoredDataset>, StoreError> {
-        let sql = format!("SELECT {DATASET_COLUMNS} FROM dataset ORDER BY id");
-        self.query(&sql, values![], dataset_from_row)
+        let sql = format!("SELECT {DATASET_COLUMNS} FROM dataset");
+        let mut datasets = self.query(&sql, values![], dataset_from_row)?;
+        // sorted here, not with ORDER BY: PostgreSQL sorts text by the
+        // database's collation, which may differ from the bytes' order
+        datasets.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(datasets)
+    }
+
+    fn catalog(&self) -> Result<Vec<Dataset>, StoreError> {
+        // read on every catalog request (ADR 0029, D4): only the columns
+        // the catalog shows
+        let mut active = self.query(
+            "SELECT id, content FROM dataset WHERE state = $1",
+            values![DatasetState::Active.name()],
+            content_from_row,
+        )?;
+        // the order of the bytes of the ids, as for `datasets`
+        active.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(active.into_iter().map(|(_, content)| content).collect())
+    }
+
+    fn dataset(&self, id: &str) -> Result<Option<StoredDataset>, StoreError> {
+        let sql = format!("SELECT {DATASET_COLUMNS} FROM dataset WHERE id = $1");
+        self.query_first(&sql, values![id], dataset_from_row)
     }
 
     fn status(&self) -> Result<HarvestStatus, StoreError> {
@@ -381,7 +411,7 @@ mod tests {
             Arc::clone(&store) as _,
         );
         restarted.start().unwrap();
-        assert_eq!(restarted.copy().all().len(), 1);
+        assert_eq!(restarted.catalog().all().unwrap().len(), 1);
         assert_eq!(
             store.jobs(None, 10).unwrap()[0].record.outcome,
             JobOutcome::Failed
@@ -433,7 +463,114 @@ mod tests {
         assert!(matches!(result, RunResult::StoreFailed(_)), "{result:?}");
         assert_eq!(store.datasets().unwrap(), before);
         assert_eq!(store.jobs(None, 10).unwrap().len(), 1);
-        assert_eq!(harvester.copy().all().len(), 1);
+        assert_eq!(harvester.catalog().all().unwrap().len(), 1);
+    }
+
+    /// The catalog is read from the database on each request (TD-50,
+    /// ADR 0029 D4): what a harvest wrote through one store is what the
+    /// next request through another store on the same database sees, with
+    /// nothing reloaded.
+    fn a_harvest_is_seen_through_another_store(
+        writer: &Arc<ConnectorStore>,
+        reader: &Arc<ConnectorStore>,
+    ) {
+        let first = harvester(writer, vec![entry("a"), entry("b")]);
+        // the reader's harvester only reads: its source is empty and its
+        // start run fails, which keeps the stored datasets
+        let other = DatasetHarvester::new(
+            Arc::new(crate::harvest::FileSource::new("/nonexistent.json")),
+            Arc::new(DspCheck::new(
+                "https://p.example/dsp/2025-1",
+                &CredentialTypes::default(),
+            )),
+            Arc::clone(reader) as _,
+        );
+        let catalog = other.catalog();
+        let ids = |catalog: &crate::harvest::StoredCatalog| -> Vec<String> {
+            catalog.all().unwrap().into_iter().map(|d| d.id).collect()
+        };
+        assert_eq!(ids(&catalog), ["a", "b"]);
+
+        // the writer's next run withdraws a and changes b's source
+        let mut moved = entry("b");
+        moved["portitor:source"] = json!("http://upstream.example/b2");
+        let second = DatasetHarvester::new(
+            Arc::new(FixedSource::new(vec![moved])),
+            Arc::new(DspCheck::new(
+                "https://p.example/dsp/2025-1",
+                &CredentialTypes::default(),
+            )),
+            Arc::clone(writer) as _,
+        );
+        assert!(matches!(second.run(Trigger::Interval), RunResult::Done(_)));
+        drop(first);
+        assert_eq!(ids(&catalog), ["b"]);
+        assert_eq!(catalog.get("a").unwrap(), None, "withdrawn");
+        assert_eq!(
+            catalog.get_for_agreement("a").unwrap().unwrap().id,
+            "a",
+            "kept for agreements already made"
+        );
+        assert_eq!(
+            crate::harvest::UpstreamSources::upstream_of(&catalog, "b").unwrap(),
+            Some("http://upstream.example/b2".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_harvest_through_one_store_is_seen_through_another_on_postgres() {
+        let Some(url) = portitor_runtime::testing::databases::postgres_url() else {
+            return;
+        };
+        let settings = portitor_runtime::testing::databases::fresh_postgres_settings(&url);
+        let setting = portitor_runtime::database::DatabaseSetting::Postgres(Box::new(settings));
+        let open = || {
+            let database =
+                portitor_runtime::database::Database::open(&setting, &super::super::MIGRATIONS)
+                    .unwrap();
+            Arc::new(ConnectorStore::new(Arc::new(database)))
+        };
+        // two pools on one database: two replicas of the connector
+        a_harvest_is_seen_through_another_store(&open(), &open());
+    }
+
+    #[test]
+    fn a_harvest_through_one_store_is_seen_through_another_on_every_database() {
+        // two stores on one database (on SQLite, a file serves one
+        // process: the two share its connection)
+        on_every_database(|store| {
+            let writer = Arc::new(store.clone());
+            let reader = Arc::new(ConnectorStore::new(Arc::clone(store.database())));
+            a_harvest_is_seen_through_another_store(&writer, &reader);
+        });
+    }
+
+    /// The catalog lists ids in the order of their bytes on every
+    /// database, as the copy in memory did: PostgreSQL's own order of
+    /// text may follow a language's rules instead.
+    #[test]
+    fn the_catalog_is_in_the_order_of_the_ids_bytes() {
+        on_every_database(|store| {
+            let store = Arc::new(store.clone());
+            let harvester = harvester(
+                &store,
+                vec![
+                    entry("b"),
+                    entry("B"),
+                    entry("a-1"),
+                    entry("a_1"),
+                    entry("a"),
+                ],
+            );
+            let ids: Vec<String> = harvester
+                .catalog()
+                .all()
+                .unwrap()
+                .into_iter()
+                .map(|d| d.id)
+                .collect();
+            assert_eq!(ids, ["B", "a", "a-1", "a_1", "b"]);
+        });
     }
 
     #[test]

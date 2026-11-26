@@ -608,7 +608,7 @@ mod tests {
 
     /// A `#[cfg(test)]` line that marks something other than the unit
     /// tests does not end the reading: what follows it is code the
-    /// binary runs. (The connector's `harvest/copy.rs` has such a line
+    /// binary runs. (The connector's `harvest/catalog.rs` has such a line
     /// near its top.)
     #[test]
     fn settings_after_a_test_only_item_are_still_found() {

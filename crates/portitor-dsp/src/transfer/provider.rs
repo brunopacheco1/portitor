@@ -311,7 +311,11 @@ pub trait DataFlows {
     /// Whether the data plane can serve dataset `dataset_id` in `format`
     /// (for example `HttpData-PULL`): it supports the format and knows
     /// where the dataset's data is.
-    fn supports(&self, dataset_id: &str, format: &str) -> bool;
+    ///
+    /// # Errors
+    ///
+    /// Where the dataset's data is cannot be read now, with the reason.
+    fn supports(&self, dataset_id: &str, format: &str) -> Result<bool, String>;
 
     /// Starts the data flow for `transfer`. For a pull transfer, returns
     /// where the consumer fetches the data, with its access token; for a
@@ -751,14 +755,20 @@ where
         })?;
         // the agreement is a contract: a dataset withdrawn from the
         // catalog since stays available to it (ADR 0020)
-        let offered = self
+        let dataset = self
             .catalog
             .get_for_agreement(&agreement.target)
-            .is_some_and(|d| d.distribution.iter().any(|x| x.format == msg.format));
+            .map_err(Failure::Store)?;
+        let offered =
+            dataset.is_some_and(|d| d.distribution.iter().any(|x| x.format == msg.format));
         if !offered {
             return Err(bad("", cpid, "the dataset is not offered in this format"));
         }
-        if !self.flows.supports(&agreement.target, &msg.format) {
+        let supported = self
+            .flows
+            .supports(&agreement.target, &msg.format)
+            .map_err(Failure::DataPlane)?;
+        if !supported {
             return Err(bad(
                 "",
                 cpid,
