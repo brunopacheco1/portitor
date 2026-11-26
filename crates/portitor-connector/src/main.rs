@@ -15,7 +15,7 @@ use std::sync::Arc;
 use portitor_bundle::source::{BundleConfig, source_for};
 use portitor_bundle::store::CacheFolder;
 use portitor_connector::auth::{AuthSettings, CallerVerifier, Prover, dcp_adapters};
-use portitor_connector::bundle_harvest::BundleHarvester;
+use portitor_connector::bundle_harvest::{BundleHarvester, SharedBundleVersion};
 use portitor_connector::health::{Dependencies, OwnIdentityCheck, readiness_checks};
 use portitor_connector::management::{DEFAULT_MANAGEMENT_BIND, ManagementConfig};
 use portitor_connector::store::{ConnectorStore, MIGRATIONS};
@@ -86,7 +86,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         None => None,
     };
     // the callers' token ids go into the connector's database (TD-09)
-    let used_token_ids: Arc<dyn UsedTokenStore> = Arc::clone(&store) as _;
+    let used_token_ids = Arc::clone(&store) as Arc<dyn UsedTokenStore>;
     (ports.verifier, ports.prover) = auth_adapters(settings, used_token_ids).await?;
     let bundle = start_bundle_harvest(&config, &mut ports, &store).await?;
     // `build` runs the first harvest before it returns: blocking work (a
@@ -249,7 +249,7 @@ async fn start_bundle_harvest(
     let source = source_for(&bundle_config, directory)?;
     let store = Arc::new(CacheFolder::new(&bundle_config.cache_dir));
     // the version in use is the connector's, in its database (TD-55)
-    let shared = Arc::clone(database) as _;
+    let shared = Arc::clone(database) as Arc<dyn SharedBundleVersion>;
     let started = BundleHarvester::start(bundle_config, source, store, shared).await?;
     ports.use_bundle_rules(&started.harvester.copy());
     Ok(Some((started.harvester, started.job)))

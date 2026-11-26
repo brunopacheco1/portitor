@@ -442,12 +442,10 @@ pub fn database_answers(setting: &DatabaseSetting, db: &Database) -> Result<(), 
     use crate::database::Executor as _;
     match setting {
         DatabaseSetting::SqliteFile(path) => sqlite_file_answers(path),
-        DatabaseSetting::Postgres(_) => {
-            let mut db = db;
-            db.query("SELECT 1", &[])
-                .map(|_rows| ())
-                .map_err(|e| format!("the database does not answer: {e}"))
-        }
+        DatabaseSetting::Postgres(_) => db
+            .query("SELECT 1", &[])
+            .map(|_rows| ())
+            .map_err(|e| format!("the database does not answer: {e}")),
     }
 }
 

@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Adapter: the harvest store in memory (lost on restart; tests and
-//! development). It follows the same rules as the `SQLite` one.
+//! development). It follows the same rules as the database one
+//! (`crate::store::harvest`).
 
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};

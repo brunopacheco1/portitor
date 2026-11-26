@@ -53,11 +53,10 @@ pub const MAX_ATTEMPTS: u32 = 20;
 /// How long the outbox sleeps when nothing is due, unless woken.
 const IDLE: Duration = Duration::from_secs(60);
 
-/// How long a process holds a delivery it claimed, in seconds: longer
-/// than one try takes (the holder's DID document, then the send, each
-/// within 10 seconds). The same time as the connector's lease on a
-/// transfer (`portitor_dsp::transfer::provider::LEASE_SECONDS`, TD-48).
-pub const LEASE_SECONDS: u64 = 30;
+/// How long a replica holds a delivery it claimed, in seconds: every
+/// lease's length (`portitor_runtime::leases`), longer than one try takes
+/// (the holder's DID document, then the send, each within 10 seconds).
+pub use portitor_runtime::leases::LEASE_SECONDS;
 
 /// Whether a failed send should not be tried again: the holder answered
 /// with a 4xx status other than 401 (its check of our token may pass
@@ -140,7 +139,7 @@ pub async fn send_due_with(issuer: &Issuer, clock: Clock<'_>) {
 /// fails (logged).
 fn claim_next(issuer: &Issuer, due: u64, now: u64) -> Option<Delivery> {
     let lease = Lease {
-        holder: &issuer.process_id,
+        holder: issuer.process_id.clone(),
         until: now.saturating_add(LEASE_SECONDS),
     };
     // `due` also says which leases have ended: the earlier time, so a

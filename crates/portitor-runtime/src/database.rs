@@ -106,6 +106,21 @@ impl<T: Into<Value>> From<Option<T>> for Value {
     }
 }
 
+/// A `u64` (seconds since 1970, a count, a position) as the database
+/// keeps whole numbers: a signed 64-bit number. A value above
+/// `i64::MAX`, far beyond any real time or count, is kept as `i64::MAX`.
+#[must_use]
+pub fn to_db_int(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+/// A whole number read back from the database as a `u64`. A negative one,
+/// which Portitor never writes, reads as 0.
+#[must_use]
+pub fn from_db_int(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or(0)
+}
+
 /// The values of a statement, written like `rusqlite::params!`:
 /// `values![pid, state, version]`.
 #[macro_export]
@@ -233,19 +248,19 @@ pub trait Executor {
     ///
     /// # Errors
     /// The database refused the statement or could not be reached.
-    fn query(&mut self, sql: &str, values: &[Value]) -> Result<Vec<Row>, DbError>;
+    fn query(&self, sql: &str, values: &[Value]) -> Result<Vec<Row>, DbError>;
 
     /// Runs a statement that changes rows and returns how many it changed.
     ///
     /// # Errors
     /// The database refused the statement or could not be reached.
-    fn execute(&mut self, sql: &str, values: &[Value]) -> Result<u64, DbError>;
+    fn execute(&self, sql: &str, values: &[Value]) -> Result<u64, DbError>;
 
     /// [`Executor::query`] for at most one row.
     ///
     /// # Errors
     /// As [`Executor::query`].
-    fn query_one(&mut self, sql: &str, values: &[Value]) -> Result<Option<Row>, DbError> {
+    fn query_one(&self, sql: &str, values: &[Value]) -> Result<Option<Row>, DbError> {
         Ok(self.query(sql, values)?.into_iter().next())
     }
 }
@@ -336,11 +351,15 @@ pub const SQLITE_DEPRECATED: &str = "SQLite is deprecated since 1.3 and is remov
 /// tests).
 #[derive(Debug)]
 pub enum Database {
-    /// One `SQLite` connection; the lock makes one statement or
-    /// transaction run at a time. A file comes with the lease that keeps
-    /// other processes out of it (ADR 0029, D3; [`sqlite_lease`]); a
-    /// database in memory has none.
-    Sqlite(Mutex<Connection>, Option<sqlite_lease::ProcessLease>),
+    /// One `SQLite` connection.
+    Sqlite {
+        /// The lock makes one statement or transaction run at a time.
+        conn: Mutex<Connection>,
+        /// A file comes with the lease that keeps other processes out of
+        /// it (ADR 0029, D3; [`sqlite_lease`]); a database in memory has
+        /// none.
+        lease: Option<sqlite_lease::ProcessLease>,
+    },
     /// A pool of PostgreSQL connections.
     Postgres(Box<postgres::Pool>),
 }
@@ -363,7 +382,10 @@ impl Database {
                 let lease = sqlite_lease::take(path)?;
                 let conn =
                     crate::sqlite::open(Some(path), migrations.sqlite).map_err(DbError::new)?;
-                Ok(Self::Sqlite(Mutex::new(conn), Some(lease)))
+                Ok(Self::Sqlite {
+                    conn: Mutex::new(conn),
+                    lease: Some(lease),
+                })
             }
             DatabaseSetting::Postgres(settings) => postgres::Pool::open(settings, migrations)
                 .map(|pool| Self::Postgres(Box::new(pool))),
@@ -377,7 +399,10 @@ impl Database {
     pub fn in_memory(migrations: &Migrations) -> Result<Self, DbError> {
         let conn = crate::sqlite::open(None, migrations.sqlite).map_err(DbError::new)?;
         // one process by definition: no lease
-        Ok(Self::Sqlite(Mutex::new(conn), None))
+        Ok(Self::Sqlite {
+            conn: Mutex::new(conn),
+            lease: None,
+        })
     }
 
     /// Whether this is PostgreSQL (several replicas allowed).
@@ -399,10 +424,10 @@ impl Database {
     /// What `work` returned, or the database's error.
     pub fn transaction<T>(
         &self,
-        mut work: impl FnMut(&mut dyn Executor) -> Result<T, DbError>,
+        mut work: impl FnMut(&dyn Executor) -> Result<T, DbError>,
     ) -> Result<T, DbError> {
         match self {
-            Self::Sqlite(conn, _) => {
+            Self::Sqlite { conn, .. } => {
                 let mut conn = lock(conn);
                 // takes the write lock at the start: a transaction that
                 // reads, then writes, would otherwise fail at once
@@ -410,8 +435,7 @@ impl Database {
                 // wrote in between, as the lease thread does every 10 s
                 let tx =
                     conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-                let mut runner = SqliteRunner(&tx);
-                let out = work(&mut runner)?;
+                let out = work(&SqliteRunner(&tx))?;
                 tx.commit()?;
                 Ok(out)
             }
@@ -424,23 +448,23 @@ impl Database {
     #[must_use]
     pub fn sqlite_connection(&self) -> Option<MutexGuard<'_, Connection>> {
         match self {
-            Self::Sqlite(conn, _) => Some(lock(conn)),
+            Self::Sqlite { conn, .. } => Some(lock(conn)),
             Self::Postgres(_) => None,
         }
     }
 }
 
-impl Executor for &Database {
-    fn query(&mut self, sql: &str, values: &[Value]) -> Result<Vec<Row>, DbError> {
-        match *self {
-            Database::Sqlite(conn, _) => SqliteRunner(&lock(conn)).query(sql, values),
+impl Executor for Database {
+    fn query(&self, sql: &str, values: &[Value]) -> Result<Vec<Row>, DbError> {
+        match self {
+            Database::Sqlite { conn, .. } => SqliteRunner(&lock(conn)).query(sql, values),
             Database::Postgres(pool) => pool.query(sql, values),
         }
     }
 
-    fn execute(&mut self, sql: &str, values: &[Value]) -> Result<u64, DbError> {
-        match *self {
-            Database::Sqlite(conn, _) => SqliteRunner(&lock(conn)).execute(sql, values),
+    fn execute(&self, sql: &str, values: &[Value]) -> Result<u64, DbError> {
+        match self {
+            Database::Sqlite { conn, .. } => SqliteRunner(&lock(conn)).execute(sql, values),
             Database::Postgres(pool) => pool.execute(sql, values),
         }
     }
@@ -456,7 +480,7 @@ fn lock(conn: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
 struct SqliteRunner<'c>(&'c Connection);
 
 impl Executor for SqliteRunner<'_> {
-    fn query(&mut self, sql: &str, values: &[Value]) -> Result<Vec<Row>, DbError> {
+    fn query(&self, sql: &str, values: &[Value]) -> Result<Vec<Row>, DbError> {
         let mut stmt = self.0.prepare_cached(&sqlite_placeholders(sql))?;
         let columns = stmt.column_count();
         let mut rows = stmt.query(rusqlite::params_from_iter(values.iter().map(to_sqlite)))?;
@@ -471,7 +495,7 @@ impl Executor for SqliteRunner<'_> {
         Ok(out)
     }
 
-    fn execute(&mut self, sql: &str, values: &[Value]) -> Result<u64, DbError> {
+    fn execute(&self, sql: &str, values: &[Value]) -> Result<u64, DbError> {
         let mut stmt = self.0.prepare_cached(&sqlite_placeholders(sql))?;
         let changed = stmt.execute(rusqlite::params_from_iter(values.iter().map(to_sqlite)))?;
         Ok(u64::try_from(changed).unwrap_or(u64::MAX))
@@ -556,14 +580,14 @@ mod tests {
     #[test]
     fn rows_come_back_as_values_and_typed_reads_check_them() {
         let db = Database::in_memory(&MIGRATIONS).unwrap();
-        let changed = (&db)
+        let changed = db
             .execute(
                 "INSERT INTO item (id, n, note) VALUES ($1, $2, $3)",
                 values!["a", 7_i64, None::<String>],
             )
             .unwrap();
         assert_eq!(changed, 1);
-        let row = (&db)
+        let row = db
             .query_one("SELECT id, n, note FROM item WHERE id = $1", values!["a"])
             .unwrap()
             .unwrap();
@@ -585,7 +609,7 @@ mod tests {
             Err(DbError::new("changed my mind"))
         });
         assert!(result.is_err());
-        let rows = (&db).query("SELECT id FROM item", values![]).unwrap();
+        let rows = db.query("SELECT id FROM item", values![]).unwrap();
         assert!(rows.is_empty());
     }
 
@@ -641,7 +665,7 @@ mod tests {
         })
         .unwrap();
         other_writer.unwrap().join().unwrap();
-        let rows = (&db)
+        let rows = db
             .query("SELECT id FROM item ORDER BY id", values![])
             .unwrap();
         assert_eq!(rows.len(), 2);
@@ -663,7 +687,7 @@ mod tests {
         assert!(refused.message.contains("use PostgreSQL"), "{refused}");
         drop(first);
         let again = Database::open(&setting, &MIGRATIONS).unwrap();
-        (&again)
+        again
             .execute(
                 "INSERT INTO item (id, n) VALUES ($1, $2)",
                 values!["a", 1_i64],

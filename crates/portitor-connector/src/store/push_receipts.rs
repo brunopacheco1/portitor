@@ -5,7 +5,7 @@
 //! The receipts of push transfers as consumer (ADR 0027), in the same
 //! database: the hash of each token, never the token.
 
-use portitor_runtime::database::Row;
+use portitor_runtime::database::{Row, from_db_int, to_db_int};
 use portitor_runtime::values;
 
 use super::{ConnectorStore, StoreError, col};
@@ -15,7 +15,7 @@ fn receipt_from_row(row: &Row) -> Result<PushReceipt, StoreError> {
     let expires_at: i64 = col(row, 1)?;
     Ok(PushReceipt {
         token_hash: col(row, 0)?,
-        expires_at: u64::try_from(expires_at).unwrap_or(0),
+        expires_at: from_db_int(expires_at),
         object_key: col(row, 2)?,
     })
 }
@@ -29,7 +29,7 @@ impl PushReceipts for ConnectorStore {
     ) -> Result<(), StoreError> {
         // a new token replaces the old one; `excluded` is the row that
         // could not be inserted. The object key stays.
-        let expires_at = i64::try_from(expires_at).unwrap_or(i64::MAX);
+        let expires_at = to_db_int(expires_at);
         self.execute(
             "INSERT INTO push_receipt (consumer_pid, token_hash, expires_at)
              VALUES ($1, $2, $3)

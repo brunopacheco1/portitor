@@ -35,7 +35,7 @@ fn conn(store: &DatabaseStore) -> MutexGuard<'_, Connection> {
 /// Whether a panic poisoned the lock of the store's `SQLite` connection.
 fn is_poisoned(store: &DatabaseStore) -> bool {
     match store.db() {
-        Database::Sqlite(conn, _) => conn.is_poisoned(),
+        Database::Sqlite { conn, .. } => conn.is_poisoned(),
         Database::Postgres(_) => false,
     }
 }

@@ -29,12 +29,12 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 
-use super::DbError;
+use super::{DbError, to_db_int};
 use crate::system::{new_uuid, now_secs};
 
-/// How long a lease lasts after it was taken or renewed, in seconds: the
-/// lease of every other kind lasts as long (ADR 0029, section 6).
-pub const LEASE_SECONDS: u64 = 30;
+/// How long a lease lasts after it was taken or renewed, in seconds: as
+/// long as every other lease (ADR 0029, section 6).
+pub use crate::leases::LEASE_SECONDS;
 
 /// How often the holder renews its lease: three times within a lease, so
 /// one late renewal does not lose it.
@@ -113,7 +113,7 @@ fn take_on(conn: &mut Connection, path: &Path, holder: &str, now: u64) -> Result
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    let now = seconds(now);
+    let now = to_db_int(now);
     if let Some((other, until)) = current
         && until > now
     {
@@ -124,7 +124,7 @@ fn take_on(conn: &mut Connection, path: &Path, holder: &str, now: u64) -> Result
             "INSERT INTO {LEASE_TABLE} (id, holder, lease_until) VALUES (1, ?1, ?2)
              ON CONFLICT (id) DO UPDATE SET holder = ?1, lease_until = ?2"
         ),
-        rusqlite::params![holder, now + seconds(LEASE_SECONDS)],
+        rusqlite::params![holder, now + to_db_int(LEASE_SECONDS)],
     )?;
     tx.commit()?;
     Ok(())
@@ -149,7 +149,7 @@ fn in_use(path: &Path, other: &str, seconds_left: i64) -> DbError {
 fn renew(conn: &Connection, holder: &str, now: u64) -> Result<bool, rusqlite::Error> {
     let changed = conn.execute(
         &format!("UPDATE {LEASE_TABLE} SET lease_until = ?2 WHERE id = 1 AND holder = ?1"),
-        rusqlite::params![holder, seconds(now) + seconds(LEASE_SECONDS)],
+        rusqlite::params![holder, to_db_int(now) + to_db_int(LEASE_SECONDS)],
     )?;
     Ok(changed == 1)
 }
@@ -183,11 +183,6 @@ fn release(conn: &Connection, holder: &str) {
         // the row then ends with its lease, at most LEASE_SECONDS later
         tracing::warn!(error = %e, "SQLite: the lease on the file cannot be released");
     }
-}
-
-/// A time in seconds as `SQLite` stores it (far beyond any real time).
-fn seconds(value: u64) -> i64 {
-    i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 #[cfg(test)]

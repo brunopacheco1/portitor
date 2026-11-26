@@ -162,7 +162,6 @@ fn kind(declared: &str) -> String {
 }
 
 fn query(db: &Database, sql: &str) -> Vec<Row> {
-    let mut db = db;
     match db.query(sql, values![]) {
         Ok(rows) => rows,
         Err(e) => panic!("cannot read the schema: {e}"),

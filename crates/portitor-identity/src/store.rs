@@ -12,7 +12,9 @@ use std::sync::Arc;
 
 use portitor_dcp::credential::Profile;
 use portitor_dcp::message::CredentialObject;
-use portitor_runtime::database::{Database, DatabaseSetting, DbError, Executor, Migrations, Row};
+use portitor_runtime::database::{
+    Database, DatabaseSetting, DbError, Executor, Migrations, Row, from_db_int, to_db_int,
+};
 use portitor_runtime::leases::LeaseStore;
 use portitor_runtime::used_tokens::UsedTokenStore;
 use portitor_runtime::values;
@@ -590,7 +592,7 @@ impl IdentityStore for DatabaseStore {
                 credential_ids,
                 request.status_url.as_deref(),
                 request.access_token_id.as_deref(),
-                seconds(request.created_at),
+                to_db_int(request.created_at),
                 request.issuer_pid.as_deref(),
                 request.send_error.as_deref()
             ],
@@ -711,7 +713,7 @@ impl IdentityStore for DatabaseStore {
                      VALUES ($1, $2, $3, $4)
                      ON CONFLICT (issuer, credential_id) DO UPDATE
                          SET credential = excluded.credential, received_at = excluded.received_at",
-                    values![issuer, *credential_id, json, seconds(received_at)],
+                    values![issuer, *credential_id, json, to_db_int(received_at)],
                 )?;
             }
             Ok(())
@@ -731,7 +733,7 @@ impl IdentityStore for DatabaseStore {
             found.push(StoredOffer {
                 issuer: row.get(0)?,
                 credential: from_json(&json)?,
-                received_at: from_seconds(row.get(2)?),
+                received_at: from_db_int(row.get(2)?),
             });
         }
         Ok(found)
@@ -760,7 +762,7 @@ impl IdentityStore for DatabaseStore {
             // the database gives the id (counting up); RETURNING reads it
             let row = tx.query_one(
                 "INSERT INTO gaiax_run (started_at, outcome) VALUES ($1, $2) RETURNING id",
-                values![seconds(started_at), RunOutcome::Running.text()],
+                values![to_db_int(started_at), RunOutcome::Running.text()],
             )?;
             let id: i64 = row
                 .ok_or_else(|| DbError::new("no id for the new run"))?
@@ -783,7 +785,7 @@ impl IdentityStore for DatabaseStore {
     ) -> Result<(), StoreError> {
         self.db().execute(
             "UPDATE gaiax_run SET finished_at = $2, outcome = $3, error = $4 WHERE id = $1",
-            values![id, seconds(finished_at), outcome.text(), error],
+            values![id, to_db_int(finished_at), outcome.text(), error],
         )?;
         Ok(())
     }
@@ -793,7 +795,7 @@ impl IdentityStore for DatabaseStore {
             "UPDATE gaiax_run SET finished_at = $1, outcome = $2,
                  error = 'its process stopped' WHERE outcome = $3",
             values![
-                seconds(now),
+                to_db_int(now),
                 RunOutcome::Failed.text(),
                 RunOutcome::Running.text()
             ],
@@ -813,25 +815,14 @@ impl IdentityStore for DatabaseStore {
             let outcome: String = row.get(3)?;
             found.push(GaiaxRun {
                 id: row.get(0)?,
-                started_at: from_seconds(row.get(1)?),
-                finished_at: finished_at.map(from_seconds),
+                started_at: from_db_int(row.get(1)?),
+                finished_at: finished_at.map(from_db_int),
                 outcome: RunOutcome::from_text(&outcome)?,
                 error: row.get(4)?,
             });
         }
         Ok(found)
     }
-}
-
-/// Seconds since 1970 as the database keeps them: a signed 64-bit
-/// number.
-fn seconds(at: u64) -> i64 {
-    i64::try_from(at).unwrap_or(i64::MAX)
-}
-
-/// Seconds since 1970 read back; a negative number (never written) is 0.
-fn from_seconds(at: i64) -> u64 {
-    u64::try_from(at).unwrap_or_default()
 }
 
 fn to_json(value: &impl serde::Serialize) -> Result<String, StoreError> {
@@ -844,7 +835,7 @@ fn from_json<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, StoreError
 
 /// Writes `credential`; one with the same `id` from the same issuer is
 /// replaced, one from another issuer is not (an error).
-fn insert_credential(tx: &mut dyn Executor, credential: &StoredCredential) -> Result<(), DbError> {
+fn insert_credential(tx: &dyn Executor, credential: &StoredCredential) -> Result<(), DbError> {
     let types =
         serde_json::to_string(&credential.types).map_err(|e| DbError::new(e.to_string()))?;
     let written = tx.execute(
@@ -877,7 +868,7 @@ fn insert_credential(tx: &mut dyn Executor, credential: &StoredCredential) -> Re
 
 /// Whether request `holder_pid` was closed by `answer` (the same
 /// `issuerPid` and status) before.
-fn closed_by(tx: &mut dyn Executor, holder_pid: &str, answer: Answer<'_>) -> Result<bool, DbError> {
+fn closed_by(tx: &dyn Executor, holder_pid: &str, answer: Answer<'_>) -> Result<bool, DbError> {
     let found = tx.query_one(
         "SELECT 1 FROM credential_request
              WHERE holder_pid = $1 AND status = $2 AND issuer_pid = $3",
@@ -898,7 +889,7 @@ fn request_from(row: &Row) -> Result<CredentialRequest, StoreError> {
         credential_ids: from_json(&credential_ids)?,
         status_url: row.get(4)?,
         access_token_id: row.get(5)?,
-        created_at: from_seconds(row.get(6)?),
+        created_at: from_db_int(row.get(6)?),
         issuer_pid: row.get(7)?,
         send_error: row.get(8)?,
     })

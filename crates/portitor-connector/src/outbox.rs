@@ -29,21 +29,24 @@
 //! resend after a restart is: a message is recorded only while it is
 //! still the process's pending message (ADR 0007).
 //!
-//! Several processes may share one database (ADR 0029, TD-53). Before it
-//! sends a saved message, a process takes a lease on that message in the
+//! In this module "process" means a DSP process (a negotiation or a
+//! transfer); a running connector is a "replica".
+//!
+//! Several replicas may share one database (ADR 0029, TD-53). Before it
+//! sends a saved message, a replica takes a lease on that message in the
 //! database (`portitor_runtime::leases`: kind [`lease_kind`], id
 //! [`lease_id`]), renews it while it sends, and ends it once what became
-//! of the message is recorded. A message leased by another process, or
+//! of the message is recorded. A message leased by another replica, or
 //! by another task of this one, is left to the holder. The lease is on
-//! the message, not on its process: a counter-party's message that
+//! the message, not on its DSP process: a counter-party's message that
 //! arrives while ours is still on its way may save our next message
 //! (ADR 0007), which then goes out at once.
 //!
-//! Every process runs a loop ([`resume`], called every
+//! Every replica runs a loop ([`resume`], called every
 //! [`crate::OUTBOX_LOOP_EVERY`]) that takes up the pending messages that
 //! nobody leases: one whose recording failed (its lease is left to end,
 //! so it is sent again about 30 seconds later, not at once and over and
-//! over), and those of a process that stopped, once their leases have
+//! over), and those of a replica that stopped, once their leases have
 //! ended. As Eclipse EDC's state machines do with `nextNotLeased`.
 
 use std::sync::Arc;
@@ -91,7 +94,8 @@ impl Link {
 
 /// One saved message, as [`deliver`] needs it.
 pub(crate) struct Message<'a> {
-    /// Our process id, for the log.
+    /// Our DSP process id (the negotiation's or transfer's), for the log
+    /// and the lease ([`lease_id`]).
     pub(crate) pid: &'a str,
     /// Where to POST it.
     pub(crate) url: &'a str,
@@ -226,7 +230,7 @@ pub(crate) trait Outbox: Send + Sync + 'static {
 }
 
 /// The longest [`retry_while_busy`] waits in all: a little more than one
-/// lease, so that a lease left by a process that stopped has ended by the
+/// lease, so that a lease left by a replica that stopped has ended by the
 /// last try, and that try takes its step over (`portitor-dsp`,
 /// `transfer::provider::flow_steps`).
 pub(crate) const BUSY_WAIT_LIMIT: Duration = Duration::from_secs(LEASE_SECONDS + 5);
@@ -270,31 +274,33 @@ pub(crate) fn lease_kind(kind: metrics::Outbox) -> String {
     }
 }
 
-/// The id of the lease on one saved message: our process id, then the
-/// SHA-256 of where it goes and what it says. The message saved by a
-/// request and the same message read back from the database get the same
-/// id, so the loop and the request's own task never both send it.
+/// The id of the lease on one saved message: our DSP process id (the
+/// message's `pid`, the negotiation's or transfer's id on our side, not
+/// the replica), then the SHA-256 of where it goes and what it says. The
+/// message saved by a request and the same message read back from the
+/// database get the same id, so the loop and the request's own task never
+/// both send it, in this replica or another.
 pub(crate) fn lease_id(msg: &Message<'_>) -> String {
     let what = format!("{}\n{}", msg.url, msg.body);
     let digest = ring::digest::digest(&ring::digest::SHA256, what.as_bytes());
     format!("{} {}", msg.pid, crate::system::hex(digest.as_ref()))
 }
 
-/// Sends in the background each message in `pending` whose process
-/// nobody leases now: the loop of every process (module doc), and the
-/// first round at start. Returns how many it took up. A message it takes
-/// up is counted as sent again (`portitor.outbox.message.resent`) once
-/// its lease is taken.
+/// Sends in the background each message in `pending` that nobody leases
+/// now (the lease is on each message, [`lease_id`]): the loop of every
+/// replica (module doc), and the first round at start. Returns how many
+/// it took up. A message it takes up is counted as sent again
+/// (`portitor.outbox.message.resent`) once its lease is taken.
 pub(crate) fn resume<O: Outbox>(outbox: &Arc<O>, pending: Vec<O::Out>) -> usize {
     let held = outbox.link().leases.held(&lease_kind(outbox.kind()));
     let mut count = 0;
     for out in pending {
         if held.contains(&lease_id(&O::message(&out))) {
-            // being sent: by another process, or by a task of this one
+            // being sent: by another replica, or by a task of this one
             continue;
         }
         count += 1;
-        tokio::spawn(deliver_taken_up(Arc::clone(outbox), out, true));
+        tokio::spawn(deliver_found(Arc::clone(outbox), out, Found::ByTheLoop));
     }
     count
 }
@@ -316,16 +322,21 @@ pub(crate) fn resume<O: Outbox>(outbox: &Arc<O>, pending: Vec<O::Out>) -> usize 
 /// Each message is sent only when this task can take the lease on it
 /// (module doc); otherwise its holder sends it.
 pub(crate) fn deliver<O: Outbox>(outbox: Arc<O>, out: O::Out) -> impl Future<Output = ()> {
-    deliver_taken_up(outbox, out, false)
+    deliver_found(outbox, out, Found::JustSaved)
 }
 
-/// [`deliver`]; `taken_up` when the loop found the message ([`resume`]):
-/// it is then counted as sent again.
-fn deliver_taken_up<O: Outbox>(
-    outbox: Arc<O>,
-    out: O::Out,
-    taken_up: bool,
-) -> impl Future<Output = ()> {
+/// How a message came to be sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Found {
+    /// A request saved it just now ([`deliver`]).
+    JustSaved,
+    /// The loop found it pending ([`resume`]): it is counted as sent
+    /// again.
+    ByTheLoop,
+}
+
+/// [`deliver`], for a message `found` as given.
+fn deliver_found<O: Outbox>(outbox: Arc<O>, out: O::Out, found: Found) -> impl Future<Output = ()> {
     let kind = outbox.kind();
     // `role_name()` is `None` for an outbox without a DSP role: the span
     // then has no `portitor.dsp.role` field
@@ -339,10 +350,10 @@ fn deliver_taken_up<O: Outbox>(
     // the request saved is never taken up by the loop before this task
     // runs
     let first = claim(outbox.as_ref(), &out);
-    send_until_counter_party_acts(outbox, out, first, taken_up).instrument(span)
+    send_until_counter_party_acts(outbox, out, first, found).instrument(span)
 }
 
-/// The lease on `out` for this process, if nobody holds it. When the
+/// The lease on `out` for this replica, if nobody holds it. When the
 /// store failed (logged), the loop tries again ([`resume`]).
 fn claim<O: Outbox>(outbox: &O, out: &O::Out) -> Option<HeldLease> {
     let msg = O::message(out);
@@ -358,16 +369,16 @@ fn claim<O: Outbox>(outbox: &O, out: &O::Out) -> Option<HeldLease> {
 
 /// The work of [`deliver`]: sends `out`, under its lease `first`, then
 /// each message that follows from the answer, each under its own lease,
-/// until it is the counter-party's turn, the process ends, or another
-/// process holds the next message. `taken_up`: `out` was found by the
-/// loop, and is counted as sent again.
+/// until it is the counter-party's turn, the DSP process ends, or another
+/// replica holds the next message. `out` found by the loop
+/// ([`Found::ByTheLoop`]) is counted as sent again.
 ///
 /// A lease ends once what became of its message is recorded. When that
 /// could not be recorded (the store failed), the lease is left to end on
 /// its own: the message is still pending, and the loop sends it again
 /// after that pause. When the lease is lost while the message is sent or
-/// recorded (the process stalled, or the database did not answer, until
-/// it ended), this task stops: the process that took the lease over sends
+/// recorded (the replica stalled, or the database did not answer, until
+/// it ended), this task stops: the replica that took the lease over sends
 /// the message (it may arrive twice, which the counter-party answers as
 /// for a resend after a restart, see below).
 ///
@@ -377,7 +388,7 @@ fn claim<O: Outbox>(outbox: &O, out: &O::Out) -> Option<HeldLease> {
 /// after each further panic on this message, at most 5 minutes
 /// ([`next_pause`], as for a supervised task). Messages sent before it in
 /// this task are recorded already and are not sent again. A message
-/// that panics every time is tried for as long as the process runs.
+/// that panics every time is tried for as long as the replica runs.
 ///
 /// Why sending again is safe (ADR 0007): the counter-party answers a
 /// message it already took with an error, its state then shows that the
@@ -389,13 +400,13 @@ async fn send_until_counter_party_acts<O: Outbox>(
     outbox: Arc<O>,
     mut out: O::Out,
     first: Option<HeldLease>,
-    taken_up: bool,
+    found: Found,
 ) {
     let Some(mut lease) = first else {
         return;
     };
-    if taken_up {
-        // a message saved before a stop, or left by another process
+    if found == Found::ByTheLoop {
+        // a message saved before a stop, or left by another replica
         metrics::outbox_resent(outbox.kind());
     }
     loop {
@@ -1360,7 +1371,7 @@ mod tests {
     }
 
     /// A call that stays busy is given up once a little more than one
-    /// lease has passed: by then a lease left by a process that stopped
+    /// lease has passed: by then a lease left by a replica that stopped
     /// has ended, and the last try took its step over.
     #[tokio::test(start_paused = true)]
     async fn a_call_that_stays_busy_is_given_up_after_one_lease() {

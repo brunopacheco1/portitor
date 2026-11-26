@@ -35,7 +35,7 @@ use std::time::Duration;
 
 use portitor_dsp::Dataset;
 /// The error of every store port. The harvest keeps its read copy in the
-/// same `SQLite` file as the negotiations, so it reuses their store error
+/// same database as the negotiations, so it reuses their store error
 /// (named after negotiations, but it means "the store failed").
 pub use portitor_dsp::negotiation::provider::StoreError;
 use portitor_runtime::leases::Leases;

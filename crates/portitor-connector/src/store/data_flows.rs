@@ -6,7 +6,7 @@
 
 use portitor_dps::state::DataFlowState;
 use portitor_dsp::transfer::DataAddress;
-use portitor_runtime::database::Row;
+use portitor_runtime::database::{Row, from_db_int, to_db_int};
 use portitor_runtime::values;
 
 use super::{ConnectorStore, col};
@@ -52,7 +52,7 @@ fn flow_from_row(row: &Row) -> Result<Flow, super::StoreError> {
             .map_err(|e| super::StoreError(format!("stored state: {e}")))?,
         dataset_id: col(row, 2)?,
         token_hash: col(row, 3)?,
-        expires_at: u64::try_from(expires_at).unwrap_or(0),
+        expires_at: from_db_int(expires_at),
         push_address,
         source: col(row, 6)?,
         agreement_id: col(row, 7)?,
@@ -80,7 +80,7 @@ impl FlowStore for ConnectorStore {
     fn insert(&self, f: &Flow) -> Result<bool, FlowStoreError> {
         // a flow whose id is taken is not written: one statement, so it
         // is atomic
-        let expires_at = i64::try_from(f.expires_at).unwrap_or(i64::MAX);
+        let expires_at = to_db_int(f.expires_at);
         let sql = format!(
             "INSERT INTO data_flow ({FLOW_COLUMNS})
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -131,7 +131,7 @@ impl FlowStore for ConnectorStore {
         token_hash: &str,
         expires_at: u64,
     ) -> Result<bool, FlowStoreError> {
-        let expires_at = i64::try_from(expires_at).unwrap_or(i64::MAX);
+        let expires_at = to_db_int(expires_at);
         let changed = self
             .execute(
                 "UPDATE data_flow SET token_hash = $3, expires_at = $4

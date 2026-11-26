@@ -250,8 +250,6 @@ fn database_answers(database: &Database, db_file: Option<&Path>) -> Result<(), S
     if let Some(file) = db_file {
         return sqlite_file_answers(file);
     }
-    // `Executor` is implemented for `&Database`
-    let mut database = database;
     match database.query("SELECT 1", values![]) {
         Ok(_) => Ok(()),
         Err(e) => Err(format!("the database does not answer: {e}")),

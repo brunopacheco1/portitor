@@ -1345,11 +1345,7 @@ impl IssuerStore for PanicsOnRequest {
     fn due_deliveries(&self, now: u64) -> Result<Vec<Delivery>, StoreError> {
         self.inner.due_deliveries(now)
     }
-    fn claim_due_delivery(
-        &self,
-        now: u64,
-        lease: Lease<'_>,
-    ) -> Result<Option<Delivery>, StoreError> {
+    fn claim_due_delivery(&self, now: u64, lease: Lease) -> Result<Option<Delivery>, StoreError> {
         self.inner.claim_due_delivery(now, lease)
     }
     fn next_delivery_at(&self) -> Result<Option<u64>, StoreError> {

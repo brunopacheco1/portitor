@@ -25,19 +25,19 @@
 //! the body is read. These limits apply instead:
 //!
 //! - One upload at a time per transfer: a second request while one runs
-//!   gets 409, also when the upload runs in another process that shares
+//!   gets 409, also when the upload runs in another replica that shares
 //!   the database. The upload holds a lease in the database
 //!   ([`UPLOAD_LEASE`], `portitor_runtime::leases`), renewed while it
-//!   runs and ended with it; the lease of a process that stopped ends on
+//!   runs and ended with it; the lease of a replica that stopped ends on
 //!   its own, 30 seconds later at most (TD-54). When the database cannot
 //!   say whether one runs, the answer is 503: try again. An upload whose
 //!   lease is lost (the database did not answer until it ended) stops,
 //!   with 503 and nothing stored, so that it never runs beside another
 //!   upload of the same transfer.
-//! - At most [`MAX_CONCURRENT_UPLOADS`] uploads at once in each process,
+//! - At most [`MAX_CONCURRENT_UPLOADS`] uploads at once in each replica,
 //!   for all transfers; one more gets 503, as the public port answers
-//!   when it is too busy. This bounds the memory of the process, so it is
-//!   counted in the process. Each upload holds up to one part
+//!   when it is too busy. This bounds the memory of the replica, so it is
+//!   counted in the replica. Each upload holds up to one part
 //!   ([`portitor_dataplane::object_storage::PART_BYTES`], 8 MiB) in memory.
 //! - A body that sends nothing for [`portitor_dataplane::push::IDLE_TIMEOUT`] is
 //!   treated as one that broke off: the upload is aborted, the answer is
@@ -195,14 +195,14 @@ pub(crate) struct Receiver {
     uploads: Uploads,
 }
 
-/// The uploads that run now: how many run in this process, and their
+/// The uploads that run now: how many run in this replica, and their
 /// leases in the database.
 struct Uploads {
-    /// How many run in this process.
+    /// How many run in this replica.
     running: Mutex<usize>,
-    /// The most that may run at once in this process.
+    /// The most that may run at once in this replica.
     max: usize,
-    /// One upload per transfer, among all processes.
+    /// One upload per transfer, among all replicas.
     leases: Leases,
 }
 
@@ -237,7 +237,7 @@ impl Uploads {
     /// The turn of an upload for transfer `consumer_pid`, if it may run
     /// now.
     fn begin(&self, consumer_pid: &str) -> Result<UploadTurn<'_>, Busy> {
-        // the count is only this process's memory: taken first, so that
+        // the count is only this replica's memory: taken first, so that
         // the lock is not held while the database answers
         {
             let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
@@ -251,7 +251,7 @@ impl Uploads {
             uploads: self,
             lease: None,
         };
-        // the database decides, for every process
+        // the database decides, for every replica
         match self.leases.claim(UPLOAD_LEASE, consumer_pid) {
             Claim::Taken(lease) => turn.lease = Some(lease),
             Claim::HeldByOther => return Err(Busy::SameTransfer),
@@ -531,9 +531,11 @@ impl hyper::body::Body for StopsWhenIdle {
 mod tests {
     use super::*;
 
-    /// The leases of the process `holder` in `store`.
+    /// The leases of the replica `holder` in `store`.
     fn leases(store: &crate::store::ConnectorStore, holder: &str) -> Leases {
-        Leases::new(Arc::clone(store.database()) as _, holder)
+        let lease_store =
+            Arc::clone(store.database()) as Arc<dyn portitor_runtime::leases::LeaseStore>;
+        Leases::new(lease_store, holder)
     }
 
     #[test]
@@ -578,9 +580,9 @@ mod tests {
         assert_eq!(uploads.begin("t2").err(), Some(Busy::Unknown), "not Full");
     }
 
-    /// Two processes ("replicas") on one PostgreSQL database: an upload
+    /// Two replicas on one PostgreSQL database: an upload
     /// that runs on one is refused on the other (409), until it ends; the
-    /// upload of a process that stopped holds the transfer only until its
+    /// upload of a replica that stopped holds the transfer only until its
     /// lease ends (TD-54).
     #[test]
     fn one_upload_per_transfer_among_replicas() {

@@ -511,10 +511,7 @@ impl ConnectorStore {
         values: &[Value],
         from_row: fn(&Row) -> Result<T, StoreError>,
     ) -> Result<Vec<T>, StoreError> {
-        // `Executor` is implemented for `&Database`: a reference to the
-        // database is what runs statements outside a transaction
-        let mut database: &Database = &self.database;
-        let rows = database.query(sql, values).map_err(err)?;
+        let rows = self.database.query(sql, values).map_err(err)?;
         let mut out = Vec::with_capacity(rows.len());
         for row in &rows {
             out.push(from_row(row)?);
@@ -534,8 +531,7 @@ impl ConnectorStore {
 
     /// Runs one statement that changes rows; returns how many it changed.
     fn execute(&self, sql: &str, values: &[Value]) -> Result<u64, StoreError> {
-        let mut database: &Database = &self.database;
-        database.execute(sql, values).map_err(err)
+        self.database.execute(sql, values).map_err(err)
     }
 
     /// Runs `work` as one transaction (`Database::transaction`). On
@@ -545,7 +541,7 @@ impl ConnectorStore {
     /// and the transaction tried again.
     fn transaction<T>(
         &self,
-        work: impl FnMut(&mut dyn Executor) -> Result<T, DbError>,
+        work: impl FnMut(&dyn Executor) -> Result<T, DbError>,
     ) -> Result<T, StoreError> {
         self.database.transaction(work).map_err(err)
     }
@@ -929,7 +925,10 @@ mod tests {
 
     /// A store on a `SQLite` connection a test prepared, as it is.
     fn on_connection(conn: Connection) -> ConnectorStore {
-        ConnectorStore::new(Arc::new(Database::Sqlite(Mutex::new(conn), None)))
+        ConnectorStore::new(Arc::new(Database::Sqlite {
+            conn: Mutex::new(conn),
+            lease: None,
+        }))
     }
 
     /// A store on a `SQLite` connection a test prepared, brought up to
@@ -947,7 +946,7 @@ mod tests {
     /// The `SQLite` connection a store was on, to open it again.
     fn into_connection(store: ConnectorStore) -> Connection {
         match Arc::try_unwrap(store.database).unwrap() {
-            Database::Sqlite(conn, _) => conn.into_inner().unwrap(),
+            Database::Sqlite { conn, .. } => conn.into_inner().unwrap(),
             Database::Postgres(_) => panic!("not SQLite"),
         }
     }
@@ -955,7 +954,6 @@ mod tests {
     /// Each table and its columns, as `(table, column)` in order, from
     /// `sql`.
     fn columns(database: &Database, sql: &str) -> Vec<(String, String)> {
-        let mut database = database;
         let rows = database.query(sql, values![]).unwrap();
         let mut out = Vec::new();
         for row in rows {

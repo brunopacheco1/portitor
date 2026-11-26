@@ -199,7 +199,9 @@ fn built(
     ports.transfers.agreements = Shared(Arc::new(OneAgreement));
     ports.harvest.source = Some(Arc::new(FixedSource::new(entries)));
     if let Some(holder) = holder {
-        ports.leases = Leases::new(Arc::clone(store.database()) as _, holder);
+        let lease_store =
+            Arc::clone(store.database()) as Arc<dyn portitor_runtime::leases::LeaseStore>;
+        ports.leases = Leases::new(lease_store, holder);
     }
     let config = config(token_seconds, holder.is_some());
     let (app, negotiator) = portitor_connector::build(&config, ports).unwrap();

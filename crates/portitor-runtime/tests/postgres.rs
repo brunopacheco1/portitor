@@ -34,19 +34,17 @@ fn values_go_in_and_come_back_unchanged() {
     let Some(db) = databases::fresh_postgres(&COUNTER) else {
         return;
     };
-    (&db)
-        .execute(
-            "INSERT INTO note (text, data, flag) VALUES ($1, $2, $3)",
-            values!["é ✓", vec![0_u8, 255], true],
-        )
-        .unwrap();
-    (&db)
-        .execute(
-            "INSERT INTO note (text, data, flag) VALUES ($1, $2, $3)",
-            values![None::<String>, None::<Vec<u8>>, None::<bool>],
-        )
-        .unwrap();
-    let rows = (&db)
+    db.execute(
+        "INSERT INTO note (text, data, flag) VALUES ($1, $2, $3)",
+        values!["é ✓", vec![0_u8, 255], true],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO note (text, data, flag) VALUES ($1, $2, $3)",
+        values![None::<String>, None::<Vec<u8>>, None::<bool>],
+    )
+    .unwrap();
+    let rows = db
         .query(
             "SELECT text, data, flag FROM note ORDER BY text NULLS LAST",
             values![],
@@ -71,8 +69,7 @@ fn colliding_transactions_are_tried_again_and_lose_nothing() {
     // two pools: two "replicas" of one component
     let a = Arc::new(open(&settings, &COUNTER).unwrap());
     let b = Arc::new(open(&settings, &COUNTER).unwrap());
-    (&*a)
-        .execute("INSERT INTO counter (id, n) VALUES ('c', 0)", values![])
+    a.execute("INSERT INTO counter (id, n) VALUES ('c', 0)", values![])
         .unwrap();
     let add = |db: Arc<Database>| {
         std::thread::spawn(move || {
@@ -92,7 +89,7 @@ fn colliding_transactions_are_tried_again_and_lose_nothing() {
     let (ta, tb) = (add(Arc::clone(&a)), add(Arc::clone(&b)));
     ta.join().unwrap();
     tb.join().unwrap();
-    let n: i64 = (&*a)
+    let n: i64 = a
         .query_one("SELECT n FROM counter", values![])
         .unwrap()
         .unwrap()
@@ -117,7 +114,7 @@ fn replicas_that_start_together_migrate_once() {
         start.join().unwrap().unwrap();
     }
     let db = open(&settings, &COUNTER).unwrap();
-    let version: i64 = (&db)
+    let version: i64 = db
         .query_one("SELECT version FROM portitor_schema", values![])
         .unwrap()
         .unwrap()
@@ -159,8 +156,7 @@ fn a_failed_transaction_keeps_nothing_and_the_error_has_its_code() {
     });
     assert_eq!(result.unwrap_err().code.as_deref(), Some("23505"));
     assert!(
-        (&db)
-            .query("SELECT id FROM counter", values![])
+        db.query("SELECT id FROM counter", values![])
             .unwrap()
             .is_empty()
     );
@@ -169,20 +165,19 @@ fn a_failed_transaction_keeps_nothing_and_the_error_has_its_code() {
 #[test]
 fn every_test_database_runs_the_same_sql() {
     for db in databases::all(&COUNTER) {
-        (&db)
-            .execute(
-                "INSERT INTO counter (id, n) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
-                values!["a", 1_i64],
-            )
-            .unwrap();
-        let changed = (&db)
+        db.execute(
+            "INSERT INTO counter (id, n) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
+            values!["a", 1_i64],
+        )
+        .unwrap();
+        let changed = db
             .execute(
                 "INSERT INTO counter (id, n) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
                 values!["a", 2_i64],
             )
             .unwrap();
         assert_eq!(changed, 0, "{db:?}");
-        let rows = (&db).query(
+        let rows = db.query(
             "SELECT id, n FROM counter WHERE id = $1 RETURNING",
             values!["a"],
         );
@@ -197,10 +192,9 @@ async fn calls_from_inside_a_tokio_runtime_work() {
     let Some(db) = databases::fresh_postgres(&COUNTER) else {
         return;
     };
-    (&db)
-        .execute("INSERT INTO counter (id, n) VALUES ('t', 1)", values![])
+    db.execute("INSERT INTO counter (id, n) VALUES ('t', 1)", values![])
         .unwrap();
-    let n: i64 = (&db)
+    let n: i64 = db
         .query_one("SELECT n FROM counter", values![])
         .unwrap()
         .unwrap()
@@ -222,7 +216,7 @@ fn tls_connections_check_the_server() {
     };
     let settings = databases::fresh_postgres_settings(&url);
     let db = open(&settings, &COUNTER).unwrap();
-    let ssl: bool = (&db)
+    let ssl: bool = db
         .query_one(
             "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
             values![],
@@ -250,7 +244,7 @@ fn statements_have_a_time_limit() {
     let Some(db) = databases::fresh_postgres(&COUNTER) else {
         return;
     };
-    let limit: String = (&db)
+    let limit: String = db
         .query_one("SHOW statement_timeout", values![])
         .unwrap()
         .unwrap()
@@ -275,7 +269,7 @@ fn a_test_database_is_dropped_after_its_test() {
     };
     let settings = databases::fresh_postgres_settings(&url);
     let db = open(&settings, &COUNTER).unwrap();
-    let name: String = (&db)
+    let name: String = db
         .query_one("SELECT current_database()::text", values![])
         .unwrap()
         .unwrap()
@@ -284,7 +278,7 @@ fn a_test_database_is_dropped_after_its_test() {
     assert!(name.starts_with("portitor_test_"), "{name}");
     drop(settings);
     // still open: the database stays
-    (&db).query("SELECT 1", values![]).unwrap();
+    db.query("SELECT 1", values![]).unwrap();
     drop(db);
     let password = portitor_runtime::settings::text_from_env("PORTITOR_TEST_DATABASE_PASSWORD");
     let admin = portitor_runtime::database::postgres::Settings::from_url(&url, password).unwrap();

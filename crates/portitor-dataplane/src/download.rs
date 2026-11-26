@@ -10,7 +10,7 @@
 //!   the flow is cut, the body ends with an error instead of more data, so
 //!   the server drops the connection and the consumer sees an incomplete
 //!   download, never a complete one.
-//! - [`watchdog`] runs next to the download and checks the consumer's
+//! - [`membership_watchdog`] runs next to the download and checks the consumer's
 //!   membership again every [`AccessGate::recheck_interval`](crate::access::AccessGate::recheck_interval). When it
 //!   no longer holds, it ends the transfer (which cuts the flow); when the
 //!   check cannot finish, it cuts the flow's downloads and keeps the
@@ -62,7 +62,7 @@ impl Drop for AbortOnDrop {
 
 /// Starts the membership checks of one download of flow `flow_id` (module
 /// doc). Keep the value as long as the download runs.
-pub(super) fn watchdog(
+pub(super) fn membership_watchdog(
     gate: Arc<dyn AccessGate>,
     running: Arc<RunningFlows>,
     flow_id: &str,
@@ -283,14 +283,15 @@ mod tests {
     }
 
     /// TD-52: another process suspends the flow (it writes the state in
-    /// the shared database and cuts only its own work). The watchdog of
+    /// the shared database and cuts only its own work). The state watchdog of
     /// the download here reads the state within 5 seconds and cuts it.
     /// A paused clock: the reads come at once, and the test reads when.
     #[tokio::test(start_paused = true)]
     async fn a_suspension_written_by_another_process_cuts_within_5_seconds() {
         let (flows, running) = started_flow();
         let mut cut = running.watch("f1");
-        let _watchdog = state_watchdog(Arc::clone(&flows) as _, Arc::clone(&running), "f1");
+        let flow_store = Arc::clone(&flows) as Arc<dyn FlowStore + Send + Sync>;
+        let _watchdog = state_watchdog(flow_store, Arc::clone(&running), "f1");
         // still STARTED: the reads change nothing
         tokio::time::sleep(STATE_CHECK_EVERY * 3).await;
         assert!(!cut.is_cut());
@@ -306,7 +307,8 @@ mod tests {
     async fn a_completion_does_not_cut() {
         let (flows, running) = started_flow();
         let cut = running.watch("f1");
-        let _watchdog = state_watchdog(Arc::clone(&flows) as _, Arc::clone(&running), "f1");
+        let flow_store = Arc::clone(&flows) as Arc<dyn FlowStore + Send + Sync>;
+        let _watchdog = state_watchdog(flow_store, Arc::clone(&running), "f1");
         let changed = flows.set_state("f1", DataFlowState::Started, DataFlowState::Completed);
         assert!(changed.unwrap());
         tokio::time::sleep(STATE_CHECK_EVERY * 3).await;

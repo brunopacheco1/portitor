@@ -166,7 +166,7 @@ impl Identity {
                     &settings.compliance_did,
                     &settings.participant_file,
                     // the same store, seen as the lease port
-                    Arc::clone(&ports.store) as _,
+                    Arc::clone(&ports.store) as Arc<dyn portitor_runtime::leases::LeaseStore>,
                 )
                 .map_err(|e| format!("PORTITOR_GAIAX_PARTICIPANT_FILE: {e}"))?,
             ),

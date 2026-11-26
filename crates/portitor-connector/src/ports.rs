@@ -195,7 +195,7 @@ impl Ports {
 
 /// The leases in `store`'s database, held under this process's id.
 fn leases_in(store: &ConnectorStore) -> Leases {
-    let database: Arc<dyn LeaseStore> = Arc::clone(store.database()) as _;
+    let database = Arc::clone(store.database()) as Arc<dyn LeaseStore>;
     Leases::new(database, crate::system::process_id())
 }
 

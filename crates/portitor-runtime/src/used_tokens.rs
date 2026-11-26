@@ -33,7 +33,7 @@ use std::sync::{Mutex, PoisonError};
 
 use portitor_dcp::{Error, JtiCache, UsedTokenIds};
 
-use crate::database::{Database, DbError, Executor};
+use crate::database::{Database, DbError, Executor, to_db_int};
 use crate::values;
 
 /// Port: where a component records the token ids it accepted.
@@ -80,24 +80,18 @@ pub fn use_token_id(
     expires_at: u64,
     now: u64,
 ) -> Result<bool, DbError> {
-    let mut db = db;
     db.execute(
         "DELETE FROM used_token WHERE expires_at < $1",
-        values![seconds(now)],
+        values![to_db_int(now)],
     )?;
     // one statement: when two replicas insert the same id at once, the
     // database lets one of them change a row, and the other changes none
     let inserted = db.execute(
         "INSERT INTO used_token (token_id, expires_at) VALUES ($1, $2)
              ON CONFLICT (token_id) DO NOTHING",
-        values![token_id, seconds(expires_at)],
+        values![token_id, to_db_int(expires_at)],
     )?;
     Ok(inserted == 1)
-}
-
-/// Seconds since 1970 as the database keeps them: a signed 64-bit number.
-fn seconds(at: u64) -> i64 {
-    i64::try_from(at).unwrap_or(i64::MAX)
 }
 
 /// Lets [`portitor_dcp::validate_self_issued`] record the token id in a
@@ -148,7 +142,7 @@ mod tests {
             assert!(store.use_token_id("j-2", 300, 150).unwrap());
             // at 201, j-1 has expired: its row is deleted, j-2 stays
             assert!(store.use_token_id("j-3", 400, 201).unwrap());
-            let left = (&db)
+            let left = db
                 .query(
                     "SELECT token_id FROM used_token ORDER BY token_id",
                     values![],

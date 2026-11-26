@@ -2,30 +2,54 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! Leases in the database: which process does a piece of work now, so
-//! that several processes on one database do it once (ADR 0029, decision
-//! 6; TD-53, TD-54, TD-56).
+//! Leases in the database: which replica does a piece of work now, so
+//! that several replicas on one database do it once (ADR 0029, decision
+//! 6; TD-53, TD-54, TD-56). A replica is one running process of a
+//! component; in these docs "process" means a replica only in "process
+//! id" ([`crate::system::process_id`]).
 //!
 //! A lease names a piece of work by a kind and an id (for example
-//! `outbox:transfer:provider` and a process id, or `job` and
+//! `outbox:transfer:provider` and a message's id, or `job` and
 //! `dataset_harvest`), who holds it and when it ends, in seconds since
-//! 1970. The holder is one claim, not one process: the process id
-//! ([`crate::system::process_id`]) and a random id made for each claim.
-//! So a process that lost a lease, and took the same work again, holds
-//! two different leases: the first can neither renew nor end the second.
-//! A process takes a lease only when nobody holds it or the holder's
-//! lease has ended: one statement decides, so of several processes that
-//! try at once exactly one gets it (compare-and-swap). The holder renews
-//! it while the work runs ([`HeldLease`]); a process that dies stops
-//! renewing, and once the lease has ended another process takes the work
-//! over.
+//! 1970. The holder is one claim, not one replica: the replica's process
+//! id and a random id made for each claim. So a replica that lost a
+//! lease, and took the same work again, holds two different leases: the
+//! first can neither renew nor end the second. A replica takes a lease
+//! only when nobody holds it or the holder's lease has ended: one
+//! statement decides, so of several replicas that try at once exactly one
+//! gets it (compare-and-swap). The holder renews it while the work runs
+//! ([`HeldLease`]); a replica that dies stops renewing, and once the
+//! lease has ended another replica takes the work over.
 //!
-//! A lease can be lost while its work still runs: the process stalled, or
+//! A lease can be lost while its work still runs: the replica stalled, or
 //! the database did not answer (a failover) until the lease ended.
 //! [`HeldLease::lost`] then fires, and the work stops, so that it does
-//! not run twice: once here, once in the process that took it over. It
+//! not run twice: once here, once in the replica that took it over. It
 //! fires when a renewal finds another holder, or when renewals failed
 //! until the next one would come too late (about 20 seconds without one).
+//!
+//! Every lease in Portitor, each lasting [`LEASE_SECONDS`]:
+//!
+//! | Work | Where | Kind, id |
+//! |------|-------|----------|
+//! | Sending one saved DSP message (TD-53) | connector, `outbox.rs` | `outbox:<process>[:<role>]`, the message's DSP pid and digest (`lease_id`) |
+//! | A running push of a provider's transfer (TD-54) | connector, `transfer.rs` | `push`, the provider pid |
+//! | A running upload received as consumer (TD-54) | connector, `receiving.rs` | `upload`, the consumer pid |
+//! | The scheduled dataset harvest (TD-56) | connector, `harvest.rs` | `job`, `dataset_harvest` |
+//! | A Gaia-X compliance run (TD-56) | identity, `gaiax.rs` | `job`, `gaiax_compliance` |
+//! | A step of a provider's transfer (TD-48) | connector, `portitor-dsp` `transfer/provider/flow_steps.rs` | own columns: `transfer.lease_holder`, `lease_until` |
+//! | Sending one credential delivery (TD-57) | issuer, `delivery.rs` | own columns: `outbox.lease_holder`, `lease_until` |
+//! | The use of a `SQLite` file by one process (ADR 0029, D3) | every component, `database/sqlite_lease.rs` | own table `portitor_process_lease`, one row |
+//!
+//! Why three of them do not use the `lease` table: the transfer's lease
+//! is taken in the same compare-and-swap update that records the step on
+//! the transfer's row (`portitor-dsp` decides it, and knows no lease
+//! table), and it came in 1.2, before this table. The issuer's delivery
+//! lease marks the outbox row itself, so that one query finds the oldest
+//! delivery that is due and free; the issuer has no `lease` table. The
+//! `SQLite` file lease guards the file itself and is taken before any
+//! migration, so it cannot be a row of the schema it protects; it goes
+//! with `SQLite` in 2.0.
 //!
 //! Modelled on Eclipse EDC's lease table (`edc_lease`, in
 //! `extensions/common/sql/sql-lease`): one row per leased entity, with
@@ -42,7 +66,7 @@
 //! );
 //! ```
 //!
-//! Leases use each process's own clock, as EDC does: the hosts' clocks
+//! Leases use each replica's own clock, as EDC does: the hosts' clocks
 //! must be in sync (NTP; DEPLOYING).
 
 use std::collections::BTreeSet;
@@ -51,7 +75,7 @@ use std::time::Duration;
 
 use tokio::sync::watch;
 
-use crate::database::{Database, DbError, Executor};
+use crate::database::{Database, DbError, Executor, to_db_int};
 use crate::system::{new_uuid, now_secs};
 use crate::values;
 
@@ -64,7 +88,7 @@ pub const LEASE_SECONDS: u64 = 30;
 /// [`LEASE_SECONDS`], so one late renewal does not lose it.
 pub const RENEW_EVERY: Duration = Duration::from_secs(10);
 
-/// How long a lease row is kept after it ended, in seconds. A process
+/// How long a lease row is kept after it ended, in seconds. A replica
 /// that stopped never deletes its rows; [`LeaseStore::forget_ended`]
 /// does, an hour later.
 const KEPT_AFTER_END: u64 = 3600;
@@ -74,7 +98,7 @@ pub trait LeaseStore: Send + Sync {
     /// Gives the lease on (`kind`, `id`) to `holder` until `until`, if
     /// nobody holds it, or its lease ended at `now` or before. Returns
     /// whether `holder` got it. A holder whose lease still runs does not
-    /// get it again: one piece of work runs once, also in one process.
+    /// get it again: one piece of work runs once, also in one replica.
     ///
     /// # Errors
     /// The store fails; the text says why.
@@ -89,7 +113,7 @@ pub trait LeaseStore: Send + Sync {
 
     /// Moves the end of `holder`'s lease on (`kind`, `id`) to `until`.
     /// Returns false, and changes nothing, when `holder` no longer holds
-    /// it (it ended and another process took it).
+    /// it (it ended and another replica took it).
     ///
     /// # Errors
     /// The store fails.
@@ -109,7 +133,7 @@ pub trait LeaseStore: Send + Sync {
     /// The store fails.
     fn held(&self, kind: &str, now: u64) -> Result<Vec<String>, String>;
 
-    /// Deletes the leases that ended before `before`: those of processes
+    /// Deletes the leases that ended before `before`: those of replicas
     /// that stopped. Returns how many.
     ///
     /// # Errors
@@ -128,36 +152,33 @@ impl LeaseStore for Database {
         now: u64,
     ) -> Result<bool, String> {
         // one statement: a new row, or the row of a lease that ended. When
-        // two processes claim at once, the database lets one of them
+        // two replicas claim at once, the database lets one of them
         // change a row, and the other changes none
-        let mut db = self;
-        let changed = db
+        let changed = self
             .execute(
                 "INSERT INTO lease (kind, id, lease_holder, lease_until) VALUES ($1, $2, $3, $4)
                  ON CONFLICT (kind, id) DO UPDATE
                      SET lease_holder = excluded.lease_holder, lease_until = excluded.lease_until
                      WHERE lease.lease_until <= $5",
-                values![kind, id, holder, seconds(until), seconds(now)],
+                values![kind, id, holder, to_db_int(until), to_db_int(now)],
             )
             .map_err(lease_error)?;
         Ok(changed == 1)
     }
 
     fn extend(&self, kind: &str, id: &str, holder: &str, until: u64) -> Result<bool, String> {
-        let mut db = self;
-        let changed = db
+        let changed = self
             .execute(
                 "UPDATE lease SET lease_until = $4
                  WHERE kind = $1 AND id = $2 AND lease_holder = $3",
-                values![kind, id, holder, seconds(until)],
+                values![kind, id, holder, to_db_int(until)],
             )
             .map_err(lease_error)?;
         Ok(changed == 1)
     }
 
     fn release(&self, kind: &str, id: &str, holder: &str) -> Result<(), String> {
-        let mut db = self;
-        db.execute(
+        self.execute(
             "DELETE FROM lease WHERE kind = $1 AND id = $2 AND lease_holder = $3",
             values![kind, id, holder],
         )
@@ -166,11 +187,10 @@ impl LeaseStore for Database {
     }
 
     fn held(&self, kind: &str, now: u64) -> Result<Vec<String>, String> {
-        let mut db = self;
-        let rows = db
+        let rows = self
             .query(
                 "SELECT id FROM lease WHERE kind = $1 AND lease_until > $2",
-                values![kind, seconds(now)],
+                values![kind, to_db_int(now)],
             )
             .map_err(lease_error)?;
         let mut ids = Vec::with_capacity(rows.len());
@@ -181,10 +201,9 @@ impl LeaseStore for Database {
     }
 
     fn forget_ended(&self, before: u64) -> Result<u64, String> {
-        let mut db = self;
-        db.execute(
+        self.execute(
             "DELETE FROM lease WHERE lease_until < $1",
-            values![seconds(before)],
+            values![to_db_int(before)],
         )
         .map_err(lease_error)
     }
@@ -195,15 +214,10 @@ fn lease_error(e: DbError) -> String {
     format!("leases: {e}")
 }
 
-/// Seconds since 1970 as the database keeps them: a signed 64-bit number.
-fn seconds(at: u64) -> i64 {
-    i64::try_from(at).unwrap_or(i64::MAX)
-}
-
 /// What a lease reads the time from: seconds since 1970.
 pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
-/// The leases of one process: the store, the id this process holds them
+/// The leases of one replica: the store, the id this replica holds them
 /// under, and the clock. Cloning it is cheap.
 #[derive(Clone)]
 pub struct Leases {
@@ -247,7 +261,8 @@ impl Leases {
         (self.clock)()
     }
 
-    /// The id of this process, which each claim's holder starts with.
+    /// The process id of this replica, which each claim's holder starts
+    /// with.
     #[must_use]
     pub fn holder(&self) -> &str {
         &self.holder
@@ -263,7 +278,7 @@ impl Leases {
     /// holds it. Inside a Tokio runtime, the lease is then renewed every
     /// [`RENEW_EVERY`] until the [`HeldLease`] is released or dropped.
     /// The answer says whether it was taken, or held by another (another
-    /// process, or another task of this one), or whether the store failed
+    /// replica, or another task of this one), or whether the store failed
     /// (logged): see [`Claim`].
     #[must_use]
     pub fn claim(&self, kind: &str, id: &str) -> Claim {
@@ -296,7 +311,7 @@ impl Leases {
     }
 
     /// Deletes the leases that ended more than an hour ago: those that
-    /// stopped processes left. A failure is logged; the next call tries
+    /// stopped replicas left. A failure is logged; the next call tries
     /// again.
     pub fn forget_old(&self) {
         let before = self.now().saturating_sub(KEPT_AFTER_END);
@@ -312,7 +327,7 @@ pub enum Claim {
     /// The lease is ours: do the work, and stop if it is lost
     /// ([`HeldLease::lost`]).
     Taken(HeldLease),
-    /// Another holder has it: another process, or another task of this
+    /// Another holder has it: another replica, or another task of this
     /// one. Leave the work to it.
     HeldByOther,
     /// The store failed (logged), so nobody knows who holds it. Try again
@@ -334,10 +349,10 @@ impl Claim {
     }
 }
 
-/// A lease this process holds. It is renewed in the background while
+/// A lease this replica holds. It is renewed in the background while
 /// the value lives (inside a Tokio runtime). Dropping it stops the
 /// renewals but leaves the lease to end on its own, at most
-/// [`LEASE_SECONDS`] later: what a process that failed to record its work
+/// [`LEASE_SECONDS`] later: what a replica that failed to record its work
 /// does, so that the work is tried again after that pause.
 /// [`HeldLease::release`] ends it at once.
 pub struct HeldLease {
@@ -406,7 +421,7 @@ impl HeldLease {
         *self.lost.borrow()
     }
 
-    /// Ends the lease now: the work is done, and any process may take
+    /// Ends the lease now: the work is done, and any replica may take
     /// what comes next. A failure is logged; the lease then ends on its
     /// own. A lease that was lost is left to its new holder.
     pub fn release(mut self) {
@@ -495,7 +510,7 @@ impl Renewal {
     /// One renewal. Returns false when the lease is lost: another holder
     /// has it, or the renewals failed until the next one would come after
     /// the lease ends. Stopping then, before it ends, leaves a margin of
-    /// one [`RENEW_EVERY`] before another process can take the work.
+    /// one [`RENEW_EVERY`] before another replica can take the work.
     fn renew_once(&mut self) -> bool {
         let (kind, id) = (&self.kind, &self.id);
         let until = self.leases.now().saturating_add(LEASE_SECONDS);
@@ -506,7 +521,7 @@ impl Renewal {
             }
             Ok(false) => {
                 // the lease ended before a renewal came (a stalled
-                // process), and another process took the work over
+                // replica), and another replica took the work over
                 tracing::warn!(lease = %kind, %id, "a lease was lost; another process took the work over; its work here stops");
                 false
             }
@@ -646,9 +661,9 @@ mod tests {
         (time, Arc::new(move || read.load(Ordering::SeqCst)))
     }
 
-    /// A process stalls (or its database did not answer) until its
+    /// A replica stalls (or its database did not answer) until its
     /// lease ended, and another claim took the work over, here in the
-    /// same process: the first holder's work is told to stop at its next
+    /// same replica: the first holder's work is told to stop at its next
     /// renewal, and its late release leaves the new holder's lease alone.
     #[tokio::test(start_paused = true)]
     async fn a_lease_taken_over_stops_the_first_holder() {
@@ -721,7 +736,7 @@ mod tests {
 
     /// The database does not answer (a failover): one failed renewal is
     /// tried again, but once the next try would come after the lease
-    /// ends, the work is told to stop, before another process can take
+    /// ends, the work is told to stop, before another replica can take
     /// it. A claim that cannot reach the database says so.
     #[tokio::test(start_paused = true)]
     async fn renewals_that_fail_until_the_lease_ends_stop_the_work() {
@@ -730,7 +745,8 @@ mod tests {
             down: AtomicBool::new(false),
         });
         let (time, clock) = set_clock(1_000);
-        let leases = Leases::with_clock(Arc::clone(&outage) as _, "p-1", clock);
+        let lease_store = Arc::clone(&outage) as Arc<dyn LeaseStore>;
+        let leases = Leases::with_clock(lease_store, "p-1", clock);
         let held = leases.claim("push", "t-1").taken().unwrap();
         outage.down.store(true, Ordering::SeqCst);
         assert!(matches!(leases.claim("push", "t-2"), Claim::Failed));

@@ -17,7 +17,9 @@ use portitor_bundle::source::{
     BundleConfig, BundleLocation, BundleSource, BundleSourceError, VersionChoice, source_for,
 };
 use portitor_bundle::store::{CacheFolder, IN_USE_FILE, KEY_FILE};
-use portitor_connector::bundle_harvest::{BundleHarvester, BundleListener, Started};
+use portitor_connector::bundle_harvest::{
+    BundleHarvester, BundleListener, SharedBundleVersion, Started,
+};
 use portitor_connector::harvest::{JobKind, JobOutcome, JobRecord, Trigger};
 use portitor_connector::store::ConnectorStore;
 use portitor_dcp::SigningKey;
@@ -869,7 +871,7 @@ async fn a_newer_version_with_only_unknown_roles_is_not_taken() {
 async fn process_on(authority: &Authority, database: &Arc<ConnectorStore>) -> Started {
     let settings = authority.settings(&scratch());
     let store = Arc::new(CacheFolder::new(&settings.cache_dir));
-    let shared = Arc::clone(database) as _;
+    let shared = Arc::clone(database) as Arc<dyn SharedBundleVersion>;
     BundleHarvester::start(settings.clone(), source(&settings), store, shared)
         .await
         .unwrap()
@@ -933,7 +935,6 @@ async fn a_version_one_process_takes_is_moved_to_by_the_other() {
 /// and from then on recorded in the database.
 #[tokio::test]
 async fn a_database_of_1_2_takes_the_version_in_use_from_the_cache() {
-    use portitor_connector::bundle_harvest::SharedBundleVersion;
     const MIGRATIONS_OF_1_2: usize = 17;
     let authority = Authority::start(true).await;
     authority.publish("2026.12.0", "2026-12-01T00:00:00Z");
@@ -953,7 +954,7 @@ async fn a_database_of_1_2_takes_the_version_in_use_from_the_cache() {
 
     authority.point_latest_at(VERSION);
     let store = Arc::new(CacheFolder::new(&settings.cache_dir));
-    let shared = Arc::clone(&database) as _;
+    let shared = Arc::clone(&database) as Arc<dyn SharedBundleVersion>;
     let started = BundleHarvester::start(settings.clone(), source(&settings), store, shared)
         .await
         .unwrap();

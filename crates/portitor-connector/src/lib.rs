@@ -208,7 +208,8 @@ pub const OUTBOX_LOOP_EVERY: Duration = Duration::from_secs(1);
 
 /// The largest value of a setting in seconds: one year (365 days).
 /// Larger values are refused, as a time that far ahead can overflow the
-/// clock types (a schedule `Instant`, a token expiry stored in `SQLite`).
+/// clock types (a schedule `Instant`, a token expiry stored in the
+/// database).
 pub const MAX_SETTING_SECONDS: u64 = 31_536_000;
 
 /// Reads a setting in whole seconds, from 0 to [`MAX_SETTING_SECONDS`];
@@ -813,7 +814,7 @@ fn versions(service_id: String) -> VersionResponse {
 /// dataset that fails does not stop it (ADR 0020).
 ///
 /// That first run is blocking work (it reads the source, checks every
-/// entry, writes `SQLite`) done on the calling thread, also when called
+/// entry, writes the database) done on the calling thread, also when called
 /// from async code. That is acceptable once at start, before anything is
 /// served; the scheduled runs use `spawn_blocking`.
 ///

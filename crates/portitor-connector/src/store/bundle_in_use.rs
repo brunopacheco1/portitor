@@ -8,22 +8,16 @@
 //! cache folder.
 
 use portitor_bundle::store::InUse;
-use portitor_runtime::database::{DbError, Executor, Row};
+use portitor_runtime::database::{DbError, Executor};
 use portitor_runtime::values;
 
-use super::{ConnectorStore, StoreError, col};
+use super::{ConnectorStore, StoreError, err};
 use crate::bundle_harvest::SharedBundleVersion;
 
-fn in_use_from_row(row: &Row) -> Result<InUse, StoreError> {
-    Ok(InUse {
-        version: col(row, 0)?,
-        issued: col(row, 1)?,
-    })
-}
-
-/// The recorded version, read in the transaction `tx`.
-fn recorded(tx: &mut dyn Executor) -> Result<Option<InUse>, DbError> {
-    let row = tx.query_one(
+/// The recorded version, read through `db`: the database itself, or a
+/// transaction.
+fn recorded(db: &dyn Executor) -> Result<Option<InUse>, DbError> {
+    let row = db.query_one(
         "SELECT version, issued FROM bundle_in_use WHERE id = 1",
         values![],
     )?;
@@ -37,7 +31,7 @@ fn recorded(tx: &mut dyn Executor) -> Result<Option<InUse>, DbError> {
 }
 
 /// Records `to` in the transaction `tx`, as the only row.
-fn record(tx: &mut dyn Executor, to: &InUse) -> Result<(), DbError> {
+fn record(tx: &dyn Executor, to: &InUse) -> Result<(), DbError> {
     let updated = tx.execute(
         "UPDATE bundle_in_use SET version = $1, issued = $2 WHERE id = 1",
         values![&to.version, &to.issued],
@@ -63,11 +57,7 @@ fn may_replace(current: Option<&InUse>, to: &InUse) -> bool {
 
 impl SharedBundleVersion for ConnectorStore {
     fn bundle_in_use(&self) -> Result<Option<InUse>, StoreError> {
-        self.query_first(
-            "SELECT version, issued FROM bundle_in_use WHERE id = 1",
-            values![],
-            in_use_from_row,
-        )
+        recorded(self.database().as_ref()).map_err(err)
     }
 
     fn move_bundle_to(&self, to: &InUse, even_if_older: bool) -> Result<InUse, StoreError> {

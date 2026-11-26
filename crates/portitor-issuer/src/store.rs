@@ -21,7 +21,9 @@ use std::sync::Arc;
 use portitor_dcp::credential::Profile;
 use portitor_dcp::issuance::STATUS_LIST_ENTRIES;
 use portitor_dcp::message::RequestStatus;
-use portitor_runtime::database::{Database, DatabaseSetting, DbError, Executor, Migrations, Row};
+use portitor_runtime::database::{
+    Database, DatabaseSetting, DbError, Executor, Migrations, Row, from_db_int, to_db_int,
+};
 use portitor_runtime::system::random_below;
 use portitor_runtime::used_tokens::UsedTokenStore;
 use portitor_runtime::values;
@@ -157,14 +159,14 @@ pub struct Delivery {
     pub next_attempt_at: u64,
 }
 
-/// A lease on a delivery while a process sends it (TD-57, as Eclipse
+/// A lease on a delivery while a replica sends it (TD-57, as Eclipse
 /// EDC's lease columns): who holds it and until when.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Lease<'a> {
-    /// The id of the process that holds it, made at its start.
-    pub holder: &'a str,
-    /// When it ends, seconds since 1970. A process that stopped while it
-    /// held the lease leaves it to end; then another process may take
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lease {
+    /// The id of the replica that holds it, made at its start.
+    pub holder: String,
+    /// When it ends, seconds since 1970. A replica that stopped while it
+    /// held the lease leaves it to end; then another replica may take
     /// the delivery.
     pub until: u64,
 }
@@ -229,6 +231,13 @@ pub struct SignedRequest {
 /// Signs a request's credentials once their status list positions are
 /// chosen: gets one position per [`Planned`] credential, in the same
 /// order. [`IssuerStore::issue`] calls it inside its transaction.
+///
+/// Why a `dyn FnMut` and not a generic `impl FnMut`: the store is used as
+/// `dyn IssuerStore` (the issuer holds an `Arc<dyn IssuerStore>`), and a
+/// method of a trait used that way cannot be generic. `FnMut`, not `Fn`
+/// or `FnOnce`: on PostgreSQL the transaction may run again after a
+/// collision (`Database::transaction`), so the closure may be called more
+/// than once, and it may keep state between the calls.
 pub type SignCredentials<'a> = dyn FnMut(&[u64]) -> Result<SignedRequest, String> + 'a;
 
 /// What [`SignStatusList`] returns: a status list credential, signed.
@@ -244,7 +253,7 @@ pub struct SignedStatusList {
 /// revoked credentials. [`IssuerStore::revoke`] and
 /// [`IssuerStore::sign_status_list_if_needed`] call it inside their
 /// transaction, so the list stored always has every revocation stored
-/// with it.
+/// with it. A `dyn FnMut` for the reason [`SignCredentials`] is one.
 pub type SignStatusList<'a> = dyn FnMut(Profile, &[u64]) -> Result<SignedStatusList, String> + 'a;
 
 /// Port: the issuer's storage. It keeps the used token ids too
@@ -338,11 +347,7 @@ pub trait IssuerStore: UsedTokenStore + Send + Sync {
     ///
     /// # Errors
     /// The store fails.
-    fn claim_due_delivery(
-        &self,
-        now: u64,
-        lease: Lease<'_>,
-    ) -> Result<Option<Delivery>, StoreError>;
+    fn claim_due_delivery(&self, now: u64, lease: Lease) -> Result<Option<Delivery>, StoreError>;
 
     /// When the outbox has work next: the earliest time a waiting
     /// delivery is due and its lease, if any, has ended.
@@ -628,7 +633,7 @@ impl IssuerStore for DatabaseStore {
             values![
                 &participant.did,
                 claims,
-                to_sql_int(participant.registered_at)
+                to_db_int(participant.registered_at)
             ],
         )?;
         Ok(added == 1)
@@ -671,7 +676,7 @@ impl IssuerStore for DatabaseStore {
                 ids,
                 request.access_token.as_deref(),
                 request.status.as_str(),
-                to_sql_int(request.received_at)
+                to_db_int(request.received_at)
             ],
         )?;
         Ok(added == 1)
@@ -695,7 +700,7 @@ impl IssuerStore for DatabaseStore {
             credential_ids: from_json(&ids)?,
             access_token: row.get(4)?,
             status: status_from_text(&status)?,
-            received_at: from_sql_int(row.get(6)?),
+            received_at: from_db_int(row.get(6)?),
         }))
     }
 
@@ -768,7 +773,7 @@ impl IssuerStore for DatabaseStore {
             tx.execute(
                 "INSERT INTO outbox (issuer_pid, message, attempts, next_attempt_at)
                      VALUES ($1, $2, 0, $3)",
-                values![issuer_pid, &signed.message_json, to_sql_int(rules.now)],
+                values![issuer_pid, &signed.message_json, to_db_int(rules.now)],
             )?;
             Ok(IssueOutcome::Issued)
         })?;
@@ -782,16 +787,12 @@ impl IssuerStore for DatabaseStore {
                  FROM outbox o JOIN credential_request r ON r.issuer_pid = o.issuer_pid
                  WHERE o.next_attempt_at <= $1 ORDER BY o.next_attempt_at, o.issuer_pid"
             ),
-            values![to_sql_int(now)],
+            values![to_db_int(now)],
         )?;
         rows.iter().map(delivery_from).collect()
     }
 
-    fn claim_due_delivery(
-        &self,
-        now: u64,
-        lease: Lease<'_>,
-    ) -> Result<Option<Delivery>, StoreError> {
+    fn claim_due_delivery(&self, now: u64, lease: Lease) -> Result<Option<Delivery>, StoreError> {
         let claimed = self.db().transaction(|tx| {
             let Some(issuer_pid) = oldest_free_delivery(tx, now)? else {
                 return Ok(None);
@@ -806,9 +807,9 @@ impl IssuerStore for DatabaseStore {
                      AND (lease_until IS NULL OR lease_until <= $4)",
                 values![
                     &issuer_pid,
-                    lease.holder,
-                    to_sql_int(lease.until),
-                    to_sql_int(now)
+                    &lease.holder,
+                    to_db_int(lease.until),
+                    to_db_int(now)
                 ],
             )?;
             if taken == 0 {
@@ -832,7 +833,7 @@ impl IssuerStore for DatabaseStore {
             Some(row) => row.get(0)?,
             None => None,
         };
-        Ok(next.map(from_sql_int))
+        Ok(next.map(from_db_int))
     }
 
     fn retry_later(
@@ -846,7 +847,7 @@ impl IssuerStore for DatabaseStore {
             "UPDATE outbox SET attempts = $3, next_attempt_at = $4,
                      lease_holder = NULL, lease_until = NULL
                  WHERE issuer_pid = $1 AND lease_holder = $2",
-            values![issuer_pid, holder, attempts, to_sql_int(next_attempt_at)],
+            values![issuer_pid, holder, attempts, to_db_int(next_attempt_at)],
         )?;
         Ok(changed == 1)
     }
@@ -921,7 +922,7 @@ impl IssuerStore for DatabaseStore {
             }
             tx.execute(
                 "UPDATE issued_credential SET revoked_at = $2 WHERE id = $1",
-                values![id, to_sql_int(now)],
+                values![id, to_db_int(now)],
             )?;
             // the new list, with this revocation, in the same transaction
             store_signed_list(tx, profile, sign)?;
@@ -931,7 +932,7 @@ impl IssuerStore for DatabaseStore {
     }
 
     fn revoked_indexes(&self, profile: Profile) -> Result<Vec<u64>, StoreError> {
-        Ok(revoked_positions(&mut self.db(), profile)?)
+        Ok(revoked_positions(self.db(), profile)?)
     }
 
     fn status_list(&self, profile: Profile) -> Result<Option<SignedStatusList>, StoreError> {
@@ -976,7 +977,7 @@ impl IssuerStore for DatabaseStore {
 /// Signs the status list of `profile` from the revoked credentials, and
 /// stores it in place of the one before.
 fn store_signed_list(
-    tx: &mut dyn Executor,
+    tx: &dyn Executor,
     profile: Profile,
     sign: &mut SignStatusList<'_>,
 ) -> Result<(), DbError> {
@@ -993,7 +994,7 @@ fn store_signed_list(
 }
 
 /// The positions of the revoked credentials of `profile`, in order.
-fn revoked_positions(tx: &mut dyn Executor, profile: Profile) -> Result<Vec<u64>, DbError> {
+fn revoked_positions(tx: &dyn Executor, profile: Profile) -> Result<Vec<u64>, DbError> {
     let rows = tx.query(
         "SELECT status_index FROM issued_credential
              WHERE profile = $1 AND revoked_at IS NOT NULL ORDER BY status_index",
@@ -1001,25 +1002,25 @@ fn revoked_positions(tx: &mut dyn Executor, profile: Profile) -> Result<Vec<u64>
     )?;
     let mut found = Vec::new();
     for row in &rows {
-        found.push(from_sql_int(row.get(0)?));
+        found.push(from_db_int(row.get(0)?));
     }
     Ok(found)
 }
 
 /// The `issuer_pid` of the oldest delivery due at `now` whose lease, if
 /// any, has ended.
-fn oldest_free_delivery(tx: &mut dyn Executor, now: u64) -> Result<Option<String>, DbError> {
+fn oldest_free_delivery(tx: &dyn Executor, now: u64) -> Result<Option<String>, DbError> {
     let row = tx.query_one(
         "SELECT issuer_pid FROM outbox
              WHERE next_attempt_at <= $1 AND (lease_until IS NULL OR lease_until <= $1)
              ORDER BY next_attempt_at, issuer_pid LIMIT 1",
-        values![to_sql_int(now)],
+        values![to_db_int(now)],
     )?;
     row.map(|row| row.get(0)).transpose()
 }
 
 /// The delivery of request `issuer_pid`, if it is in the outbox.
-fn delivery(tx: &mut dyn Executor, issuer_pid: &str) -> Result<Option<Delivery>, DbError> {
+fn delivery(tx: &dyn Executor, issuer_pid: &str) -> Result<Option<Delivery>, DbError> {
     let row = tx.query_one(
         &format!(
             "SELECT {DELIVERY_COLUMNS}
@@ -1043,12 +1044,12 @@ fn delivery_from(row: &Row) -> Result<Delivery, StoreError> {
         access_token: row.get(2)?,
         message: row.get(3)?,
         attempts: u32::try_from(attempts).unwrap_or(u32::MAX),
-        next_attempt_at: from_sql_int(row.get(5)?),
+        next_attempt_at: from_db_int(row.get(5)?),
     })
 }
 
 /// Writes one issued credential.
-fn insert_issued(tx: &mut dyn Executor, credential: &IssuedCredential) -> Result<(), DbError> {
+fn insert_issued(tx: &dyn Executor, credential: &IssuedCredential) -> Result<(), DbError> {
     tx.execute(
         &format!(
             "INSERT INTO issued_credential ({ISSUED_COLUMNS})
@@ -1061,10 +1062,10 @@ fn insert_issued(tx: &mut dyn Executor, credential: &IssuedCredential) -> Result
             &credential.definition_id,
             &credential.credential_type,
             credential.profile.alias(),
-            to_sql_int(credential.status_index),
-            to_sql_int(credential.issued_at),
-            to_sql_int(credential.expires_at),
-            credential.revoked_at.map(to_sql_int)
+            to_db_int(credential.status_index),
+            to_db_int(credential.issued_at),
+            to_db_int(credential.expires_at),
+            credential.revoked_at.map(to_db_int)
         ],
     )?;
     Ok(())
@@ -1072,7 +1073,7 @@ fn insert_issued(tx: &mut dyn Executor, credential: &IssuedCredential) -> Result
 
 /// The holder of request `issuer_pid` if the request is still `RECEIVED`;
 /// `None` if it is unknown or decided already.
-fn holder_if_received(tx: &mut dyn Executor, issuer_pid: &str) -> Result<Option<String>, DbError> {
+fn holder_if_received(tx: &dyn Executor, issuer_pid: &str) -> Result<Option<String>, DbError> {
     let row = tx.query_one(
         "SELECT holder_did FROM credential_request WHERE issuer_pid = $1 AND status = $2",
         values![issuer_pid, RequestStatus::Received.as_str()],
@@ -1083,7 +1084,7 @@ fn holder_if_received(tx: &mut dyn Executor, issuer_pid: &str) -> Result<Option<
 /// The first planned definition of which the holder already has
 /// [`IssueRules::max_active_per_holder`] active credentials, if any.
 fn first_limit_reached(
-    tx: &mut dyn Executor,
+    tx: &dyn Executor,
     holder_did: &str,
     planned: &[Planned],
     rules: IssueRules,
@@ -1106,7 +1107,7 @@ enum Positions {
 }
 
 /// One free status list position per planned credential.
-fn choose_positions(tx: &mut dyn Executor, planned: &[Planned]) -> Result<Positions, DbError> {
+fn choose_positions(tx: &dyn Executor, planned: &[Planned]) -> Result<Positions, DbError> {
     let mut positions: Vec<u64> = Vec::new();
     for credential in planned {
         let taken_here: Vec<u64> = positions_in(planned, &positions, credential.profile);
@@ -1121,7 +1122,7 @@ fn choose_positions(tx: &mut dyn Executor, planned: &[Planned]) -> Result<Positi
 /// How many credentials of `definition_id` the holder has that are
 /// neither revoked nor expired at `now`.
 fn active_credentials(
-    tx: &mut dyn Executor,
+    tx: &dyn Executor,
     holder_did: &str,
     definition_id: &str,
     now: u64,
@@ -1130,13 +1131,13 @@ fn active_credentials(
         "SELECT COUNT(*) FROM issued_credential
              WHERE holder_did = $1 AND definition_id = $2
              AND revoked_at IS NULL AND expires_at > $3",
-        values![holder_did, definition_id, to_sql_int(now)],
+        values![holder_did, definition_id, to_db_int(now)],
     )?;
     let count: i64 = match row {
         Some(row) => row.get(0)?,
         None => 0,
     };
-    Ok(from_sql_int(count))
+    Ok(from_db_int(count))
 }
 
 /// The positions already chosen in this request for credentials of
@@ -1158,7 +1159,7 @@ const RANDOM_TRIES: usize = 32;
 /// A random free position below `entries` in the status list of
 /// `profile`, other than `taken_here`; `None` if there is none.
 fn free_position(
-    tx: &mut dyn Executor,
+    tx: &dyn Executor,
     profile: Profile,
     taken_here: &[u64],
     entries: u64,
@@ -1177,7 +1178,7 @@ fn free_position(
         values![profile.alias()],
     )?;
     for row in &rows {
-        taken.insert(from_sql_int(row.get(0)?));
+        taken.insert(from_db_int(row.get(0)?));
     }
     let free = entries.saturating_sub(u64::try_from(taken.len()).unwrap_or(u64::MAX));
     if free == 0 {
@@ -1187,10 +1188,10 @@ fn free_position(
 }
 
 /// Whether a credential of `profile` has `position` in its status list.
-fn is_recorded(tx: &mut dyn Executor, profile: Profile, position: u64) -> Result<bool, DbError> {
+fn is_recorded(tx: &dyn Executor, profile: Profile, position: u64) -> Result<bool, DbError> {
     let found = tx.query_one(
         "SELECT 1 FROM issued_credential WHERE profile = $1 AND status_index = $2",
-        values![profile.alias(), to_sql_int(position)],
+        values![profile.alias(), to_db_int(position)],
     )?;
     Ok(found.is_some())
 }
@@ -1222,10 +1223,10 @@ fn issued_from(row: &Row) -> Result<IssuedCredential, StoreError> {
         definition_id: row.get(3)?,
         credential_type: row.get(4)?,
         profile: profile_from_text(&profile)?,
-        status_index: from_sql_int(row.get(6)?),
-        issued_at: from_sql_int(row.get(7)?),
-        expires_at: from_sql_int(row.get(8)?),
-        revoked_at: revoked_at.map(from_sql_int),
+        status_index: from_db_int(row.get(6)?),
+        issued_at: from_db_int(row.get(7)?),
+        expires_at: from_db_int(row.get(8)?),
+        revoked_at: revoked_at.map(from_db_int),
     })
 }
 
@@ -1236,7 +1237,7 @@ fn participant_from(row: &Row) -> Result<Participant, StoreError> {
     Ok(Participant {
         did: row.get(0)?,
         claims: from_json(&claims)?,
-        registered_at: from_sql_int(row.get(2)?),
+        registered_at: from_db_int(row.get(2)?),
     })
 }
 
@@ -1255,17 +1256,6 @@ fn to_json(value: &impl serde::Serialize) -> Result<String, StoreError> {
 
 fn from_json<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, StoreError> {
     serde_json::from_str(text).map_err(|e| StoreError(e.to_string()))
-}
-
-/// A number (seconds or a status list position) as the database keeps
-/// whole numbers: signed, 64 bits.
-fn to_sql_int(value: u64) -> i64 {
-    i64::try_from(value).unwrap_or(i64::MAX)
-}
-
-/// A whole number read back; a negative one (never written) is 0.
-fn from_sql_int(value: i64) -> u64 {
-    u64::try_from(value).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1362,8 +1352,11 @@ mod tests {
     }
 
     /// The lease of process `holder` until `until`.
-    fn lease(holder: &str, until: u64) -> Lease<'_> {
-        Lease { holder, until }
+    fn lease(holder: &str, until: u64) -> Lease {
+        Lease {
+            holder: holder.to_owned(),
+            until,
+        }
     }
 
     /// Every database the tests run on, each with a store.

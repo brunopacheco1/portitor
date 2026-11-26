@@ -88,7 +88,8 @@ fn memory() -> Arc<dyn DatasetStore> {
 fn leases_in(store: &crate::store::ConnectorStore, holder: &str) -> Leases {
     let begun = tokio::time::Instant::now();
     let clock = Arc::new(move || 1_800_000_000 + begun.elapsed().as_secs());
-    Leases::with_clock(Arc::clone(store.database()) as _, holder, clock)
+    let lease_store = Arc::clone(store.database()) as Arc<dyn portitor_runtime::leases::LeaseStore>;
+    Leases::with_clock(lease_store, holder, clock)
 }
 
 /// [`leases_in`] a database of their own.

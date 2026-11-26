@@ -15,6 +15,23 @@
 //!
 //! A client's query only passes messages to its connection task, so
 //! waiting for it needs no tokio runtime on the calling thread.
+//!
+//! The calling thread is usually one of tokio's worker threads: a
+//! request handler or a background loop calls a store port, which is a
+//! plain function. The worker is then parked for the database's round
+//! trip, and for the short sleep before a transaction that collided runs
+//! again ([`TRIES`]); other tasks wait for another worker meanwhile.
+//! Besides requests, two loops call the database from async code this
+//! way: the connector's outbox loop (`take_up`, every second) and each
+//! running download's or push's state watchdog in the data plane
+//! (`flows.get`, every 5 seconds). The cost is measured and accepted for
+//! now (TD-40; asynchronous store ports are planned for 1.12).
+//!
+//! Why not tokio's own ways to wait: `Handle::block_on` panics when
+//! called from async code, which runs on a worker; `spawn_blocking` (or `block_in_place`) would need every caller
+//! up to the request handler to be async, or to know that it is on a
+//! worker, and the store ports are synchronous (TD-40). [`block_on`]
+//! here only parks the calling thread until the database thread wakes it.
 
 use std::cell::Cell;
 use std::future::Future;
@@ -410,7 +427,7 @@ impl Pool {
     /// [`super::Database::transaction`] on PostgreSQL.
     pub(super) fn transaction<T>(
         &self,
-        work: &mut dyn FnMut(&mut dyn Executor) -> Result<T, DbError>,
+        work: &mut dyn FnMut(&dyn Executor) -> Result<T, DbError>,
     ) -> Result<T, DbError> {
         let mut tries = 0;
         loop {
@@ -547,6 +564,9 @@ impl Pool {
         let tls = self.settings.tls.clone();
         let shown = self.settings.shown.clone();
         let connecting = self.runtime.spawn(async move {
+            // two branches that look the same: `config.connect` is generic
+            // over the TLS type, and `connection` has a different type in
+            // each, so they cannot share one `let`
             let client = if let Some(tls) = tls {
                 let tls = super::postgres_tls::MakeRustlsConnect::new(tls);
                 let (client, connection) = config.connect(tls).await?;
@@ -687,20 +707,27 @@ fn answer_within<T>(
     )))
 }
 
-/// Statements on one PostgreSQL client.
+/// Statements on one PostgreSQL client, outside a transaction.
+///
+/// [`PgTx`] below is the same code for a transaction. `Client` and
+/// `Transaction` have the same `query` and `execute` methods; their
+/// common trait in `tokio-postgres`, `GenericClient`, could only be used
+/// as a generic parameter (its methods are generic). For two methods of
+/// two lines each, writing them twice reads more easily than one generic
+/// struct with its bounds.
 struct PgRunner<'c> {
-    client: &'c mut Client,
+    client: &'c Client,
     timed_out: &'c Cell<bool>,
 }
 
 impl Executor for PgRunner<'_> {
-    fn query(&mut self, sql: &str, values: &[Value]) -> Result<Vec<Row>, DbError> {
+    fn query(&self, sql: &str, values: &[Value]) -> Result<Vec<Row>, DbError> {
         let params = params(values);
         let rows = answer(self.client.query(sql, &params), self.timed_out)?;
         rows.iter().map(row_from_pg).collect()
     }
 
-    fn execute(&mut self, sql: &str, values: &[Value]) -> Result<u64, DbError> {
+    fn execute(&self, sql: &str, values: &[Value]) -> Result<u64, DbError> {
         let params = params(values);
         answer(self.client.execute(sql, &params), self.timed_out)
     }
@@ -713,13 +740,13 @@ struct PgTx<'t, 'c> {
 }
 
 impl Executor for PgTx<'_, '_> {
-    fn query(&mut self, sql: &str, values: &[Value]) -> Result<Vec<Row>, DbError> {
+    fn query(&self, sql: &str, values: &[Value]) -> Result<Vec<Row>, DbError> {
         let params = params(values);
         let rows = answer(self.tx.query(sql, &params), self.timed_out)?;
         rows.iter().map(row_from_pg).collect()
     }
 
-    fn execute(&mut self, sql: &str, values: &[Value]) -> Result<u64, DbError> {
+    fn execute(&self, sql: &str, values: &[Value]) -> Result<u64, DbError> {
         let params = params(values);
         answer(self.tx.execute(sql, &params), self.timed_out)
     }
@@ -730,14 +757,14 @@ impl Executor for PgTx<'_, '_> {
 fn run_once<T>(
     client: &mut Client,
     timed_out: &Cell<bool>,
-    work: &mut dyn FnMut(&mut dyn Executor) -> Result<T, DbError>,
+    work: &mut dyn FnMut(&dyn Executor) -> Result<T, DbError>,
 ) -> Result<T, DbError> {
     let starting = client
         .build_transaction()
         .isolation_level(tokio_postgres::IsolationLevel::Serializable)
         .start();
     let tx = answer(starting, timed_out)?;
-    let out = work(&mut PgTx { tx: &tx, timed_out })?;
+    let out = work(&PgTx { tx: &tx, timed_out })?;
     answer(tx.commit(), timed_out)?;
     Ok(out)
 }
@@ -809,6 +836,12 @@ impl ToSql for Value {
 }
 
 /// A PostgreSQL row as [`Value`]s, by the type of each column.
+///
+/// A column of any other type (`TEXT`, `VARCHAR`, `NAME`, ...) is read as
+/// text. That is safe: Portitor's schemas use only `BIGINT`, `INTEGER`,
+/// `SMALLINT`, `BOOLEAN`, `BYTEA` and text columns, and `try_get` checks
+/// the type itself: a column that cannot be read as text (a `NUMERIC` or
+/// a `TIMESTAMP`, say) gives an error, never a wrong value.
 fn row_from_pg(row: &tokio_postgres::Row) -> Result<Row, DbError> {
     let mut cells = Vec::with_capacity(row.len());
     for (i, column) in row.columns().iter().enumerate() {
@@ -868,7 +901,9 @@ fn start_database_thread()
 
 /// Runs `future` to its end on the calling thread, which sleeps while the
 /// future waits. The futures given here only wait for messages from the
-/// database thread, so no tokio runtime is needed on this thread.
+/// database thread, so no tokio runtime is needed on this thread. The
+/// calling thread is often a tokio worker, parked meanwhile (module doc,
+/// TD-40).
 pub(super) fn block_on<F: Future>(future: F) -> F::Output {
     let mut future = pin!(future);
     let waker = Waker::from(Arc::new(Unpark(std::thread::current())));

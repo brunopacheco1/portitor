@@ -421,6 +421,9 @@ Several containers serve one participant on one shared database
   copies a SQLite file into PostgreSQL ([TD-59](RISKS_AND_TECHNICAL_DEBTS.md#td-59)); a Helm chart
   ([TD-39](RISKS_AND_TECHNICAL_DEBTS.md#td-39)); a repeated first contract request and the outbox's
   delivery check ([TD-60](RISKS_AND_TECHNICAL_DEBTS.md#td-60), [TD-61](RISKS_AND_TECHNICAL_DEBTS.md#td-61)).
+  Suggested by the 1.3 readability review (2026-11-26), small, to be
+  confirmed: one helper for the loops that tick ([TD-70](RISKS_AND_TECHNICAL_DEBTS.md#td-70)); one
+  shared database wrapper for the identity and the issuer ([TD-71](RISKS_AND_TECHNICAL_DEBTS.md#td-71)).
 - Exit: purpose and permit tested granted and refused; data-permits runs
   with the R-48, TD-46 and TD-20 steps changed to refusals or passes;
   the TCKs and the EDC interop test stay green.
@@ -457,7 +460,9 @@ Several containers serve one participant on one shared database
 - Debts and risks assigned to this release (maintainer, 2026-11-26):
   a negotiation started by the provider ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)); why and when a
   negotiation ended stored ([TD-62](RISKS_AND_TECHNICAL_DEBTS.md#td-62)); source files above 1,000
-  lines split ([TD-63](RISKS_AND_TECHNICAL_DEBTS.md#td-63)).
+  lines split ([TD-63](RISKS_AND_TECHNICAL_DEBTS.md#td-63)). Suggested by the 1.3 readability
+  review (2026-11-26), to be confirmed: one error type for the database
+  and the stores, done with the split of the store files ([TD-72](RISKS_AND_TECHNICAL_DEBTS.md#td-72)).
 - Exit: the four answers written in the docs.
 - Main risk: our design for dependent agreements may not match what EDC
   or Simpl-Open do later.
@@ -509,7 +514,12 @@ a debt with a release (maintainer, 2026-11-26): files above 1,000 lines
 in 1.5 ([TD-63](RISKS_AND_TECHNICAL_DEBTS.md#td-63)), simpler types in
 1.6 ([TD-64](RISKS_AND_TECHNICAL_DEBTS.md#td-64)), `Negotiator` in 1.7
 ([TD-65](RISKS_AND_TECHNICAL_DEBTS.md#td-65)), the Helm chart in 1.4
-([TD-39](RISKS_AND_TECHNICAL_DEBTS.md#td-39)).
+([TD-39](RISKS_AND_TECHNICAL_DEBTS.md#td-39)). The 1.3 readability review (2026-11-26) adds
+small items, suggested next to them and to be confirmed: a loop helper
+and a shared database wrapper in 1.4 ([TD-70](RISKS_AND_TECHNICAL_DEBTS.md#td-70),
+[TD-71](RISKS_AND_TECHNICAL_DEBTS.md#td-71)), one database error type in 1.5 with the file
+split ([TD-72](RISKS_AND_TECHNICAL_DEBTS.md#td-72)), and more long files and functions for that
+split ([TD-63](RISKS_AND_TECHNICAL_DEBTS.md#td-63)).
 
 - One shared core for the negotiation and transfer logic, as provider
   and as consumer, in place of the four near-copies; the in-memory
@@ -518,8 +528,14 @@ in 1.5 ([TD-63](RISKS_AND_TECHNICAL_DEBTS.md#td-63)), simpler types in
   branch: `crates/portitor-dsp/src/process.rs` and
   `crates/portitor-connector/src/test_stores.rs`.
 - No source file above 1,000 lines, tests not counted: `auth/dcp.rs`,
-  the issuer's and the identity's `store.rs`, `dcp/bundle.rs` and
-  `runtime/http.rs` are split by topic ([R-01](RISKS_AND_TECHNICAL_DEBTS.md#r-01)).
+  the issuer's and the identity's `store.rs`, `dcp/bundle.rs`,
+  `runtime/http.rs` and the connector's `lib.rs` are split by topic,
+  and so are the long functions `BundleHarvester::start` and
+  `Pool::migrate` ([R-01](RISKS_AND_TECHNICAL_DEBTS.md#r-01), [TD-63](RISKS_AND_TECHNICAL_DEBTS.md#td-63)).
+- Small items from the 1.3 readability review: one `spawn_every` helper
+  for the loops that tick ([TD-70](RISKS_AND_TECHNICAL_DEBTS.md#td-70)), one database wrapper for the
+  identity and the issuer ([TD-71](RISKS_AND_TECHNICAL_DEBTS.md#td-71)), one error type for the
+  database and the stores ([TD-72](RISKS_AND_TECHNICAL_DEBTS.md#td-72)).
 - Simpler types: fewer type parameters on the services (today
   `ProviderService<S, D, C, E>`), and each macro that writes types
   either replaced by plain code or explained with its output in

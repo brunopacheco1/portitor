@@ -11,7 +11,7 @@ use portitor_dsp::transfer::provider::{
     Agreements, FlowStep, Lease, Outgoing, Transfer, TransferStore,
 };
 use portitor_dsp::transfer::{TransferState, Transition};
-use portitor_runtime::database::{Row, Value};
+use portitor_runtime::database::{Row, Value, from_db_int, to_db_int};
 use portitor_runtime::values;
 
 use super::{
@@ -52,10 +52,7 @@ fn state_before_step_text(transfer: &Transfer) -> Result<Option<String>, StoreEr
 /// two NULLs (migration 17).
 fn lease_columns(transfer: &Transfer) -> (Option<&str>, Option<i64>) {
     match &transfer.lease {
-        Some(lease) => (
-            Some(lease.holder.as_str()),
-            Some(i64::try_from(lease.until).unwrap_or(i64::MAX)),
-        ),
+        Some(lease) => (Some(lease.holder.as_str()), Some(to_db_int(lease.until))),
         None => (None, None),
     }
 }
@@ -66,7 +63,7 @@ fn parsed_lease(holder: Option<String>, until: Option<i64>) -> Option<Lease> {
     match (holder, until) {
         (Some(holder), Some(until)) => Some(Lease {
             holder,
-            until: u64::try_from(until).unwrap_or(0),
+            until: from_db_int(until),
         }),
         _ => None,
     }
@@ -160,24 +157,23 @@ fn transfer_from_row(row: &Row) -> Result<Transfer, StoreError> {
 /// The values of a new `transfer` row, in the order of [`TRANSFER_COLUMNS`].
 fn transfer_values(transfer: &Transfer) -> Result<Vec<Value>, StoreError> {
     let (lease_holder, lease_until) = lease_columns(transfer);
-    Ok(values![
-        &transfer.provider_pid,
-        &transfer.consumer_pid,
-        transfer_state_text(transfer.state)?,
-        &transfer.callback_address,
-        &transfer.counter_party,
-        &transfer.agreement_id,
-        &transfer.dataset_id,
-        &transfer.format,
-        pending_text(transfer.pending.as_ref())?,
-        version(transfer.version)?,
-        address_text(transfer)?,
-        flow_step_text(transfer),
-        state_before_step_text(transfer)?,
-        lease_holder,
-        lease_until,
-    ]
-    .to_vec())
+    Ok(vec![
+        Value::from(&transfer.provider_pid),
+        Value::from(&transfer.consumer_pid),
+        Value::from(transfer_state_text(transfer.state)?),
+        Value::from(&transfer.callback_address),
+        Value::from(&transfer.counter_party),
+        Value::from(&transfer.agreement_id),
+        Value::from(&transfer.dataset_id),
+        Value::from(&transfer.format),
+        Value::from(pending_text(transfer.pending.as_ref())?),
+        Value::from(version(transfer.version)?),
+        Value::from(address_text(transfer)?),
+        Value::from(flow_step_text(transfer)),
+        Value::from(state_before_step_text(transfer)?),
+        Value::from(lease_holder),
+        Value::from(lease_until),
+    ])
 }
 
 impl TransferStore for ConnectorStore {
@@ -245,20 +241,21 @@ impl TransferStore for ConnectorStore {
         // back in this same statement (TD-48): nothing else writes it.
         let (lease_holder, lease_until) = lease_columns(transfer);
         let changed = self.execute(
-            "UPDATE transfer SET state = $2, pending = $3, version = $4, data_address = $6,
-                 flow_step = $7, state_before_step = $8, lease_holder = $9, lease_until = $10
-             WHERE provider_pid = $1 AND version = $5",
+            "UPDATE transfer SET state = $1, pending = $2, version = $3, data_address = $4,
+                 flow_step = $5, state_before_step = $6, lease_holder = $7, lease_until = $8
+             WHERE provider_pid = $9 AND version = $10",
             values![
-                &transfer.provider_pid,
                 transfer_state_text(transfer.state)?,
                 pending_text(transfer.pending.as_ref())?,
                 version(transfer.version)?,
-                version(expected)?,
                 address_text(transfer)?,
                 flow_step_text(transfer),
                 state_before_step_text(transfer)?,
                 lease_holder,
                 lease_until,
+                // WHERE
+                &transfer.provider_pid,
+                version(expected)?,
             ],
         )?;
         Ok(changed == 1)

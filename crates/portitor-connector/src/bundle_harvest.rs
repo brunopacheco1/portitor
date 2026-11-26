@@ -512,7 +512,7 @@ impl BundleHarvester {
 
     /// One check, then tells `listener`: the run for the job log and, if
     /// a new version is in use, that the rules changed. The listener's
-    /// work (`SQLite`, SHACL) runs on a blocking thread.
+    /// work (the database, SHACL) runs on a blocking thread.
     pub async fn run(&self, trigger: Trigger, listener: &Arc<dyn BundleListener>) -> JobRecord {
         let (job, changed) = self.check(trigger).await;
         let told = Arc::clone(listener);

@@ -141,7 +141,7 @@ impl HttpDataPlane {
         )];
         // no gate: nothing to check again, as in 1.0 (unit tests)
         if let Some(gate) = &self.gate {
-            watchdogs.push(download::watchdog(
+            watchdogs.push(download::membership_watchdog(
                 Arc::clone(gate),
                 self.running_flows(),
                 id,

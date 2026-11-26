@@ -168,9 +168,12 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [TD-67](#td-67) | Datasets are harvested from one kind of source only | Technical debt | Open | 1.8 |
 | [TD-68](#td-68) | No dataspace-wide registry or federated catalogue | Technical debt | Open | 1.8, only if needed |
 | [TD-69](#td-69) | No Simpl-Open features beyond the protocols (mutual TLS, consent, API gateway) | Technical debt | Open | consent code: 1.7; ADR: 1.9 |
+| [TD-70](#td-70) | Four loops that tick each write their own timer | Technical debt, readability | Open | 1.4 (suggested) |
+| [TD-71](#td-71) | The identity and the issuer each wrap the database the same way | Technical debt, readability | Open | 1.4 (suggested) |
+| [TD-72](#td-72) | Two error types for the database, converted both ways | Technical debt, readability | Open | 1.5 (suggested, with TD-63) |
 
-Counts on 2026-11-26, on the 1.3 branch: 37 risks and 50 technical
-debts are not closed (Open 50, Mitigated 22, Accepted 15), of which 11
+Counts on 2026-11-26, on the 1.3 branch: 37 risks and 53 technical
+debts are not closed (Open 53, Mitigated 22, Accepted 15), of which 11
 (TD-08, TD-09, TD-50 to TD-58) are done on the 1.3 branch and close at
 the release; 12 risks and 19 technical debts are closed.
 
@@ -1732,8 +1735,16 @@ the release; 12 risks and 19 technical debts are closed.
 - **What.** `auth/dcp.rs`, the issuer's and the identity's `store.rs`,
   `dcp/bundle.rs` and `runtime/http.rs` are above 1,000 lines, tests
   not counted ([2026-11-18 review](reviews/2026-11-18-specifications-and-code-quality.md)).
-- **Why it matters.** Long files are hard to read for the maintainer
-  ([R-01](#r-01)).
+  The 1.3 readability review (2026-11-26) adds two: the connector's
+  `lib.rs` (about 1,100 lines) and the issuer's `store.rs`, which grew
+  from about 940 to about 1,260 lines with PostgreSQL. It also found
+  two long functions, to split with them: `BundleHarvester::start`
+  (`crates/portitor-connector/src/bundle_harvest.rs`, about 90 lines)
+  and `Pool::migrate`
+  (`crates/portitor-runtime/src/database/postgres.rs`, one block of
+  about 60 lines).
+- **Why it matters.** Long files and functions are hard to read for the
+  maintainer ([R-01](#r-01)).
 - **Current state: Open.**
 - **Next.** Split each by topic, no change of behaviour. Assigned to
   1.5 (maintainer, 2026-11-26).
@@ -1812,6 +1823,60 @@ the release; 12 risks and 19 technical debts are closed.
 - **Next.** Consent first, with [TD-15](#td-15) in 1.7; an ADR on
   mutual TLS and the gateway in 1.9 with the Simpl-Open tests
   (maintainer, 2026-11-26).
+
+<a id="td-70"></a>
+### TD-70 Four loops that tick each write their own timer
+
+- **What.** The connector's background loops that run every few
+  seconds or minutes (the outbox loop in `lib.rs`, the sweep of
+  recorded data plane steps in `transfer.rs`, the dataset harvest in
+  `harvest.rs`, the bundle check in `bundle_harvest.rs`) each build the
+  same `tokio::time::interval_at` with `MissedTickBehavior::Skip`
+  inside `spawn_supervised` (1.3 readability review, 2026-11-26).
+- **Why it matters.** The same ten lines four times; a reader must
+  check each copy to see that they behave alike ([R-01](#r-01)).
+- **Current state: Open.**
+- **Next.** One helper, `spawn_every(name, every, round)`, in
+  `portitor-runtime` next to `spawn_supervised`, used by the four
+  loops; no change of behaviour. Small: suggested for 1.4, next to the
+  Helm chart (to be confirmed by the maintainer).
+
+<a id="td-71"></a>
+### TD-71 The identity and the issuer each wrap the database the same way
+
+- **What.** `DatabaseStore` in `crates/portitor-identity/src/store.rs`
+  and in `crates/portitor-issuer/src/store.rs` are the same wrapper
+  around `Arc<Database>`: the same `new`, `open`, `in_memory`, `db()`,
+  and the same `UsedTokenStore` and `LeaseStore` impls that only pass
+  the call on (1.3 readability review, 2026-11-26).
+- **Why it matters.** Two copies to keep alike, in two files that are
+  long already ([TD-63](#td-63), [R-01](#r-01)).
+- **Current state: Open.**
+- **Next.** One shared piece in `portitor-runtime` (the wrapper, or the
+  two pass-through impls), used by both stores; no change of
+  behaviour. Small: suggested for 1.4 (to be confirmed by the
+  maintainer).
+
+<a id="td-72"></a>
+### TD-72 Two error types for the database, converted both ways
+
+- **What.** The database returns `DbError`
+  (`crates/portitor-runtime/src/database.rs`); each store port returns
+  its `StoreError`. A store converts `DbError` to `StoreError` (with
+  `From`, or `map_err(err)` in the connector), and inside a transaction
+  it converts its own `StoreError` back to `DbError`
+  (`map_err(|e| DbError::new(e.0))`), because the transaction's closure
+  must return `DbError` so that a collision on PostgreSQL is seen and
+  the transaction run again (1.3 readability review, 2026-11-26).
+- **Why it matters.** A reader must follow the conversions to see which
+  error comes out, and the SQLSTATE code of a `DbError` is lost in a
+  `StoreError` ([R-01](#r-01)).
+- **Current state: Open.**
+- **Next.** One error type that keeps the code, or a transaction that
+  takes the store's error type; no change of behaviour. It touches
+  every store file, so it is done with their split in 1.5
+  ([TD-63](#td-63)) and is not a large item of its own: suggested for
+  1.5 (to be confirmed by the maintainer).
 
 ## Closed
 

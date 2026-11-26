@@ -392,7 +392,7 @@ impl TransferProvider {
     /// One sweep ([`TransferProvider::schedule_sweep`]).
     async fn sweep(self: &Arc<Self>) {
         let provider = Arc::clone(self);
-        // SQLite and the built-in data plane: blocking work, so on a
+        // the database and the built-in data plane: blocking work, so on a
         // thread for it
         let swept = tokio::task::spawn_blocking(move || {
             provider.service.run_steps_left_over().map_err(Box::new)

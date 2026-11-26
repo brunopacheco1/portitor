@@ -54,9 +54,13 @@ fn dataset_from_row(row: &Row) -> Result<StoredDataset, StoreError> {
     })
 }
 
-const JOB_COLUMNS: &str = "id, started_at, finished_at, run_trigger, source, snapshot_sha256, \
-     outcome, seen, added, updated, unchanged, withdrawn, rejected, summary, kind";
+/// The columns of `harvest_job` but its `id`, which the database gives
+/// (an insert names these; a `SELECT` puts `id` in front of them).
+const JOB_COLUMNS_WITHOUT_ID: &str = "started_at, finished_at, run_trigger, source, \
+     snapshot_sha256, outcome, seen, added, updated, unchanged, withdrawn, rejected, summary, \
+     kind";
 
+/// A row of `SELECT id, ` and then [`JOB_COLUMNS_WITHOUT_ID`].
 fn job_from_row(row: &Row) -> Result<HarvestJob, StoreError> {
     Ok(HarvestJob {
         id: uint(col(row, 0)?)?,
@@ -104,8 +108,8 @@ fn status_from_row(row: &Row) -> Result<HarvestStatus, StoreError> {
 /// A run's rows, made before its transaction: the transaction only
 /// writes them (it may run more than once, see
 /// `ConnectorStore::transaction`). The job's id is known only inside the
-/// transaction, so every statement takes it as `$1`, and each list of
-/// values here starts at `$2`.
+/// transaction, so it is added at the end of each list of dataset and
+/// error values there, as the last placeholder ([`with_job_id`]).
 struct RunRows {
     job: Vec<Value>,
     datasets: Vec<Vec<Value>>,
@@ -117,54 +121,51 @@ struct RunRows {
 /// The values of the job's row, without its id (the database gives it).
 fn job_values(job: &JobRecord) -> Result<Vec<Value>, StoreError> {
     let counts = &job.counts;
-    Ok(values![
-        int(job.started_at)?,
-        int(job.finished_at)?,
-        job.trigger.name(),
-        &job.source,
-        job.snapshot_sha256.as_deref(),
-        job.outcome.name(),
-        int(counts.seen)?,
-        int(counts.added)?,
-        int(counts.updated)?,
-        int(counts.unchanged)?,
-        int(counts.withdrawn)?,
-        int(counts.rejected)?,
-        &job.summary,
-        job.kind.name(),
-    ]
-    .to_vec())
+    Ok(vec![
+        Value::from(int(job.started_at)?),
+        Value::from(int(job.finished_at)?),
+        Value::from(job.trigger.name()),
+        Value::from(&job.source),
+        Value::from(job.snapshot_sha256.as_deref()),
+        Value::from(job.outcome.name()),
+        Value::from(int(counts.seen)?),
+        Value::from(int(counts.added)?),
+        Value::from(int(counts.updated)?),
+        Value::from(int(counts.unchanged)?),
+        Value::from(int(counts.withdrawn)?),
+        Value::from(int(counts.rejected)?),
+        Value::from(&job.summary),
+        Value::from(job.kind.name()),
+    ])
 }
 
-/// The values of a dataset's row, `$2` and on (`$1` is the job's id,
-/// its `last_job`).
+/// The values of a dataset's row, `$1` to `$9`, in the order of
+/// [`DATASET_COLUMNS`]; the job's id (its `last_job`) is added as `$10`.
 fn dataset_values(dataset: &StoredDataset) -> Result<Vec<Value>, StoreError> {
-    Ok(values![
-        &dataset.id,
-        json(&dataset.entry)?,
-        json(&dataset.content)?,
-        dataset.upstream.as_deref(),
-        &dataset.content_sha256,
-        dataset.state.name(),
-        dataset.conforms_to.as_deref(),
-        int(dataset.first_seen)?,
-        int(dataset.last_changed)?,
-    ]
-    .to_vec())
+    Ok(vec![
+        Value::from(&dataset.id),
+        Value::from(json(&dataset.entry)?),
+        Value::from(json(&dataset.content)?),
+        Value::from(dataset.upstream.as_deref()),
+        Value::from(&dataset.content_sha256),
+        Value::from(dataset.state.name()),
+        Value::from(dataset.conforms_to.as_deref()),
+        Value::from(int(dataset.first_seen)?),
+        Value::from(int(dataset.last_changed)?),
+    ])
 }
 
-/// The values of an entry error's row, `$2` and on (`$1` is the job's
-/// id).
+/// The values of an entry error's row, `$1` to `$6`; the job's id is
+/// added as `$7`.
 fn error_values(seq: usize, error: &EntryError) -> Result<Vec<Value>, StoreError> {
-    Ok(values![
-        int(count(seq))?,
-        error.position.map(int).transpose()?,
-        error.dataset_id.as_deref(),
-        error.kind.name(),
-        &error.message,
-        error.report.as_ref().map(json).transpose()?,
-    ]
-    .to_vec())
+    Ok(vec![
+        Value::from(int(count(seq))?),
+        Value::from(error.position.map(int).transpose()?),
+        Value::from(error.dataset_id.as_deref()),
+        Value::from(error.kind.name()),
+        Value::from(&error.message),
+        Value::from(error.report.as_ref().map(json).transpose()?),
+    ])
 }
 
 impl RunRows {
@@ -182,22 +183,21 @@ impl RunRows {
             job: job_values(&commit.job)?,
             datasets,
             errors,
-            status: values![
-                status.rules_version.as_deref(),
-                status.snapshot_sha256.as_deref(),
-                int(status.version)?
-            ]
-            .to_vec(),
+            status: vec![
+                Value::from(status.rules_version.as_deref()),
+                Value::from(status.snapshot_sha256.as_deref()),
+                Value::from(int(status.version)?),
+            ],
             kept_jobs: int(KEPT_JOBS)?,
         })
     }
 }
 
-/// `values` with the job's id in front, as `$1`.
-fn with_job_id(job_id: i64, values: &[Value]) -> Vec<Value> {
+/// `values` with the job's id added at the end, as the last placeholder.
+fn with_job_id(values: &[Value], job_id: i64) -> Vec<Value> {
     let mut all = Vec::with_capacity(values.len() + 1);
-    all.push(Value::Int(job_id));
     all.extend_from_slice(values);
+    all.push(Value::Int(job_id));
     all
 }
 
@@ -214,7 +214,7 @@ fn with_job_id(job_id: i64, values: &[Value]) -> Vec<Value> {
 /// identity column of PostgreSQL. Two processes that write a run at once
 /// get two ids, never the same one, and no process keeps a count of its
 /// own.
-fn write_run(tx: &mut dyn Executor, rows: &RunRows) -> Result<Option<i64>, DbError> {
+fn write_run(tx: &dyn Executor, rows: &RunRows) -> Result<Option<i64>, DbError> {
     let status_written = tx.execute(
         "UPDATE harvest_state
          SET rules_version = $1, snapshot_sha256 = $2, version = version + 1
@@ -225,25 +225,23 @@ fn write_run(tx: &mut dyn Executor, rows: &RunRows) -> Result<Option<i64>, DbErr
         return Ok(None);
     }
     let insert_job = format!(
-        "INSERT INTO harvest_job ({})
+        "INSERT INTO harvest_job ({JOB_COLUMNS_WITHOUT_ID})
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-         RETURNING id",
-        // every column but the id, which the database gives
-        JOB_COLUMNS.trim_start_matches("id, ")
+         RETURNING id"
     );
     let id = match tx.query_one(&insert_job, &rows.job)? {
         Some(row) => row.get::<i64>(0)?,
         None => return Err(DbError::new("the new harvest job has no id")),
     };
     for dataset in &rows.datasets {
-        write_dataset(tx, &with_job_id(id, dataset))?;
+        write_dataset(tx, &with_job_id(dataset, id))?;
     }
     for error in &rows.errors {
         tx.execute(
             "INSERT INTO harvest_error
-                 (job_id, seq, entry_position, dataset_id, kind, message, report)
+                 (seq, entry_position, dataset_id, kind, message, report, job_id)
              VALUES ($1, $2, $3, $4, $5, $6, $7)",
-            &with_job_id(id, error),
+            &with_job_id(error, id),
         )?;
     }
     // keep the newest KEPT_JOBS jobs. Ids count up but may have gaps (a
@@ -270,19 +268,20 @@ fn write_run(tx: &mut dyn Executor, rows: &RunRows) -> Result<Option<i64>, DbErr
 
 /// Writes one dataset: an update of its row, or a new row. (Two plain
 /// statements rather than an upsert; they run in the run's transaction.)
-/// `values`: the job's id, then the dataset's columns.
-fn write_dataset(tx: &mut dyn Executor, values: &[Value]) -> Result<(), DbError> {
+/// `values`: the dataset's columns, in the order of [`DATASET_COLUMNS`],
+/// the job's id (`last_job`) last.
+fn write_dataset(tx: &dyn Executor, values: &[Value]) -> Result<(), DbError> {
     let updated = tx.execute(
         "UPDATE dataset
-         SET entry = $3, content = $4, upstream = $5, content_sha256 = $6, state = $7,
-             conforms_to = $8, first_seen = $9, last_changed = $10, last_job = $1
-         WHERE id = $2",
+         SET entry = $2, content = $3, upstream = $4, content_sha256 = $5, state = $6,
+             conforms_to = $7, first_seen = $8, last_changed = $9, last_job = $10
+         WHERE id = $1",
         values,
     )?;
     if updated == 0 {
         let sql = format!(
             "INSERT INTO dataset ({DATASET_COLUMNS})
-             VALUES ($2, $3, $4, $5, $6, $7, $8, $9, $10, $1)"
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
         );
         tx.execute(&sql, values)?;
     }
@@ -346,7 +345,7 @@ impl DatasetStore for ConnectorStore {
         // no `before`: from the newest. The CAST gives PostgreSQL the type
         // of $1, which it cannot tell from `$1 IS NULL`
         let sql = format!(
-            "SELECT {JOB_COLUMNS} FROM harvest_job
+            "SELECT id, {JOB_COLUMNS_WITHOUT_ID} FROM harvest_job
              WHERE CAST($1 AS BIGINT) IS NULL OR id < $1
              ORDER BY id DESC LIMIT $2"
         );
@@ -357,7 +356,7 @@ impl DatasetStore for ConnectorStore {
 
     fn job(&self, id: u64) -> Result<Option<JobWithErrors>, StoreError> {
         let id = int(id)?;
-        let sql = format!("SELECT {JOB_COLUMNS} FROM harvest_job WHERE id = $1");
+        let sql = format!("SELECT id, {JOB_COLUMNS_WITHOUT_ID} FROM harvest_job WHERE id = $1");
         let Some(job) = self.query_first(&sql, values![id], job_from_row)? else {
             return Ok(None);
         };
@@ -542,7 +541,7 @@ mod tests {
                 "https://p.example/dsp/2025-1",
                 &CredentialTypes::default(),
             )),
-            Arc::clone(reader) as _,
+            Arc::clone(reader) as Arc<dyn DatasetStore>,
         );
         let catalog = other.catalog();
         let ids = |catalog: &crate::harvest::StoredCatalog| -> Vec<String> {
@@ -559,7 +558,7 @@ mod tests {
                 "https://p.example/dsp/2025-1",
                 &CredentialTypes::default(),
             )),
-            Arc::clone(writer) as _,
+            Arc::clone(writer) as Arc<dyn DatasetStore>,
         );
         assert!(matches!(second.run(Trigger::Interval), RunResult::Done(_)));
         drop(first);
