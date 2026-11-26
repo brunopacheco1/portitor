@@ -82,6 +82,20 @@ fn memory() -> Arc<dyn DatasetStore> {
     Arc::new(InMemoryDatasetStore::default())
 }
 
+/// The leases of process `holder` in `store`'s database, on Tokio's clock
+/// (paused in the tests that schedule runs): a second of that clock is a
+/// second for the leases.
+fn leases_in(store: &crate::store::ConnectorStore, holder: &str) -> Leases {
+    let begun = tokio::time::Instant::now();
+    let clock = Arc::new(move || 1_800_000_000 + begun.elapsed().as_secs());
+    Leases::with_clock(Arc::clone(store.database()) as _, holder, clock)
+}
+
+/// [`leases_in`] a database of their own.
+fn leases(holder: &str) -> Leases {
+    leases_in(&crate::store::ConnectorStore::in_memory().unwrap(), holder)
+}
+
 /// The newest job and its errors.
 fn last_job(store: &Arc<dyn DatasetStore>) -> (HarvestJob, Vec<EntryError>) {
     let newest = store.jobs(None, 1).unwrap().remove(0);
@@ -709,11 +723,13 @@ async fn the_schedule_runs_again_and_zero_means_only_at_start() {
     let store = memory();
     let source = Source::with(vec![entry("a")]);
     let harvester = Arc::new(started(&source, &store, dsp()));
-    assert!(harvester.schedule(Duration::ZERO).is_none());
+    assert!(harvester.schedule(Duration::ZERO, &leases("p-1")).is_none());
     let job_count = || store.jobs(None, 10).unwrap().len();
     assert_eq!(job_count(), 1, "the start run");
 
-    let schedule = harvester.schedule(Duration::from_secs(60)).unwrap();
+    let schedule = harvester
+        .schedule(Duration::from_secs(60), &leases("p-1"))
+        .unwrap();
     tokio::time::sleep(Duration::from_secs(59)).await;
     assert_eq!(job_count(), 1, "nothing before the first interval");
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -725,6 +741,40 @@ async fn the_schedule_runs_again_and_zero_means_only_at_start() {
     let jobs = store.jobs(None, 10).unwrap();
     assert_eq!(jobs[0].record.trigger, Trigger::Interval);
     assert_eq!(jobs[0].record.outcome, JobOutcome::Unchanged);
+}
+
+/// Two processes ("replicas") on one database, each with its schedule:
+/// one harvest per interval between them, not one each (TD-56). The
+/// replica that started second ticks 10 seconds later and finds the run
+/// of the interval done.
+#[tokio::test(start_paused = true)]
+async fn two_replicas_run_one_scheduled_harvest_per_interval() {
+    let leases_store = crate::store::ConnectorStore::in_memory().unwrap();
+    let store = memory();
+    let source = Source::with(vec![entry("a")]);
+    let one = Arc::new(started(&source, &store, dsp()));
+    let two = Arc::new(started(&source, &store, dsp()));
+    let job_count = || store.jobs(None, 10).unwrap().len();
+    assert_eq!(job_count(), 2, "the start runs");
+    let every = Duration::from_secs(60);
+    let first = one
+        .schedule(every, &leases_in(&leases_store, "p-1"))
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    let second = two
+        .schedule(every, &leases_in(&leases_store, "p-2"))
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(51)).await;
+    assert_eq!(job_count(), 3, "p-1 ran at 60 s");
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert_eq!(job_count(), 3, "p-2 skipped its turn at 70 s");
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert_eq!(job_count(), 4, "one run between 120 s and 130 s");
+    // p-1 stops: p-2 runs from the next interval on
+    first.abort();
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert_eq!(job_count(), 5, "p-2 ran at 190 s");
+    second.abort();
 }
 
 /// A source with a bug: its next snapshot panics, once, when `.1` is
@@ -785,7 +835,9 @@ async fn the_schedule_goes_on_after_a_run_that_panicked() {
     let job_count = || store.jobs(None, 10).unwrap().len();
     assert_eq!(job_count(), 1, "the start run");
 
-    let schedule = harvester.schedule(Duration::from_secs(60)).unwrap();
+    let schedule = harvester
+        .schedule(Duration::from_secs(60), &leases("p-1"))
+        .unwrap();
     entries.set(vec![entry("a"), entry("b")]);
     source.1.store(true, std::sync::atomic::Ordering::SeqCst);
     tokio::time::sleep(Duration::from_secs(61)).await;

@@ -93,6 +93,20 @@ route, setting and file format still works
 - The DSP TCK run in CI keeps the connector's state in PostgreSQL 19.
 - The images no longer set `PORTITOR_DB_FILE` (it would conflict with `PORTITOR_DATABASE_URL`). The SQLite defaults stay `/data/...`; the connector image now runs in the working directory `/data`, so a relative path in a connector setting is read from there.
 
+- The connector's background work goes through leases in the database
+  (a `lease` table, as Eclipse EDC's lease columns; 30 s, renewed while
+  the work runs): each saved DSP message, each running push and
+  consumer upload, the scheduled dataset harvest; the identity's Gaia-X
+  run too. A loop in every connector process, every second, sends the
+  pending messages and starts the pushes that nobody leases, instead of
+  only at start. A second upload of one transfer gets 409 also when the
+  first runs on another container. Harvest job ids come from the
+  database. Running downloads and pushes read their flow's state every
+  5 seconds. The identity no longer marks every `RUNNING` Gaia-X run as
+  failed at start: the next run that takes the lease marks those of a
+  process that stopped (error `its process stopped`).
+  <!-- 1.3 (loops) -->
+
 ### Fixed
 
 - State that one process held is now in the database, so several

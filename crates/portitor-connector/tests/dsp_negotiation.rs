@@ -824,12 +824,13 @@ impl Sender for PanicsWhileSet {
     }
 }
 
-/// A panic while a message is sent (TD-41) ends only that delivery
-/// (`outbox.rs`, `deliver`): the request was answered, the server goes
-/// on, the negotiation keeps its state, and the message stays saved. It
-/// is sent at the next start, as after any stop (ADR 0007).
+/// A panic while a message is sent (TD-41) ends only that try (`outbox.rs`,
+/// `deliver`): the request was answered, the server goes on, the
+/// negotiation keeps its state, and the message stays saved. The task
+/// that sends it holds its lease (TD-53), so the loop leaves it alone, and
+/// sends it again itself after a pause of 5 seconds.
 #[tokio::test]
-async fn a_send_that_panics_leaves_the_message_saved_for_the_next_start() {
+async fn a_send_that_panics_is_tried_again_by_the_task_that_leases_it() {
     use portitor_connector::store::ConnectorStore;
     use portitor_dsp::negotiation::provider::NegotiationStore as _;
 
@@ -854,11 +855,18 @@ async fn a_send_that_panics_leaves_the_message_saved_for_the_next_start() {
     assert_eq!(saved.len(), 1, "the agreement is still to be sent");
     assert_eq!(saved[0].provider_pid, pid);
 
-    // the next start, with the bug gone
+    // the bug is gone; the loop finds the message leased by the task
     with_a_bug
         .1
         .store(false, std::sync::atomic::Ordering::SeqCst);
-    assert_eq!(connector.resume().unwrap(), 1);
+    assert_eq!(connector.resume().unwrap(), 0);
+    // the task sends it again after its pause
+    for _ in 0..80 {
+        if sender.count() > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     state(&app, &pid, "AGREED").await;
     assert_eq!(sender.count(), 1);
     assert_eq!(sender.get(0).1["@type"], "ContractAgreementMessage");

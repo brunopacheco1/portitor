@@ -149,8 +149,8 @@ pub async fn serve(
             // `Response::map` changes only the body; the status and the
             // headers stay.
             let response = response.map(|body| Body::new(AuditedBody::new(body, &id, parties)));
-            let watchdog = plane.membership_watchdog(&id);
-            download::cut_when_told(response, cut, watchdog)
+            let watchdogs = plane.watchdogs(&id);
+            download::cut_when_told(response, cut, watchdogs)
         }
         Err(error) => {
             // the source is private: the log names the flow, not the URL

@@ -1460,11 +1460,18 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   other, and a start again on another container begins a second push
   of the same transfer.
 - **Current state: Open; in progress (1.3)** (code review,
-  2026-11-26). Fine with one replica.
-- **Next.** ADR 0029, D6: a watchdog in each running download and push
-  reads its flow's state from the database every 5 seconds and stops
-  it when the state changed. A suspension or termination that lands on
-  another container takes up to 5 seconds.
+  2026-11-26). Fine with one replica. Done on the 1.3 branch: a
+  watchdog next to each running download and push reads its flow's
+  state every 5 seconds and cuts it once the flow is suspended,
+  terminated or gone (`state_watchdog` in
+  `crates/portitor-dataplane/src/download.rs`); the switches of
+  `RunningFlows` stay, so a cut in the same process is still immediate.
+  Tested with two replicas on one PostgreSQL database
+  (`a_suspension_on_another_replica_cuts_a_running_download`). Left: a
+  suspension and a start again on another container within the same
+  5 seconds are not seen (the flow reads `STARTED` again); a counter of
+  state changes on the flow would close it.
+- **Next.** Close at the 1.3 release.
 
 <a id="td-53"></a>
 ### TD-53 The DSP outbox is taken up again only at start, and retried in memory
@@ -1478,10 +1485,20 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   starts sends again messages that another container is still sending.
 - **Current state: Open; in progress (1.3)** (code review,
   2026-11-26). Fine with one replica: at start, no other process
-  sends.
-- **Next.** ADR 0029: lease columns on the outbox and a loop in every
-  process that takes the due messages nobody leases, as EDC does with
-  `nextNotLeased` (maintainer, 2026-11-26). Lease 30 seconds.
+  sends. Done on the 1.3 branch: each saved message is sent under a
+  lease in the database (`lease` table, `portitor_runtime::leases`;
+  id: the process id and the SHA-256 of the message's URL and body, so
+  a counter-party's message racing ours still lets our next one go out
+  at once, ADR 0007). 30 seconds, renewed while it is sent, ended once
+  the outcome is recorded; left to end when the recording failed, so it
+  is sent again about 30 s later. A loop in every process
+  (`Negotiator::schedule_outbox`, every second) takes up the pending
+  messages nobody leases. Tested with two replicas on one PostgreSQL
+  database (`pending_messages_are_sent_once_by_two_replicas`). The loop
+  reads every pending message of the four process tables each round,
+  not only the free ones as EDC's `nextNotLeased` does; fine while few
+  messages are pending at once.
+- **Next.** Close at the 1.3 release.
 
 <a id="td-54"></a>
 ### TD-54 Pushes are resumed only at start; one push or upload per transfer is guarded in one process
@@ -1498,10 +1515,18 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   died waits for a restart, and two containers can push the same
   transfer at once.
 - **Current state: Open; in progress (1.3)** (code review,
-  2026-11-26). Fine with one replica.
-- **Next.** ADR 0029: a lease per running push and per consumer
-  upload, renewed while it runs; an expired one is taken over by the
-  loop of [TD-53](#td-53).
+  2026-11-26). Fine with one replica. Done on the 1.3 branch: a push
+  runs under the lease `push` of its transfer (`PUSH_LEASE` in
+  `crates/portitor-connector/src/transfer.rs`), renewed while it runs
+  and ended once its end is recorded; the loop of TD-53 starts the
+  pushes of `STARTED` push transfers that nobody leases. `watch_if_idle`
+  is gone. An upload as consumer runs under the lease `upload`; a second
+  one gets 409 on any container. The limit of 8 uploads at once stays
+  per process (it bounds that process's memory). Tested with two
+  replicas on one PostgreSQL database
+  (`a_push_left_by_a_replica_that_stopped_is_taken_over_once`,
+  `one_upload_per_transfer_among_replicas`).
+- **Next.** Close at the 1.3 release.
 
 <a id="td-55"></a>
 ### TD-55 Each connector process holds its own copy of the rules bundle and its own cache folder
@@ -1542,9 +1567,21 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   failed a Gaia-X run that another replica is still running.
 - **Current state: Open; in progress (1.3)** (code review,
   2026-11-26). Fine with one replica.
-- **Next.** ADR 0029: a lease in the database per kind of job; job ids
-  from a database sequence or identity column; no "mark every running
-  run as failed" at start.
+- **Done on the 1.3 branch.** The scheduled dataset harvest runs under
+  the lease `job`/`dataset_harvest`, renewed during the run and kept
+  after it until the next interval, so one run per interval among the
+  processes (`two_replicas_run_one_scheduled_harvest_per_interval`).
+  Harvest job ids come from the database (`INSERT ... RETURNING id`;
+  `runs_of_two_replicas_get_different_ids`). A Gaia-X run, scheduled or
+  started by the operator, needs the lease `job`/`gaiax_compliance`; the
+  start no longer marks every `RUNNING` run as failed: the next run that
+  takes the lease marks those left by a process that stopped
+  (`a_run_waits_for_the_lease_of_another_process`). Left: the retry
+  pauses after a failed Gaia-X run are counted per process, so with two
+  replicas a failing service is asked about twice as often; the bundle
+  harvest still runs in each container (its cache is per container,
+  TD-55); the start harvest runs in each container.
+- **Next.** Close at the 1.3 release.
 
 <a id="td-57"></a>
 ### TD-57 The issuer's credential outbox does not claim a delivery before it sends it

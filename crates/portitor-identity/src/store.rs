@@ -13,6 +13,7 @@ use std::sync::Arc;
 use portitor_dcp::credential::Profile;
 use portitor_dcp::message::CredentialObject;
 use portitor_runtime::database::{Database, DatabaseSetting, DbError, Executor, Migrations, Row};
+use portitor_runtime::leases::LeaseStore;
 use portitor_runtime::used_tokens::UsedTokenStore;
 use portitor_runtime::values;
 
@@ -175,8 +176,8 @@ pub struct StoredOffer {
 }
 
 /// Port: the identity component's storage. It keeps the used token ids
-/// too ([`UsedTokenStore`]).
-pub trait IdentityStore: UsedTokenStore + Send + Sync {
+/// ([`UsedTokenStore`]) and the leases ([`LeaseStore`]) too.
+pub trait IdentityStore: UsedTokenStore + LeaseStore + Send + Sync {
     /// Records a new request. Returns false if one with the same
     /// `holder_pid` exists already.
     ///
@@ -296,8 +297,9 @@ pub trait IdentityStore: UsedTokenStore + Send + Sync {
         error: Option<&str>,
     ) -> Result<(), StoreError>;
 
-    /// Marks the runs still `RUNNING` as failed at `now`: a restart
-    /// stopped them. Returns how many.
+    /// Marks the runs still `RUNNING` as failed at `now`: the process that
+    /// ran them stopped. Call it only while holding the lease of the runs
+    /// (TD-56): then no other process runs one. Returns how many.
     ///
     /// # Errors
     /// The store fails.
@@ -414,6 +416,17 @@ const SQLITE_MIGRATIONS: &[&str] = &[
         expires_at INTEGER NOT NULL
     );
     CREATE INDEX used_token_expires_at ON used_token (expires_at)",
+    // 1.3 (loops): the leases of work one process at a time does: the
+    // Gaia-X compliance run (ADR 0029, decision 6; TD-56;
+    // `portitor_runtime::leases`). `lease_holder`: the id of the process
+    // that holds it; `lease_until`: when it ends, in seconds since 1970
+    "CREATE TABLE lease (
+        kind         TEXT NOT NULL,
+        id           TEXT NOT NULL,
+        lease_holder TEXT NOT NULL,
+        lease_until  INTEGER NOT NULL,
+        PRIMARY KEY (kind, id)
+    )",
 ];
 
 /// The PostgreSQL schema migrations, since 1.3. The first one is the
@@ -462,6 +475,15 @@ const POSTGRES_MIGRATIONS: &[&str] = &[
         expires_at BIGINT NOT NULL
     );
     CREATE INDEX used_token_expires_at ON used_token (expires_at)",
+    // 1.3 (loops): the leases of work one process at a time does, as the
+    // SQLite migration of the same name
+    "CREATE TABLE lease (
+        kind         TEXT NOT NULL,
+        id           TEXT NOT NULL,
+        lease_holder TEXT NOT NULL,
+        lease_until  BIGINT NOT NULL,
+        PRIMARY KEY (kind, id)
+    )",
 ];
 
 /// The identity component's schema, for both databases.
@@ -520,6 +542,35 @@ impl DatabaseStore {
 impl UsedTokenStore for DatabaseStore {
     fn use_token_id(&self, token_id: &str, expires_at: u64, now: u64) -> Result<bool, String> {
         self.db().use_token_id(token_id, expires_at, now)
+    }
+}
+
+impl LeaseStore for DatabaseStore {
+    fn claim(
+        &self,
+        kind: &str,
+        id: &str,
+        holder: &str,
+        until: u64,
+        now: u64,
+    ) -> Result<bool, String> {
+        self.db().claim(kind, id, holder, until, now)
+    }
+
+    fn extend(&self, kind: &str, id: &str, holder: &str, until: u64) -> Result<bool, String> {
+        self.db().extend(kind, id, holder, until)
+    }
+
+    fn release(&self, kind: &str, id: &str, holder: &str) -> Result<(), String> {
+        self.db().release(kind, id, holder)
+    }
+
+    fn held(&self, kind: &str, now: u64) -> Result<Vec<String>, String> {
+        self.db().held(kind, now)
+    }
+
+    fn forget_ended(&self, before: u64) -> Result<u64, String> {
+        self.db().forget_ended(before)
     }
 }
 
@@ -740,7 +791,7 @@ impl IdentityStore for DatabaseStore {
     fn abandon_gaiax_runs(&self, now: u64) -> Result<usize, StoreError> {
         let changed = self.db().execute(
             "UPDATE gaiax_run SET finished_at = $1, outcome = $2,
-                 error = 'stopped by a restart' WHERE outcome = $3",
+                 error = 'its process stopped' WHERE outcome = $3",
             values![
                 seconds(now),
                 RunOutcome::Failed.text(),

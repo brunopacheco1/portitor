@@ -113,7 +113,7 @@ struct RunRows {
     kept_jobs: i64,
 }
 
-/// The values of the job's row, `$2` and on (`$1` is its id).
+/// The values of the job's row, without its id (the database gives it).
 fn job_values(job: &JobRecord) -> Result<Vec<Value>, StoreError> {
     let counts = &job.counts;
     Ok(values![
@@ -200,17 +200,23 @@ fn with_job_id(job_id: i64, values: &[Value]) -> Vec<Value> {
 }
 
 /// Writes one run in the transaction `tx` and returns the job's id.
+///
+/// The database gives the id (TD-56): the row id of `SQLite`, the
+/// identity column of PostgreSQL. Two processes that write a run at once
+/// get two ids, never the same one, and no process keeps a count of its
+/// own.
 fn write_run(tx: &mut dyn Executor, rows: &RunRows) -> Result<i64, DbError> {
-    let newest = match tx.query_one("SELECT COALESCE(MAX(id), 0) FROM harvest_job", values![])? {
-        Some(row) => row.get::<i64>(0)?,
-        None => 0,
-    };
-    let id = newest + 1;
     let insert_job = format!(
-        "INSERT INTO harvest_job ({JOB_COLUMNS})
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)"
+        "INSERT INTO harvest_job ({})
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+         RETURNING id",
+        // every column but the id, which the database gives
+        JOB_COLUMNS.trim_start_matches("id, ")
     );
-    tx.execute(&insert_job, &with_job_id(id, &rows.job))?;
+    let id = match tx.query_one(&insert_job, &rows.job)? {
+        Some(row) => row.get::<i64>(0)?,
+        None => return Err(DbError::new("the new harvest job has no id")),
+    };
     for dataset in &rows.datasets {
         write_dataset(tx, &with_job_id(id, dataset))?;
     }
@@ -222,9 +228,17 @@ fn write_run(tx: &mut dyn Executor, rows: &RunRows) -> Result<i64, DbError> {
             &with_job_id(id, error),
         )?;
     }
-    // keep the newest KEPT_JOBS jobs: ids have no gaps, as each job
-    // takes the next one and the newest is never deleted
-    let oldest_kept = id - rows.kept_jobs + 1;
+    // keep the newest KEPT_JOBS jobs. Ids count up but may have gaps (a
+    // PostgreSQL identity skips the ids of transactions that ran again),
+    // so the oldest kept job is looked up, not computed
+    let oldest_kept = match tx.query_one(
+        "SELECT id FROM harvest_job ORDER BY id DESC LIMIT 1 OFFSET $1",
+        values![rows.kept_jobs - 1],
+    )? {
+        Some(row) => row.get::<i64>(0)?,
+        // fewer jobs than that: nothing to delete
+        None => 0,
+    };
     tx.execute(
         "DELETE FROM harvest_error WHERE job_id < $1",
         values![oldest_kept],
@@ -374,6 +388,37 @@ mod tests {
         );
         harvester.start().unwrap();
         harvester
+    }
+
+    /// Two processes ("replicas") on one PostgreSQL database write runs
+    /// at once: each run gets its own id from the database (TD-56).
+    #[test]
+    fn runs_of_two_replicas_get_different_ids() {
+        let Some(replicas) = crate::store::two_replicas() else {
+            return;
+        };
+        let threads: Vec<_> = replicas
+            .into_iter()
+            .map(|store| {
+                std::thread::spawn(move || {
+                    let store = Arc::new(store);
+                    let harvester = harvester(&store, vec![entry("a")]);
+                    for _ in 0..5 {
+                        assert!(matches!(
+                            harvester.run(Trigger::Interval),
+                            RunResult::Done(_)
+                        ));
+                    }
+                    store
+                })
+            })
+            .collect();
+        let stores: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+        let jobs = stores[0].jobs(None, 100).unwrap();
+        // the start run and 5 more, on each replica
+        assert_eq!(jobs.len(), 12);
+        let ids: std::collections::BTreeSet<u64> = jobs.iter().map(|job| job.id).collect();
+        assert_eq!(ids.len(), 12, "no id given twice: {ids:?}");
     }
 
     #[test]

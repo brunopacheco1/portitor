@@ -19,6 +19,9 @@
 //!   the flow ([`crate::running_flows::RunningFlows::cut`]), the push's
 //!   [`crate::running_flows::CutSignal`] fires, the request is dropped,
 //!   and the transfer is left as the suspension or termination made it.
+//!   When another process that shares the database handled the
+//!   suspension or termination, the push reads it from the flow's state
+//!   within 5 seconds and is cut the same way (TD-52).
 //! - The consumer's membership is checked before the push and again
 //!   while it runs, as for a download (ADR 0027, section 7.2): a revoked
 //!   membership ends the transfer; a check that cannot finish fails the
@@ -81,9 +84,12 @@ pub struct PushJob {
 
 impl HttpDataPlane {
     /// The push to send now for flow `id`, if it is a push flow that is
-    /// STARTED and none of its pushes runs already. The caller sends it
-    /// ([`send`]) and keeps the job until it is done: its cut signal
-    /// tells the data plane a push of this flow runs.
+    /// STARTED. The caller sends it ([`send`]) and keeps the job until it
+    /// is done: its cut signal stops it on a suspension or termination.
+    ///
+    /// One push per flow: the caller makes sure of it, among all the
+    /// processes that share the database, with a lease taken before this
+    /// call (the connector's push lease, TD-54).
     ///
     /// # Errors
     ///
@@ -91,10 +97,7 @@ impl HttpDataPlane {
     pub fn push_job(&self, id: &str) -> Result<Option<PushJob>, SignalError> {
         // watch first, check second, as a download does
         // (`running_flows` module doc)
-        let Some(cut) = self.running.watch_if_idle(id) else {
-            // already being sent
-            return Ok(None);
-        };
+        let cut = self.running.watch(id);
         let flow = self.flow(id)?;
         let parties = flow.parties();
         let Some(address) = flow.push_address else {
@@ -245,8 +248,9 @@ async fn send_until_cut(plane: &HttpDataPlane, job: &mut PushJob, idle: Duration
             };
         }
     }
-    // checks the membership again while the push runs
-    let _watchdog = plane.membership_watchdog(&job.flow_id);
+    // reads the flow's state (TD-52) and checks the membership again
+    // while the push runs
+    let _watchdogs = plane.watchdogs(&job.flow_id);
     let counted = Arc::new(AtomicU64::new(0));
     // borrows of the job's fields: the post reads three of them while the
     // cut signal is watched (it needs `&mut`). The job's parties are for

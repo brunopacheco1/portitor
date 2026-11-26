@@ -25,16 +25,20 @@
 //! the body is read. These limits apply instead:
 //!
 //! - One upload at a time per transfer: a second request while one runs
-//!   gets 409.
-//! - At most [`MAX_CONCURRENT_UPLOADS`] uploads at once, for all
-//!   transfers; one more gets 503, as the public port answers when it is
-//!   too busy. Each upload holds up to one part
+//!   gets 409, also when the upload runs in another process that shares
+//!   the database. The upload holds a lease in the database
+//!   ([`UPLOAD_LEASE`], `portitor_runtime::leases`), renewed while it
+//!   runs and ended with it; the lease of a process that stopped ends on
+//!   its own, 30 seconds later at most (TD-54).
+//! - At most [`MAX_CONCURRENT_UPLOADS`] uploads at once in each process,
+//!   for all transfers; one more gets 503, as the public port answers
+//!   when it is too busy. This bounds the memory of the process, so it is
+//!   counted in the process. Each upload holds up to one part
 //!   ([`portitor_dataplane::object_storage::PART_BYTES`], 8 MiB) in memory.
 //! - A body that sends nothing for [`portitor_dataplane::push::IDLE_TIMEOUT`] is
 //!   treated as one that broke off: the upload is aborted, the answer is
 //!   400 and the audit line says `cut`.
 
-use std::collections::BTreeSet;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -55,6 +59,7 @@ use portitor_dsp::transfer::{
     DataAddress, DataAddressType, EndpointProperty, HTTP_PUSH_ENDPOINT_TYPE, TransferState,
 };
 use portitor_runtime::http::bearer_token_in;
+use portitor_runtime::leases::{HeldLease, Leases};
 
 use crate::Config;
 use crate::consumer_transfer::TransferConsumer;
@@ -71,6 +76,10 @@ pub const PUSH_PATH: &str = "/push";
 /// transfers (module doc). Each holds up to 8 MiB in memory, so at most
 /// 64 MiB in all.
 pub const MAX_CONCURRENT_UPLOADS: usize = 8;
+
+/// The kind of the lease on a running upload in the database; its id is
+/// the transfer's consumer pid (TD-54).
+pub(crate) const UPLOAD_LEASE: &str = "upload";
 
 /// What is kept of a push transfer as consumer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,11 +191,15 @@ pub(crate) struct Receiver {
     uploads: Uploads,
 }
 
-/// The uploads that run now, by consumer pid.
+/// The uploads that run now: how many run in this process, and their
+/// leases in the database.
 struct Uploads {
-    running: Mutex<BTreeSet<String>>,
-    /// The most that may run at once.
+    /// How many run in this process.
+    running: Mutex<usize>,
+    /// The most that may run at once in this process.
     max: usize,
+    /// One upload per transfer, among all processes.
+    leases: Leases,
 }
 
 /// Why an upload cannot begin now.
@@ -198,46 +211,60 @@ enum Busy {
     Full,
 }
 
-/// Held while one upload runs; dropping it ends the upload's turn.
+/// Held while one upload runs; dropping it ends the upload's turn and
+/// its lease.
 struct UploadTurn<'a> {
     uploads: &'a Uploads,
-    consumer_pid: String,
+    /// `None` only once dropped.
+    lease: Option<HeldLease>,
 }
 
 impl Uploads {
-    fn new(max: usize) -> Self {
+    fn new(max: usize, leases: Leases) -> Self {
         Self {
-            running: Mutex::new(BTreeSet::new()),
+            running: Mutex::new(0),
             max,
+            leases,
         }
     }
 
     /// The turn of an upload for transfer `consumer_pid`, if it may run
     /// now.
     fn begin(&self, consumer_pid: &str) -> Result<UploadTurn<'_>, Busy> {
-        let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
-        if running.contains(consumer_pid) {
+        // the count is only this process's memory: taken first, so that
+        // the lock is not held while the database answers
+        {
+            let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
+            if *running >= self.max {
+                return Err(Busy::Full);
+            }
+            *running += 1;
+        }
+        // from here on, dropping the turn gives the count back
+        let mut turn = UploadTurn {
+            uploads: self,
+            lease: None,
+        };
+        // the database decides, for every process
+        turn.lease = self.leases.claim(UPLOAD_LEASE, consumer_pid);
+        if turn.lease.is_none() {
             return Err(Busy::SameTransfer);
         }
-        if running.len() >= self.max {
-            return Err(Busy::Full);
-        }
-        running.insert(consumer_pid.to_owned());
-        Ok(UploadTurn {
-            uploads: self,
-            consumer_pid: consumer_pid.to_owned(),
-        })
+        Ok(turn)
     }
 }
 
 impl Drop for UploadTurn<'_> {
     fn drop(&mut self) {
+        if let Some(lease) = self.lease.take() {
+            lease.release();
+        }
         let mut running = self
             .uploads
             .running
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        running.remove(&self.consumer_pid);
+        *running = running.saturating_sub(1);
     }
 }
 
@@ -301,6 +328,7 @@ pub(crate) fn consumer_transfers(
         Arc::clone(&transfers),
         ports.push_receipts.clone(),
         ports.object_storage.clone(),
+        ports.leases.clone(),
     );
     (transfers, routes)
 }
@@ -311,6 +339,7 @@ fn routes(
     transfers: Arc<TransferConsumer>,
     receipts: AnyPushReceipts,
     storage: Option<Arc<ObjectStorage>>,
+    leases: Leases,
 ) -> Router {
     let Some(storage) = storage else {
         return Router::new();
@@ -323,7 +352,7 @@ fn routes(
         receipts,
         storage,
         bucket,
-        uploads: Uploads::new(MAX_CONCURRENT_UPLOADS),
+        uploads: Uploads::new(MAX_CONCURRENT_UPLOADS, leases),
     });
     Router::new()
         .route(
@@ -471,15 +500,56 @@ impl hyper::body::Body for StopsWhenIdle {
 mod tests {
     use super::*;
 
+    /// The leases of the process `holder` in `store`.
+    fn leases(store: &crate::store::ConnectorStore, holder: &str) -> Leases {
+        Leases::new(Arc::clone(store.database()) as _, holder)
+    }
+
     #[test]
     fn one_upload_per_transfer_and_a_few_in_all() {
-        let uploads = Uploads::new(2);
+        let store = crate::store::ConnectorStore::in_memory().unwrap();
+        let uploads = Uploads::new(2, leases(&store, "p-1"));
         let first = uploads.begin("t1").unwrap();
         assert_eq!(uploads.begin("t1").err(), Some(Busy::SameTransfer));
         let _second = uploads.begin("t2").unwrap();
         assert_eq!(uploads.begin("t3").err(), Some(Busy::Full));
         drop(first);
         assert!(uploads.begin("t1").is_ok(), "its turn ended");
+    }
+
+    /// Two processes ("replicas") on one PostgreSQL database: an upload
+    /// that runs on one is refused on the other (409), until it ends; the
+    /// upload of a process that stopped holds the transfer only until its
+    /// lease ends (TD-54).
+    #[test]
+    fn one_upload_per_transfer_among_replicas() {
+        let Some([one, two]) = crate::store::two_replicas() else {
+            return;
+        };
+        let first = Uploads::new(2, leases(&one, "replica-1"));
+        let second = Uploads::new(2, leases(&two, "replica-2"));
+        let running = first.begin("t1").unwrap();
+        assert_eq!(second.begin("t1").err(), Some(Busy::SameTransfer));
+        drop(running);
+        let taken = second.begin("t1").unwrap();
+        // replica 2 stops without ending its upload: its lease is left,
+        // and ends 30 seconds after it was taken
+        std::mem::forget(taken);
+        assert_eq!(first.begin("t1").err(), Some(Busy::SameTransfer));
+        let now = crate::system::now_secs();
+        let database = one.database();
+        let ended = now + portitor_runtime::leases::LEASE_SECONDS;
+        let claim = |holder| {
+            portitor_runtime::leases::LeaseStore::claim(
+                &**database,
+                UPLOAD_LEASE,
+                "t1",
+                holder,
+                ended + 30,
+                ended,
+            )
+        };
+        assert!(claim("replica-1").unwrap(), "taken over once it ended");
     }
 
     /// A body that gives one piece, then waits forever.
