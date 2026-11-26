@@ -208,7 +208,7 @@ Portitor invests in.
   that the Tier 2 handshake needs from a Compose file built later, to
   get a Tier 2 certificate and identity attributes, and needs the review
   of answer 3 first
-  ([ROADMAP, 1.7](../ROADMAP.md#17-simpl-open-tests)).
+  ([ROADMAP, Simpl-Open tests](../ROADMAP.md#19-simpl-open-tests)).
 
 ## Maintainer's answers (2026-11-21)
 
