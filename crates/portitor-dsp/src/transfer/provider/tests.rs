@@ -5,7 +5,7 @@
 #![allow(clippy::unwrap_used)]
 
 use std::cell::{Cell, RefCell};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::json;
 
@@ -18,9 +18,16 @@ use crate::{Dataset, DatasetType, Distribution, DistributionType, Rule};
 const CONSUMER: &str = "did:web:consumer";
 
 /// Transfers in memory. `.1`: inserts fail; `.2`: how many writes lose
-/// the version check as if another write came first.
+/// the version check as if another write came first; `.3`: how many
+/// writes that record a data plane step as run (that clear `flow_step`)
+/// fail as if the store failed.
 #[derive(Default)]
-struct Store(RefCell<BTreeMap<String, Transfer>>, Cell<bool>, Cell<u32>);
+struct Store(
+    RefCell<BTreeMap<String, Transfer>>,
+    Cell<bool>,
+    Cell<u32>,
+    Cell<u32>,
+);
 
 impl TransferStore for &Store {
     fn get(&self, pid: &str) -> Result<Option<Transfer>, StoreError> {
@@ -53,6 +60,14 @@ impl TransferStore for &Store {
                 old.version += 1;
             }
             return Ok(false);
+        }
+        let records_a_step_as_run = t.flow_step.is_none()
+            && map
+                .get(&t.provider_pid)
+                .is_some_and(|old| old.flow_step.is_some());
+        if records_a_step_as_run && self.3.get() > 0 {
+            self.3.set(self.3.get() - 1);
+            return Err(StoreError("disk full".to_owned()));
         }
         match map.get(&t.provider_pid) {
             Some(old) if old.version == expected => {
@@ -149,8 +164,10 @@ fn member_at(level: &str) -> CallerCredentials {
 }
 
 /// The data plane: records each call; fails every call when `.1` is set.
+/// `.2`: the flows that were completed or terminated; like the real data
+/// plane, it refuses to suspend, resume or start them again.
 #[derive(Default)]
-struct Flows(RefCell<Vec<String>>, Cell<bool>);
+struct Flows(RefCell<Vec<String>>, Cell<bool>, RefCell<BTreeSet<String>>);
 
 impl Flows {
     fn record(&self, call: &str) -> Result<(), String> {
@@ -160,6 +177,20 @@ impl Flows {
         } else {
             Ok(())
         }
+    }
+    /// Records `call` for flow `pid`; refused when the flow has ended.
+    fn record_unless_ended(&self, call: &str, pid: &str) -> Result<(), String> {
+        self.record(call)?;
+        if self.2.borrow().contains(pid) {
+            return Err(format!("data flow {pid} has ended"));
+        }
+        Ok(())
+    }
+    /// Records `call`, which ends flow `pid`.
+    fn record_end(&self, call: &str, pid: &str) -> Result<(), String> {
+        self.record(call)?;
+        self.2.borrow_mut().insert(pid.to_owned());
+        Ok(())
     }
     fn calls(&self) -> Vec<String> {
         self.0.borrow().clone()
@@ -195,26 +226,29 @@ impl DataFlows for &Flows {
         Ok(Some(address(&t.provider_pid, "t0ken")))
     }
     fn restart(&self, t: &Transfer) -> Result<Option<DataAddress>, String> {
-        self.record(&format!("restart {}", t.provider_pid))?;
+        let pid = &t.provider_pid;
+        self.record_unless_ended(&format!("restart {pid}"), pid)?;
         if t.data_address.is_some() {
             return Ok(None);
         }
         Ok(Some(address(&t.provider_pid, "t0ken-2")))
     }
     fn suspend(&self, pid: &str) -> Result<(), String> {
-        self.record(&format!("suspend {pid}"))
+        self.record_unless_ended(&format!("suspend {pid}"), pid)
     }
     fn resume(&self, pid: &str, to: Option<&DataAddress>) -> Result<(), String> {
         match to.and_then(|to| to.property("authorization")) {
-            Some(token) => self.record(&format!("resume {pid} push with {token}")),
-            None => self.record(&format!("resume {pid}")),
+            Some(token) => {
+                self.record_unless_ended(&format!("resume {pid} push with {token}"), pid)
+            }
+            None => self.record_unless_ended(&format!("resume {pid}"), pid),
         }
     }
     fn complete(&self, pid: &str) -> Result<(), String> {
-        self.record(&format!("complete {pid}"))
+        self.record_end(&format!("complete {pid}"), pid)
     }
     fn terminate(&self, pid: &str) -> Result<(), String> {
-        self.record(&format!("terminate {pid}"))
+        self.record_end(&format!("terminate {pid}"), pid)
     }
 }
 
@@ -922,7 +956,7 @@ fn an_undeliverable_start_ends_the_data_flow_and_the_transfer() {
         )
         .unwrap();
     let out = out.unwrap();
-    assert_eq!(s.pending().unwrap(), std::slice::from_ref(&out));
+    assert_eq!(s.pending().unwrap().messages, std::slice::from_ref(&out));
     let termination = s
         .abort(&out, "the consumer could not be reached")
         .unwrap()
@@ -1674,7 +1708,7 @@ fn a_step_recorded_before_a_restart_runs_at_the_restart() {
     stopped_before_the_start(&store);
     let s = service(&store, &flows, TransferDecision::Start);
 
-    let to_send = s.pending().unwrap();
+    let to_send = s.pending().unwrap().messages;
     assert_eq!(flows.calls(), ["start urn:uuid:1"]);
     assert_eq!(to_send.len(), 1);
     let sent: TransferStartMessage = serde_json::from_value(to_send[0].body.clone()).unwrap();
@@ -1687,7 +1721,7 @@ fn a_step_recorded_before_a_restart_runs_at_the_restart() {
     assert_eq!(saved.pending.as_ref(), Some(&to_send[0]));
 
     // a second restart sends the message again, and starts nothing
-    assert_eq!(s.pending().unwrap(), to_send);
+    assert_eq!(s.pending().unwrap().messages, to_send);
     assert_eq!(flows.calls(), ["start urn:uuid:1"]);
 }
 
@@ -1703,7 +1737,7 @@ fn a_consumers_step_recorded_before_a_restart_runs_at_the_restart() {
         saved.state = TransferState::Suspended;
         saved.flow_step = Some(FlowStep::Suspend);
     }
-    assert!(s.pending().unwrap().is_empty(), "nothing to send");
+    assert!(s.pending().unwrap().messages.is_empty(), "nothing to send");
     assert_eq!(flows.calls().last().unwrap(), "suspend urn:uuid:1");
     assert_eq!(store.0.borrow()[PID].flow_step, None);
 }
@@ -1716,7 +1750,7 @@ fn a_step_refused_after_a_restart_ends_the_transfer() {
     stopped_before_the_start(&store);
     flows.1.set(true);
     let s = service(&store, &flows, TransferDecision::Start);
-    let to_send = s.pending().unwrap();
+    let to_send = s.pending().unwrap().messages;
     assert_eq!(to_send.len(), 1);
     assert_eq!(to_send[0].transition, Transition::Terminate);
     assert!(format!("{}", to_send[0].body).contains("data plane refused"));
@@ -1741,7 +1775,7 @@ fn a_message_waits_for_its_step() {
     }
     let waiting = store.0.borrow()[PID].clone();
     assert_eq!(ready_to_send(&waiting), None);
-    let to_send = s.pending().unwrap();
+    let to_send = s.pending().unwrap().messages;
     assert_eq!(to_send, [waiting.pending.unwrap()]);
     assert_eq!(flows.calls().last().unwrap(), "suspend urn:uuid:1");
 }
@@ -1838,4 +1872,107 @@ fn a_refused_abort_keeps_the_message_pending() {
     let saved = store.0.borrow()[PID].clone();
     assert_eq!(saved.pending, Some(start));
     assert_eq!(saved.flow_step, None);
+}
+
+/// A step left recorded by an earlier call (its recording failed) runs
+/// before the next write of its transfer. Here the end of a push recorded
+/// its completion, and then the consumer suspends: the completion reaches
+/// the data plane first, which then refuses the suspension, so the
+/// transfer stays as it was and completes, as in 1.1 (where the data plane
+/// completed the flow before the push's write). The flow and the transfer
+/// never disagree.
+#[test]
+fn a_step_left_recorded_runs_before_the_next_write() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = started(&store, &flows);
+    {
+        let mut all = store.0.borrow_mut();
+        let saved = all.get_mut(PID).unwrap();
+        saved.pending = Some(completion(saved));
+        saved.flow_step = Some(FlowStep::Complete);
+    }
+    let refused = s.suspend(PID, IDS, CONSUMER).unwrap_err();
+    assert!(matches!(refused, Failure::DataPlane(_)), "{refused:?}");
+    assert_eq!(
+        flows.calls()[1..],
+        ["complete urn:uuid:1", "suspend urn:uuid:1"],
+        "the completion first"
+    );
+    let saved = store.0.borrow()[PID].clone();
+    assert_eq!(saved.state, TransferState::Started);
+    assert_eq!(saved.flow_step, None);
+    let completion = saved.pending.unwrap();
+    assert_eq!(completion.transition, Transition::Complete);
+    s.delivered(&completion).unwrap();
+    assert_eq!(state(&store), TransferState::Completed);
+}
+
+/// A step that ran is recorded as run, if need be at the second try. When
+/// both tries fail, the caller gets a store failure, the step stays
+/// recorded, and it runs again before the next write of the transfer.
+#[test]
+fn a_step_that_ran_is_recorded_at_the_second_try_or_runs_again_later() {
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = started(&store, &flows);
+    store.3.set(1);
+    s.suspend(PID, IDS, CONSUMER).unwrap();
+    assert_eq!(store.0.borrow()[PID].flow_step, None);
+    assert_eq!(flows.calls()[1..], ["suspend urn:uuid:1"]);
+
+    let (store, flows) = (Store::default(), Flows::default());
+    let s = started(&store, &flows);
+    store.3.set(2);
+    let failure = s.suspend(PID, IDS, CONSUMER).unwrap_err();
+    assert!(
+        matches!(&failure, Failure::Store(e) if e.0.contains("ran, but recording")),
+        "{failure:?}"
+    );
+    let saved = store.0.borrow()[PID].clone();
+    assert_eq!(saved.state, TransferState::Suspended, "the write landed");
+    assert_eq!(saved.flow_step, Some(FlowStep::Suspend));
+    let restart: TransferStartMessage = serde_json::from_value(json!({
+        "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+        "@type": "TransferStartMessage", "providerPid": PID, "consumerPid": "urn:uuid:c"
+    }))
+    .unwrap();
+    s.start(PID, &restart, CONSUMER).unwrap();
+    assert_eq!(
+        flows.calls()[1..],
+        [
+            "suspend urn:uuid:1",
+            "suspend urn:uuid:1",
+            "resume urn:uuid:1"
+        ]
+    );
+    assert_eq!(store.0.borrow()[PID].flow_step, None);
+    assert_eq!(state(&store), TransferState::Started);
+}
+
+/// After a restart, a transfer whose step cannot be recorded is left out
+/// and named, with its step still recorded; the others are taken up.
+#[test]
+fn a_transfer_that_fails_at_the_restart_does_not_stop_the_others() {
+    let (store, flows) = (Store::default(), Flows::default());
+    stopped_before_the_start(&store);
+    let mut second = store.0.borrow()[PID].clone();
+    second.provider_pid = "urn:uuid:2".to_owned();
+    second.consumer_pid = "urn:uuid:c2".to_owned();
+    store
+        .0
+        .borrow_mut()
+        .insert(second.provider_pid.clone(), second);
+    // both tries to record the first transfer's start fail
+    store.3.set(2);
+    let s = service(&store, &flows, TransferDecision::Start);
+    let found = s.pending().unwrap();
+    let not_taken_up: Vec<&str> = found
+        .not_taken_up
+        .iter()
+        .map(|(pid, _)| pid.as_str())
+        .collect();
+    assert_eq!(not_taken_up, [PID]);
+    assert_eq!(found.messages.len(), 1);
+    assert_eq!(found.messages[0].provider_pid, "urn:uuid:2");
+    assert_eq!(store.0.borrow()[PID].flow_step, Some(FlowStep::Start));
+    assert_eq!(store.0.borrow()["urn:uuid:2"].flow_step, None);
 }

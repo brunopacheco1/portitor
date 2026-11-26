@@ -17,7 +17,7 @@
 //! access must not wait for a partner that may not answer. The outbox
 //! ignores a report about the replaced message: it is no longer pending.
 
-use crate::process::{self, Lookup, Records, Write};
+use crate::process::{Lookup, Records, Write};
 
 use super::{
     Agreements, CatalogDatasets, DataFlows, Environment, Failure, FlowStep, IfRefused, Outgoing,
@@ -76,7 +76,8 @@ where
         provider_pid: &str,
         reason: &str,
     ) -> Result<(Transfer, Option<Outgoing>), Failure> {
-        let saved = process::update_keeping_before(self, &Lookup::own(provider_pid), |transfer| {
+        let lookup = Lookup::own(provider_pid);
+        let stepped = self.write_then_run_step(&lookup, IfRefused::TakeBack, |transfer| {
             if transfer.state.is_terminal() {
                 return Err(bad(
                     provider_pid,
@@ -86,28 +87,29 @@ where
             }
             // access ends right after this write, whatever follows
             transfer.flow_step = Some(FlowStep::Terminate);
-            let ending = transfer
-                .pending
-                .as_ref()
-                .is_some_and(|sent| sent.transition == Transition::Terminate);
-            if !ending {
+            if !termination_on_its_way(transfer) {
                 transfer.pending = Some(termination(transfer, reason));
             }
             Ok(Write::Save)
         })?;
-        // `update_keeping_before` skips only when the change says so, and
-        // this one never does; `None` is handled anyway
-        let Some((before, written)) = saved else {
+        // the change above never skips; `None` is handled anyway
+        let Some(stepped) = stepped else {
             return Ok((self.transfer(provider_pid)?, None));
         };
-        let if_refused = IfRefused::TakeBack { before: &before };
-        let now = self.after_write(written.clone(), &if_refused)?;
         // our termination was on its way already: it is not sent again
-        let ending = before
-            .pending
-            .as_ref()
-            .is_some_and(|sent| sent.transition == Transition::Terminate);
-        let out = if ending { None } else { ready_to_send(&now) };
-        Ok((written, out))
+        let out = if termination_on_its_way(&stepped.before) {
+            None
+        } else {
+            ready_to_send(&stepped.current)
+        };
+        Ok((stepped.written, out))
+    }
+}
+
+/// Whether our termination of `transfer` is on its way already.
+fn termination_on_its_way(transfer: &Transfer) -> bool {
+    match &transfer.pending {
+        Some(sent) => sent.transition == Transition::Terminate,
+        None => false,
     }
 }

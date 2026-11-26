@@ -283,11 +283,24 @@ impl TransferProvider {
     }
 
     /// Sends every message saved as pending, for example after a restart.
-    /// Returns how many.
+    /// Returns how many. A transfer whose data plane step cannot be taken
+    /// up now is logged (ERROR) and left out; the others go on.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be read.
     pub(crate) fn resume(self: &Arc<Self>) -> Result<usize, Box<Failure>> {
         let pending = self.service.pending().map_err(Box::new)?;
+        for (provider_pid, failure) in &pending.not_taken_up {
+            tracing::error!(
+                transfer = %provider_pid,
+                ?failure,
+                "transfer not taken up after the restart: its data plane step stays recorded \
+                 and runs before its next change or at the next restart"
+            );
+        }
         self.resume_pushes();
-        Ok(outbox::resume(self, pending))
+        Ok(outbox::resume(self, pending.messages))
     }
 
     /// Sends again, from the start, the pushes a restart cut: transfers

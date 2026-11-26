@@ -20,7 +20,7 @@ const TRANSFER_COLUMNS: &str = "provider_pid, consumer_pid, state, callback_addr
      counter_party, agreement_id, dataset_id, format, pending, version, data_address, flow_step";
 
 /// The data plane step not run yet, as stored: its name, for example
-/// `suspend` (migration 13).
+/// `suspend` (migration 16).
 fn flow_step_text(transfer: &Transfer) -> Option<&'static str> {
     transfer.flow_step.map(FlowStep::name)
 }

@@ -354,13 +354,18 @@ pub(crate) fn update<S: Records>(
     change: impl Fn(&mut S::Record) -> Result<Write, S::Failure>,
 ) -> Result<Option<S::Record>, S::Failure> {
     match update_keeping_before(records, lookup, change)? {
-        Some((_before, written)) => Ok(Some(written)),
+        Some(updated) => Ok(Some(updated.written)),
         None => Ok(None),
     }
 }
 
 /// A record as it was read before a change, and as it was written.
-pub(crate) type BeforeAndWritten<R> = (R, R);
+pub(crate) struct Updated<R> {
+    /// The record as it was read, before the change.
+    pub(crate) before: R,
+    /// The record as it was written, with the change.
+    pub(crate) written: R,
+}
 
 /// Like [`update`], but returns two records: the one as it was read
 /// before the change that was written, and the one written. The
@@ -375,7 +380,7 @@ pub(crate) fn update_keeping_before<S: Records>(
     records: &S,
     lookup: &Lookup<'_>,
     change: impl Fn(&mut S::Record) -> Result<Write, S::Failure>,
-) -> Result<Option<BeforeAndWritten<S::Record>>, S::Failure> {
+) -> Result<Option<Updated<S::Record>>, S::Failure> {
     for _ in 0..WRITE_ATTEMPTS {
         let before = records.read(lookup)?;
         let mut record = before.clone();
@@ -388,7 +393,10 @@ pub(crate) fn update_keeping_before<S: Records>(
         let expected = record.version();
         record.set_version(expected.wrapping_add(1));
         if records.replace_if(&record, expected)? {
-            return Ok(Some((before, record)));
+            return Ok(Some(Updated {
+                before,
+                written: record,
+            }));
         }
     }
     Err(records.keeps_changing(lookup))
