@@ -1,32 +1,4 @@
 
 # cargo-vet audits file
 
-[[audits.fancy-regex]]
-who = "Bruno Pacheco <4491850+brunopacheco1@users.noreply.github.com>"
-criteria = "safe-to-run"
-delta = "0.20.1 -> 0.20.2"
-
-[[audits.jsonschema]]
-who = "Bruno Pacheco <4491850+brunopacheco1@users.noreply.github.com>"
-criteria = "safe-to-run"
-delta = "0.61.1 -> 0.61.2"
-
-[[audits.jsonschema-regex]]
-who = "Bruno Pacheco <4491850+brunopacheco1@users.noreply.github.com>"
-criteria = "safe-to-run"
-delta = "0.61.1 -> 0.61.2"
-
-[[audits.jsonschema-value]]
-who = "Bruno Pacheco <4491850+brunopacheco1@users.noreply.github.com>"
-criteria = "safe-to-run"
-delta = "0.61.1 -> 0.61.2"
-
-[[audits.referencing]]
-who = "Bruno Pacheco <4491850+brunopacheco1@users.noreply.github.com>"
-criteria = "safe-to-run"
-delta = "0.61.1 -> 0.61.2"
-
-[[audits.rusqlite]]
-who = "Bruno Pacheco <4491850+brunopacheco1@users.noreply.github.com>"
-criteria = "safe-to-deploy"
-delta = "0.42.0 -> 0.43.0"
+[audits]

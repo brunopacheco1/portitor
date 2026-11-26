@@ -120,7 +120,7 @@ version = "1.0.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.fancy-regex]]
-version = "0.20.1"
+version = "0.20.2"
 criteria = "safe-to-run"
 
 [[exemptions.find-msvc-tools]]
@@ -216,15 +216,15 @@ version = "0.2.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.jsonschema]]
-version = "0.61.1"
+version = "0.61.2"
 criteria = "safe-to-run"
 
 [[exemptions.jsonschema-regex]]
-version = "0.61.1"
+version = "0.61.2"
 criteria = "safe-to-run"
 
 [[exemptions.jsonschema-value]]
-version = "0.61.1"
+version = "0.61.2"
 criteria = "safe-to-run"
 
 [[exemptions.lazy_static]]
@@ -246,10 +246,6 @@ criteria = "safe-to-deploy"
 [[exemptions.lock_api]]
 version = "0.4.14"
 criteria = "safe-to-deploy"
-
-[[exemptions.lock_api]]
-version = "0.4.14"
-criteria = "safe-to-run"
 
 [[exemptions.log]]
 version = "0.4.35"
@@ -363,17 +359,9 @@ criteria = "safe-to-deploy"
 version = "0.12.5"
 criteria = "safe-to-deploy"
 
-[[exemptions.parking_lot]]
-version = "0.12.5"
-criteria = "safe-to-run"
-
 [[exemptions.parking_lot_core]]
 version = "0.9.12"
 criteria = "safe-to-deploy"
-
-[[exemptions.parking_lot_core]]
-version = "0.9.12"
-criteria = "safe-to-run"
 
 [[exemptions.phf]]
 version = "0.13.1"
@@ -389,6 +377,14 @@ criteria = "safe-to-deploy"
 
 [[exemptions.portable-atomic]]
 version = "1.15.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.postgres-protocol]]
+version = "0.6.12"
+criteria = "safe-to-deploy"
+
+[[exemptions.postgres-types]]
+version = "0.2.14"
 criteria = "safe-to-deploy"
 
 [[exemptions.ppv-lite86]]
@@ -427,10 +423,6 @@ criteria = "safe-to-deploy"
 version = "0.5.18"
 criteria = "safe-to-deploy"
 
-[[exemptions.redox_syscall]]
-version = "0.5.18"
-criteria = "safe-to-run"
-
 [[exemptions.ref-cast]]
 version = "1.0.27"
 criteria = "safe-to-run"
@@ -440,7 +432,7 @@ version = "1.0.27"
 criteria = "safe-to-run"
 
 [[exemptions.referencing]]
-version = "0.61.1"
+version = "0.61.2"
 criteria = "safe-to-run"
 
 [[exemptions.regex]]
@@ -464,7 +456,7 @@ version = "0.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusqlite]]
-version = "0.42.0"
+version = "0.43.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls]]
@@ -593,6 +585,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.tokio-macros]]
 version = "2.7.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.tokio-postgres]]
+version = "0.7.18"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokio-rustls]]
