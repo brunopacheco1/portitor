@@ -26,7 +26,11 @@
 //! and ends it once the end of the push is recorded. The loop of every
 //! process ([`TransferProvider::resume`]) starts the pushes of `STARTED`
 //! push transfers that nobody leases: those that a process that stopped
-//! left, once their lease has ended.
+//! left, once their lease has ended. A push whose lease is lost (its
+//! process stalled, or the database did not answer, until the lease
+//! ended) stops, so that it does not run beside the one that took over;
+//! in one process, a push also never starts while another push of the
+//! same transfer still runs.
 
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -173,7 +177,8 @@ impl TransferProvider {
         let (Some(plane), Some(me)) = (&self.plane, self.me.upgrade()) else {
             return;
         };
-        let Some(lease) = self.link.leases.claim(PUSH_LEASE, provider_pid) else {
+        // held by another, or the store failed: the loop tries again
+        let Some(lease) = self.link.leases.claim(PUSH_LEASE, provider_pid).taken() else {
             return;
         };
         match plane.push_job(provider_pid) {
@@ -190,7 +195,8 @@ impl TransferProvider {
                     run_push(me, plane, job, lease).await;
                 });
             }
-            // not a push transfer that is STARTED: nothing to send
+            // not a push transfer that is STARTED, or its push still
+            // runs in this process: nothing to send
             Ok(None) => lease.release(),
             Err(error) => {
                 tracing::warn!(flow = %provider_pid, %error, "push: cannot start; the transfer is terminated");
@@ -684,6 +690,10 @@ async fn until_consumer_started(link: &Link, status_url: &str, audience: &str) {
 /// the audit line, then completes or terminates the transfer. A push that
 /// suspend or terminate cut leaves the transfer as they made it; any
 /// other cut is a failure ([`portitor_dataplane::push::send`]).
+///
+/// A push whose lease is lost stops at once (`cut` in the audit line) and
+/// leaves the transfer as it is: the process that took the lease over
+/// sends the data again and ends the transfer (module doc).
 async fn run_push(
     provider: Arc<TransferProvider>,
     plane: Arc<HttpDataPlane>,
@@ -693,14 +703,16 @@ async fn run_push(
     let pid = job.flow_id.clone();
     // the agreement and the consumer the flow kept from its start message
     let parties = job.parties.clone();
-    let pushed = portitor_dataplane::push::send(&plane, &mut job).await;
+    let lost = lease.lost().wait();
+    let pushed = portitor_dataplane::push::send_unless(&plane, &mut job, lost).await;
     drop(job);
     portitor_dataplane::push::audit(&pid, &parties, &pushed);
     let failure = match &pushed.sent {
         portitor_dataplane::push::Sent::Done => None,
         portitor_dataplane::push::Sent::Failed(reason) => Some(reason.as_str()),
         portitor_dataplane::push::Sent::Cut => {
-            // the push is over: a later start again may send again
+            // the push is over: a later start again may send again. (A
+            // lost lease is not ours to end: this ends nothing then.)
             lease.release();
             return;
         }

@@ -44,7 +44,10 @@
 //! A process that finds it held does not run. The runs still `RUNNING`
 //! when a process takes the lease were left by a process that stopped
 //! (its lease ended): they are marked failed then, not at start, where
-//! they may be another process's run.
+//! they may be another process's run. A run whose lease is lost (its
+//! process stalled, or the database did not answer, until the lease
+//! ended) stops, stores nothing and is recorded failed: the process that
+//! took the lease over runs instead.
 //!
 //! The public base is where the participant's `did:web` DID document is,
 //! without `did.json` ([`public_base`]): `https://provider.example` for
@@ -68,7 +71,7 @@ use portitor_dcp::gaiax_sign::{
 use portitor_runtime::BoxFuture;
 use portitor_runtime::api_key::problem;
 use portitor_runtime::http::HttpSender;
-use portitor_runtime::leases::{HeldLease, LeaseStore, Leases};
+use portitor_runtime::leases::{Claim, HeldLease, LeaseLost, LeaseStore, Leases};
 use portitor_runtime::retry::retry_delay;
 use portitor_runtime::system::now_secs;
 use serde::Deserialize;
@@ -427,10 +430,16 @@ pub fn start_run(identity: &Arc<Identity>) -> Result<GaiaxRun, StartError> {
     let Ok(guard) = Arc::clone(&onboarding.running).try_lock_owned() else {
         return Err(StartError::Busy);
     };
-    let Some(lease) = claim_run(identity, onboarding) else {
+    let lease = match claim_run(identity, onboarding) {
+        Claim::Taken(lease) => lease,
         // another process runs one
-        return Err(StartError::Busy);
+        Claim::HeldByOther => return Err(StartError::Busy),
+        Claim::Failed => {
+            let error = StoreError("cannot take the run's lease".to_owned());
+            return Err(StartError::Store(error));
+        }
     };
+    let lost = lease.lost();
     let lease = RunLease(Some(lease));
     let started_at = now_secs();
     let id = identity
@@ -442,7 +451,7 @@ pub fn start_run(identity: &Arc<Identity>) -> Result<GaiaxRun, StartError> {
     // so the next run can start, and this run stays `running` in the
     // store until that run marks it failed
     let run = async move {
-        finish_run(&background, id, guard).await;
+        finish_run(&background, id, guard, lost).await;
         drop(lease);
         if let Some(onboarding) = &background.gaiax {
             onboarding.ran.notify_one();
@@ -500,10 +509,16 @@ fn latest_run(identity: &Identity) -> Option<GaiaxRun> {
 /// returns that run.
 async fn run_locked(identity: &Identity, running: OwnedMutexGuard<()>) -> Option<GaiaxRun> {
     let onboarding = identity.gaiax.as_ref()?;
-    let Some(lease) = claim_run(identity, onboarding) else {
-        tracing::info!("Gaia-X compliance run skipped: another process runs one");
-        return latest_run(identity);
+    let lease = match claim_run(identity, onboarding) {
+        Claim::Taken(lease) => lease,
+        Claim::HeldByOther => {
+            tracing::info!("Gaia-X compliance run skipped: another process runs one");
+            return latest_run(identity);
+        }
+        // logged; the schedule tries again
+        Claim::Failed => return None,
     };
+    let lost = lease.lost();
     // ends the lease when this function returns, also on a panic
     let _lease = RunLease(Some(lease));
     let id = match identity.store.start_gaiax_run(now_secs()) {
@@ -513,7 +528,7 @@ async fn run_locked(identity: &Identity, running: OwnedMutexGuard<()>) -> Option
             return None;
         }
     };
-    finish_run(identity, id, running).await
+    finish_run(identity, id, running, lost).await
 }
 
 /// The lease of a run, ended when the value is dropped: when the run
@@ -534,12 +549,16 @@ impl Drop for RunLease {
 /// database (TD-56, `portitor_runtime::leases`).
 pub const RUN_LEASE: (&str, &str) = ("job", "gaiax_compliance");
 
-/// Takes [`RUN_LEASE`] for this process; `None` while another process
-/// holds it. Once taken, no other process runs: the runs still `RUNNING`
-/// were left by a process that stopped, and are marked failed.
-fn claim_run(identity: &Identity, onboarding: &Onboarding) -> Option<HeldLease> {
+/// Takes [`RUN_LEASE`] for this process. Once taken, no other process
+/// runs: the runs still `RUNNING` were left by a process that stopped,
+/// or by one whose lease was lost, which stopped its run before the lease
+/// ended (module doc). They are marked failed.
+fn claim_run(identity: &Identity, onboarding: &Onboarding) -> Claim {
     let (kind, id) = RUN_LEASE;
-    let lease = onboarding.leases.claim(kind, id)?;
+    let claim = onboarding.leases.claim(kind, id);
+    if !matches!(claim, Claim::Taken(_)) {
+        return claim;
+    }
     match identity.store.abandon_gaiax_runs(now_secs()) {
         Ok(0) => {}
         Ok(count) => {
@@ -550,16 +569,18 @@ fn claim_run(identity: &Identity, onboarding: &Onboarding) -> Option<HeldLease> 
         }
         Err(error) => tracing::error!(%error, "identity store failed"),
     }
-    Some(lease)
+    claim
 }
 
-/// Runs, records how it ended, and lets the next run start.
+/// Runs, records how it ended, and lets the next run start. `lost`
+/// fires when the run's lease is lost: the run then stops (module doc).
 async fn finish_run(
     identity: &Identity,
     id: i64,
     _running: OwnedMutexGuard<()>,
+    lost: LeaseLost,
 ) -> Option<GaiaxRun> {
-    let outcome = onboard(identity, now_secs()).await;
+    let outcome = onboard(identity, now_secs(), &lost).await;
     let finished_at = now_secs();
     let (result, error) = match &outcome {
         Ok(until) => {
@@ -584,12 +605,21 @@ async fn finish_run(
 }
 
 /// One run at `now` (module doc, steps 1 to 5). Returns when the
-/// compliance credential expires.
-async fn onboard(identity: &Identity, now: u64) -> Result<Option<i64>, String> {
+/// compliance credential expires. Stops, storing nothing, once `lost`
+/// fires.
+async fn onboard(identity: &Identity, now: u64, lost: &LeaseLost) -> Result<Option<i64>, String> {
+    const LOST: &str = "the run's lease was lost; another process runs instead";
     let onboarding = identity.gaiax.as_ref().ok_or("Gaia-X is off")?;
     let participant = read_participant(&onboarding.participant_file)?;
     let signed = build_and_sign(identity, participant, Period::starting(now))?;
-    let answer = send_and_check(identity, onboarding, &signed, now).await?;
+    let answer = tokio::select! {
+        answer = send_and_check(identity, onboarding, &signed, now) => answer?,
+        () = lost.clone().wait() => return Err(LOST.to_owned()),
+    };
+    // lost while the answer came: the other process's run stores
+    if lost.is_lost() {
+        return Err(LOST.to_owned());
+    }
     store_credentials(identity, &signed, &answer)?;
     Ok(answer.validity.until)
 }

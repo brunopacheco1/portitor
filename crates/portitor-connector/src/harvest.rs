@@ -19,6 +19,14 @@
 //!
 //! The rule: the stored datasets change only when a run succeeds, and a
 //! bad entry never replaces a good one.
+//!
+//! Several processes may share the store (ADR 0029). The scheduled run
+//! takes a lease, so one process runs it per interval ([`HARVEST_LEASE`]);
+//! the other runs (at start, after new rules, a bundle job) need none.
+//! What keeps every run right is the store: a run is written only if no
+//! other run was written since it read the store, and is otherwise
+//! planned again from the stored copy ([`DatasetStore::commit`]). A lock
+//! in the process (`busy`) keeps its own runs apart.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -308,6 +316,10 @@ pub struct HarvestStatus {
     pub rules_version: Option<String>,
     /// SHA-256 of the last snapshot taken; none forces a full run.
     pub snapshot_sha256: Option<String>,
+    /// How many runs were written: each commit counts it up. A run
+    /// writes only if it is still the number it read before it read the
+    /// datasets (compare-and-swap, [`DatasetStore::commit`]).
+    pub version: u64,
 }
 
 /// Everything one run writes, in one transaction.
@@ -319,7 +331,8 @@ pub struct Commit {
     pub errors: Vec<EntryError>,
     /// Datasets added or changed (their `last_job` is set to the new job).
     pub writes: Vec<StoredDataset>,
-    /// The status after the run.
+    /// The status after the run. Its `version` is the one the run read
+    /// before it read anything else; the store counts it up.
     pub status: HarvestStatus,
 }
 
@@ -359,10 +372,16 @@ pub trait DatasetStore: Send + Sync {
     /// the jobs older than the last [`KEPT_JOBS`] with their errors.
     /// Returns the new job's id.
     ///
+    /// Several processes may run at once (ADR 0029): the run is written
+    /// only if no other run was written since it read the status, which
+    /// the status's `version` tells. Otherwise nothing is written and the
+    /// answer is `None`: the run was planned from a copy that is no
+    /// longer the stored one, and must be planned again.
+    ///
     /// # Errors
     ///
     /// The store cannot be written; nothing was written.
-    fn commit(&self, commit: &Commit) -> Result<u64, StoreError>;
+    fn commit(&self, commit: &Commit) -> Result<Option<u64>, StoreError>;
 
     /// Up to `limit` jobs older than job `before` (all when `None`), newest
     /// first.
@@ -545,31 +564,45 @@ impl DatasetHarvester {
     /// # Errors
     ///
     /// The store cannot be written.
-    pub fn record_bundle_run(&self, job: JobRecord) -> Result<u64, StoreError> {
+    pub fn record_bundle_run(&self, job: &JobRecord) -> Result<u64, StoreError> {
         let _running = self.busy.lock().unwrap_or_else(PoisonError::into_inner);
-        let status = self.store.status()?;
-        let commit = Commit {
-            job,
-            errors: Vec::new(),
-            writes: Vec::new(),
-            status,
-        };
-        let id = self.store.commit(&commit)?;
-        measure_run(&commit);
-        Ok(id)
+        until_committed("bundle job", || {
+            let commit = Commit {
+                job: job.clone(),
+                errors: Vec::new(),
+                writes: Vec::new(),
+                status: self.store.status()?,
+            };
+            let id = self.store.commit(&commit)?;
+            if id.is_some() {
+                measure_run(&commit);
+            }
+            Ok(id)
+        })
     }
 
     /// Checks the stored datasets again if the rules are not the ones
     /// they were last checked with. Returns whether they changed. A check
     /// that cannot be stored is logged; the caller goes on.
     fn recheck_if_rules_changed(&self) -> Result<bool, StoreError> {
-        let status = self.store.status()?;
         let rules = self.check.rules_version();
-        let changed = status.rules_version.as_deref() != Some(rules.as_str());
-        if changed && let Err(e) = self.recheck(&rules) {
+        let checked_with =
+            |status: &HarvestStatus| status.rules_version.as_deref() == Some(rules.as_str());
+        if checked_with(&self.store.status()?) {
+            return Ok(false);
+        }
+        let rechecked = until_committed("check again", || {
+            let status = self.store.status()?;
+            if checked_with(&status) {
+                // another process checked them with these rules meanwhile
+                return Ok(Some(()));
+            }
+            self.recheck(&rules, status.version)
+        });
+        if let Err(e) = rechecked {
             tracing::error!(error = %e, "harvest: cannot check the stored datasets again");
         }
-        Ok(changed)
+        Ok(true)
     }
 
     /// One run, unless one is going on. Blocking: it reads the source and
@@ -645,8 +678,15 @@ impl DatasetHarvester {
     }
 
     /// Takes a snapshot, decides the changes, and commits them. `full`:
-    /// check every entry even if the snapshot is unchanged.
+    /// check every entry even if the snapshot is unchanged. Planned again
+    /// when another process wrote a run meanwhile ([`until_committed`]).
     fn run_now(&self, trigger: Trigger, full: bool) -> Result<HarvestJob, StoreError> {
+        until_committed("harvest", || self.run_once(trigger, full))
+    }
+
+    /// One try of [`DatasetHarvester::run_now`]: `None` when another run
+    /// was written since this one read the status.
+    fn run_once(&self, trigger: Trigger, full: bool) -> Result<Option<HarvestJob>, StoreError> {
         let started_at = now_secs();
         let status = self.store.status()?;
         // the job record of this run: only how it ended differs
@@ -694,25 +734,30 @@ impl DatasetHarvester {
         let after = HarvestStatus {
             rules_version: Some(self.check.rules_version()),
             snapshot_sha256: Some(snapshot.sha256),
+            // what this run read, before the datasets
+            version: status.version,
         };
         self.commit(done, plan, after)
     }
 
     /// Checks the stored active and hidden datasets again with the rules
     /// now in force, `rules` (a `bundle` job), and clears the snapshot hash
-    /// so the next run checks every entry of the source again.
-    fn recheck(&self, rules: &str) -> Result<(), StoreError> {
+    /// so the next run checks every entry of the source again. `version`:
+    /// the status's, read before the datasets. `None` when another run
+    /// was written since.
+    fn recheck(&self, rules: &str, version: u64) -> Result<Option<()>, StoreError> {
         let started_at = now_secs();
         let stored = self.stored_by_id()?;
         let after = HarvestStatus {
             rules_version: Some(rules.to_owned()),
             snapshot_sha256: None,
+            version,
         };
         let plan = run::plan_recheck(&stored, self.check.as_ref(), started_at);
         if plan.counts.seen == 0 {
             // nothing stored to check: the start run that follows checks
             // every entry and remembers the rules
-            return Ok(());
+            return Ok(Some(()));
         }
         let job = JobRecord {
             kind: JobKind::Datasets,
@@ -725,7 +770,8 @@ impl DatasetHarvester {
             counts: plan.counts,
             summary: format!("rules changed to {rules}: {}", run::summary(&plan.counts)),
         };
-        self.commit(job, plan, after).map(|_| ())
+        let committed = self.commit(job, plan, after)?;
+        Ok(committed.map(|_| ()))
     }
 
     fn stored_by_id(&self) -> Result<BTreeMap<String, StoredDataset>, StoreError> {
@@ -737,26 +783,61 @@ impl DatasetHarvester {
     }
 
     /// Commits a run and logs it. The next request reads what it wrote.
+    /// `None`, with nothing written, when another run was written since
+    /// this one read `status` ([`DatasetStore::commit`]).
     fn commit(
         &self,
         job: JobRecord,
         plan: run::Plan,
         status: HarvestStatus,
-    ) -> Result<HarvestJob, StoreError> {
+    ) -> Result<Option<HarvestJob>, StoreError> {
         let commit = Commit {
             job,
             errors: plan.errors,
             writes: plan.writes,
             status,
         };
-        let id = self.store.commit(&commit)?;
+        let Some(id) = self.store.commit(&commit)? else {
+            return Ok(None);
+        };
         log_run(id, &commit);
         measure_run(&commit);
-        Ok(HarvestJob {
+        Ok(Some(HarvestJob {
             id,
             record: commit.job,
-        })
+        }))
     }
+}
+
+/// How many times a run is planned when other processes keep writing
+/// runs first. Each time one of them wins, so with fewer replicas than
+/// this all of them get through, also when they start together.
+const PLAN_TRIES: usize = 10;
+
+/// Runs `attempt` until it writes its run. `None` from `attempt` says
+/// that another run was written since it read the store (by another
+/// process: in this one the `busy` lock keeps runs apart), so it plans
+/// again from what is stored now. Why plan again rather than skip: the
+/// other run may have been of another kind (a bundle job, a check with
+/// new rules), so this one's work may still be needed; planned again, a
+/// run whose work is done already finds it so (the same rules, the same
+/// snapshot) and writes only its job.
+fn until_committed<T>(
+    what: &str,
+    mut attempt: impl FnMut() -> Result<Option<T>, StoreError>,
+) -> Result<T, StoreError> {
+    for _ in 0..PLAN_TRIES {
+        if let Some(done) = attempt()? {
+            return Ok(done);
+        }
+        tracing::info!(
+            run = what,
+            "harvest: another process wrote a run first; planning again"
+        );
+    }
+    Err(StoreError(format!(
+        "{what}: other processes wrote runs first, {PLAN_TRIES} times"
+    )))
 }
 
 /// The run's metrics: how it ended, and the rejected entries by check.
@@ -829,7 +910,9 @@ pub const HARVEST_LEASE: (&str, &str) = ("job", "dataset_harvest");
 async fn run_if_due(harvester: &Arc<DatasetHarvester>, leases: &Leases, every: Duration) {
     let ticked = leases.now();
     let (kind, id) = HARVEST_LEASE;
-    let Some(lease) = leases.claim(kind, id) else {
+    // held by another process in this interval, or the store failed
+    // (logged): the next tick tries again
+    let Some(lease) = leases.claim(kind, id).taken() else {
         tracing::debug!("harvest: another process runs it in this interval");
         return;
     };

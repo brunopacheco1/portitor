@@ -99,35 +99,53 @@ pub async fn run_outbox(issuer: Arc<Issuer>) {
     }
 }
 
+/// What the outbox reads the time from: seconds since 1970.
+pub type Clock<'a> = &'a (dyn Fn() -> u64 + Sync);
+
 /// Sends every delivery due now, one after the other.
 pub async fn send_due(issuer: &Issuer) {
-    send_due_at(issuer, now_secs()).await;
+    send_due_with(issuer, &now_secs).await;
 }
 
-/// Sends every delivery due at `now` that no other process holds, one
-/// after the other, and schedules the next try of a failed one from
-/// `now` (tests pass a later time instead of waiting).
+/// [`send_due_with`] on a clock that stands still at `now`: for tests,
+/// which pass a later time instead of waiting.
 pub async fn send_due_at(issuer: &Issuer, now: u64) {
-    // a recorded try ends the lease and moves the delivery at least a
-    // second later (or out of the outbox), so the loop ends
-    while let Some(delivery) = claim_next(issuer, now) {
+    send_due_with(issuer, &move || now).await;
+}
+
+/// Sends every delivery that is due when the round begins and that no
+/// other process holds, one after the other, and schedules the next try
+/// of a failed one.
+///
+/// The time is read from `clock` again for each claim and each record,
+/// not once for the round: one try may take 20 seconds, so a lease taken
+/// for the third delivery with the round's first time could end at once,
+/// and another process would send that delivery too.
+pub async fn send_due_with(issuer: &Issuer, clock: Clock<'_>) {
+    // what is due when the round begins: a recorded try ends the lease
+    // and moves the delivery at least a second after that time (or out
+    // of the outbox), so the loop ends
+    let due = clock();
+    while let Some(delivery) = claim_next(issuer, due, clock()) {
         if delivery.attempts > 0 {
             metrics::outbox_resent(metrics::Outbox::CredentialDelivery);
         }
         let outcome = send(issuer, &delivery).await;
-        record(issuer, &delivery, outcome, now);
+        record(issuer, &delivery, outcome, clock());
     }
 }
 
-/// Claims the next delivery due at `now` for this process, for
-/// [`LEASE_SECONDS`]. `None` when none is due and free, or the store
+/// Claims the next delivery due at `due` for this process, from `now`
+/// for [`LEASE_SECONDS`]. `None` when none is due and free, or the store
 /// fails (logged).
-fn claim_next(issuer: &Issuer, now: u64) -> Option<Delivery> {
+fn claim_next(issuer: &Issuer, due: u64, now: u64) -> Option<Delivery> {
     let lease = Lease {
         holder: &issuer.process_id,
         until: now.saturating_add(LEASE_SECONDS),
     };
-    match issuer.store.claim_due_delivery(now, lease) {
+    // `due` also says which leases have ended: the earlier time, so a
+    // lease is never taken over early
+    match issuer.store.claim_due_delivery(due, lease) {
         Ok(claimed) => claimed,
         Err(error) => {
             tracing::error!(%error, "cannot read the outbox");
@@ -136,7 +154,8 @@ fn claim_next(issuer: &Issuer, now: u64) -> Option<Delivery> {
     }
 }
 
-/// Records what became of one try, and so ends this process's lease.
+/// Records what became of one try at `now`, and so ends this process's
+/// lease.
 fn record(issuer: &Issuer, delivery: &Delivery, outcome: Result<(), String>, now: u64) {
     let pid = delivery.issuer_pid.as_str();
     let holder = issuer.process_id.as_str();

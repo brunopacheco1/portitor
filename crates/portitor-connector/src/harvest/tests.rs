@@ -488,12 +488,17 @@ fn new_rules_while_running_check_the_datasets_again() {
     // the bundle run is logged next to the harvest runs; it changes no
     // dataset and keeps the harvest status
     let id = harvester
-        .record_bundle_run(bundle_run("version v2 in use (was v1)"))
+        .record_bundle_run(&bundle_run("version v2 in use (was v1)"))
         .unwrap();
     let (logged, errors) = store.job(id).unwrap().unwrap();
     assert_eq!(logged.record.kind, JobKind::Bundle);
     assert!(errors.is_empty());
-    assert_eq!(store.status().unwrap(), status_before);
+    let after = HarvestStatus {
+        // one more run written
+        version: status_before.version + 1,
+        ..status_before
+    };
+    assert_eq!(store.status().unwrap(), after);
 
     // new rules that refuse b: the stored datasets are checked again,
     // then every entry of the unchanged source, both as `bundle` runs
@@ -581,7 +586,7 @@ fn a_new_portitor_version_checks_the_stored_datasets_again() {
             writes: Vec::new(),
             status: HarvestStatus {
                 rules_version: Some(older),
-                snapshot_sha256: store.status().unwrap().snapshot_sha256,
+                ..store.status().unwrap()
             },
         })
         .unwrap();
@@ -1055,4 +1060,51 @@ fn each_form_of_an_offer_that_is_not_understood_is_an_odrl_failure() {
         "{}",
         failure.message
     );
+}
+
+/// The DSP rules, and something done by "another process" the first time
+/// an entry is checked: after the run read the stored datasets, before
+/// it writes.
+struct Meanwhile(Mutex<Option<Box<dyn FnOnce() + Send>>>);
+
+impl DatasetCheck for Meanwhile {
+    fn rules_version(&self) -> String {
+        dsp().rules_version()
+    }
+    fn check(&self, entry: &Value) -> Result<CheckedDataset, EntryFailure> {
+        let first = self.0.lock().unwrap().take();
+        if let Some(other_process) = first {
+            other_process();
+        }
+        dsp().check(entry)
+    }
+}
+
+/// Two processes harvest at once (ADR 0029): one writes its run while
+/// the other plans. The other's run, planned from a copy that is no
+/// longer the stored one, is not written; it is planned again from the
+/// stored copy, so the dataset the first one added is withdrawn, not
+/// left in the catalog.
+#[test]
+fn a_run_planned_from_an_older_copy_is_planned_again() {
+    let store = memory();
+    let first_source = Source::with(vec![entry("a")]);
+    let first = Arc::new(started(&first_source, &store, dsp()));
+    let second_source = Source::with(vec![entry("a"), entry("c")]);
+    let other = Arc::clone(&first);
+    let meanwhile = Meanwhile(Mutex::new(Some(Box::new(move || {
+        first_source.set(vec![entry("a"), entry("b")]);
+        assert!(matches!(other.run(Trigger::Interval), RunResult::Done(_)));
+    }))));
+    let second = DatasetHarvester::new(second_source, Arc::new(meanwhile), Arc::clone(&store));
+    let job = done(second.run(Trigger::Interval));
+    assert_eq!(ids(&second.catalog()), ["a", "c"]);
+    let withdrawn = store.dataset("b").unwrap().unwrap();
+    assert_eq!(withdrawn.state, DatasetState::Withdrawn);
+    assert_eq!(
+        (job.record.counts.added, job.record.counts.withdrawn),
+        (1, 1)
+    );
+    // the start, the first process's run, the second one's: no other
+    assert_eq!(store.jobs(None, 10).unwrap().len(), 3);
 }

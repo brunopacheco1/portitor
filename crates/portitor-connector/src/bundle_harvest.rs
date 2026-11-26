@@ -186,7 +186,7 @@ pub trait BundleListener: Send + Sync {
 
 impl BundleListener for DatasetHarvester {
     fn record(&self, job: JobRecord) {
-        if let Err(e) = self.record_bundle_run(job) {
+        if let Err(e) = self.record_bundle_run(&job) {
             tracing::error!(error = %e, "bundle harvest: cannot store the run in the job log");
         }
     }

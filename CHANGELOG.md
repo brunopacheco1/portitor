@@ -143,6 +143,25 @@ change:
   `two-data-spaces`, which runs processes, uses PostgreSQL when
   `PORTITOR_TEST_DATABASE_URL` names a server (`scripts/test-databases.sh`).
 - The DSP TCK run in CI keeps the connector's state in PostgreSQL 19.
+- A lease is held by one claim (the process id and a random id), not
+  by the process. Work whose lease is lost stops: when another holder
+  took it over, or when no renewal succeeded for about 20 seconds (a
+  database failover). A push or an upload is cut (the upload is
+  answered 503), a message is left to the process that took it over, a
+  Gaia-X run is recorded failed and stores nothing. In one process, a
+  push of a transfer never starts while another one of it runs (as in
+  1.2). An upload whose lease cannot be taken because the database does
+  not answer gets 503, not 409.
+- Dataset harvest runs of several connector containers no longer undo
+  each other: a run (at start, after new rules, a bundle job, or
+  scheduled) is written only if no other run was written since it read
+  the store, and is otherwise planned again from the stored datasets.
+  The connector's database gets a migration: a `version` column in
+  `harvest_state` and an index on `lease.lease_until`.
+- The issuer's outbox reads the clock again for each delivery it
+  claims and records, not once per round: after a slow try, the next
+  delivery's lease could end at once and another issuer container send
+  it too.
 
 ### Dependencies
 

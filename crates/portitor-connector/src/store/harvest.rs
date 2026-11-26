@@ -97,6 +97,7 @@ fn status_from_row(row: &Row) -> Result<HarvestStatus, StoreError> {
     Ok(HarvestStatus {
         rules_version: col(row, 0)?,
         snapshot_sha256: col(row, 1)?,
+        version: uint(col(row, 2)?)?,
     })
 }
 
@@ -183,7 +184,8 @@ impl RunRows {
             errors,
             status: values![
                 status.rules_version.as_deref(),
-                status.snapshot_sha256.as_deref()
+                status.snapshot_sha256.as_deref(),
+                int(status.version)?
             ]
             .to_vec(),
             kept_jobs: int(KEPT_JOBS)?,
@@ -199,13 +201,29 @@ fn with_job_id(job_id: i64, values: &[Value]) -> Vec<Value> {
     all
 }
 
-/// Writes one run in the transaction `tx` and returns the job's id.
+/// Writes one run in the transaction `tx` and returns the job's id;
+/// `None`, with nothing written, when another run was written since this
+/// one read the status (`DatasetStore::commit`).
 ///
-/// The database gives the id (TD-56): the row id of `SQLite`, the
+/// The status is written first, and only if its version is still the one
+/// the run read (compare-and-swap). Of two processes that write a run at
+/// once, one changes the row; the other changes none (or, on PostgreSQL,
+/// collides and runs again, and then changes none).
+///
+/// The database gives the job's id (TD-56): the row id of `SQLite`, the
 /// identity column of PostgreSQL. Two processes that write a run at once
 /// get two ids, never the same one, and no process keeps a count of its
 /// own.
-fn write_run(tx: &mut dyn Executor, rows: &RunRows) -> Result<i64, DbError> {
+fn write_run(tx: &mut dyn Executor, rows: &RunRows) -> Result<Option<i64>, DbError> {
+    let status_written = tx.execute(
+        "UPDATE harvest_state
+         SET rules_version = $1, snapshot_sha256 = $2, version = version + 1
+         WHERE id = 1 AND version = $3",
+        &rows.status,
+    )?;
+    if status_written == 0 {
+        return Ok(None);
+    }
     let insert_job = format!(
         "INSERT INTO harvest_job ({})
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
@@ -247,11 +265,7 @@ fn write_run(tx: &mut dyn Executor, rows: &RunRows) -> Result<i64, DbError> {
         "DELETE FROM harvest_job WHERE id < $1",
         values![oldest_kept],
     )?;
-    tx.execute(
-        "UPDATE harvest_state SET rules_version = $1, snapshot_sha256 = $2 WHERE id = 1",
-        &rows.status,
-    )?;
-    Ok(id)
+    Ok(Some(id))
 }
 
 /// Writes one dataset: an update of its row, or a new row. (Two plain
@@ -313,7 +327,7 @@ impl DatasetStore for ConnectorStore {
     fn status(&self) -> Result<HarvestStatus, StoreError> {
         // the one row of harvest_state: both columns may be NULL
         let found = self.query_first(
-            "SELECT rules_version, snapshot_sha256 FROM harvest_state WHERE id = 1",
+            "SELECT rules_version, snapshot_sha256, version FROM harvest_state WHERE id = 1",
             values![],
             status_from_row,
         )?;
@@ -321,11 +335,11 @@ impl DatasetStore for ConnectorStore {
         Ok(found.unwrap_or_default())
     }
 
-    fn commit(&self, commit: &Commit) -> Result<u64, StoreError> {
+    fn commit(&self, commit: &Commit) -> Result<Option<u64>, StoreError> {
         let rows = RunRows::of(commit)?;
         // on any error nothing is written
         let id = self.transaction(|tx| write_run(tx, &rows))?;
-        uint(id)
+        id.map(uint).transpose()
     }
 
     fn jobs(&self, before: Option<u64>, limit: usize) -> Result<Vec<HarvestJob>, StoreError> {
@@ -416,7 +430,7 @@ mod tests {
         let stores: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
         let jobs = stores[0].jobs(None, 100).unwrap();
         // the start run and 5 more, on each replica
-        assert_eq!(jobs.len(), 12);
+        assert_eq!(jobs.len(), 12, "{jobs:?}");
         let ids: std::collections::BTreeSet<u64> = jobs.iter().map(|job| job.id).collect();
         assert_eq!(ids.len(), 12, "no id given twice: {ids:?}");
     }
@@ -625,7 +639,6 @@ mod tests {
 
     fn only_the_last_jobs_are_kept_with_their_errors_on(store: &ConnectorStore) {
         let store = Arc::new(store.clone());
-        let status = HarvestStatus::default();
         for n in 0..KEPT_JOBS + 3 {
             let commit = Commit {
                 job: JobRecord {
@@ -647,9 +660,9 @@ mod tests {
                     report: Some(json!({"conforms": false})),
                 }],
                 writes: Vec::new(),
-                status: status.clone(),
+                status: store.status().unwrap(),
             };
-            assert_eq!(store.commit(&commit).unwrap(), n + 1);
+            assert_eq!(store.commit(&commit).unwrap(), Some(n + 1));
         }
         let jobs = store.jobs(None, 1_000).unwrap();
         assert_eq!(u64::try_from(jobs.len()).unwrap(), KEPT_JOBS);
@@ -670,5 +683,41 @@ mod tests {
             .map(|j| j.id)
             .collect();
         assert_eq!(page, [9, 8, 7]);
+    }
+
+    #[test]
+    fn a_run_is_written_only_on_the_status_it_read() {
+        on_every_database(a_run_is_written_only_on_the_status_it_read_on);
+    }
+
+    /// Two runs read the same status; the first is written, the second
+    /// is not (nothing of it: no job, no dataset, no status).
+    fn a_run_is_written_only_on_the_status_it_read_on(store: &ConnectorStore) {
+        let read = store.status().unwrap();
+        let run = |summary: &str, rules: &str| Commit {
+            job: JobRecord {
+                kind: JobKind::Datasets,
+                started_at: 1,
+                finished_at: 2,
+                trigger: Trigger::Interval,
+                source: "test".to_owned(),
+                snapshot_sha256: None,
+                outcome: JobOutcome::Succeeded,
+                counts: Counts::default(),
+                summary: summary.to_owned(),
+            },
+            errors: Vec::new(),
+            writes: Vec::new(),
+            status: HarvestStatus {
+                rules_version: Some(rules.to_owned()),
+                ..read.clone()
+            },
+        };
+        assert_eq!(store.commit(&run("first", "r1")).unwrap(), Some(1));
+        assert_eq!(store.commit(&run("second", "r2")).unwrap(), None);
+        let status = store.status().unwrap();
+        assert_eq!(status.rules_version.as_deref(), Some("r1"));
+        assert_eq!(status.version, read.version + 1);
+        assert_eq!(store.jobs(None, 10).unwrap().len(), 1);
     }
 }

@@ -824,12 +824,24 @@ the release; 12 risks and 19 technical debts are closed.
   take over work that is still running: a message is sent twice, or a
   push starts twice. A host whose clock runs ahead also writes leases
   that last longer after its process died.
+- **Also.** Used token ids (TD-09) are deleted once their token has
+  expired by the clock of the process that deletes them: a host whose
+  clock runs ahead by some seconds deletes them that much early, and a
+  token replayed in that window to a process whose clock is right is
+  accepted again.
 - **Current state: Mitigated.** DEPLOYING asks for NTP on every host
-  ([Database](DEPLOYING.md#database)). Work done twice is safe in most
-  places: a partner that gets a DSP message twice answers with an
+  ([Database](DEPLOYING.md#database)). Each lease is held by one claim
+  (the process id and a random id), and a process whose lease was taken
+  over, or that could not renew it for about 20 seconds (a database
+  failover), stops that work (a push, an upload, a message, a Gaia-X
+  run), so that it does not run beside the process that took it over;
+  what already went out may go out twice. Work done twice is safe in
+  most places: a partner that gets a DSP message twice answers with an
   error and the state check goes on
   ([ADR 0007](adr/0007-outbox-and-proof-of-delivery.md)); a data plane
-  step may run twice. Related: [R-23](#r-23).
+  step may run twice. Dataset harvest runs do not depend on clocks: a
+  run is written only if no other run was written since it read the
+  store. Related: [R-23](#r-23).
 - **Next.** None. Leases from the database's own clock (`now()`) would
   remove it; not planned.
 
@@ -1542,9 +1554,12 @@ the release; 12 risks and 19 technical debts are closed.
   runs under the lease `push` of its transfer (`PUSH_LEASE` in
   `crates/portitor-connector/src/transfer.rs`), renewed while it runs
   and ended once its end is recorded; the loop of TD-53 starts the
-  pushes of `STARTED` push transfers that nobody leases. `watch_if_idle`
-  is gone. An upload as consumer runs under the lease `upload`; a second
-  one gets 409 on any container. The limit of 8 uploads at once stays
+  pushes of `STARTED` push transfers that nobody leases. A push or an
+  upload whose lease is lost stops (`HeldLease::lost` in
+  `portitor_runtime::leases`), and `watch_if_idle` stays as a cheap
+  second guard in each process. An upload as consumer runs under the
+  lease `upload`; a second one gets 409 on any container, and 503 when
+  the database does not answer. The limit of 8 uploads at once stays
   per process (it bounds that process's memory). Tested with two
   replicas on one PostgreSQL database
   (`a_push_left_by_a_replica_that_stopped_is_taken_over_once`,

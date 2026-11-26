@@ -984,6 +984,36 @@ async fn a_failed_delivery_is_retried_later() {
     assert_eq!(world.delivery().await, ("DELIVERED".to_owned(), None));
 }
 
+/// Each try takes long here: the clock moves 40 seconds each time it is
+/// read. Each claim and each record reads it again, so a lease and the
+/// next try count from when they are taken, not from when the round
+/// began (where the second delivery's lease would have ended before it
+/// was taken).
+#[tokio::test]
+async fn each_try_reads_the_clock_again() {
+    let world = World::new();
+    world.register(HOLDER, json!({})).await;
+    world.sender.fail_with(Some("HTTP 503 Service Unavailable"));
+    assert_eq!(world.ask("h-1", &["membership-vc20"]).await, "ISSUED");
+    assert_eq!(world.ask("h-2", &["membership-vc20"]).await, "ISSUED");
+    let start = now_secs();
+    let time = std::sync::atomic::AtomicU64::new(start);
+    let clock = || time.fetch_add(40, std::sync::atomic::Ordering::SeqCst);
+    // reads: the round at start; claim, record, claim, record 40 s apart
+    delivery::send_due_with(&world.issuer, &clock).await;
+    assert_eq!(world.sender.tries(), 2);
+    let mut next: Vec<u64> = world
+        .store
+        .due_deliveries(u64::MAX)
+        .unwrap()
+        .iter()
+        .map(|waiting| waiting.next_attempt_at)
+        .collect();
+    next.sort_unstable();
+    // recorded at start + 80 and start + 160, then one second
+    assert_eq!(next, [start + 81, start + 161]);
+}
+
 #[tokio::test]
 async fn a_delivery_is_given_up_after_the_last_try() {
     let world = World::new();

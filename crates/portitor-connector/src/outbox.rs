@@ -52,7 +52,7 @@ use std::time::Duration;
 use portitor_dsp::guard::{Direction, MessageGuard};
 use portitor_dsp::policy::CredentialTypes;
 use portitor_dsp::transfer::provider::LEASE_SECONDS;
-use portitor_runtime::leases::HeldLease;
+use portitor_runtime::leases::{Claim, HeldLease};
 use portitor_runtime::panics::{catch_panic, next_pause};
 use portitor_runtime::telemetry::metrics;
 use serde_json::Value;
@@ -342,17 +342,18 @@ fn deliver_taken_up<O: Outbox>(
     send_until_counter_party_acts(outbox, out, first, taken_up).instrument(span)
 }
 
-/// The lease on `out` for this process, if nobody holds it.
+/// The lease on `out` for this process, if nobody holds it. When the
+/// store failed (logged), the loop tries again ([`resume`]).
 fn claim<O: Outbox>(outbox: &O, out: &O::Out) -> Option<HeldLease> {
     let msg = O::message(out);
-    let lease = outbox
+    let claim = outbox
         .link()
         .leases
         .claim(&lease_kind(outbox.kind()), &lease_id(&msg));
-    if lease.is_none() {
+    if matches!(claim, Claim::HeldByOther) {
         tracing::debug!(pid = msg.pid, "message left to the process that leases it");
     }
-    lease
+    claim.taken()
 }
 
 /// The work of [`deliver`]: sends `out`, under its lease `first`, then
@@ -364,7 +365,11 @@ fn claim<O: Outbox>(outbox: &O, out: &O::Out) -> Option<HeldLease> {
 /// A lease ends once what became of its message is recorded. When that
 /// could not be recorded (the store failed), the lease is left to end on
 /// its own: the message is still pending, and the loop sends it again
-/// after that pause.
+/// after that pause. When the lease is lost while the message is sent or
+/// recorded (the process stalled, or the database did not answer, until
+/// it ended), this task stops: the process that took the lease over sends
+/// the message (it may arrive twice, which the counter-party answers as
+/// for a resend after a restart, see below).
 ///
 /// A panic while one message is sent or recorded (a bug) is logged and
 /// counted (`portitor.task.panicked`, task `outbox_delivery`), and the
@@ -394,7 +399,14 @@ async fn send_until_counter_party_acts<O: Outbox>(
         metrics::outbox_resent(outbox.kind());
     }
     loop {
-        match send_until_recorded(&outbox, &out).await {
+        let step = tokio::select! {
+            step = send_until_recorded(&outbox, &out) => step,
+            () = lease.lost().wait() => {
+                tracing::warn!(pid = O::message(&out).pid, "message left to the process that took its lease over");
+                return;
+            }
+        };
+        match step {
             Step::Next(next) => {
                 lease.release();
                 let Some(next_lease) = claim(outbox.as_ref(), &next) else {

@@ -89,7 +89,8 @@ impl HttpDataPlane {
     ///
     /// One push per flow: the caller makes sure of it, among all the
     /// processes that share the database, with a lease taken before this
-    /// call (the connector's push lease, TD-54).
+    /// call (the connector's push lease, TD-54). In this process, a flow
+    /// whose push still runs gives `None` too.
     ///
     /// # Errors
     ///
@@ -97,7 +98,10 @@ impl HttpDataPlane {
     pub fn push_job(&self, id: &str) -> Result<Option<PushJob>, SignalError> {
         // watch first, check second, as a download does
         // (`running_flows` module doc)
-        let cut = self.running.watch(id);
+        let Some(cut) = self.running.watch_if_idle(id) else {
+            // already being sent here
+            return Ok(None);
+        };
         let flow = self.flow(id)?;
         let parties = flow.parties();
         let Some(address) = flow.push_address else {
@@ -209,8 +213,20 @@ impl Pushed {
 /// Sends `job` with `plane`'s push client, until it is done or its flow is
 /// cut.
 pub async fn send(plane: &HttpDataPlane, job: &mut PushJob) -> Pushed {
-    let mut pushed = send_until_cut(plane, job, IDLE_TIMEOUT).await;
-    if pushed.sent == Sent::Cut && plane.is_started(&job.flow_id) {
+    send_unless(plane, job, std::future::pending()).await
+}
+
+/// [`send`], but it also stops, as [`Sent::Cut`], when `stop` finishes:
+/// the connector's push lease was lost, and another process sends the
+/// data now (TD-54). The flow is left as it is then: that process
+/// completes or terminates the transfer.
+pub async fn send_unless(
+    plane: &HttpDataPlane,
+    job: &mut PushJob,
+    stop: impl Future<Output = ()>,
+) -> Pushed {
+    let (mut pushed, stopped) = send_until_cut(plane, job, IDLE_TIMEOUT, stop).await;
+    if pushed.sent == Sent::Cut && !stopped && plane.is_started(&job.flow_id) {
         // cut, but the flow is still STARTED: no suspension or termination
         // cut it (they change the state first), but a membership check
         // that could not finish. Nothing would send the data now, so the
@@ -222,30 +238,26 @@ pub async fn send(plane: &HttpDataPlane, job: &mut PushJob) -> Pushed {
 }
 
 /// [`send`], with `idle` as the longest time without progress. A cut
-/// gives [`Sent::Cut`].
-async fn send_until_cut(plane: &HttpDataPlane, job: &mut PushJob, idle: Duration) -> Pushed {
+/// gives [`Sent::Cut`]; so does `stop`, and then the second value is
+/// true.
+async fn send_until_cut(
+    plane: &HttpDataPlane,
+    job: &mut PushJob,
+    idle: Duration,
+    stop: impl Future<Output = ()>,
+) -> (Pushed, bool) {
+    let not_sent = |sent| Pushed { sent, bytes: 0 };
     if job.cut.is_cut() {
         // cut before it began, while it waited for the consumer
-        return Pushed {
-            sent: Sent::Cut,
-            bytes: 0,
-        };
+        return (not_sent(Sent::Cut), false);
     }
     match plane.check_membership_before_push(&job.flow_id).await {
         BeforePush::Go => {}
-        BeforePush::Revoked => {
-            // the transfer is being ended
-            return Pushed {
-                sent: Sent::Cut,
-                bytes: 0,
-            };
-        }
+        // the transfer is being ended
+        BeforePush::Revoked => return (not_sent(Sent::Cut), false),
         BeforePush::Unchecked => {
             let reason = "the consumer's membership could not be checked";
-            return Pushed {
-                sent: Sent::Failed(reason.to_owned()),
-                bytes: 0,
-            };
+            return (not_sent(Sent::Failed(reason.to_owned())), false);
         }
     }
     // reads the flow's state (TD-52) and checks the membership again
@@ -259,21 +271,32 @@ async fn send_until_cut(plane: &HttpDataPlane, job: &mut PushJob, idle: Duration
     let source = &job.source;
     let address = &job.address;
     let cut = &mut job.cut;
-    // `None`: the flow was cut before the post finished, and the post was
-    // dropped
-    let posted = tokio::select! {
-        result = post(plane, flow_id, source, address, Arc::clone(&counted), idle) => Some(result),
-        () = cut.cut() => None,
+    // what ended it; the post is dropped unless it finished
+    let ended = tokio::select! {
+        result = post(plane, flow_id, source, address, Arc::clone(&counted), idle) => Ended::Posted(result),
+        () = cut.cut() => Ended::Cut,
+        () = stop => Ended::Stopped,
     };
-    let sent = match posted {
-        Some(Ok(())) => Sent::Done,
-        Some(Err(reason)) => Sent::Failed(reason),
-        None => Sent::Cut,
+    let sent = match &ended {
+        Ended::Posted(Ok(())) => Sent::Done,
+        Ended::Posted(Err(reason)) => Sent::Failed(reason.clone()),
+        Ended::Cut | Ended::Stopped => Sent::Cut,
     };
-    Pushed {
+    let pushed = Pushed {
         sent,
         bytes: counted.load(Ordering::Relaxed),
-    }
+    };
+    (pushed, matches!(ended, Ended::Stopped))
+}
+
+/// What ended [`send_until_cut`]'s post.
+enum Ended {
+    /// It finished: the consumer answered, or it failed.
+    Posted(Result<(), String>),
+    /// The flow was cut.
+    Cut,
+    /// The caller's `stop` finished.
+    Stopped,
 }
 
 /// When a push last made progress.
@@ -448,5 +471,48 @@ mod tests {
         .unwrap();
         let reason = sent.unwrap_err();
         assert!(reason.contains("no answer"), "{reason}");
+    }
+
+    /// A push whose connector lease is lost stops as cut, and leaves its
+    /// flow STARTED for the process that took the push over: not failed,
+    /// which would end the transfer. While it runs, this process starts
+    /// no second push of the flow.
+    #[tokio::test]
+    async fn a_stopped_push_is_cut_and_leaves_the_flow() {
+        use crate::flows::{Flow, FlowStore as _};
+
+        let flows = Arc::new(crate::test_store::InMemoryFlows::default());
+        let flow = Flow {
+            id: "f1".to_owned(),
+            state: DataFlowState::Started,
+            dataset_id: "d1".to_owned(),
+            source: Some(source().await),
+            agreement_id: String::new(),
+            counter_party_id: String::new(),
+            token_hash: String::new(),
+            expires_at: u64::MAX / 2,
+            push_address: Some(DataAddress {
+                kind: DataAddressType,
+                endpoint_type: HTTP_PUSH_ENDPOINT_TYPE.to_owned(),
+                endpoint: Some(silent_endpoint().await),
+                endpoint_properties: Vec::new(),
+            }),
+        };
+        flows.insert(&flow).unwrap();
+        let plane = HttpDataPlane::new(flows, "https://provider.example", 60)
+            .unwrap()
+            .with_push_over_http(true)
+            .unwrap();
+        let mut job = plane.push_job("f1").unwrap().unwrap();
+        assert!(plane.push_job("f1").unwrap().is_none(), "one push here");
+        let stop = tokio::time::sleep(Duration::from_millis(100));
+        let pushed =
+            tokio::time::timeout(Duration::from_secs(5), send_unless(&plane, &mut job, stop))
+                .await
+                .unwrap();
+        assert_eq!(pushed.sent, Sent::Cut);
+        assert!(plane.is_started("f1"));
+        drop(job);
+        assert!(plane.push_job("f1").unwrap().is_some(), "it ended");
     }
 }

@@ -8,14 +8,24 @@
 //!
 //! A lease names a piece of work by a kind and an id (for example
 //! `outbox:transfer:provider` and a process id, or `job` and
-//! `dataset_harvest`), the process that holds it (a random id made at
-//! start, [`crate::system::process_id`]) and when it ends, in seconds
-//! since 1970. A process takes a lease only when nobody holds it or the
-//! holder's lease has ended: one statement decides, so of several
-//! processes that try at once exactly one gets it (compare-and-swap).
-//! The holder renews it while the work runs ([`HeldLease`]); a process
-//! that dies stops renewing, and once the lease has ended another process
-//! takes the work over.
+//! `dataset_harvest`), who holds it and when it ends, in seconds since
+//! 1970. The holder is one claim, not one process: the process id
+//! ([`crate::system::process_id`]) and a random id made for each claim.
+//! So a process that lost a lease, and took the same work again, holds
+//! two different leases: the first can neither renew nor end the second.
+//! A process takes a lease only when nobody holds it or the holder's
+//! lease has ended: one statement decides, so of several processes that
+//! try at once exactly one gets it (compare-and-swap). The holder renews
+//! it while the work runs ([`HeldLease`]); a process that dies stops
+//! renewing, and once the lease has ended another process takes the work
+//! over.
+//!
+//! A lease can be lost while its work still runs: the process stalled, or
+//! the database did not answer (a failover) until the lease ended.
+//! [`HeldLease::lost`] then fires, and the work stops, so that it does
+//! not run twice: once here, once in the process that took it over. It
+//! fires when a renewal finds another holder, or when renewals failed
+//! until the next one would come too late (about 20 seconds without one).
 //!
 //! Modelled on Eclipse EDC's lease table (`edc_lease`, in
 //! `extensions/common/sql/sql-lease`): one row per leased entity, with
@@ -39,8 +49,10 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::sync::watch;
+
 use crate::database::{Database, DbError, Executor};
-use crate::system::now_secs;
+use crate::system::{new_uuid, now_secs};
 use crate::values;
 
 /// How long a lease lasts after it was taken or renewed, in seconds: 30,
@@ -211,7 +223,8 @@ impl std::fmt::Debug for Leases {
 impl Leases {
     /// The leases in `store`, held as `holder`: the process id
     /// ([`crate::system::process_id`]) in a running component; tests
-    /// pass one id per "replica".
+    /// pass one id per "replica". Each claim adds its own random id to
+    /// it (module doc).
     #[must_use]
     pub fn new(store: Arc<dyn LeaseStore>, holder: &str) -> Self {
         Self::with_clock(store, holder, Arc::new(now_secs))
@@ -234,7 +247,7 @@ impl Leases {
         (self.clock)()
     }
 
-    /// The id the leases are held under.
+    /// The id of this process, which each claim's holder starts with.
     #[must_use]
     pub fn holder(&self) -> &str {
         &self.holder
@@ -249,18 +262,21 @@ impl Leases {
     /// Takes the lease on (`kind`, `id`) for [`LEASE_SECONDS`], if nobody
     /// holds it. Inside a Tokio runtime, the lease is then renewed every
     /// [`RENEW_EVERY`] until the [`HeldLease`] is released or dropped.
-    /// `None` when another process holds it, or the store failed (logged):
-    /// the work is then left to the holder, or to a later try.
+    /// The answer says whether it was taken, or held by another (another
+    /// process, or another task of this one), or whether the store failed
+    /// (logged): see [`Claim`].
     #[must_use]
-    pub fn claim(&self, kind: &str, id: &str) -> Option<HeldLease> {
+    pub fn claim(&self, kind: &str, id: &str) -> Claim {
+        // a holder of its own for this claim (module doc)
+        let holder = format!("{} {}", self.holder, new_uuid());
         let now = self.now();
         let until = now.saturating_add(LEASE_SECONDS);
-        match self.store.claim(kind, id, &self.holder, until, now) {
-            Ok(true) => Some(HeldLease::renewed(self.clone(), kind, id)),
-            Ok(false) => None,
+        match self.store.claim(kind, id, &holder, until, now) {
+            Ok(true) => Claim::Taken(HeldLease::renewed(self.clone(), kind, id, holder, until)),
+            Ok(false) => Claim::HeldByOther,
             Err(error) => {
                 tracing::error!(%error, lease = kind, id, "cannot take a lease");
-                None
+                Claim::Failed
             }
         }
     }
@@ -290,6 +306,34 @@ impl Leases {
     }
 }
 
+/// What [`Leases::claim`] found.
+#[derive(Debug)]
+pub enum Claim {
+    /// The lease is ours: do the work, and stop if it is lost
+    /// ([`HeldLease::lost`]).
+    Taken(HeldLease),
+    /// Another holder has it: another process, or another task of this
+    /// one. Leave the work to it.
+    HeldByOther,
+    /// The store failed (logged), so nobody knows who holds it. Try again
+    /// later; a request that asked for the work can be answered "busy,
+    /// try again" (503), not "conflict".
+    Failed,
+}
+
+impl Claim {
+    /// The lease, if it was taken: for callers that leave the work alone
+    /// both when another holds it and when the store failed (a later try
+    /// takes it up).
+    #[must_use]
+    pub fn taken(self) -> Option<HeldLease> {
+        match self {
+            Claim::Taken(lease) => Some(lease),
+            Claim::HeldByOther | Claim::Failed => None,
+        }
+    }
+}
+
 /// A lease this process holds. It is renewed in the background while
 /// the value lives (inside a Tokio runtime). Dropping it stops the
 /// renewals but leaves the lease to end on its own, at most
@@ -300,6 +344,10 @@ pub struct HeldLease {
     leases: Leases,
     kind: String,
     id: String,
+    /// The holder written in the store: this claim's own (module doc).
+    holder: String,
+    /// Says `true` once the lease is lost.
+    lost: watch::Receiver<bool>,
     renewals: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -308,21 +356,33 @@ impl std::fmt::Debug for HeldLease {
         f.debug_struct("HeldLease")
             .field("kind", &self.kind)
             .field("id", &self.id)
+            .field("holder", &self.holder)
             .finish_non_exhaustive()
     }
 }
 
 impl HeldLease {
-    /// A lease just taken, with its renewals started when there is a
-    /// Tokio runtime.
-    fn renewed(leases: Leases, kind: &str, id: &str) -> Self {
+    /// A lease just taken by `holder`, ending at `until`, with its
+    /// renewals started when there is a Tokio runtime. Without one
+    /// (plain tests) it is never renewed, and never reported lost.
+    fn renewed(leases: Leases, kind: &str, id: &str, holder: String, until: u64) -> Self {
+        let (tell_lost, lost) = watch::channel(false);
+        let renewal = Renewal {
+            leases: leases.clone(),
+            kind: kind.to_owned(),
+            id: id.to_owned(),
+            holder: holder.clone(),
+            until,
+        };
         let renewals = tokio::runtime::Handle::try_current()
             .ok()
-            .map(|runtime| runtime.spawn(renew(leases.clone(), kind.to_owned(), id.to_owned())));
+            .map(|runtime| runtime.spawn(renewal.run(tell_lost)));
         Self {
             leases,
             kind: kind.to_owned(),
             id: id.to_owned(),
+            holder,
+            lost,
             renewals,
         }
     }
@@ -333,13 +393,26 @@ impl HeldLease {
         &self.id
     }
 
+    /// A signal that fires when this lease is lost (module doc). The
+    /// work selects on it (`tokio::select!`) and stops when it fires.
+    #[must_use]
+    pub fn lost(&self) -> LeaseLost {
+        LeaseLost(self.lost.clone())
+    }
+
+    /// Whether this lease was lost already.
+    #[must_use]
+    pub fn is_lost(&self) -> bool {
+        *self.lost.borrow()
+    }
+
     /// Ends the lease now: the work is done, and any process may take
     /// what comes next. A failure is logged; the lease then ends on its
-    /// own.
+    /// own. A lease that was lost is left to its new holder.
     pub fn release(mut self) {
         self.stop_renewing();
         let leases = &self.leases;
-        if let Err(error) = leases.store.release(&self.kind, &self.id, &leases.holder) {
+        if let Err(error) = leases.store.release(&self.kind, &self.id, &self.holder) {
             tracing::warn!(%error, lease = %self.kind, id = %self.id, "cannot end a lease; it ends on its own");
         }
     }
@@ -352,7 +425,7 @@ impl HeldLease {
         let leases = &self.leases;
         let extended = leases
             .store
-            .extend(&self.kind, &self.id, &leases.holder, until);
+            .extend(&self.kind, &self.id, &self.holder, until);
         if let Err(error) = extended {
             tracing::warn!(%error, lease = %self.kind, id = %self.id, "cannot keep a lease");
         }
@@ -371,22 +444,82 @@ impl Drop for HeldLease {
     }
 }
 
-/// Renews the lease on (`kind`, `id`) every [`RENEW_EVERY`], until it is
-/// lost (logged) or the task is stopped.
-async fn renew(leases: Leases, kind: String, id: String) {
-    loop {
-        tokio::time::sleep(RENEW_EVERY).await;
-        let until = leases.now().saturating_add(LEASE_SECONDS);
-        match leases.store.extend(&kind, &id, &leases.holder, until) {
-            Ok(true) => {}
+/// Fires when a [`HeldLease`] is lost ([`HeldLease::lost`]). Cloning it
+/// is cheap.
+#[derive(Debug, Clone)]
+pub struct LeaseLost(watch::Receiver<bool>);
+
+impl LeaseLost {
+    /// Finishes once the lease is lost; waits forever otherwise (also
+    /// after the lease was released or dropped: its work is over then).
+    pub async fn wait(mut self) {
+        // an error only says that the renewals stopped; a lost lease
+        // says `true` before they stop
+        let _ = self.0.wait_for(|lost| *lost).await;
+        if !*self.0.borrow() {
+            std::future::pending::<()>().await;
+        }
+    }
+
+    /// Whether the lease was lost already.
+    #[must_use]
+    pub fn is_lost(&self) -> bool {
+        *self.0.borrow()
+    }
+}
+
+/// What the renewals of one [`HeldLease`] need.
+struct Renewal {
+    leases: Leases,
+    kind: String,
+    id: String,
+    holder: String,
+    /// When the lease ends, as last taken or renewed.
+    until: u64,
+}
+
+impl Renewal {
+    /// Renews the lease every [`RENEW_EVERY`] until it is lost, then
+    /// says so on `tell_lost` (and logs it). Stopped from outside when
+    /// the lease is released or dropped.
+    async fn run(mut self, tell_lost: watch::Sender<bool>) {
+        loop {
+            tokio::time::sleep(RENEW_EVERY).await;
+            if !self.renew_once() {
+                break;
+            }
+        }
+        let _ = tell_lost.send(true);
+    }
+
+    /// One renewal. Returns false when the lease is lost: another holder
+    /// has it, or the renewals failed until the next one would come after
+    /// the lease ends. Stopping then, before it ends, leaves a margin of
+    /// one [`RENEW_EVERY`] before another process can take the work.
+    fn renew_once(&mut self) -> bool {
+        let (kind, id) = (&self.kind, &self.id);
+        let until = self.leases.now().saturating_add(LEASE_SECONDS);
+        match self.leases.store.extend(kind, id, &self.holder, until) {
+            Ok(true) => {
+                self.until = until;
+                true
+            }
             Ok(false) => {
                 // the lease ended before a renewal came (a stalled
                 // process), and another process took the work over
-                tracing::warn!(lease = %kind, %id, "a lease was lost; another process took the work over");
-                return;
+                tracing::warn!(lease = %kind, %id, "a lease was lost; another process took the work over; its work here stops");
+                false
             }
-            // the store may answer again at the next renewal
-            Err(error) => tracing::warn!(%error, lease = %kind, %id, "cannot renew a lease"),
+            Err(error) => {
+                let next_try = self.leases.now().saturating_add(RENEW_EVERY.as_secs());
+                if next_try < self.until {
+                    // the store may answer again at the next renewal
+                    tracing::warn!(%error, lease = %kind, %id, "cannot renew a lease; trying again");
+                    return true;
+                }
+                tracing::error!(%error, lease = %kind, %id, "cannot renew a lease before it ends; its work here stops");
+                false
+            }
         }
     }
 }
@@ -394,6 +527,8 @@ async fn renew(leases: Leases, kind: String, id: String) {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
     use super::*;
     use crate::database::Migrations;
 
@@ -489,17 +624,126 @@ mod tests {
         let db: Arc<dyn LeaseStore> = Arc::new(Database::in_memory(&MIGRATIONS).unwrap());
         let one = Leases::new(Arc::clone(&db), "p-1");
         let two = Leases::new(Arc::clone(&db), "p-2");
-        let held = one.claim("push", "t-1").unwrap();
-        assert!(two.claim("push", "t-1").is_none());
+        let held = one.claim("push", "t-1").taken().unwrap();
+        assert!(matches!(two.claim("push", "t-1"), Claim::HeldByOther));
         assert_eq!(two.held("push").len(), 1);
         // the renewal task runs (paused clock: the sleep passes at once)
         tokio::time::sleep(RENEW_EVERY + Duration::from_millis(10)).await;
+        assert!(!held.is_lost());
         held.release();
         assert!(two.held("push").is_empty());
-        let again = two.claim("push", "t-1").unwrap();
+        let again = two.claim("push", "t-1").taken().unwrap();
         assert_eq!(again.id(), "t-1");
         // dropped: still held until it ends
         drop(again);
-        assert!(one.claim("push", "t-1").is_none());
+        assert!(one.claim("push", "t-1").taken().is_none());
+    }
+
+    /// A clock the test sets, in seconds since 1970.
+    fn set_clock(at: u64) -> (Arc<AtomicU64>, Clock) {
+        let time = Arc::new(AtomicU64::new(at));
+        let read = Arc::clone(&time);
+        (time, Arc::new(move || read.load(Ordering::SeqCst)))
+    }
+
+    /// A process stalls (or its database did not answer) until its
+    /// lease ended, and another claim took the work over, here in the
+    /// same process: the first holder's work is told to stop at its next
+    /// renewal, and its late release leaves the new holder's lease alone.
+    #[tokio::test(start_paused = true)]
+    async fn a_lease_taken_over_stops_the_first_holder() {
+        let db: Arc<dyn LeaseStore> = Arc::new(Database::in_memory(&MIGRATIONS).unwrap());
+        let (time, clock) = set_clock(1_000);
+        let leases = Leases::with_clock(Arc::clone(&db), "p-1", clock);
+        let first = leases.claim("push", "t-1").taken().unwrap();
+        let first_lost = first.lost();
+        // the lease ended, unrenewed, and a second claim takes the work
+        time.store(1_000 + LEASE_SECONDS, Ordering::SeqCst);
+        let second = leases.claim("push", "t-1").taken().unwrap();
+        // the first one's next renewal finds the other holder
+        tokio::time::timeout(RENEW_EVERY * 2, first_lost.wait())
+            .await
+            .unwrap();
+        assert!(first.is_lost());
+        assert!(!second.is_lost());
+        // the first one ends late: the second one still holds the work
+        first.release();
+        assert_eq!(leases.held("push").len(), 1);
+        assert!(matches!(leases.claim("push", "t-1"), Claim::HeldByOther));
+        second.release();
+        assert!(leases.held("push").is_empty());
+    }
+
+    /// The leases in a database whose writes fail while `down` is set.
+    struct Outage {
+        db: Database,
+        down: AtomicBool,
+    }
+
+    impl Outage {
+        fn check(&self) -> Result<(), String> {
+            if self.down.load(Ordering::SeqCst) {
+                return Err("the database does not answer".to_owned());
+            }
+            Ok(())
+        }
+    }
+
+    impl LeaseStore for Outage {
+        fn claim(
+            &self,
+            kind: &str,
+            id: &str,
+            holder: &str,
+            until: u64,
+            now: u64,
+        ) -> Result<bool, String> {
+            self.check()?;
+            self.db.claim(kind, id, holder, until, now)
+        }
+        fn extend(&self, kind: &str, id: &str, holder: &str, until: u64) -> Result<bool, String> {
+            self.check()?;
+            self.db.extend(kind, id, holder, until)
+        }
+        fn release(&self, kind: &str, id: &str, holder: &str) -> Result<(), String> {
+            self.check()?;
+            self.db.release(kind, id, holder)
+        }
+        fn held(&self, kind: &str, now: u64) -> Result<Vec<String>, String> {
+            self.check()?;
+            self.db.held(kind, now)
+        }
+        fn forget_ended(&self, before: u64) -> Result<u64, String> {
+            self.check()?;
+            self.db.forget_ended(before)
+        }
+    }
+
+    /// The database does not answer (a failover): one failed renewal is
+    /// tried again, but once the next try would come after the lease
+    /// ends, the work is told to stop, before another process can take
+    /// it. A claim that cannot reach the database says so.
+    #[tokio::test(start_paused = true)]
+    async fn renewals_that_fail_until_the_lease_ends_stop_the_work() {
+        let outage = Arc::new(Outage {
+            db: Database::in_memory(&MIGRATIONS).unwrap(),
+            down: AtomicBool::new(false),
+        });
+        let (time, clock) = set_clock(1_000);
+        let leases = Leases::with_clock(Arc::clone(&outage) as _, "p-1", clock);
+        let held = leases.claim("push", "t-1").taken().unwrap();
+        outage.down.store(true, Ordering::SeqCst);
+        assert!(matches!(leases.claim("push", "t-2"), Claim::Failed));
+        // first renewal fails at 1010: the next one, at 1020, still
+        // comes before the end (1030)
+        time.store(1_010, Ordering::SeqCst);
+        tokio::time::sleep(RENEW_EVERY + Duration::from_millis(10)).await;
+        assert!(!held.is_lost());
+        // second one fails at 1020: the next would come too late
+        time.store(1_020, Ordering::SeqCst);
+        tokio::time::timeout(RENEW_EVERY * 2, held.lost().wait())
+            .await
+            .unwrap();
+        assert!(held.is_lost());
     }
 }

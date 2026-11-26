@@ -273,7 +273,13 @@ const SQLITE_MIGRATIONS: &[&str] = &[
         lease_holder TEXT NOT NULL,
         lease_until  INTEGER NOT NULL,
         PRIMARY KEY (kind, id)
-     )",
+     )", // 1.3 (leases): the harvest status counts the runs written, so that
+    // a run planned from a copy that another process changed meanwhile
+    // is not written (`store/harvest.rs`, `write_run`); and the lease
+    // ends are indexed for the loop that deletes the old ones every
+    // second (`LeaseStore::forget_ended`)
+    "ALTER TABLE harvest_state ADD COLUMN version INTEGER NOT NULL DEFAULT 0;
+     CREATE INDEX lease_until ON lease (lease_until)",
 ];
 
 /// The PostgreSQL schema (since 1.3), applied in order as the `SQLite`
@@ -442,7 +448,10 @@ const POSTGRES_MIGRATIONS: &[&str] = &[
         lease_holder TEXT NOT NULL,
         lease_until  BIGINT NOT NULL,
         PRIMARY KEY (kind, id)
-     )",
+     )", // 1.3 (leases): the runs written, and the index of lease ends, as
+    // the SQLite migration of the same name
+    "ALTER TABLE harvest_state ADD COLUMN version BIGINT NOT NULL DEFAULT 0;
+     CREATE INDEX lease_until ON lease (lease_until)",
 ];
 
 /// Adapter: every store of the connector, on its database. Cloning it
