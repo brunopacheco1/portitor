@@ -147,9 +147,13 @@ change:
 ### Dependencies
 
 - `tokio-postgres` 0.7 and the crates it brings: 32 crate versions not
-  covered by the imported cargo-vet audits
+  covered by the imported cargo-vet audits, exempted
   ([R-04](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-04)).
-  <!-- 1.3: fill after the cargo-vet decision -->
+- cargo-vet: the six delta audits recorded before 1.3 are replaced by
+  exemptions, because an audit must mean a person read the code
+  (maintainer, 2026-11-26). Now 57 crate versions are covered by imported
+  audits, 1 partly, and 185 are exempted; `supply-chain/audits.toml` is
+  empty ([CONTRIBUTING](CONTRIBUTING.md#dependency-audits-cargo-vet)).
 
 ### Documentation
 
