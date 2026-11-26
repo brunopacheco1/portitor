@@ -498,9 +498,21 @@ Since 1.3 the store tests run on every database Portitor supports
 ([ADR 0029](adr/0029-several-replicas.md)): always on SQLite in
 memory, and also on PostgreSQL when `PORTITOR_TEST_DATABASE_URL` names
 a server (`crates/portitor-runtime/src/testing/databases.rs`). Each
-test makes a new, empty database on that server, so the URL's user
-must be allowed to create databases. The tests of the database layer
-itself are in `crates/portitor-runtime/tests/postgres.rs`.
+test makes a new, empty database on that server (`portitor_test_...`),
+so the URL's user must be allowed to create databases. The database is
+dropped (`DROP DATABASE ... WITH (FORCE)`) when the test is done with
+it; a run that is killed leaves its databases behind. The tests of the
+database layer itself are in `crates/portitor-runtime/tests/postgres.rs`,
+and those of reading the URL in `database/postgres.rs`.
+
+Each component has a schema test (`the_two_schemas_have_the_same_tables_and_columns`
+or `both_schemas_have_the_same_tables_and_columns`): its PostgreSQL
+migrations end with the schema its SQLite migrations end with, the same
+tables, columns, column types (`INTEGER` and `BIGINT` count as one,
+`BLOB` and `BYTEA` too), `NOT NULL`, primary keys and unique indexes
+(`portitor_runtime::testing::schema`). And a test per component,
+`a_file_of_1_2_opens_and_works`, opens a SQLite file of 1.2 with rows in
+it, and checks that they read back and that 1.3 works on them.
 
 On your machine, with a throwaway server (Docker or Podman; trust and
 no TLS are for a test server only):
@@ -523,8 +535,10 @@ docker stop portitor-test-db
   `PORTITOR_TEST_DATABASE_PASSWORD`, never in the URL.
 - TLS: `PORTITOR_TEST_DATABASE_TLS_URL` names a server with TLS whose
   CA is in `sslrootcert` and whose certificate names `localhost`. The
-  test checks that the connection is encrypted and that a wrong host
-  name is refused. CI does not run it.
+  test checks that the connection is encrypted, that a wrong host name
+  is refused, and that `sslrootcert=system` (the system's CAs, which do
+  not hold the test CA) is refused. CI runs it on a PostgreSQL 16 with
+  TLS, started by a step with a test CA made there.
 - **In CI** (`CI` workflow), PostgreSQL 16 and 19 run as service
   containers, pinned by digest in `.github/workflows/ci.yml`, with
   `PORTITOR_TEST_REQUIRE_POSTGRES=true`. `cargo test --workspace` runs

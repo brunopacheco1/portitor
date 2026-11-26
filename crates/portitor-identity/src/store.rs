@@ -1183,15 +1183,16 @@ mod tests {
         assert!(!b.use_token_id("j-1", 200, 100).unwrap());
     }
 
-    /// The PostgreSQL schema has the tables and columns the `SQLite`
-    /// migrations end with.
+    /// The PostgreSQL schema is the one the `SQLite` migrations end
+    /// with: tables, columns, types, NOT NULL, primary keys and unique
+    /// indexes.
     #[test]
     fn both_schemas_have_the_same_tables_and_columns() {
         let Some(postgres) = databases::fresh_postgres(&MIGRATIONS) else {
             return;
         };
         let sqlite = Database::in_memory(&MIGRATIONS).unwrap();
-        assert_eq!(schema::columns(&postgres), schema::columns(&sqlite));
+        assert_eq!(schema::tables(&postgres), schema::tables(&sqlite));
     }
 
     /// The file of `path` as the database setting.
@@ -1243,6 +1244,54 @@ mod tests {
         let again = DatabaseStore::open(&file(&path)).unwrap();
         assert_eq!(again.credentials().unwrap().len(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The migrations of 1.2 (the last release before PostgreSQL).
+    const MIGRATIONS_OF_1_2: usize = 3;
+
+    /// A file written by 1.2, with a sent request, a credential and a
+    /// Gaia-X run that was running when its process stopped, opens with
+    /// 1.3: the rows read back, the run is ended as abandoned, a new run
+    /// starts, and the leases and token ids of 1.3 work in it.
+    #[test]
+    fn a_file_of_1_2_opens_and_works() {
+        let dir = portitor_runtime::testing::TempDir::new("identity-file-of-1-2");
+        let path = dir.path().join("identity.db");
+        let conn =
+            portitor_runtime::sqlite::open(Some(&path), &SQLITE_MIGRATIONS[..MIGRATIONS_OF_1_2])
+                .unwrap();
+        conn.execute_batch(
+            "INSERT INTO credential_request (holder_pid, issuer_did, status, credential_ids,
+                 status_url, access_token_id, created_at, issuer_pid, send_error)
+                 VALUES ('h-1', 'did:web:issuer.example', 'ISSUED', '[\"membership\"]',
+                     'https://issuer.example/requests/i-1', 'jti-1', 5, 'i-1', NULL);
+             INSERT INTO credential (id, issuer, types, profile, expires_at, holder_pid, jwt)
+                 VALUES ('c-1', 'did:web:issuer.example',
+                     '[\"VerifiableCredential\",\"MembershipCredential\"]',
+                     'vc11-sl2021/jwt', 2000000000, 'h-1', 'a.b.c');
+             INSERT INTO gaiax_run (started_at, finished_at, outcome, error)
+                 VALUES (10, NULL, 'RUNNING', NULL);",
+        )
+        .unwrap();
+        drop(conn);
+
+        let store = DatabaseStore::open(&file(&path)).unwrap();
+        let read = store.request("h-1").unwrap().unwrap();
+        assert_eq!(read.status, RequestStatus::Issued);
+        assert_eq!(read.credential_ids, ["membership"]);
+        assert_eq!(read.issuer_pid.as_deref(), Some("i-1"));
+        assert_eq!(
+            store.credentials().unwrap(),
+            [credential("c-1", "did:web:issuer.example")]
+        );
+        assert_eq!(store.abandon_gaiax_runs(20).unwrap(), 1);
+        let next = store.start_gaiax_run(30).unwrap();
+        let runs = store.gaiax_runs(10).unwrap();
+        assert_eq!(runs[0].id, next);
+        assert_eq!(runs[1].outcome, RunOutcome::Failed);
+        assert!(store.claim("gaiax", "run", "p-1", 60, 30).unwrap());
+        assert!(!store.claim("gaiax", "run", "p-2", 60, 30).unwrap());
+        assert!(store.use_token_id("jti-2", 200, 30).unwrap());
     }
 
     #[test]

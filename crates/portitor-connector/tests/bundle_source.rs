@@ -927,6 +927,42 @@ async fn a_version_one_process_takes_is_moved_to_by_the_other() {
     authority.stop().await;
 }
 
+/// A connector's `SQLite` file of 1.2 (its 17 migrations) has no
+/// `bundle_in_use` row: the version in use is the one the cache folder's
+/// `.in-use.json` names, kept also when latest.json names an older one,
+/// and from then on recorded in the database.
+#[tokio::test]
+async fn a_database_of_1_2_takes_the_version_in_use_from_the_cache() {
+    use portitor_connector::bundle_harvest::SharedBundleVersion;
+    const MIGRATIONS_OF_1_2: usize = 17;
+    let authority = Authority::start(true).await;
+    authority.publish("2026.12.0", "2026-12-01T00:00:00Z");
+    authority.point_latest_at("2026.12.0");
+    let cache = scratch();
+    let settings = authority.settings(&cache);
+    // 1.2 took 2026.12.0, and its cache folder says so
+    let first = start(&settings).await.unwrap();
+    assert_eq!(first.harvester.in_use().version, "2026.12.0");
+    drop(first);
+    let dir = portitor_runtime::testing::TempDir::new("bundle-database-of-1-2");
+    let path = dir.path().join("connector.db");
+    let migrations = portitor_connector::store::MIGRATIONS.sqlite;
+    drop(portitor_runtime::sqlite::open(Some(&path), &migrations[..MIGRATIONS_OF_1_2]).unwrap());
+    let database = Arc::new(ConnectorStore::open_sqlite_file(&path).unwrap());
+    assert_eq!(database.bundle_in_use().unwrap(), None);
+
+    authority.point_latest_at(VERSION);
+    let store = Arc::new(CacheFolder::new(&settings.cache_dir));
+    let shared = Arc::clone(&database) as _;
+    let started = BundleHarvester::start(settings.clone(), source(&settings), store, shared)
+        .await
+        .unwrap();
+    assert_eq!(started.harvester.in_use().version, "2026.12.0");
+    let recorded = database.bundle_in_use().unwrap().unwrap();
+    assert_eq!(recorded.version, "2026.12.0");
+    authority.stop().await;
+}
+
 /// TD-55: a process that starts while latest.json names an older version
 /// (a host that moved back) keeps the connector's version, also from a
 /// container with no copy of it.

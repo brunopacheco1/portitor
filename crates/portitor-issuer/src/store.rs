@@ -1507,15 +1507,16 @@ mod tests {
         }
     }
 
-    /// The PostgreSQL schema has the tables and columns the `SQLite`
-    /// migrations end with.
+    /// The PostgreSQL schema is the one the `SQLite` migrations end
+    /// with: tables, columns, types, NOT NULL, primary keys and unique
+    /// indexes.
     #[test]
     fn both_schemas_have_the_same_tables_and_columns() {
         let Some(postgres) = databases::fresh_postgres(&MIGRATIONS) else {
             return;
         };
         let sqlite = Database::in_memory(&MIGRATIONS).unwrap();
-        assert_eq!(schema::columns(&postgres), schema::columns(&sqlite));
+        assert_eq!(schema::tables(&postgres), schema::tables(&sqlite));
     }
 
     /// The file of `path` as the database setting.
@@ -1535,6 +1536,70 @@ mod tests {
         let again = DatabaseStore::open(&file(&path)).unwrap();
         assert_eq!(again.revoked_indexes(Profile::Vc11).unwrap(), [position]);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The migrations of 1.2 (the last release before PostgreSQL).
+    const MIGRATIONS_OF_1_2: usize = 1;
+
+    /// A file written by 1.2, with a participant, an issued request whose
+    /// delivery waits in the outbox, and a revoked credential, opens with
+    /// 1.3: the rows read back; the outbox row, which has no lease
+    /// columns in 1.2 (NULL now), is claimed; the status list, which 1.2
+    /// did not store, is signed at start with the revocation.
+    #[test]
+    fn a_file_of_1_2_opens_and_works() {
+        let dir = portitor_runtime::testing::TempDir::new("issuer-file-of-1-2");
+        let path = dir.path().join("issuer.db");
+        let conn =
+            portitor_runtime::sqlite::open(Some(&path), &SQLITE_MIGRATIONS[..MIGRATIONS_OF_1_2])
+                .unwrap();
+        conn.execute_batch(
+            "INSERT INTO participant (did, claims, registered_at)
+                 VALUES ('did:web:holder.example', '{\"memberOf\":\"ds\"}', 50);
+             INSERT INTO credential_request (issuer_pid, holder_did, holder_pid,
+                 credential_ids, access_token, status, delivery, received_at)
+                 VALUES ('i-1', 'did:web:holder.example', 'h-1', '[\"membership-vc11\"]',
+                     'token', 'ISSUED', 'PENDING', 100);
+             INSERT INTO issued_credential (id, issuer_pid, holder_did, definition_id,
+                 credential_type, profile, status_index, issued_at, expires_at, revoked_at)
+                 VALUES ('urn:uuid:c-1', 'i-1', 'did:web:holder.example', 'membership-vc11',
+                     'MembershipCredential', 'vc11-sl2021/jwt', 7, 100, 200, 150);
+             INSERT INTO outbox (issuer_pid, message, attempts, next_attempt_at)
+                 VALUES ('i-1', '{}', 2, 120);",
+        )
+        .unwrap();
+        drop(conn);
+
+        let store = DatabaseStore::open(&file(&path)).unwrap();
+        let participant = store.participant(HOLDER).unwrap().unwrap();
+        assert_eq!(participant.registered_at, 50);
+        let request = store.request("i-1").unwrap().unwrap();
+        assert_eq!(request.status, RequestStatus::Issued);
+        assert_eq!(request.access_token.as_deref(), Some("token"));
+        let issued = store.issued(Some(HOLDER)).unwrap();
+        assert_eq!(issued.len(), 1);
+        assert_eq!(issued[0].credential.revoked_at, Some(150));
+        assert_eq!(issued[0].delivery, DeliveryState::Pending);
+        assert_eq!(store.revoked_indexes(Profile::Vc11).unwrap(), [7]);
+        // the outbox row of 1.2 is due and free
+        assert_eq!(store.next_delivery_at().unwrap(), Some(120));
+        let claimed = store.claim_due_delivery(130, lease("p-1", 160)).unwrap();
+        let claimed = claimed.unwrap();
+        assert_eq!((claimed.issuer_pid.as_str(), claimed.attempts), ("i-1", 2));
+        assert!(
+            store
+                .end_delivery("i-1", "p-1", DeliveryState::Delivered)
+                .unwrap()
+        );
+        // 1.2 stored no status list: signed at start, with the revocation
+        assert_eq!(store.status_list(Profile::Vc11).unwrap(), None);
+        assert!(
+            store
+                .sign_status_list_if_needed(Profile::Vc11, "k-1", &mut signer("k-1"))
+                .unwrap()
+        );
+        let list = store.status_list(Profile::Vc11).unwrap().unwrap();
+        assert_eq!(list.credential, "vc11-sl2021/jwt:[7]");
     }
 
     #[test]

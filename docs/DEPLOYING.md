@@ -243,10 +243,35 @@ does not use channel binding.
 | `disable` | No TLS. Only on a private network you trust, for example a database next to the container on one host |
 | `prefer`, `allow` | Refused: they fall back to plain text without saying so |
 
-The trusted CAs are those of the image, or of `SSL_CERT_DIR` and
-`SSL_CERT_FILE` ([Private CAs](#private-cas)). For a database with a
-certificate from a private CA, add `sslrootcert=<PEM file>` to the URL
-and mount that file read-only.
+The trusted CAs are set with `sslrootcert`, as in libpq:
+
+| `sslrootcert` | The server's certificate must chain to |
+|---|---|
+| missing | a CA of the image, or of `SSL_CERT_DIR` and `SSL_CERT_FILE` ([Private CAs](#private-cas)). libpq would read `~/.postgresql/root.crt` instead, which a container does not have |
+| `system` | the same: a CA of the image, `SSL_CERT_DIR` or `SSL_CERT_FILE` |
+| a PEM file | a CA in that file, **and no other** |
+
+For a database with a certificate from a private CA, add
+`sslrootcert=<PEM file>` to the URL and mount that file read-only.
+
+**Timeouts.** Each can be set in the URL as libpq reads it; without
+it, Portitor's default applies:
+
+| URL parameter | Default | What it limits |
+|---|---|---|
+| `connect_timeout` (seconds) | 10 | Connecting. `0`: no limit |
+| `options=-c%20statement_timeout%3D<time>` | `30s` | How long one statement runs on the server, as long as a lease ([Several replicas](#several-replicas)) |
+| `tcp_user_timeout` (milliseconds) | 30000 | How long sent data may stay unacknowledged before the connection is closed. `0`: the system's default |
+| `keepalives_idle`, `keepalives_interval` (seconds) | 15, 5 | When TCP starts to check an idle connection, and how often |
+
+With these, a connection to a server that went away without closing
+it (a failover, a network cut) is closed within about 30 seconds,
+instead of the system's two hours. On top of them, a call that has no
+answer after 40 seconds fails, and its connection is closed and
+replaced. The statement timeout goes to the server as the `options`
+startup parameter; a pooler in front of PostgreSQL must pass it on
+(PgBouncer refuses it unless `ignore_startup_parameters` names it, and
+then drops it: only the 40-second limit is left).
 
 **In Docker Compose.** The scenarios run one PostgreSQL container for
 all components, each with its own database and role

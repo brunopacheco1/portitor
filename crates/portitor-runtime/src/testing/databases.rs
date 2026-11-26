@@ -34,7 +34,8 @@ pub fn postgres_url() -> Option<String> {
 
 /// A new, empty PostgreSQL database on the test server, with
 /// `migrations` applied, or `None` when there is no test server. Each
-/// call makes its own database, so tests do not see each other's rows.
+/// call makes its own database, so tests do not see each other's rows;
+/// it is dropped from the server with the returned [`Database`].
 ///
 /// # Panics
 /// The test server cannot be reached or refuses to create the database.
@@ -50,6 +51,8 @@ pub fn fresh_postgres(migrations: &Migrations) -> Option<Database> {
 
 /// Makes a new, empty database on the test server and returns its
 /// settings; for tests that open it more than once (two "replicas").
+/// The database is dropped when the last copy of the settings, and the
+/// last database opened with them, is dropped.
 ///
 /// # Panics
 /// The test server cannot be reached or refuses to create the database.
@@ -65,7 +68,7 @@ pub fn fresh_postgres_settings(url: &str) -> Settings {
     if let Err(e) = created {
         panic!("cannot create the test database {name}: {e}");
     }
-    settings(&with_database(url, &name), password)
+    settings(&with_database(url, &name), password).dropping_the_database(&admin, &name)
 }
 
 fn settings(url: &str, password: Option<String>) -> Settings {

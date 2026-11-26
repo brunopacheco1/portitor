@@ -404,7 +404,12 @@ impl Database {
         match self {
             Self::Sqlite(conn, _) => {
                 let mut conn = lock(conn);
-                let tx = conn.transaction()?;
+                // takes the write lock at the start: a transaction that
+                // reads, then writes, would otherwise fail at once
+                // (SQLITE_BUSY, without waiting) when another connection
+                // wrote in between, as the lease thread does every 10 s
+                let tx =
+                    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
                 let mut runner = SqliteRunner(&tx);
                 let out = work(&mut runner)?;
                 tx.commit()?;
@@ -603,6 +608,43 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("without PORTITOR_DATABASE_URL"), "{err}");
+    }
+
+    /// The lease thread writes the `SQLite` file from a connection of its
+    /// own. A transaction that reads, then writes, while another
+    /// connection writes in between, still succeeds: the other write
+    /// waits for it.
+    #[test]
+    fn a_write_from_another_connection_waits_for_a_transaction() {
+        let dir = crate::testing::TempDir::new("database-immediate");
+        let path = dir.path().join("component.db");
+        let setting = DatabaseSetting::SqliteFile(path.clone());
+        let db = Database::open(&setting, &MIGRATIONS).unwrap();
+        let mut other_writer = None;
+        db.transaction(|tx| {
+            let rows = tx.query("SELECT id FROM item", values![])?;
+            let other_path = path.clone();
+            other_writer.get_or_insert_with(|| {
+                std::thread::spawn(move || {
+                    let other = crate::sqlite::connect(Some(&other_path)).unwrap();
+                    other
+                        .execute("INSERT INTO item (id, n) VALUES ('other', 1)", [])
+                        .unwrap();
+                })
+            });
+            // time for the other connection to write, if it could
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            tx.execute(
+                "INSERT INTO item (id, n) VALUES ($1, $2)",
+                values!["ours", i64::try_from(rows.len()).unwrap_or(0)],
+            )
+        })
+        .unwrap();
+        other_writer.unwrap().join().unwrap();
+        let rows = (&db)
+            .query("SELECT id FROM item ORDER BY id", values![])
+            .unwrap();
+        assert_eq!(rows.len(), 2);
     }
 
     /// ADR 0029, D3: a second process on one `SQLite` file refuses to

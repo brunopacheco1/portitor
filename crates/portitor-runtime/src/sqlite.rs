@@ -55,7 +55,11 @@ pub fn connect(path: Option<&Path>) -> Result<Connection, String> {
 /// A migration fails, or the file has more migrations than `migrations`
 /// (written by a newer version).
 pub fn migrate(conn: &mut Connection, migrations: &[&str]) -> Result<(), String> {
-    let tx = conn.transaction().map_err(sql_error)?;
+    // the write lock from the start: the lease thread writes the file
+    // from another connection (`database::sqlite_lease`)
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(sql_error)?;
     let stored: i64 = tx
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(sql_error)?;
