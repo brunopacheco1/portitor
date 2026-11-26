@@ -418,6 +418,19 @@ impl Failure {
     }
 }
 
+/// What [`TransferService::pending`] found to take up again after a
+/// restart.
+#[derive(Debug, Default)]
+pub struct Pending {
+    /// Our messages to send.
+    pub messages: Vec<Outgoing>,
+    /// The transfers whose data plane step could not run or be recorded
+    /// now, by provider pid, with the failure. Their step stays recorded:
+    /// it runs before the next write of the transfer, or at the next
+    /// restart.
+    pub not_taken_up: Vec<(String, Failure)>,
+}
+
 /// The acknowledgement for the HTTP response and, possibly, the next
 /// message to send.
 pub type Handled = Result<(TransferProcess, Option<Outgoing>), Failure>;
@@ -431,8 +444,9 @@ pub struct TransferService<S, A, F, D, C, E> {
     decider: D,
     catalog: C,
     env: E,
-    /// Held while a data plane step runs, so the steps run one at a time
-    /// in this process (`flow_steps`). Shared by clones of the service.
+    /// Held from a transfer's write until the data plane step it recorded
+    /// has run, so writes and their steps run one at a time in this
+    /// process (`flow_steps`). Shared by clones of the service.
     one_step_at_a_time: Arc<Mutex<()>>,
 }
 
@@ -625,22 +639,16 @@ where
     /// starts its data flow if the decider said so, and returns the
     /// answer. A transfer that is not saved starts nothing.
     fn save_new(&self, transfer: &Transfer, msg: &TransferRequestMessage) -> Handled {
-        match self.store.insert(transfer) {
-            Ok(true) => {
-                let now = self.after_write(transfer.clone(), &IfRefused::EndTheTransfer)?;
-                Ok((ack(transfer), ready_to_send(&now)))
-            }
-            Ok(false) => {
-                // a copy of this request was saved while this one was
-                // being checked: answer with the transfer that was saved
-                let (caller, cpid) = (&transfer.counter_party, &transfer.consumer_pid);
-                match self.requested_before(caller, cpid)? {
-                    Some(existing) => answer_again(&existing, msg),
-                    None => Err(bad("", cpid, "the request was sent twice; retry")),
-                }
-            }
-            Err(e) => Err(Failure::Store(e)),
-        }
+        let Some(current) = self.insert_then_run_step(transfer)? else {
+            // a copy of this request was saved while this one was being
+            // checked: answer with the transfer that was saved
+            let (caller, cpid) = (&transfer.counter_party, &transfer.consumer_pid);
+            return match self.requested_before(caller, cpid)? {
+                Some(existing) => answer_again(&existing, msg),
+                None => Err(bad("", cpid, "the request was sent twice; retry")),
+            };
+        };
+        Ok((ack(transfer), ready_to_send(&current)))
     }
 
     /// The transfer `caller` already asked for with `consumer_pid`, if
@@ -777,7 +785,8 @@ where
     ///
     /// Unknown transfer, or the store failed.
     pub fn delivered(&self, sent: &Outgoing) -> Result<Option<Outgoing>, Failure> {
-        let saved = process::update(self, &Lookup::own(&sent.provider_pid), |transfer| {
+        let lookup = Lookup::own(&sent.provider_pid);
+        let stepped = self.write_then_run_step(&lookup, IfRefused::EndTheTransfer, |transfer| {
             if !process::is_pending(transfer, sent) {
                 return Ok(Write::Skip);
             }
@@ -789,11 +798,10 @@ where
             }
             Ok(Write::Save)
         })?;
-        let Some(saved) = saved else {
-            return Ok(None);
-        };
-        let now = self.after_write(saved, &IfRefused::EndTheTransfer)?;
-        Ok(ready_to_send(&now))
+        match stepped {
+            Some(stepped) => Ok(ready_to_send(&stepped.current)),
+            None => Ok(None),
+        }
     }
 
     /// `sent` could not be delivered: end the data flow and the transfer,
@@ -806,7 +814,7 @@ where
     /// refuses, the transfer stays as it was (`flow_steps`).
     pub fn abort(&self, sent: &Outgoing, reason: &str) -> Result<Option<Outgoing>, Failure> {
         let lookup = Lookup::own(&sent.provider_pid);
-        let saved = process::update_keeping_before(self, &lookup, |transfer| {
+        let stepped = self.write_then_run_step(&lookup, IfRefused::TakeBack, |transfer| {
             if !process::can_abort(transfer, sent) {
                 return Ok(Write::Skip);
             }
@@ -814,12 +822,10 @@ where
             transfer.flow_step = Some(FlowStep::Terminate);
             Ok(Write::Save)
         })?;
-        let Some((before, written)) = saved else {
-            return Ok(None);
-        };
-        let if_refused = IfRefused::TakeBack { before: &before };
-        let now = self.after_write(written.clone(), &if_refused)?;
-        Ok(ready_to_send(&now))
+        match stepped {
+            Some(stepped) => Ok(ready_to_send(&stepped.current)),
+            None => Ok(None),
+        }
     }
 
     /// Transfers with a message still to send, for example after a
@@ -827,19 +833,31 @@ where
     /// when the process stopped run first (`flow_steps`); a message
     /// waits for its step.
     ///
+    /// A transfer whose step cannot run or be recorded now (the store
+    /// failed) is left out, with its step still recorded, and listed in
+    /// [`Pending::not_taken_up`]: one such transfer does not keep the
+    /// others, or the connector, from starting.
+    ///
     /// # Errors
     ///
-    /// Store failure.
-    pub fn pending(&self) -> Result<Vec<Outgoing>, Failure> {
+    /// The store cannot be read.
+    pub fn pending(&self) -> Result<Pending, Failure> {
         let transfers = self.store.pending().map_err(Failure::Store)?;
-        let mut messages = Vec::new();
+        let mut found = Pending::default();
         for transfer in transfers {
-            let now = self.after_write(transfer, &IfRefused::EndTheTransfer)?;
-            if let Some(message) = ready_to_send(&now) {
-                messages.push(message);
+            let current = match self.run_step_found_after_restart(&transfer) {
+                Ok(current) => current,
+                Err(failure) => {
+                    let pid = transfer.provider_pid.clone();
+                    found.not_taken_up.push((pid, failure));
+                    continue;
+                }
+            };
+            if let Some(message) = ready_to_send(&current) {
+                found.messages.push(message);
             }
         }
-        Ok(messages)
+        Ok(found)
     }
 
     /// Applies a consumer's message: checks the ids and the transition,
@@ -865,7 +883,7 @@ where
         }
         // a transfer that is not found is answered without a consumer pid
         let lookup = Lookup::from_caller(pid, "", caller);
-        let saved = process::update_keeping_before(self, &lookup, |transfer| {
+        let stepped = self.write_then_run_step(&lookup, IfRefused::TakeBack, |transfer| {
             if transfer.consumer_pid != named_consumer {
                 return Err(bad(pid, named_consumer, "process ids do not match"));
             }
@@ -885,10 +903,11 @@ where
             transfer.flow_step = consumer_step(transfer.state, address.is_some());
             Ok(Write::Save)
         })?;
-        let (before, written) = saved.ok_or_else(|| not_found(pid, named_consumer))?;
-        let if_refused = IfRefused::TakeBack { before: &before };
-        let now = self.after_write(written.clone(), &if_refused)?;
-        Ok((ack(&written), ready_to_send(&now)))
+        let Some(stepped) = stepped else {
+            // the change above never skips; answered anyway
+            return Err(not_found(pid, named_consumer));
+        };
+        Ok((ack(&stepped.written), ready_to_send(&stepped.current)))
     }
 
     /// Records on `transfer` the provider's next step, as the decider

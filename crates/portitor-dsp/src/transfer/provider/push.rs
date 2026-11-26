@@ -9,7 +9,7 @@
 use super::{
     Agreements, CatalogDatasets, DataFlows, Environment, Failure, FlowStep, IfRefused, Lookup,
     Outgoing, TransferDecider, TransferService, TransferState, TransferStore, Write, completion,
-    process, ready_to_send, termination,
+    ready_to_send, termination,
 };
 
 impl<S, A, F, D, C, E> TransferService<S, A, F, D, C, E>
@@ -45,7 +45,7 @@ where
         failure: Option<&str>,
     ) -> Result<Option<Outgoing>, Failure> {
         let lookup = Lookup::own(provider_pid);
-        let saved = process::update_keeping_before(self, &lookup, |transfer| {
+        let stepped = self.write_then_run_step(&lookup, IfRefused::TakeBack, |transfer| {
             if transfer.state != TransferState::Started || transfer.pending.is_some() {
                 return Ok(Write::Skip);
             }
@@ -60,11 +60,9 @@ where
             transfer.flow_step = Some(step);
             Ok(Write::Save)
         })?;
-        let Some((before, written)) = saved else {
-            return Ok(None);
-        };
-        let if_refused = IfRefused::TakeBack { before: &before };
-        let now = self.after_write(written.clone(), &if_refused)?;
-        Ok(ready_to_send(&now))
+        match stepped {
+            Some(stepped) => Ok(ready_to_send(&stepped.current)),
+            None => Ok(None),
+        }
     }
 }
