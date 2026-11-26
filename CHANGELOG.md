@@ -52,6 +52,7 @@ route, setting and file format still works
 ### Changed
 
 - A second process on the same SQLite file refuses to start. <!-- 1.3: check after integration -->
+- The images no longer set `PORTITOR_DB_FILE` (it would conflict with `PORTITOR_DATABASE_URL`). The SQLite defaults stay `/data/...`; the connector image now runs in the working directory `/data`, so a relative path in a connector setting is read from there.
 
 ### Fixed
 

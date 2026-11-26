@@ -465,7 +465,6 @@ it does not mean the issuer is offering anything (ADR 0018).
 Docker (keys and secrets as read-only mounts; the management port is
 published on the host's loopback only; `db.internal` is your
 PostgreSQL server, [Database](#database)):
-<!-- 1.3: check after integration: the images set PORTITOR_DB_FILE (Dockerfile), and a component refuses to start with both settings -->
 
 ```sh
 docker run -d --name portitor-issuer --restart unless-stopped \

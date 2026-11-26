@@ -62,7 +62,8 @@ ARG TARGETARCH
 LABEL org.opencontainers.image.title="portitor-identity" \
       org.opencontainers.image.description="Portitor identity: DID document, STS and credential service (DCP 1.0)"
 COPY dist/${TARGETARCH}/portitor-identity /portitor-identity
-ENV PORTITOR_DB_FILE=/data/portitor-identity.db
+# no PORTITOR_DB_FILE here: it would conflict with PORTITOR_DATABASE_URL (ADR 0029);
+# the SQLite default is already /data/portitor-identity.db
 # 8090: DID document, STS and credential service. 8091: health checks, and the
 # management API when PORTITOR_MANAGEMENT_API_KEY_FILE is set; it listens on
 # 127.0.0.1 unless PORTITOR_MANAGEMENT_BIND says otherwise.
@@ -78,7 +79,8 @@ ARG TARGETARCH
 LABEL org.opencontainers.image.title="portitor-issuer" \
       org.opencontainers.image.description="Portitor issuer: issues and revokes credentials for a dataspace authority (DCP 1.0)"
 COPY dist/${TARGETARCH}/portitor-issuer /portitor-issuer
-ENV PORTITOR_DB_FILE=/data/portitor-issuer.db
+# no PORTITOR_DB_FILE here: it would conflict with PORTITOR_DATABASE_URL (ADR 0029);
+# the SQLite default is already /data/portitor-issuer.db
 # 8070: DID document, issuer metadata, credential requests and status, status
 # lists. 8071: health checks, and the management API when
 # PORTITOR_MANAGEMENT_API_KEY_FILE is set; it listens on 127.0.0.1 unless
@@ -94,7 +96,9 @@ ARG TARGETARCH
 LABEL org.opencontainers.image.title="portitor-connector" \
       org.opencontainers.image.description="Portitor connector for the Dataspace Protocol (DSP 2025-1)"
 COPY dist/${TARGETARCH}/portitor-connector /portitor-connector
-ENV PORTITOR_DB_FILE=/data/portitor.db
+# no PORTITOR_DB_FILE here: it would conflict with PORTITOR_DATABASE_URL (ADR 0029).
+# The SQLite default "portitor.db" is relative to the working directory: /data.
+WORKDIR /data
 # 8080: DSP. 8081: health checks, and the management API when
 # PORTITOR_MANAGEMENT_API_KEY_FILE is set; it listens on 127.0.0.1 unless
 # PORTITOR_MANAGEMENT_BIND says otherwise.
