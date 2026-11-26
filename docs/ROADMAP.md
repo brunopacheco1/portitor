@@ -301,7 +301,10 @@ not a CI job (maintainer, 2026-11-15).
 - Signals to the data plane go out after the transfer's write, recorded
   with it as the outbox records our messages, never inside the retried
   update
-  ([TD-48](RISKS_AND_TECHNICAL_DEBTS.md#td-48)).
+  ([TD-48](RISKS_AND_TECHNICAL_DEBTS.md#td-48)). The write takes a
+  lease on the transfer in the database; a message for a transfer whose
+  step is running gets HTTP 503 with `Retry-After`, as Eclipse EDC
+  answers (maintainer, 2026-11-26: no lock in one process).
 - The data plane code (1,114 lines in one file in 1.1) is split so no file is above 1,000 lines
   ([R-01](RISKS_AND_TECHNICAL_DEBTS.md#r-01)).
 - Exit: all tests, the DSP and DCP TCKs and the EDC interop test pass
@@ -310,6 +313,8 @@ not a CI job (maintainer, 2026-11-15).
   "Data plane" results are within 10 % of 1.1.
 - Main risk: a change of behaviour nobody sees in the transfer service
   and the outbox.
+- Tried before the tag: all six scenarios ran on the maintainer's
+  Linux laptop on 2026-11-26.
 
 ### 1.3 Several replicas and PostgreSQL
 
@@ -725,7 +730,7 @@ Research first; code only if the ADR finds a hand-over worth building.
   [TD-48](RISKS_AND_TECHNICAL_DEBTS.md#td-48)); signaling over HTTP and
   registration; the separate image; interop with an outside data plane
   and an EDC control plane. Closes
-  [TD-17](RISKS_AND_TECHNICAL_DEBTS.md#td-17). Step 1 is planned for 1.2
+  [TD-17](RISKS_AND_TECHNICAL_DEBTS.md#td-17). Step 1 was done in 1.2
   (above); steps 2 to 4 later in 1.x, or after Data Plane Signaling 1.0
   is released (maintainer, 2026-11-25).
 - Two options from the 2026-11-26 discussion of locks in one process
