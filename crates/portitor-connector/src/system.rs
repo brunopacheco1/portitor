@@ -5,26 +5,12 @@
 //! What the connector takes from the operating system: random ids and the
 //! current time (shared helpers in `portitor_runtime::system`).
 
-use std::sync::OnceLock;
-
 use portitor_dsp::negotiation::provider::Environment;
-pub use portitor_runtime::system::{hex, new_uuid, now_secs, xsd_date_time};
+pub use portitor_runtime::system::{hex, new_uuid, now_secs, process_id, xsd_date_time};
 
 /// Adapter: identifiers from the OS random generator, time from the clock.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemEnvironment;
-
-/// This process's id: a random UUID, made the first time it is asked for
-/// (at start, [`process_id`]) and the same until the process stops. It
-/// names who holds a lease on a provider's transfer (TD-48). Random, not
-/// the host name: two containers on one host, or a container started
-/// again, are other processes.
-static PROCESS_ID: OnceLock<String> = OnceLock::new();
-
-/// This process's id ([`PROCESS_ID`]).
-pub fn process_id() -> &'static str {
-    PROCESS_ID.get_or_init(new_uuid)
-}
 
 impl Environment for SystemEnvironment {
     fn new_id(&self) -> String {

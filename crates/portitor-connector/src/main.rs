@@ -112,12 +112,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     }
-    // messages saved but not acknowledged before the last stop
+    // messages saved but not acknowledged before the last stop, and
+    // pushes that should run, that no other process leases
     match negotiator.resume() {
         Ok(0) => {}
         Ok(count) => tracing::info!(count, "sending pending negotiation messages again"),
         Err(failure) => return Err(format!("cannot read pending messages: {failure:?}").into()),
     }
+    // then the same every second, until the process stops: what another
+    // process left, once its leases have ended (ADR 0029, TD-53, TD-54)
+    let _outbox = negotiator.schedule_outbox(portitor_connector::OUTBOX_LOOP_EVERY);
     // data plane steps left over by a process that stopped (TD-48); runs
     // until the process stops, as the harvest schedule does
     let _sweep = negotiator.schedule_transfer_sweep(portitor_connector::TRANSFER_SWEEP_EVERY);
@@ -147,7 +151,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         %bind,
         datasets = negotiator.catalog_size(),
         db = %database_name(&config.database),
-        // the lease holder in the database (TD-48): which process this is
+        // the lease holder in the database (TD-48, ADR 0029): which
+        // process this is
         process = portitor_connector::system::process_id(),
         "portitor-connector listening"
     );

@@ -30,6 +30,8 @@ use portitor_dsp::transfer::provider::{
 };
 use portitor_dsp::transfer::{DataAddress, TransferState};
 
+use portitor_runtime::leases::{LeaseStore, Leases};
+
 use crate::auth::{CallerVerifier, Membership, NoTokens, Prover, RefuseAll};
 use crate::flow_membership::{MembershipStore, StoredMembership};
 use crate::http_client::Sender;
@@ -103,6 +105,13 @@ pub struct Ports {
     /// to ask for, and grant, for an offer's credential constraints.
     /// [`crate::build`] sets it from [`crate::Config::credential_types`].
     pub(crate) credential_types: CredentialTypes,
+    /// The leases of the work one process at a time does, held under
+    /// this process's id (ADR 0029, decision 6): sending a process's
+    /// pending message (TD-53), a push and an upload (TD-54), the
+    /// scheduled harvest (TD-56). [`Ports::new`] keeps them in the
+    /// connector's database; a test of two "replicas" gives each its own
+    /// holder id.
+    pub leases: Leases,
 }
 
 impl std::fmt::Debug for Ports {
@@ -155,6 +164,7 @@ impl Ports {
             },
             object_storage: None,
             credential_types: CredentialTypes::default(),
+            leases: leases_in(store),
         }
     }
 }
@@ -179,7 +189,14 @@ impl Ports {
         if self.flow_store.is_some() {
             self.flow_store = Some(Shared(Arc::clone(store) as _));
         }
+        self.leases = leases_in(store);
     }
+}
+
+/// The leases in `store`'s database, held under this process's id.
+fn leases_in(store: &ConnectorStore) -> Leases {
+    let database: Arc<dyn LeaseStore> = Arc::clone(store.database()) as _;
+    Leases::new(database, crate::system::process_id())
 }
 
 impl Ports {

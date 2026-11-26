@@ -198,6 +198,14 @@ pub const DEFAULT_DATA_TOKEN_SECONDS: u64 = 3_600;
 /// setting: settings are frozen (`docs/STABILITY.md`).
 pub const TRANSFER_SWEEP_EVERY: Duration = Duration::from_secs(10);
 
+/// How often each process looks for work that nobody leases
+/// ([`Negotiator::schedule_outbox`]; ADR 0029, TD-53 and TD-54): pending
+/// DSP messages, and pushes that should run. One second, as the wait of
+/// Eclipse EDC's state machines between two rounds. A round reads the
+/// pending messages and the leases; when nothing is left over it sends
+/// nothing. Not a setting: settings are frozen (`docs/STABILITY.md`).
+pub const OUTBOX_LOOP_EVERY: Duration = Duration::from_secs(1);
+
 /// The largest value of a setting in seconds: one year (365 days).
 /// Larger values are refused, as a time that far ahead can overflow the
 /// clock types (a schedule `Instant`, a token expiry stored in `SQLite`).
@@ -395,6 +403,8 @@ pub struct Negotiator {
     harvester: Arc<harvest::DatasetHarvester>,
     catalog_reader: Arc<catalog_reader::CatalogReader>,
     receiving: Router,
+    /// The leases of this process (ADR 0029, decision 6).
+    leases: portitor_runtime::leases::Leases,
 }
 
 impl std::fmt::Debug for Negotiator {
@@ -564,11 +574,12 @@ impl Negotiator {
 
     /// Runs a dataset harvest every `every`, in the background, the first
     /// one `every` after now (the start run is done by [`build`]). A zero
-    /// `every` means no schedule (`None`). Must be called inside the Tokio
-    /// runtime.
+    /// `every` means no schedule (`None`). Processes that share the
+    /// database run one harvest per interval between them (TD-56). Must
+    /// be called inside the Tokio runtime.
     #[must_use]
     pub fn schedule_harvest(&self, every: Duration) -> Option<tokio::task::JoinHandle<()>> {
-        self.harvester.schedule(every)
+        self.harvester.schedule(every, &self.leases)
     }
 
     /// Starts the sweep of the transfers as provider, every `every` in the
@@ -668,16 +679,84 @@ impl Negotiator {
         self.harvester.store().job(id)
     }
 
-    /// Sends again, in the background, every message that was saved but
-    /// not acknowledged (negotiations and transfers, as provider and as
-    /// consumer), for example after a restart. Call it once at start.
-    /// Returns how many.
+    /// One round of the loop of [`Negotiator::schedule_outbox`], now:
+    /// sends in the background every message that was saved but not
+    /// acknowledged and that no process leases (negotiations and
+    /// transfers, as provider and as consumer), and starts the pushes
+    /// that should run and that no process sends. The binary calls it
+    /// once at start, before the loop. Returns how many messages it took
+    /// up.
     ///
     /// # Errors
     ///
     /// The store failed.
     pub fn resume(&self) -> Result<usize, Box<Failure>> {
-        // reported like a negotiation store failure: all are the same file
+        self.outboxes().take_up()
+    }
+
+    /// Runs [`Negotiator::resume`] every `every` (the binary:
+    /// [`OUTBOX_LOOP_EVERY`]) in the background, the first round `every`
+    /// after now, until the process stops (ADR 0029, TD-53 and TD-54).
+    /// So the messages and pushes of a process that stopped are taken
+    /// over once their leases have ended, without waiting for a restart.
+    /// A round that fails is logged; the next one tries again. Must be
+    /// called inside the Tokio runtime; aborting the handle stops it.
+    #[must_use]
+    pub fn schedule_outbox(&self, every: Duration) -> tokio::task::JoinHandle<()> {
+        let outboxes = self.outboxes();
+        // supervised, as every task that runs as long as the process: the
+        // closure makes the task anew after a panic
+        let rounds = move || {
+            let outboxes = outboxes.clone();
+            async move {
+                let first = tokio::time::Instant::now() + every;
+                let mut ticks = tokio::time::interval_at(first, every);
+                ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    ticks.tick().await;
+                    match outboxes.take_up() {
+                        Ok(0) => {}
+                        Ok(count) => tracing::info!(count, "pending messages taken up"),
+                        Err(failure) => {
+                            tracing::error!(?failure, "cannot read pending messages");
+                        }
+                    }
+                    outboxes.leases.forget_old();
+                }
+            }
+        };
+        portitor_runtime::panics::spawn_supervised("outbox_loop", rounds)
+    }
+
+    /// The four senders of DSP messages, for the loop.
+    fn outboxes(&self) -> Outboxes {
+        Outboxes {
+            provider: Arc::clone(&self.provider),
+            consumer: Arc::clone(&self.consumer),
+            transfers: Arc::clone(&self.transfers),
+            transfer_consumer: Arc::clone(&self.transfer_consumer),
+            leases: self.leases.clone(),
+        }
+    }
+}
+
+/// The four senders of DSP messages (negotiations and transfers, as
+/// provider and as consumer), as the loop of
+/// [`Negotiator::schedule_outbox`] holds them.
+#[derive(Clone)]
+struct Outboxes {
+    provider: Arc<negotiation::Provider>,
+    consumer: Arc<consumer::Consumer>,
+    transfers: Arc<transfer::TransferProvider>,
+    transfer_consumer: Arc<consumer_transfer::TransferConsumer>,
+    leases: portitor_runtime::leases::Leases,
+}
+
+impl Outboxes {
+    /// One round of the loop ([`Negotiator::resume`]).
+    fn take_up(&self) -> Result<usize, Box<Failure>> {
+        // reported like a negotiation store failure: all are the same
+        // database
         let as_store_failure = |f: Box<TransferFailure>| {
             Box::new(Failure::Store(
                 portitor_dsp::negotiation::provider::StoreError(format!("{f:?}")),
@@ -782,6 +861,7 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         let ender = transfer::EndsThroughProvider(Arc::downgrade(&transfers));
         gate.ends_transfers_with(Arc::new(ender));
     }
+    let leases = ports.leases.clone();
     let provider = Arc::new(negotiation::Provider::new(
         ports,
         datasets.clone(),
@@ -804,6 +884,7 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         harvester,
         catalog_reader,
         receiving,
+        leases,
     };
     let state = Arc::new(AppState { catalog, versions });
     // open: discovery (DSP 2025-1), health, and the data plane, which

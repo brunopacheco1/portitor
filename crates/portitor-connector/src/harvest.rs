@@ -29,6 +29,7 @@ use portitor_dsp::Dataset;
 /// same `SQLite` file as the negotiations, so it reuses their store error
 /// (named after negotiations, but it means "the store failed").
 pub use portitor_dsp::negotiation::provider::StoreError;
+use portitor_runtime::leases::Leases;
 use portitor_runtime::panics::spawn_supervised;
 use portitor_runtime::telemetry::metrics;
 
@@ -577,18 +578,31 @@ impl DatasetHarvester {
     /// `every` after now (the start run is done by [`DatasetHarvester::start`]).
     /// A zero `every` means no schedule (`None`). Must be called inside
     /// the Tokio runtime.
+    ///
+    /// Several processes on one database run one harvest per interval
+    /// between them (TD-56): a run needs the job's lease in `leases`
+    /// ([`HARVEST_LEASE`]), renewed while it runs, and kept after it until
+    /// the next run is due. A process that finds the lease held skips its
+    /// turn. A process that stops in a run leaves its lease to end; the
+    /// next tick of any process after that runs.
     #[must_use]
-    pub fn schedule(self: &Arc<Self>, every: Duration) -> Option<tokio::task::JoinHandle<()>> {
+    pub fn schedule(
+        self: &Arc<Self>,
+        every: Duration,
+        leases: &Leases,
+    ) -> Option<tokio::task::JoinHandle<()>> {
         if every.is_zero() {
             return None;
         }
         let harvester = Arc::clone(self);
+        let leases = leases.clone();
         // supervised, as every task that runs as long as the process
         // (the closure makes the task anew after a panic, with its own
         // pointer to the harvester). A run that panics does not end the
         // schedule at all: it runs on its own thread, see below
         let schedule = move || {
             let harvester = Arc::clone(&harvester);
+            let leases = leases.clone();
             async move {
                 let first = tokio::time::Instant::now() + every;
                 let mut ticks = tokio::time::interval_at(first, every);
@@ -596,21 +610,12 @@ impl DatasetHarvester {
                 ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
                     ticks.tick().await;
-                    let runner = Arc::clone(&harvester);
-                    // the run reads a file and writes SQLite: blocking work
-                    let ran = tokio::task::spawn_blocking(move || runner.run(Trigger::Interval));
-                    // a run that panicked: logged and counted; the schedule
-                    // goes on with the next tick
-                    if let Err(e) = ran.await {
-                        tracing::error!(error = %e, "harvest run stopped unexpectedly");
-                        metrics::task_panicked("dataset_harvest");
-                    }
+                    run_if_due(&harvester, &leases, every).await;
                 }
             }
         };
         Some(spawn_supervised("dataset_harvest", schedule))
     }
-
     /// Loads the copy from the store into memory.
     fn reload(&self) -> Result<(), StoreError> {
         let datasets = self.store.datasets()?;
@@ -795,6 +800,34 @@ fn log_run(id: u64, commit: &Commit) {
         rejected = counts.rejected,
         "harvest run"
     );
+}
+
+/// The kind and the id of the lease of the scheduled dataset harvest in
+/// the database (TD-56, `portitor_runtime::leases`).
+pub const HARVEST_LEASE: (&str, &str) = ("job", "dataset_harvest");
+
+/// One tick of [`DatasetHarvester::schedule`]: a run, if this process can
+/// take the job's lease. After the run, the lease is kept until a second
+/// before the next tick of this process, so that no process runs again
+/// within the interval, and this process finds it ended at its next tick.
+async fn run_if_due(harvester: &Arc<DatasetHarvester>, leases: &Leases, every: Duration) {
+    let ticked = leases.now();
+    let (kind, id) = HARVEST_LEASE;
+    let Some(lease) = leases.claim(kind, id) else {
+        tracing::debug!("harvest: another process runs it in this interval");
+        return;
+    };
+    let runner = Arc::clone(harvester);
+    // the run reads a file and writes the store: blocking work
+    let ran = tokio::task::spawn_blocking(move || runner.run(Trigger::Interval));
+    // a run that panicked: logged and counted; the schedule goes on with
+    // the next tick
+    if let Err(e) = ran.await {
+        tracing::error!(error = %e, "harvest run stopped unexpectedly");
+        metrics::task_panicked("dataset_harvest");
+    }
+    let next_due = ticked.saturating_add(every.as_secs()).saturating_sub(1);
+    lease.hold_until(next_due);
 }
 
 #[cfg(test)]

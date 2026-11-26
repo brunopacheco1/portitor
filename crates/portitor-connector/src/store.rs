@@ -251,6 +251,19 @@ const SQLITE_MIGRATIONS: &[&str] = &[
         expires_at INTEGER NOT NULL
      );
      CREATE INDEX used_token_expires_at ON used_token (expires_at)",
+    // 1.3 (loops): the leases of work that one process at a time does:
+    // sending a process's pending DSP message, a running push, a
+    // consumer's upload, a scheduled job (ADR 0029, decision 6; TD-53,
+    // TD-54, TD-56; `portitor_runtime::leases`). `lease_holder`: the id
+    // of the process that holds it; `lease_until`: when it ends, in
+    // seconds since 1970
+    "CREATE TABLE lease (
+        kind         TEXT NOT NULL,
+        id           TEXT NOT NULL,
+        lease_holder TEXT NOT NULL,
+        lease_until  INTEGER NOT NULL,
+        PRIMARY KEY (kind, id)
+     )",
 ];
 
 /// The PostgreSQL schema (since 1.3), applied in order as the `SQLite`
@@ -404,6 +417,15 @@ const POSTGRES_MIGRATIONS: &[&str] = &[
         expires_at BIGINT NOT NULL
      );
      CREATE INDEX used_token_expires_at ON used_token (expires_at)",
+    // 1.3 (loops): the leases of work that one process at a time does,
+    // as the SQLite migration of the same name
+    "CREATE TABLE lease (
+        kind         TEXT NOT NULL,
+        id           TEXT NOT NULL,
+        lease_holder TEXT NOT NULL,
+        lease_until  BIGINT NOT NULL,
+        PRIMARY KEY (kind, id)
+     )",
 ];
 
 /// Adapter: every store of the connector, on its database. Cloning it
@@ -834,6 +856,24 @@ fn on_every_database(test: impl Fn(&ConnectorStore)) {
         println!("on {name}");
         test(&ConnectorStore::new(Arc::new(database)));
     }
+}
+
+/// Two stores on one new PostgreSQL database, each with its own
+/// connections, as two processes ("replicas") have them; `None` without
+/// a test server.
+///
+/// # Panics
+/// The database cannot be made or opened.
+#[cfg(test)]
+pub(crate) fn two_replicas() -> Option<[ConnectorStore; 2]> {
+    use portitor_runtime::testing::databases;
+    let url = databases::postgres_url()?;
+    let setting = DatabaseSetting::Postgres(Box::new(databases::fresh_postgres_settings(&url)));
+    let open = || match Database::open(&setting, &MIGRATIONS) {
+        Ok(database) => ConnectorStore::new(Arc::new(database)),
+        Err(e) => panic!("cannot open the test database: {e}"),
+    };
+    Some([open(), open()])
 }
 
 #[cfg(test)]

@@ -525,10 +525,9 @@ impl GaiaxCompliance for PanicsOnce {
 
 /// A run the operator starts works in the background
 /// (`portitor_runtime::panics::report_panic`). If it panics, it stores
-/// nothing and frees the lock, so the next run can start and succeeds;
-/// the management API keeps answering. The run that panicked stays
-/// `RUNNING` in the list until the next start of the process marks it
-/// failed.
+/// nothing and frees the lock and the lease, so the next run can start
+/// and succeeds; the management API keeps answering. The next run, which
+/// takes the lease, marks the run that panicked failed (TD-56).
 #[tokio::test]
 async fn a_run_that_panics_does_not_block_the_next_run() {
     let setup = setup_through(COMPLIANCE, |adapter| {
@@ -578,8 +577,49 @@ async fn a_run_that_panics_does_not_block_the_next_run() {
     };
     assert_eq!(runs[0]["outcome"], "SUCCEEDED", "{runs}");
     assert_eq!(runs[1]["id"], panicking["id"]);
-    assert_eq!(runs[1]["outcome"], "RUNNING", "{runs}");
+    assert_eq!(runs[1]["outcome"], "FAILED", "{runs}");
+    assert_eq!(runs[1]["error"], "its process stopped", "{runs}");
     assert_eq!(held_gaiax(world).len(), 4, "only the second run stored");
+}
+
+/// ADR 0029 (TD-56): another process that shares the database runs, or
+/// ran and stopped. While its lease holds, this process starts no run:
+/// the management API answers 409, and a scheduled run counts the other
+/// one. Once the lease has ended, the next run here marks the run that
+/// was left `RUNNING` failed, and runs.
+#[tokio::test]
+async fn a_run_waits_for_the_lease_of_another_process() {
+    let setup = setup().await;
+    let world = &setup.world;
+    let store = world.identity.store();
+    let now = portitor_runtime::system::now_secs();
+    let left = store.start_gaiax_run(now).unwrap();
+    let (kind, id) = portitor_identity::gaiax::RUN_LEASE;
+    assert!(store.claim(kind, id, "replica-gone", now + 2, now).unwrap());
+
+    let start = || {
+        Request::post("/v1/gaiax/compliance")
+            .header(header::AUTHORIZATION, format!("Bearer {API_KEY}"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        call(&world.management, start()).await.0,
+        StatusCode::CONFLICT
+    );
+    let counted = run_now(&world.identity).await.unwrap();
+    assert_eq!((counted.id, counted.outcome), (left, RunOutcome::Running));
+    assert!(held_gaiax(world).is_empty(), "nothing ran here");
+
+    while portitor_runtime::system::now_secs() <= now + 2 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let ran = run_now(&world.identity).await.unwrap();
+    assert_eq!(ran.outcome, RunOutcome::Succeeded);
+    let runs = store.gaiax_runs(2).unwrap();
+    assert_eq!(runs[1].id, left);
+    assert_eq!(runs[1].outcome, RunOutcome::Failed);
+    assert_eq!(runs[1].error.as_deref(), Some("its process stopped"));
 }
 
 /// The service's reason for a refusal is in the run's error, as the

@@ -82,20 +82,6 @@ impl RunningFlows {
         CutSignal(switch.subscribe())
     }
 
-    /// Like [`RunningFlows::watch`], but only when no work of flow
-    /// `flow_id` runs: one push at a time per flow (ADR 0027, section 1).
-    pub fn watch_if_idle(&self, flow_id: &str) -> Option<CutSignal> {
-        let mut switches = self.switches();
-        switches.retain(|_, switch| switch.receiver_count() > 0);
-        if switches.contains_key(flow_id) {
-            return None;
-        }
-        let switch = watch::channel(()).0;
-        let signal = CutSignal(switch.subscribe());
-        switches.insert(flow_id.to_owned(), switch);
-        Some(signal)
-    }
-
     /// Stops every piece of work of flow `flow_id` that is running now.
     /// Work started later is not affected. Returns how many were told.
     pub fn cut(&self, flow_id: &str) -> usize {
@@ -154,15 +140,6 @@ mod tests {
         assert!(!new.is_cut());
         let waited = tokio::time::timeout(Duration::from_millis(50), new.cut()).await;
         assert!(waited.is_err(), "not cut");
-    }
-
-    #[test]
-    fn only_one_piece_of_work_when_idle() {
-        let running = RunningFlows::new();
-        let first = running.watch_if_idle("f1").unwrap();
-        assert!(running.watch_if_idle("f1").is_none(), "one runs");
-        drop(first);
-        assert!(running.watch_if_idle("f1").is_some(), "it ended");
     }
 
     #[test]

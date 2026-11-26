@@ -38,6 +38,14 @@
 //! scheduled run that waited for the operator's does not follow it at
 //! once.
 //!
+//! Several processes may share one database (ADR 0029, TD-56): a run
+//! needs the lease [`RUN_LEASE`] in the database, renewed while it runs
+//! and ended with it, so runs never overlap among the processes either.
+//! A process that finds it held does not run. The runs still `RUNNING`
+//! when a process takes the lease were left by a process that stopped
+//! (its lease ended): they are marked failed then, not at start, where
+//! they may be another process's run.
+//!
 //! The public base is where the participant's `did:web` DID document is,
 //! without `did.json` ([`public_base`]): `https://provider.example` for
 //! `did:web:provider.example`, `https://host.example/participants/a` for
@@ -60,6 +68,7 @@ use portitor_dcp::gaiax_sign::{
 use portitor_runtime::BoxFuture;
 use portitor_runtime::api_key::problem;
 use portitor_runtime::http::HttpSender;
+use portitor_runtime::leases::{HeldLease, LeaseStore, Leases};
 use portitor_runtime::retry::retry_delay;
 use portitor_runtime::system::now_secs;
 use serde::Deserialize;
@@ -188,8 +197,11 @@ pub struct Onboarding {
     /// The only DID whose answer is taken (`PORTITOR_GAIAX_COMPLIANCE_DID`).
     compliance_did: String,
     participant_file: PathBuf,
-    /// Held while a run is on.
+    /// Held while a run of this process is on; the lease in the database
+    /// ([`RUN_LEASE`]) keeps the other processes out.
     running: Arc<Mutex<()>>,
+    /// The leases of this process.
+    leases: Leases,
     /// Wakes [`run_schedule`] after a run the operator started.
     ran: Notify,
 }
@@ -208,10 +220,13 @@ impl Onboarding {
     /// # Errors
     /// The participant file or the registration number credential cannot
     /// be read or is invalid.
+    /// `leases`: where the lease of a run is kept, the identity's
+    /// database.
     pub fn new(
         compliance: Arc<dyn GaiaxCompliance>,
         compliance_did: &str,
         participant_file: &Path,
+        leases: Arc<dyn LeaseStore>,
     ) -> Result<Self, String> {
         let participant = read_participant(participant_file)?;
         tracing::info!(
@@ -223,6 +238,7 @@ impl Onboarding {
             compliance_did: compliance_did.to_owned(),
             participant_file: participant_file.to_owned(),
             running: Arc::new(Mutex::new(())),
+            leases: Leases::new(leases, portitor_runtime::system::process_id()),
             ran: Notify::new(),
         })
     }
@@ -411,17 +427,23 @@ pub fn start_run(identity: &Arc<Identity>) -> Result<GaiaxRun, StartError> {
     let Ok(guard) = Arc::clone(&onboarding.running).try_lock_owned() else {
         return Err(StartError::Busy);
     };
+    let Some(lease) = claim_run(identity, onboarding) else {
+        // another process runs one
+        return Err(StartError::Busy);
+    };
+    let lease = RunLease(Some(lease));
     let started_at = now_secs();
     let id = identity
         .store
         .start_gaiax_run(started_at)
         .map_err(StartError::Store)?;
     let background = Arc::clone(identity);
-    // a panic is logged and counted; it drops `guard`, so the next run
-    // can start, and this run stays `running` in the store until the
-    // next start marks it failed
+    // a panic is logged and counted; it drops `guard` and ends the lease,
+    // so the next run can start, and this run stays `running` in the
+    // store until that run marks it failed
     let run = async move {
         finish_run(&background, id, guard).await;
+        drop(lease);
         if let Some(onboarding) = &background.gaiax {
             onboarding.ran.notify_one();
         }
@@ -473,8 +495,17 @@ fn latest_run(identity: &Identity) -> Option<GaiaxRun> {
     }
 }
 
-/// Records a run's start and runs it; `running` is the held lock.
+/// Records a run's start and runs it; `running` is the held lock. When
+/// another process runs one (it holds [`RUN_LEASE`]), runs nothing and
+/// returns that run.
 async fn run_locked(identity: &Identity, running: OwnedMutexGuard<()>) -> Option<GaiaxRun> {
+    let onboarding = identity.gaiax.as_ref()?;
+    let Some(lease) = claim_run(identity, onboarding) else {
+        tracing::info!("Gaia-X compliance run skipped: another process runs one");
+        return latest_run(identity);
+    };
+    // ends the lease when this function returns, also on a panic
+    let _lease = RunLease(Some(lease));
     let id = match identity.store.start_gaiax_run(now_secs()) {
         Ok(id) => id,
         Err(error) => {
@@ -483,6 +514,43 @@ async fn run_locked(identity: &Identity, running: OwnedMutexGuard<()>) -> Option
         }
     };
     finish_run(identity, id, running).await
+}
+
+/// The lease of a run, ended when the value is dropped: when the run
+/// ends, and also when it panics, since this process knows that the run
+/// is over then. (A process that stops does not end it: it ends on its
+/// own.)
+struct RunLease(Option<HeldLease>);
+
+impl Drop for RunLease {
+    fn drop(&mut self) {
+        if let Some(lease) = self.0.take() {
+            lease.release();
+        }
+    }
+}
+
+/// The kind and the id of the lease of a Gaia-X compliance run in the
+/// database (TD-56, `portitor_runtime::leases`).
+pub const RUN_LEASE: (&str, &str) = ("job", "gaiax_compliance");
+
+/// Takes [`RUN_LEASE`] for this process; `None` while another process
+/// holds it. Once taken, no other process runs: the runs still `RUNNING`
+/// were left by a process that stopped, and are marked failed.
+fn claim_run(identity: &Identity, onboarding: &Onboarding) -> Option<HeldLease> {
+    let (kind, id) = RUN_LEASE;
+    let lease = onboarding.leases.claim(kind, id)?;
+    match identity.store.abandon_gaiax_runs(now_secs()) {
+        Ok(0) => {}
+        Ok(count) => {
+            tracing::warn!(
+                count,
+                "Gaia-X runs left by a process that stopped marked failed"
+            );
+        }
+        Err(error) => tracing::error!(%error, "identity store failed"),
+    }
+    Some(lease)
 }
 
 /// Runs, records how it ended, and lets the next run start.
@@ -714,11 +782,6 @@ pub async fn run_schedule(identity: Arc<Identity>) {
     let Some(onboarding) = &identity.gaiax else {
         return;
     };
-    match identity.store.abandon_gaiax_runs(now_secs()) {
-        Ok(0) => {}
-        Ok(count) => tracing::warn!(count, "Gaia-X runs stopped by a restart marked failed"),
-        Err(error) => tracing::error!(%error, "identity store failed"),
-    }
     let mut schedule = Schedule::default();
     loop {
         let now = now_secs();
