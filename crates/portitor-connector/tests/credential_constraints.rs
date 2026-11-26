@@ -823,8 +823,7 @@ fn verified_connectors(network: &Arc<Network>, dataspace: &LocalDataspace) -> Ne
         did_cache_seconds: 300,
     };
     let mut provider_ports = common::ports(Arc::clone(network) as Arc<dyn Sender>);
-    let used_token_ids =
-        Arc::new(portitor_connector::store::SqliteNegotiations::in_memory().unwrap());
+    let used_token_ids = Arc::new(portitor_connector::store::ConnectorStore::in_memory().unwrap());
     provider_ports.verifier =
         Arc::new(DcpVerifier::new(&settings, Arc::new(ProviderSts), used_token_ids).unwrap());
     provider_ports.prover = Arc::new(common::NameSelf {

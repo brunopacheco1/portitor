@@ -44,11 +44,6 @@ const NOT_FROZEN: &[&str] = &[
     "PORTITOR_ALLOW_HTTP_CALLBACKS",
     // renamed in 0.13 to PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE
     "PORTITOR_IDENTITY_CERTIFICATE_CHAIN",
-    // read only by the tests, on a PostgreSQL test server
-    // (`portitor_runtime::testing::databases`)
-    "PORTITOR_TEST_DATABASE_URL",
-    "PORTITOR_TEST_DATABASE_PASSWORD",
-    "PORTITOR_TEST_REQUIRE_POSTGRES",
 ];
 
 fn stability() -> String {

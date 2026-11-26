@@ -246,7 +246,6 @@ const SQLITE_MIGRATIONS: &[&str] = &[
     // 1.3: the token ids used by callers, until their token expires, so
     // that a token is taken once by every process of the connector
     // (TD-09; `store/used_tokens.rs`, `portitor_runtime::used_tokens`)
-    // 1.3 integration: add used_token to the connector PostgreSQL migrations
     "CREATE TABLE used_token (
         token_id   TEXT PRIMARY KEY,
         expires_at INTEGER NOT NULL
@@ -399,6 +398,12 @@ const POSTGRES_MIGRATIONS: &[&str] = &[
         snapshot_sha256 TEXT
     );
     INSERT INTO harvest_state (id, rules_version, snapshot_sha256) VALUES (1, NULL, NULL)"#,
+    // 1.3: the token ids used by callers (TD-09), as SQLite migration 18
+    "CREATE TABLE used_token (
+        token_id   TEXT PRIMARY KEY,
+        expires_at BIGINT NOT NULL
+     );
+     CREATE INDEX used_token_expires_at ON used_token (expires_at)",
 ];
 
 /// Adapter: every store of the connector, on its database. Cloning it

@@ -128,8 +128,7 @@ async fn the_dcp_verifier_sends_no_trace_context() {
     let (base, recorder) = traceparent_recorder().await;
     let settings = settings(&base);
     let sts: Arc<dyn SecureTokenService> = Arc::new(StsClient::new(&settings).unwrap());
-    let used_token_ids =
-        Arc::new(portitor_connector::store::SqliteNegotiations::in_memory().unwrap());
+    let used_token_ids = Arc::new(portitor_connector::store::ConnectorStore::in_memory().unwrap());
     let verifier = DcpVerifier::new(&settings, sts, used_token_ids).unwrap();
     let authorization = format!("Bearer {}", token_from(&did_of(&base)));
     let span = tracing::info_span!(target: "portitor_test", "request");

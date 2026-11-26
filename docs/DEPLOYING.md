@@ -302,6 +302,8 @@ settings are in its step.
 | `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8071` issuer, `127.0.0.1:8091` identity, `127.0.0.1:8081` connector | Address of the management port |
 | `PORTITOR_MANAGEMENT_API_KEY_FILE` | none (management API off) | File with the management API key, at least 32 characters (`openssl rand -hex 32`) |
 | `PORTITOR_DB_FILE` | `/data/portitor-issuer.db`, `/data/portitor-identity.db`, `portitor.db` (connector; `/data/portitor.db` in its image) | The SQLite file, one process per file. Deprecated since 1.3; not together with `PORTITOR_DATABASE_URL` ([Database](#database)) |
+| `PORTITOR_DATABASE_URL` | none (the SQLite file) | Since 1.3. PostgreSQL to keep the component's state in, as `postgresql://user@host:5432/database?sslmode=verify-full`, without the password; not together with `PORTITOR_DB_FILE` |
+| `PORTITOR_DATABASE_PASSWORD_FILE` | none | Since 1.3. File with the PostgreSQL password, only with `PORTITOR_DATABASE_URL` |
 | `PORTITOR_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | Largest request body on the public port, `1` to `67108864` (64 MiB) |
 | `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | The same for the management port |
 | `PORTITOR_ALLOW_HTTP` | `false` | `true` allows plain `http://` for the addresses partners give. **Never in production** |
@@ -1037,8 +1039,6 @@ Besides the [settings of every component](#settings-of-every-component):
 | Variable | Default | Meaning |
 |---|---|---|
 | `PORTITOR_PUBLIC_URL` | none (**required**) | Your public base URL, for example `https://connector.example.com` |
-| `PORTITOR_DATABASE_URL` | none (the SQLite file) | Since 1.3. PostgreSQL to keep the connector's state in, as `postgresql://user@host:5432/database?sslmode=verify-full`, without the password; not together with `PORTITOR_DB_FILE` |
-| `PORTITOR_DATABASE_PASSWORD_FILE` | none | Since 1.3. File with the PostgreSQL password, only with `PORTITOR_DATABASE_URL` |
 | `PORTITOR_STS_URL` | none (**required**) | Your identity's STS token endpoint, for example `http://identity:8090/sts/token` |
 | `PORTITOR_STS_ALLOW_HTTP` | `false` | `true` allows a plain `http://` `PORTITOR_STS_URL`, and nothing else |
 | `PORTITOR_STS_CLIENT_SECRET_FILE` | none (**required**) | The STS secret, the same file as the identity's |

@@ -38,14 +38,6 @@ const READ_FROM_THE_ENVIRONMENT_ONLY: [&str; 5] = [
     "OTEL_SERVICE_NAME",
 ];
 
-/// The settings of PostgreSQL (`docs/STABILITY.md`, every binary),
-/// which the connector does not read yet.
-// 1.3 integration: the connector reads them with
-// `portitor_runtime::database::setting`; move them into the table then
-// (with their own rule checks, as in the identity's and the issuer's
-// `tests/settings.rs`)
-const NOT_READ_YET: [&str; 2] = ["PORTITOR_DATABASE_URL", "PORTITOR_DATABASE_PASSWORD_FILE"];
-
 const MEMBERSHIP_SCOPE: &str = "org.eclipse.dspace.dcp.vc.type:MembershipCredential:read";
 const RESEARCH_SCOPE: &str = "org.eclipse.dspace.dcp.vc.type:ResearchCredential:read";
 
@@ -238,10 +230,7 @@ fn the_table_has_every_setting_of_the_stability_document() {
             in_the_table.insert(case.name.to_owned());
         }
     }
-    for name in READ_FROM_THE_ENVIRONMENT_ONLY
-        .into_iter()
-        .chain(NOT_READ_YET)
-    {
+    for name in READ_FROM_THE_ENVIRONMENT_ONLY {
         assert!(
             in_the_table.insert(name.to_owned()),
             "{name} is in both lists"

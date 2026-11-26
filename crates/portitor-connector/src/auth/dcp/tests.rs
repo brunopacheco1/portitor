@@ -24,7 +24,7 @@ use super::*;
 /// The used token ids in an in-memory store of the connector, as in
 /// production (TD-09).
 fn used_token_ids() -> Arc<dyn UsedTokenStore> {
-    Arc::new(crate::store::SqliteNegotiations::in_memory().unwrap())
+    Arc::new(crate::store::ConnectorStore::in_memory().unwrap())
 }
 
 /// One participant: its DID and key, and its DID document as served.

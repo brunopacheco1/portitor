@@ -8,40 +8,15 @@
 //! records each accepted token's `jti` here
 //! (`auth::dcp::DcpVerifier`), so a token is taken once by every process
 //! that shares the database, also after a restart.
-//!
-//! On the `SQLite` connection of [`SqliteNegotiations`] until the
-//! connector's store moves to `portitor_runtime::database` (1.3); then
-//! this adapter calls `portitor_runtime::used_tokens::use_token_id`.
 
 use portitor_runtime::used_tokens::UsedTokenStore;
-use rusqlite::params;
 
-use super::SqliteNegotiations;
+use super::ConnectorStore;
 
-impl UsedTokenStore for SqliteNegotiations {
+impl UsedTokenStore for ConnectorStore {
     fn use_token_id(&self, token_id: &str, expires_at: u64, now: u64) -> Result<bool, String> {
-        let conn = self.conn();
-        conn.execute(
-            "DELETE FROM used_token WHERE expires_at < ?1",
-            [seconds(now)],
-        )
-        .map_err(|e| format!("used token ids: {e}"))?;
-        // one statement: of two processes that insert the same id at
-        // once, one changes a row, the other none
-        let inserted = conn
-            .execute(
-                "INSERT INTO used_token (token_id, expires_at) VALUES (?1, ?2)
-                     ON CONFLICT (token_id) DO NOTHING",
-                params![token_id, seconds(expires_at)],
-            )
-            .map_err(|e| format!("used token ids: {e}"))?;
-        Ok(inserted == 1)
+        self.database().use_token_id(token_id, expires_at, now)
     }
-}
-
-/// Seconds since 1970 as `SQLite` keeps them: a signed 64-bit number.
-fn seconds(at: u64) -> i64 {
-    i64::try_from(at).unwrap_or(i64::MAX)
 }
 
 #[cfg(test)]
@@ -51,12 +26,14 @@ mod tests {
 
     #[test]
     fn a_token_id_is_used_once_until_it_expires() {
-        let store = SqliteNegotiations::in_memory().unwrap();
-        assert!(store.use_token_id("j-1", 200, 100).unwrap());
-        assert!(!store.use_token_id("j-1", 200, 150).unwrap(), "replayed");
-        // at 201 the row of j-1 has expired and is deleted
-        assert!(store.use_token_id("j-2", 300, 201).unwrap());
-        assert!(store.use_token_id("j-1", 400, 201).unwrap());
+        for database in portitor_runtime::testing::databases::all(&super::super::MIGRATIONS) {
+            let store = ConnectorStore::new(std::sync::Arc::new(database));
+            assert!(store.use_token_id("j-1", 200, 100).unwrap());
+            assert!(!store.use_token_id("j-1", 200, 150).unwrap(), "replayed");
+            // at 201 the row of j-1 has expired and is deleted
+            assert!(store.use_token_id("j-2", 300, 201).unwrap());
+            assert!(store.use_token_id("j-1", 400, 201).unwrap());
+        }
     }
 
     /// Two stores on one file (two processes): a token id used through
@@ -65,8 +42,8 @@ mod tests {
     fn a_token_id_used_by_one_process_is_refused_by_the_other() {
         let dir = portitor_runtime::testing::TempDir::new("connector-used-tokens");
         let path = dir.path().join("connector.db");
-        let first = SqliteNegotiations::open(&path).unwrap();
-        let second = SqliteNegotiations::open(&path).unwrap();
+        let first = ConnectorStore::open_sqlite_file(&path).unwrap();
+        let second = ConnectorStore::open_sqlite_file(&path).unwrap();
         assert!(first.use_token_id("j-1", 200, 100).unwrap());
         assert!(!second.use_token_id("j-1", 200, 100).unwrap());
     }
