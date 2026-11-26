@@ -14,7 +14,7 @@
 //! | File | What it holds |
 //! |---|---|
 //! | `flows.rs` | [`Flow`], the [`FlowStore`] port, access tokens ([`hash`], [`new_token`]) |
-//! | `plane.rs` | [`HttpDataPlane`]: what it holds and how it is built |
+//! | `plane.rs` | [`HttpDataPlane`]: what it holds and how it is built; its other methods are in `impl HttpDataPlane` blocks of `signaling.rs`, `serving.rs`, `sources.rs` and `push.rs` |
 //! | `signaling.rs` | the [`DataPlane`] signals: start (with the source from `metadata`, [`SOURCE_METADATA_KEY`]), suspend, resume, complete, terminate, a new token |
 //! | `serving.rs` | `GET /data/{flowId}` ([`serve`]): token, membership check, the stream, the audit line |
 //! | `sources.rs` | reading a source: an upstream URL or an `s3://` object ([`SourceData`]) |

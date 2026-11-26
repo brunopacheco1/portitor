@@ -500,12 +500,9 @@ mod tests {
             "d".to_owned(),
             "https://upstream.example/d".to_owned(),
         )]));
-        let plane = portitor_dataplane::HttpDataPlane::new(
-            Arc::new(store),
-            "https://p.example",
-            3_600,
-        )
-        .unwrap();
+        let plane =
+            portitor_dataplane::HttpDataPlane::new(Arc::new(store), "https://p.example", 3_600)
+                .unwrap();
         let flows = SignalingDataFlows::new(plane.clone(), "did:web:p", "default", sources);
         let pull = transfer("HttpData-PULL");
         let first = flows.start(&pull).unwrap().unwrap();
@@ -514,8 +511,12 @@ mod tests {
         assert_ne!(token(&first), token(&again));
         // any time before the tokens expire
         let now = 1;
-        assert!(plane.authorize("p", &token(&first), now).is_err());
-        assert!(plane.authorize("p", &token(&again), now).is_ok());
+        assert!(
+            plane
+                .source_if_authorized("p", &token(&first), now)
+                .is_err()
+        );
+        assert!(plane.source_if_authorized("p", &token(&again), now).is_ok());
     }
 
     #[test]

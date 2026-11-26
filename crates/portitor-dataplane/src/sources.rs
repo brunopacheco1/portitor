@@ -37,7 +37,12 @@ impl HttpDataPlane {
     /// Whether this data plane can read `source`: an `http(s)` URL, or an
     /// `s3://` object when the connector has object storage.
     pub(crate) fn can_read(&self, source: &str) -> bool {
-        parse_s3_uri(source).is_none() || self.storage.is_some()
+        match parse_s3_uri(source) {
+            // an `s3://` object: only with object storage
+            Some(_) => self.storage.is_some(),
+            // an upstream URL: always
+            None => true,
+        }
     }
 
     /// Opens `source`, an upstream URL or an `s3://` object, and returns
@@ -63,7 +68,7 @@ impl HttpDataPlane {
                     body: Body::new(found.body),
                 })
             }
-            None => fetch(&self.client, source).await,
+            None => fetch(&self.source_client, source).await,
         }
     }
 }

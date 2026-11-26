@@ -55,27 +55,36 @@ pub enum Denied {
     /// expired: HTTP 401, without saying which.
     Unauthorized,
     /// The flow store failed: HTTP 500.
-    Store,
+    StoreFailed,
 }
 
 impl HttpDataPlane {
-    /// Checks a request for flow `id` with bearer `token`, and returns the
-    /// upstream URL to fetch.
+    /// Checks a request for flow `id` with bearer `token` at time `now`,
+    /// and returns the flow's source, to read with
+    /// [`HttpDataPlane::open_source`]: an upstream URL or an `s3://`
+    /// object.
     ///
     /// # Errors
     ///
     /// See [`Denied`].
-    pub fn authorize(&self, id: &str, token: &str, now: u64) -> Result<String, Denied> {
-        let allowed = self.authorized(id, token, now)?;
+    pub fn source_if_authorized(&self, id: &str, token: &str, now: u64) -> Result<String, Denied> {
+        let allowed = self.check_request(id, token, now)?;
         Ok(allowed.source)
     }
 
-    /// [`HttpDataPlane::authorize`], with who the data goes to.
-    pub(crate) fn authorized(&self, id: &str, token: &str, now: u64) -> Result<Authorized, Denied> {
+    /// Checks a request for flow `id` with bearer `token` at time `now`
+    /// ([`HttpDataPlane::source_if_authorized`]), and returns the flow's
+    /// source and who the data goes to.
+    pub(crate) fn check_request(
+        &self,
+        id: &str,
+        token: &str,
+        now: u64,
+    ) -> Result<Authorized, Denied> {
         let flow = self
             .flows
             .get(id)
-            .map_err(|_| Denied::Store)?
+            .map_err(|_| Denied::StoreFailed)?
             .ok_or(Denied::Unauthorized)?;
         let allowed = flow.state == DataFlowState::Started
             && flow.push_address.is_none()
@@ -119,10 +128,10 @@ pub async fn serve(
     // watch first, check second: a suspend between the two still cuts
     // this download (`running_flows` module doc)
     let cut = plane.running.watch(&id);
-    let Authorized { source, parties } = match plane.authorized(&id, token, now_secs()) {
+    let Authorized { source, parties } = match plane.check_request(&id, token, now_secs()) {
         Ok(allowed) => allowed,
         Err(Denied::Unauthorized) => return unauthorized(),
-        Err(Denied::Store) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(Denied::StoreFailed) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
     if let Some(gate) = &plane.gate
         && !member_may_download(gate.as_ref(), &id).await
@@ -136,18 +145,25 @@ pub async fn serve(
                 response.headers_mut().insert(header::CONTENT_TYPE, value);
             }
             // the bytes are counted as they go to the consumer; the cut
-            // wraps the count, so a cut download is audited as `cut`
+            // wraps the count, so a cut download is audited as `cut`.
+            // `Response::map` changes only the body; the status and the
+            // headers stay.
             let response = response.map(|body| Body::new(AuditedBody::new(body, &id, parties)));
-            let watchdog = plane
-                .gate
-                .as_ref()
-                .map(|gate| download::watchdog(Arc::clone(gate), plane.running_flows(), &id));
+            let watchdog = match &plane.gate {
+                Some(gate) => Some(download::watchdog(
+                    Arc::clone(gate),
+                    plane.running_flows(),
+                    &id,
+                )),
+                // no gate: nothing to check again
+                None => None,
+            };
             download::cut_when_told(response, cut, watchdog)
         }
         Err(error) => {
             // the source is private: the log names the flow, not the URL
             tracing::warn!(flow = %id, %error, "upstream fetch failed");
-            let (agreement, consumer) = (&parties.agreement, &parties.counter_party);
+            let (agreement, consumer) = (&parties.agreement_id, &parties.counter_party_id);
             transfer_done(
                 &id,
                 agreement,

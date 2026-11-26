@@ -83,7 +83,7 @@ pub struct PushJob {
 impl HttpDataPlane {
     /// The push to send now for flow `id`, if it is a push flow that is
     /// STARTED and none of its pushes runs already. The caller sends it
-    /// (`crate::push`) and keeps the job until it is done: its cut signal
+    /// ([`send`]) and keeps the job until it is done: its cut signal
     /// tells the data plane a push of this flow runs.
     ///
     /// # Errors
@@ -122,28 +122,28 @@ impl HttpDataPlane {
     }
 
     /// The membership check before a push of flow `id` (ADR 0027,
-    /// section 7.2): `Err(Cut)` when the membership was revoked (the
-    /// transfer is then ended), `Err(Failed)` when it could not be checked.
-    pub(crate) async fn push_membership(&self, id: &str) -> Result<(), Outcome> {
+    /// section 7.2). A revoked membership also ends the transfer.
+    pub(crate) async fn check_membership_before_push(&self, id: &str) -> BeforePush {
         let Some(gate) = &self.gate else {
-            return Ok(());
+            // no gate: the token alone decides, as in 1.0 (unit tests)
+            return BeforePush::Go;
         };
         match gate.check(id).await {
-            Access::Granted => Ok(()),
+            Access::Granted => BeforePush::Go,
             Access::Unchecked(reason) => {
                 tracing::warn!(flow = %id, %reason, "push not sent: the consumer's membership could not be checked now");
-                Err(Outcome::Failed)
+                BeforePush::Unchecked
             }
             Access::Revoked(reason) => {
                 gate.end_transfer(id, &reason);
-                Err(Outcome::Cut)
+                BeforePush::Revoked
             }
         }
     }
 
     /// Whether flow `id` is still STARTED. A push that was cut while its
     /// flow is still STARTED was not cut by a suspension or a termination
-    /// (they change the state first, then cut): see `crate::push`.
+    /// (they change the state first, then cut): see the module doc.
     pub(crate) fn is_started(&self, id: &str) -> bool {
         matches!(self.flows.get(id), Ok(Some(flow)) if flow.state == DataFlowState::Started)
     }
@@ -151,9 +151,15 @@ impl HttpDataPlane {
     /// The membership checks of a running push of flow `id`, as for a
     /// download; they stop when the value is dropped.
     pub(crate) fn push_watchdog(&self, id: &str) -> Option<impl Send + use<>> {
-        self.gate
-            .as_ref()
-            .map(|gate| download::watchdog(Arc::clone(gate), self.running_flows(), id))
+        match &self.gate {
+            Some(gate) => Some(download::watchdog(
+                Arc::clone(gate),
+                self.running_flows(),
+                id,
+            )),
+            // no gate: nothing to check again
+            None => None,
+        }
     }
 
     /// The push flows that are STARTED (after a restart, the pushes to
@@ -167,6 +173,18 @@ impl HttpDataPlane {
     }
 }
 
+/// What [`HttpDataPlane::check_membership_before_push`] allows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BeforePush {
+    /// The consumer is still a member (or there is no gate): send.
+    Go,
+    /// The membership was revoked: do not send; the transfer is being
+    /// ended.
+    Revoked,
+    /// The check could not finish now: do not send; the push fails.
+    Unchecked,
+}
+
 /// How a push ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Sent {
@@ -174,8 +192,9 @@ pub enum Sent {
     Done,
     /// It failed; the reason names no URL and no token.
     Failed(String),
-    /// Suspend or terminate cut it.
-    Cancelled,
+    /// Suspend, terminate or a revoked membership cut it: the audit
+    /// line's outcome `cut` ([`Outcome::Cut`]).
+    Cut,
 }
 
 /// How a push ended, and how many bytes of data went out.
@@ -194,16 +213,16 @@ impl Pushed {
         match self.sent {
             Sent::Done => Outcome::Complete,
             Sent::Failed(_) => Outcome::Failed,
-            Sent::Cancelled => Outcome::Cut,
+            Sent::Cut => Outcome::Cut,
         }
     }
 }
 
-/// Sends `job` with `plane`'s client, until it is done or its flow is
+/// Sends `job` with `plane`'s push client, until it is done or its flow is
 /// cut.
 pub async fn send(plane: &HttpDataPlane, job: &mut PushJob) -> Pushed {
     let mut pushed = send_until_cut(plane, job, IDLE_TIMEOUT).await;
-    if pushed.sent == Sent::Cancelled && plane.is_started(&job.flow_id) {
+    if pushed.sent == Sent::Cut && plane.is_started(&job.flow_id) {
         // cut, but the flow is still STARTED: no suspension or termination
         // cut it (they change the state first), but a membership check
         // that could not finish. Nothing would send the data now, so the
@@ -215,42 +234,52 @@ pub async fn send(plane: &HttpDataPlane, job: &mut PushJob) -> Pushed {
 }
 
 /// [`send`], with `idle` as the longest time without progress. A cut
-/// gives [`Sent::Cancelled`].
+/// gives [`Sent::Cut`].
 async fn send_until_cut(plane: &HttpDataPlane, job: &mut PushJob, idle: Duration) -> Pushed {
     if job.cut.is_cut() {
         // cut before it began, while it waited for the consumer
         return Pushed {
-            sent: Sent::Cancelled,
+            sent: Sent::Cut,
             bytes: 0,
         };
     }
-    if let Err(outcome) = plane.push_membership(&job.flow_id).await {
-        let sent = if outcome == Outcome::Cut {
-            // the membership was revoked: the transfer is being ended
-            Sent::Cancelled
-        } else {
-            Sent::Failed("the consumer's membership could not be checked".to_owned())
-        };
-        return Pushed { sent, bytes: 0 };
+    match plane.check_membership_before_push(&job.flow_id).await {
+        BeforePush::Go => {}
+        BeforePush::Revoked => {
+            // the transfer is being ended
+            return Pushed {
+                sent: Sent::Cut,
+                bytes: 0,
+            };
+        }
+        BeforePush::Unchecked => {
+            let reason = "the consumer's membership could not be checked";
+            return Pushed {
+                sent: Sent::Failed(reason.to_owned()),
+                bytes: 0,
+            };
+        }
     }
     // checks the membership again while the push runs
     let _watchdog = plane.push_watchdog(&job.flow_id);
     let counted = Arc::new(AtomicU64::new(0));
-    // `..`: the job's parties are for the audit line, which the caller
-    // writes once the push is over
-    let PushJob {
-        flow_id,
-        source,
-        address,
-        cut,
-        ..
-    } = job;
-    let sent = tokio::select! {
-        result = post(plane, flow_id, source, address, Arc::clone(&counted), idle) => match result {
-            Ok(()) => Sent::Done,
-            Err(reason) => Sent::Failed(reason),
-        },
-        () = cut.cut() => Sent::Cancelled,
+    // borrows of the job's fields: the post reads three of them while the
+    // cut signal is watched (it needs `&mut`). The job's parties are for
+    // the audit line, which the caller writes once the push is over.
+    let flow_id = &job.flow_id;
+    let source = &job.source;
+    let address = &job.address;
+    let cut = &mut job.cut;
+    // `None`: the flow was cut before the post finished, and the post was
+    // dropped
+    let posted = tokio::select! {
+        result = post(plane, flow_id, source, address, Arc::clone(&counted), idle) => Some(result),
+        () = cut.cut() => None,
+    };
+    let sent = match posted {
+        Some(Ok(())) => Sent::Done,
+        Some(Err(reason)) => Sent::Failed(reason),
+        None => Sent::Cut,
     };
     Pushed {
         sent,
@@ -360,13 +389,13 @@ async fn post(
     }
 }
 
-/// Writes the audit line of a push sent for transfer `flow` under
-/// `agreement` to `counter_party`.
-pub fn audit(flow: &str, agreement: &str, counter_party: &str, pushed: &Pushed) {
+/// Writes the audit line of a push sent for transfer `flow` to
+/// `parties` ([`PushJob::parties`]).
+pub fn audit(flow: &str, parties: &Parties, pushed: &Pushed) {
     audit::transfer_done(
         flow,
-        agreement,
-        counter_party,
+        &parties.agreement_id,
+        &parties.counter_party_id,
         audit::Direction::Sent,
         pushed.bytes,
         pushed.outcome(),

@@ -52,7 +52,7 @@ impl HttpDataPlane {
     /// Moves flow `id` away from STARTED (to `to`) and cuts every download
     /// of it that runs (ADR 0027, section 5). Cut also when the move is
     /// refused: stopping a download is always safe.
-    fn stop(&self, id: &str, to: DataFlowState) -> Result<(), SignalError> {
+    fn move_and_cut_downloads(&self, id: &str, to: DataFlowState) -> Result<(), SignalError> {
         let moved = self.move_to(id, to);
         let cut = self.running.cut(id);
         if cut > 0 {
@@ -147,9 +147,7 @@ impl HttpDataPlane {
         }
         Ok(self.address(id, &token))
     }
-}
 
-impl HttpDataPlane {
     /// `start` for a push flow: the message carries the consumer's data
     /// address, which the flow keeps; the answer carries none.
     fn start_push(
@@ -163,7 +161,7 @@ impl HttpDataPlane {
             ));
         };
         check_push_address(address).map_err(SignalError::Invalid)?;
-        let source = self.source_in(request)?;
+        let source = self.readable_source_named_in(request)?;
         let flow = Flow {
             id: request.data_flow_id.clone(),
             state: DataFlowState::Started,
@@ -185,7 +183,10 @@ impl HttpDataPlane {
     /// `metadata` ([`SOURCE_METADATA_KEY`]), if it is one this data plane
     /// can read: an `http(s)` URL, or an `s3://` object when the
     /// connector has object storage.
-    fn source_in(&self, request: &DataFlowBaseMessage) -> Result<String, SignalError> {
+    fn readable_source_named_in(
+        &self,
+        request: &DataFlowBaseMessage,
+    ) -> Result<String, SignalError> {
         let dataset_id = &request.dataset_id;
         let named = match &request.metadata {
             Some(metadata) => metadata.get(SOURCE_METADATA_KEY),
@@ -261,7 +262,7 @@ impl DataPlane for HttpDataPlane {
                 "a pull start carries no data address".to_owned(),
             ));
         }
-        let source = self.source_in(request)?;
+        let source = self.readable_source_named_in(request)?;
         let token = new_token()?;
         let flow = Flow {
             id: request.data_flow_id.clone(),
@@ -288,7 +289,7 @@ impl DataPlane for HttpDataPlane {
     }
 
     fn suspend(&self, id: &str, _: &DataFlowSuspendMessage) -> Result<(), SignalError> {
-        self.stop(id, DataFlowState::Suspended)
+        self.move_and_cut_downloads(id, DataFlowState::Suspended)
     }
 
     fn resume(
@@ -306,7 +307,7 @@ impl DataPlane for HttpDataPlane {
     }
 
     fn terminate(&self, id: &str, _: &DataFlowTerminateMessage) -> Result<(), SignalError> {
-        self.stop(id, DataFlowState::Terminated)
+        self.move_and_cut_downloads(id, DataFlowState::Terminated)
     }
 
     fn completed(&self, id: &str) -> Result<(), SignalError> {
@@ -339,7 +340,7 @@ mod tests {
     }
 
     /// The `metadata` of a start message that names `source`.
-    fn naming(source: &str) -> serde_json::Map<String, serde_json::Value> {
+    fn metadata_naming(source: &str) -> serde_json::Map<String, serde_json::Value> {
         let mut metadata = serde_json::Map::new();
         metadata.insert(SOURCE_METADATA_KEY.to_owned(), source.into());
         metadata
@@ -349,7 +350,7 @@ mod tests {
     /// dataset `d1` has a source, `http://upstream.example/d1`.
     fn start(dataset: &str, profile: &str) -> DataFlowStartMessage {
         let metadata = if dataset == "d1" {
-            Some(naming("http://upstream.example/d1"))
+            Some(metadata_naming("http://upstream.example/d1"))
         } else {
             None
         };
@@ -397,8 +398,11 @@ mod tests {
         };
         p.resume("f1", &resume).unwrap();
         let now = now_secs();
-        assert!(p.authorize("f1", &new, now).is_ok());
-        assert_eq!(p.authorize("f1", &old, now), Err(Denied::Unauthorized));
+        assert!(p.source_if_authorized("f1", &new, now).is_ok());
+        assert_eq!(
+            p.source_if_authorized("f1", &old, now),
+            Err(Denied::Unauthorized)
+        );
 
         p.completed("f1").unwrap();
         assert!(p.new_address("f1").is_err(), "an ended flow gets no token");
@@ -422,31 +426,43 @@ mod tests {
 
         let now = now_secs();
         assert_eq!(
-            p.authorize("f1", &token, now).unwrap(),
+            p.source_if_authorized("f1", &token, now).unwrap(),
             "http://upstream.example/d1"
         );
         // the token is not stored, only its hash
         let stored = p.flows.get("f1").unwrap().unwrap();
         assert_ne!(stored.token_hash, token);
-        assert_eq!(p.authorize("f1", "wrong", now), Err(Denied::Unauthorized));
-        assert_eq!(p.authorize("f2", &token, now), Err(Denied::Unauthorized));
         assert_eq!(
-            p.authorize("f1", &token, now + 61),
+            p.source_if_authorized("f1", "wrong", now),
+            Err(Denied::Unauthorized)
+        );
+        assert_eq!(
+            p.source_if_authorized("f2", &token, now),
+            Err(Denied::Unauthorized)
+        );
+        assert_eq!(
+            p.source_if_authorized("f1", &token, now + 61),
             Err(Denied::Unauthorized),
             "expired"
         );
 
         p.suspend("f1", &reason()).unwrap();
-        assert_eq!(p.authorize("f1", &token, now), Err(Denied::Unauthorized));
+        assert_eq!(
+            p.source_if_authorized("f1", &token, now),
+            Err(Denied::Unauthorized)
+        );
         let resume = AddressMessage {
             message_id: "m".to_owned(),
             data_address: None,
         };
         let resumed = p.resume("f1", &resume).unwrap();
         assert!(resumed.data_address.is_none(), "same token");
-        assert!(p.authorize("f1", &token, now).is_ok());
+        assert!(p.source_if_authorized("f1", &token, now).is_ok());
         p.completed("f1").unwrap();
-        assert_eq!(p.authorize("f1", &token, now), Err(Denied::Unauthorized));
+        assert_eq!(
+            p.source_if_authorized("f1", &token, now),
+            Err(Denied::Unauthorized)
+        );
         assert_eq!(p.status("f1").unwrap().state, DataFlowState::Completed);
         assert!(matches!(
             p.terminate("f1", &reason()),
@@ -488,12 +504,15 @@ mod tests {
     fn the_flow_serves_the_source_its_start_message_named() {
         let p = plane();
         let mut message = start("d1", HTTP_PULL);
-        message.flow.metadata = Some(naming("https://elsewhere.example/the-data"));
+        message.flow.metadata = Some(metadata_naming("https://elsewhere.example/the-data"));
         let token = token_of(&p.start(&message).unwrap());
         let stored = p.flows.get("f1").unwrap().unwrap();
         let source = Some("https://elsewhere.example/the-data".to_owned());
         assert_eq!(stored.source, source);
-        assert_eq!(p.authorize("f1", &token, now_secs()).ok(), source);
+        assert_eq!(
+            p.source_if_authorized("f1", &token, now_secs()).ok(),
+            source
+        );
     }
 
     /// A start whose metadata names no source this data plane can read is
@@ -509,9 +528,9 @@ mod tests {
             serde_json::json!(42),
         )]));
         let mut file = start("d1", HTTP_PULL);
-        file.flow.metadata = Some(naming("file:///etc/passwd"));
+        file.flow.metadata = Some(metadata_naming("file:///etc/passwd"));
         let mut no_storage = start("d1", HTTP_PULL);
-        no_storage.flow.metadata = Some(naming("s3://datasets/d1.csv"));
+        no_storage.flow.metadata = Some(metadata_naming("s3://datasets/d1.csv"));
         let mut push_without = start("d1", HTTP_PUSH);
         push_without.flow.metadata = None;
         push_without.data_address = Some(DataAddress {
@@ -549,7 +568,7 @@ mod tests {
         };
         p.flows.insert(&flow).unwrap();
         assert_eq!(
-            p.authorize("old", &token, now_secs()),
+            p.source_if_authorized("old", &token, now_secs()),
             Err(Denied::Unauthorized)
         );
         flow.id = "old-push".to_owned();
@@ -572,10 +591,10 @@ mod tests {
     fn the_flow_keeps_the_parties_of_its_start_message() {
         let p = plane();
         let token = token_of(&p.start(&start("d1", HTTP_PULL)).unwrap());
-        let allowed = p.authorized("f1", &token, now_secs()).unwrap();
+        let allowed = p.check_request("f1", &token, now_secs()).unwrap();
         let parties = Parties {
-            agreement: "a".to_owned(),
-            counter_party: "did:web:c".to_owned(),
+            agreement_id: "a".to_owned(),
+            counter_party_id: "did:web:c".to_owned(),
         };
         assert_eq!(allowed.parties, parties);
 
@@ -601,6 +620,9 @@ mod tests {
         second.flow.data_flow_id = "f2".to_owned();
         let b = token_of(&p.start(&second).unwrap());
         assert_ne!(a, b);
-        assert_eq!(p.authorize("f2", &a, now_secs()), Err(Denied::Unauthorized));
+        assert_eq!(
+            p.source_if_authorized("f2", &a, now_secs()),
+            Err(Denied::Unauthorized)
+        );
     }
 }
