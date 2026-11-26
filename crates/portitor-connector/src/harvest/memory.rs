@@ -57,8 +57,12 @@ impl DatasetStore for InMemoryDatasetStore {
         Ok(self.kept().status.clone())
     }
 
-    fn commit(&self, commit: &Commit) -> Result<u64, StoreError> {
+    fn commit(&self, commit: &Commit) -> Result<Option<u64>, StoreError> {
         let mut kept = self.kept();
+        if kept.status.version != commit.status.version {
+            // another run was written since this one read the status
+            return Ok(None);
+        }
         // the highest job id so far (the keys are sorted), 0 for none
         let newest = kept.jobs.keys().next_back().copied().unwrap_or(0);
         let id = newest + 1;
@@ -76,8 +80,11 @@ impl DatasetStore for InMemoryDatasetStore {
         kept.jobs.insert(id, (job, commit.errors.clone()));
         // keep the last KEPT_JOBS jobs: ids id - KEPT_JOBS + 1 to id
         kept.jobs.retain(|job_id, _| job_id + KEPT_JOBS > id);
-        kept.status = commit.status.clone();
-        Ok(id)
+        kept.status = HarvestStatus {
+            version: commit.status.version + 1,
+            ..commit.status.clone()
+        };
+        Ok(Some(id))
     }
 
     fn jobs(&self, before: Option<u64>, limit: usize) -> Result<Vec<HarvestJob>, StoreError> {

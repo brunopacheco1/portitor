@@ -112,7 +112,9 @@ export on, `telemetry: exporting` (INFO).
 | `message had arrived before` (INFO) | A send failed, but the partner's state shows it had received the message (a lost answer, or a resend after a restart); the negotiation goes on | Nothing |
 | `sending pending negotiation messages again` (INFO, at start) | Messages saved but not acknowledged before the last stop, and that no other process is sending, are being sent | Nothing |
 | `pending messages taken up` (INFO, 1.3) | The loop that runs every second in each process found messages saved but not sent that no process leases (`count`): those of a container that stopped, once its leases ended (30 s at most), or one whose recording failed (ADR 0029, TD-53) | Nothing. If it repeats for the same messages, look for `outgoing message not recorded` (the database) |
-| `a lease was lost; another process took the work over` (WARN, 1.3) | A process did not renew a lease within 30 s (stalled, or its clock is behind), and another process took the work (a message, a push, an upload, a scheduled job) over; it may be done twice | Check the hosts' clocks (NTP) and the database's response time |
+| `a lease was lost; another process took the work over; its work here stops` (WARN, 1.3) | A process did not renew a lease within 30 s (stalled, or its clock is behind), and another process took the work (a message, a push, an upload, a scheduled job, a Gaia-X run) over. The work stops here: a push or an upload is cut (`cut` in its audit line; the upload is answered 503), a message is left to the other process, a Gaia-X run is recorded failed. What already went out may go out twice (a message, part of a push) | Check the hosts' clocks (NTP) and the database's response time |
+| `cannot renew a lease before it ends; its work here stops` (ERROR, 1.3) | The database did not answer two renewals of a lease (about 20 s, a failover for example): the work stops before the lease ends, so that another process can take it over without doing it twice. A `pending messages taken up` or a push started again follows | Look at the database: why it did not answer |
+| `harvest: another process wrote a run first; planning again` (INFO, 1.3) | Two containers ran a dataset harvest (or a check after new rules) at once; the one that wrote second plans its run again from the stored datasets, so neither undoes the other | Nothing |
 | `running download or push cut: its flow was suspended or terminated` (INFO, 1.3) | Another container handled the suspension or termination of a data flow; this container read the new state (every 5 s) and stopped its running download or push (ADR 0029, TD-52) | Nothing |
 | `counter-party not reachable; process not started` (WARN) | The first request of a negotiation or transfer we started as consumer failed (tried as above); it ends without a message, as the provider never knew it | Same as above |
 | `termination not acknowledged` (WARN) | The partner did not take a termination; DSP allows this, the negotiation is terminated anyway | Nothing, unless it repeats for one partner |
@@ -584,6 +586,12 @@ one database ([ADR 0029](adr/0029-several-replicas.md)).
 4. **Several replicas** need PostgreSQL
    ([DEPLOYING, Database](DEPLOYING.md#database)), and the two-step
    [key rotation](#rotating-a-key-with-several-replicas).
+5. **What each replica asks of the database.** Every second, each
+   connector replica reads the pending messages of its four outboxes,
+   the started pushes and their leases, and deletes the leases that
+   ended an hour ago (an index on `lease.lease_until` keeps that
+   cheap). With many replicas, or many pending messages, count this in
+   the database's load and its connection pool.
 
 ### From SQLite to PostgreSQL
 

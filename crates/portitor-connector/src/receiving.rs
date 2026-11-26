@@ -29,7 +29,11 @@
 //!   the database. The upload holds a lease in the database
 //!   ([`UPLOAD_LEASE`], `portitor_runtime::leases`), renewed while it
 //!   runs and ended with it; the lease of a process that stopped ends on
-//!   its own, 30 seconds later at most (TD-54).
+//!   its own, 30 seconds later at most (TD-54). When the database cannot
+//!   say whether one runs, the answer is 503: try again. An upload whose
+//!   lease is lost (the database did not answer until it ended) stops,
+//!   with 503 and nothing stored, so that it never runs beside another
+//!   upload of the same transfer.
 //! - At most [`MAX_CONCURRENT_UPLOADS`] uploads at once in each process,
 //!   for all transfers; one more gets 503, as the public port answers
 //!   when it is too busy. This bounds the memory of the process, so it is
@@ -59,7 +63,7 @@ use portitor_dsp::transfer::{
     DataAddress, DataAddressType, EndpointProperty, HTTP_PUSH_ENDPOINT_TYPE, TransferState,
 };
 use portitor_runtime::http::bearer_token_in;
-use portitor_runtime::leases::{HeldLease, Leases};
+use portitor_runtime::leases::{Claim, HeldLease, Leases};
 
 use crate::Config;
 use crate::consumer_transfer::TransferConsumer;
@@ -209,6 +213,8 @@ enum Busy {
     SameTransfer,
     /// [`Uploads::max`] run: 503.
     Full,
+    /// The database could not say whether one runs: 503.
+    Unknown,
 }
 
 /// Held while one upload runs; dropping it ends the upload's turn and
@@ -246,11 +252,22 @@ impl Uploads {
             lease: None,
         };
         // the database decides, for every process
-        turn.lease = self.leases.claim(UPLOAD_LEASE, consumer_pid);
-        if turn.lease.is_none() {
-            return Err(Busy::SameTransfer);
+        match self.leases.claim(UPLOAD_LEASE, consumer_pid) {
+            Claim::Taken(lease) => turn.lease = Some(lease),
+            Claim::HeldByOther => return Err(Busy::SameTransfer),
+            Claim::Failed => return Err(Busy::Unknown),
         }
         Ok(turn)
+    }
+}
+
+impl UploadTurn<'_> {
+    /// Finishes when the upload's lease is lost.
+    async fn lost(&self) {
+        match &self.lease {
+            Some(lease) => lease.lost().wait().await,
+            None => std::future::pending().await,
+        }
     }
 }
 
@@ -381,10 +398,12 @@ pub(crate) async fn receive(
         Err(Refused::Unauthorized) => return unauthorized(),
         Err(Refused::Store) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    let _turn = match receiver.uploads.begin(&consumer_pid) {
+    let turn = match receiver.uploads.begin(&consumer_pid) {
         Ok(turn) => turn,
         Err(Busy::SameTransfer) => return StatusCode::CONFLICT.into_response(),
-        Err(Busy::Full) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Err(Busy::Full | Busy::Unknown) => {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
     };
     let content_type = headers
         .get(header::CONTENT_TYPE)
@@ -401,12 +420,24 @@ pub(crate) async fn receive(
         Body::new(counted),
         portitor_dataplane::push::IDLE_TIMEOUT,
     ));
-    let stored = receiver
+    let upload = receiver
         .storage
-        .upload(&receiver.bucket, &consumer_pid, content_type, body)
-        .await;
+        .upload(&receiver.bucket, &consumer_pid, content_type, body);
+    // a lost lease stops the upload: dropping it stops reading the body
+    // and leaves the object as it was (module doc)
+    let stored = tokio::select! {
+        stored = upload => Some(stored),
+        () = turn.lost() => None,
+    };
     let (outcome, response) = match stored {
-        Ok(_) => match receiver
+        None => {
+            tracing::warn!(flow = %consumer_pid, "push received: the upload's lease was lost; it stopped");
+            (
+                Outcome::Cut,
+                StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            )
+        }
+        Some(Ok(_)) => match receiver
             .receipts
             .0
             .set_object_key(&consumer_pid, &consumer_pid)
@@ -418,8 +449,8 @@ pub(crate) async fn receive(
             ),
         },
         // the sender's body broke off: nothing was stored
-        Err(StorageError::Body(_)) => (Outcome::Cut, StatusCode::BAD_REQUEST.into_response()),
-        Err(error) => {
+        Some(Err(StorageError::Body(_))) => (Outcome::Cut, StatusCode::BAD_REQUEST.into_response()),
+        Some(Err(error)) => {
             // the error names a status or a cause, never a key
             tracing::warn!(flow = %consumer_pid, %error, "push received: the object storage failed");
             (Outcome::Failed, StatusCode::BAD_GATEWAY.into_response())
@@ -515,6 +546,36 @@ mod tests {
         assert_eq!(uploads.begin("t3").err(), Some(Busy::Full));
         drop(first);
         assert!(uploads.begin("t1").is_ok(), "its turn ended");
+    }
+
+    /// The leases of a database that does not answer.
+    struct Down;
+
+    impl portitor_runtime::leases::LeaseStore for Down {
+        fn claim(&self, _: &str, _: &str, _: &str, _: u64, _: u64) -> Result<bool, String> {
+            Err("down".to_owned())
+        }
+        fn extend(&self, _: &str, _: &str, _: &str, _: u64) -> Result<bool, String> {
+            Err("down".to_owned())
+        }
+        fn release(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+            Err("down".to_owned())
+        }
+        fn held(&self, _: &str, _: u64) -> Result<Vec<String>, String> {
+            Err("down".to_owned())
+        }
+        fn forget_ended(&self, _: u64) -> Result<u64, String> {
+            Err("down".to_owned())
+        }
+    }
+
+    /// A database that does not answer is not "another upload runs"
+    /// (409), but "try again" (503); the turn is given back.
+    #[test]
+    fn a_database_outage_is_not_a_conflict() {
+        let uploads = Uploads::new(1, Leases::new(Arc::new(Down), "p-1"));
+        assert_eq!(uploads.begin("t1").err(), Some(Busy::Unknown));
+        assert_eq!(uploads.begin("t2").err(), Some(Busy::Unknown), "not Full");
     }
 
     /// Two processes ("replicas") on one PostgreSQL database: an upload
