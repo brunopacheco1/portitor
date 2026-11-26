@@ -403,7 +403,7 @@ async fn an_offer_on_a_type_that_is_not_configured_is_rejected() {
     let mut provider_ports = ports(&network, PROVIDER_DID, &wallets, &queries);
     provider_ports.harvest.source = Some(Arc::new(FixedSource::new(vec![reports()])));
     let (_, provider) = portitor_connector::build(&provider, provider_ports).unwrap();
-    assert_eq!(provider.catalog_size(), 0);
+    assert_eq!(provider.catalog_size().unwrap(), 0);
     let jobs = provider.harvest_jobs(None, 10).unwrap();
     let (job, errors) = provider.harvest_job(jobs[0].id).unwrap().unwrap();
     assert_eq!(job.record.counts.rejected, 1);

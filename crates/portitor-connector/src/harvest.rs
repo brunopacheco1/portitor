@@ -9,15 +9,16 @@
 //!   datasets; [`FileSource`] reads the datasets file.
 //! - [`DatasetCheck`] (port) checks one entry; [`DspCheck`] holds the DSP
 //!   and ODRL rules, and [`BothChecks`] adds another check (SHACL) after it.
-//! - [`DatasetStore`] (port) keeps the read copy, the jobs and their
-//!   errors; the `SQLite` adapter is in `store/harvest.rs`.
+//! - [`DatasetStore`] (port) keeps the stored datasets, the jobs and their
+//!   errors; the database adapter is in `store/harvest.rs`.
 //! - `run` decides what a run changes, without I/O; [`DatasetHarvester`] runs it:
 //!   at start, then on a schedule, one run at a time.
-//! - [`DatasetCopy`] is what the DSP code and the data plane read: the copy in
-//!   memory, replaced after each run that changed it.
+//! - [`StoredCatalog`] is what the DSP code and the data plane read: the
+//!   stored datasets, read from the store on each request (ADR 0029, D4),
+//!   so every process that shares the database answers the same.
 //!
-//! The rule: the read copy changes only when a run succeeds, and a bad
-//! entry never replaces a good one.
+//! The rule: the stored datasets change only when a run succeeds, and a
+//! bad entry never replaces a good one.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,16 +33,16 @@ pub use portitor_dsp::negotiation::provider::StoreError;
 use portitor_runtime::panics::spawn_supervised;
 use portitor_runtime::telemetry::metrics;
 
+mod catalog;
 mod check;
-mod copy;
 mod memory;
 mod run;
 mod source;
 
+pub use catalog::{StoredCatalog, UpstreamSources};
 pub use check::{
     BothChecks, CHECKS_VERSION, CheckKind, CheckedDataset, DatasetCheck, DspCheck, EntryFailure,
 };
-pub use copy::{DatasetCopy, UpstreamSources};
 pub use memory::InMemoryDatasetStore;
 pub(crate) use run::count;
 pub use run::{MAX_REPORT_RESULTS, MAX_STORED_ERRORS, SOURCE_KEY};
@@ -330,6 +331,21 @@ pub trait DatasetStore: Send + Sync {
     /// The store cannot be read.
     fn datasets(&self) -> Result<Vec<StoredDataset>, StoreError>;
 
+    /// The catalog: the active datasets as the catalog shows them, in id
+    /// order (the order of the bytes of their ids, on every database).
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be read.
+    fn catalog(&self) -> Result<Vec<Dataset>, StoreError>;
+
+    /// One dataset, in any state.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be read.
+    fn dataset(&self, id: &str) -> Result<Option<StoredDataset>, StoreError>;
+
     /// The rules version and the last snapshot hash.
     ///
     /// # Errors
@@ -386,7 +402,8 @@ impl std::fmt::Debug for HarvestPorts {
 }
 
 impl Default for HarvestPorts {
-    /// The copy in memory, the source from the configuration, DSP rules only.
+    /// The datasets in memory, the source from the configuration, DSP
+    /// rules only.
     fn default() -> Self {
         Self {
             store: Shared(Arc::new(InMemoryDatasetStore::default())),
@@ -401,7 +418,6 @@ pub struct DatasetHarvester {
     source: Arc<dyn DatasetSource>,
     check: Arc<dyn DatasetCheck>,
     store: Arc<dyn DatasetStore>,
-    copy: DatasetCopy,
     /// Held while a run is going on.
     busy: Mutex<()>,
     /// Set once [`DatasetHarvester::start`] has run (readiness, ADR 0023).
@@ -439,16 +455,16 @@ impl DatasetHarvester {
             source,
             check,
             store,
-            copy: DatasetCopy::default(),
             busy: Mutex::new(()),
             started: AtomicBool::new(false),
         }
     }
 
-    /// The read copy the DSP code and the data plane use.
+    /// The catalog the DSP code and the data plane use: read from the
+    /// store on each call, never from memory.
     #[must_use]
-    pub fn copy(&self) -> DatasetCopy {
-        self.copy.clone()
+    pub fn catalog(&self) -> StoredCatalog {
+        StoredCatalog::new(Arc::clone(&self.store))
     }
 
     /// The store, for the management API.
@@ -457,16 +473,15 @@ impl DatasetHarvester {
         &self.store
     }
 
-    /// The start: loads the stored copy, checks it again if the rules
-    /// changed (a `bundle` job), then runs a harvest (a `start` job). A
-    /// source that fails leaves the stored copy (empty on the first start).
+    /// The start: checks the stored datasets again if the rules changed
+    /// (a `bundle` job), then runs a harvest (a `start` job). A source
+    /// that fails leaves the stored datasets (none on the first start).
     ///
     /// # Errors
     ///
-    /// The stored copy cannot be read.
+    /// The stored datasets cannot be read.
     pub fn start(&self) -> Result<(), StoreError> {
         let _running = self.busy.lock().unwrap_or_else(PoisonError::into_inner);
-        self.reload()?;
         let rules_changed = self.recheck_if_rules_changed()?;
         // new rules: every entry of the source is checked again, even if
         // the snapshot is the same, as some rejected before may pass now
@@ -476,7 +491,7 @@ impl DatasetHarvester {
                 "harvest: cannot store the run; the catalog keeps the stored datasets"
             );
         }
-        tracing::info!(datasets = self.copy.active_count(), "catalog ready");
+        tracing::info!(datasets = self.catalog().active_count()?, "catalog ready");
         self.started.store(true, Ordering::SeqCst);
         Ok(())
     }
@@ -507,6 +522,18 @@ impl DatasetHarvester {
                 );
                 RunResult::StoreFailed(e)
             }
+        }
+    }
+
+    /// Another process of the connector took a new bundle version, and
+    /// this process moved to it (TD-55): checks the stored datasets again
+    /// with the new rules, unless the store says they were checked with
+    /// them already (by that process). The check clears the snapshot
+    /// hash, so the next run checks every entry of the source. Blocking.
+    pub fn rules_moved(&self) {
+        let _running = self.busy.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Err(e) = self.recheck_if_rules_changed() {
+            tracing::error!(error = %e, "harvest: cannot check the stored datasets again");
         }
     }
 
@@ -611,13 +638,6 @@ impl DatasetHarvester {
         Some(spawn_supervised("dataset_harvest", schedule))
     }
 
-    /// Loads the copy from the store into memory.
-    fn reload(&self) -> Result<(), StoreError> {
-        let datasets = self.store.datasets()?;
-        self.copy.replace(&datasets);
-        Ok(())
-    }
-
     /// Takes a snapshot, decides the changes, and commits them. `full`:
     /// check every entry even if the snapshot is unchanged.
     fn run_now(&self, trigger: Trigger, full: bool) -> Result<HarvestJob, StoreError> {
@@ -710,15 +730,13 @@ impl DatasetHarvester {
         Ok(by_id)
     }
 
-    /// Commits a run, logs it, and refreshes the copy in memory if the run
-    /// changed it.
+    /// Commits a run and logs it. The next request reads what it wrote.
     fn commit(
         &self,
         job: JobRecord,
         plan: run::Plan,
         status: HarvestStatus,
     ) -> Result<HarvestJob, StoreError> {
-        let changed = !plan.writes.is_empty();
         let commit = Commit {
             job,
             errors: plan.errors,
@@ -726,9 +744,6 @@ impl DatasetHarvester {
             status,
         };
         let id = self.store.commit(&commit)?;
-        if changed {
-            self.reload()?;
-        }
         log_run(id, &commit);
         measure_run(&commit);
         Ok(HarvestJob {

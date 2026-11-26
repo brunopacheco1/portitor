@@ -479,7 +479,7 @@ A crate may implement its own trait for a type it did not write, even a
 standard one: here a plain map of dataset id to URL becomes an adapter
 of the connector's `UpstreamSources` port, which `SignalingDataFlows`
 reads to name each dataset's source in a start message, so unit tests
-need no fake type (`portitor-connector/src/harvest/copy.rs`). The reverse, someone
+need no fake type (`portitor-connector/src/harvest/catalog.rs`). The reverse, someone
 else's trait for someone else's type, is not allowed.
 
 ```rust
@@ -614,31 +614,33 @@ plane's gate as `Arc<dyn AccessGate>` without knowing its type
 ### A snapshot swapped as a whole: `RwLock<Arc<View>>`
 
 ```rust
-pub struct DatasetCopy(Arc<RwLock<Arc<View>>>);
+pub struct BundleCopy(Arc<RwLock<Arc<BundleRules>>>);
 
-fn view(&self) -> Arc<View> {
+pub fn current(&self) -> Arc<BundleRules> {
     Arc::clone(&self.0.read().unwrap_or_else(PoisonError::into_inner))
 }
 ```
 
 `RwLock` lets many readers in at once, or one writer. The value inside
 is itself an `Arc`, so a reader holds the lock only to copy that
-pointer, then works on its own snapshot without any lock. A harvest run
-builds a whole new `View` and swaps the pointer in one write
-(`DatasetCopy::replace` in `portitor-connector/src/harvest/copy.rs`). A
-request never sees half a run, and a slow catalog request never blocks
-the next run. The old snapshot is freed when its last reader drops it.
+pointer, then works on its own snapshot without any lock. A new bundle
+version builds whole new rules and swaps the pointer in one write
+(`BundleCopy::replace` in `portitor-connector/src/bundle_harvest.rs`). A
+message is never checked with half of a version, and a slow check
+never blocks the swap. The old rules are freed when their last reader
+drops them.
 
 ```rust
-*self.0.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(view);
+let mut in_use = self.0.write().unwrap_or_else(PoisonError::into_inner);
+*in_use = Arc::new(rules);
 ```
 
 `self.0` is the first (here the only) field of a *tuple struct*, a
-struct whose fields have no names: `DatasetCopy(Arc<...>)`. `StartError(e.0)`
+struct whose fields have no names: `BundleCopy(Arc<...>)`. `StartError(e.0)`
 and `Shared(Arc::clone(store) as _)` in the connector use the same
 form. `write()` returns a guard; `*guard = value` replaces the value the
-guard protects, and the guard is dropped (the lock freed) at the end of
-the line (`DatasetCopy::replace`).
+guard protects, and the guard is dropped (the lock freed) when it goes
+out of use; `BundleCopy::replace` drops it early, with `drop(in_use)`.
 
 ## Panics
 

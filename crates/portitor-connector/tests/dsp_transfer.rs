@@ -108,8 +108,8 @@ impl FakeFlows {
 }
 
 impl DataFlows for FakeFlows {
-    fn supports(&self, _: &str, format: &str) -> bool {
-        format == "HttpData-PULL"
+    fn supports(&self, _: &str, format: &str) -> Result<bool, String> {
+        Ok(format == "HttpData-PULL")
     }
     fn start(&self, t: &Transfer) -> Result<Option<DataAddress>, String> {
         self.record(format!("start {}", t.dataset_id));
@@ -1185,17 +1185,20 @@ async fn a_request_refused_before_the_agreement_is_looked_up_settles_nothing() {
     }
 }
 
-/// The connector on the `SQLite` file `path`. With `after_a_start`,
+/// The connector on the store `file`, a `SQLite` file. With `after_a_start`,
 /// what the file holds as pending is sent again, as `main` does it.
 /// Returns the router, what it sends, and how many messages were sent
 /// again.
-fn connector_on(path: &std::path::Path, after_a_start: bool) -> (Router, Arc<FakeSender>, usize) {
+fn connector_on(
+    file: &Arc<ConnectorStore>,
+    after_a_start: bool,
+) -> (Router, Arc<FakeSender>, usize) {
     let (sender, flows) = (
         Arc::new(FakeSender::default()),
         Arc::new(FakeFlows::default()),
     );
     let mut p = ports(&sender, &flows);
-    p.use_database(&Arc::new(ConnectorStore::open_sqlite_file(path).unwrap()));
+    p.use_database(file);
     let (app, negotiator) = portitor_connector::build(&config(), p).unwrap();
     let sent_again = if after_a_start {
         negotiator.resume().unwrap()
@@ -1216,12 +1219,12 @@ async fn after_a_restart_a_settled_finalization_is_not_sent_again() {
 
     let folder = portitor_runtime::testing::TempDir::new("td-44");
     let path = folder.path().join("portitor.db");
-    let file = ConnectorStore::open_sqlite_file(&path).unwrap();
+    let file = Arc::new(ConnectorStore::open_sqlite_file(&path).unwrap());
     file.insert(&finalization_on_its_way()).unwrap();
     let uri = format!("{BASE}/request");
 
     // the event is on its way (nothing answers it); the request arrives
-    let (app, _sender, _) = connector_on(&path, false);
+    let (app, _sender, _) = connector_on(&file, false);
     let (status, first) = call(&app, post(&uri, &request("a-new"))).await;
     assert_eq!(status, StatusCode::CREATED, "{first}");
     let pid = first["providerPid"].as_str().unwrap().to_owned();
@@ -1229,7 +1232,7 @@ async fn after_a_restart_a_settled_finalization_is_not_sent_again() {
     drop(app);
 
     // the restart
-    let (app, sender, sent_again) = connector_on(&path, true);
+    let (app, sender, sent_again) = connector_on(&file, true);
     assert_eq!(sent_again, 0, "nothing was pending");
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(sender.sent().is_empty(), "{:?}", sender.sent());
@@ -1254,10 +1257,10 @@ async fn after_a_restart_with_the_finalization_still_on_its_way_a_request_is_ser
 
     let folder = portitor_runtime::testing::TempDir::new("td-44");
     let path = folder.path().join("portitor.db");
-    let file = ConnectorStore::open_sqlite_file(&path).unwrap();
+    let file = Arc::new(ConnectorStore::open_sqlite_file(&path).unwrap());
     file.insert(&finalization_on_its_way()).unwrap();
 
-    let (app, sender, sent_again) = connector_on(&path, true);
+    let (app, sender, sent_again) = connector_on(&file, true);
     assert_eq!(sent_again, 1, "the finalization event");
     let (status, answer) = call(&app, post(&format!("{BASE}/request"), &request("a-new"))).await;
     assert_eq!(status, StatusCode::CREATED, "{answer}");

@@ -11,7 +11,7 @@
 //! | Source of truth (port) | [`crate::harvest::DatasetSource`] | [`BundleSource`] |
 //! | Pulls, checks, keeps or refuses | [`crate::harvest::DatasetHarvester`] | [`BundleHarvester`] |
 //! | Local copy (port) | [`crate::harvest::DatasetStore`] | [`BundleStore`] |
-//! | What requests read | [`crate::harvest::DatasetCopy`] | [`BundleCopy`] |
+//! | What requests read | [`crate::harvest::StoredCatalog`] | [`BundleCopy`] |
 //!
 //! At start, [`BundleHarvester::start`] takes the configured version (a
 //! fixed one, or the one `latest.json` names), from the authority or, if
@@ -23,9 +23,24 @@
 //! so the authority's host cannot move the connector back. Whatever goes
 //! wrong, the rules in use stay. Each run is a job of kind `bundle` in
 //! the harvest job log (`GET /v1/harvest-jobs`).
+//!
+//! Several processes of the connector (replicas on one PostgreSQL
+//! database) use one version (TD-55, ADR 0029): the version in use is
+//! recorded in the database ([`SharedBundleVersion`]). A process that
+//! takes a newer version records it there; every process looks at the
+//! record when it starts, before it serves, and then every
+//! [`FOLLOW_EVERY`] ([`BundleHarvester::follow_database`]), and moves to
+//! the recorded version: from its own cache folder, or downloaded from
+//! the authority when its container has no copy. So after a new version
+//! is taken, another process checks messages with the version before for
+//! at most [`FOLLOW_EVERY`] and the time it takes to load the new one.
+//! The rules themselves stay in each process's memory: they are a few
+//! MiB of shapes and code lists, made from the files of one version.
 
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::Duration;
+
+use portitor_dsp::negotiation::provider::StoreError;
 
 use portitor_dcp::bundle::VerifiedBundle;
 use portitor_dcp::bundle::sha256_hex;
@@ -126,15 +141,47 @@ impl MessageGuard for BundleCopy {
     }
 }
 
+/// How often each process looks at the version recorded in the database
+/// and moves to it (TD-55): as often as a running download looks at its
+/// flow's state (ADR 0029, D6).
+pub const FOLLOW_EVERY: Duration = Duration::from_secs(5);
+
+/// Port: the bundle version the connector uses, shared by all its
+/// processes (TD-55). The connector's database is the adapter
+/// (`store/bundle_in_use.rs`).
+pub trait SharedBundleVersion: Send + Sync {
+    /// The version recorded, if one was ever recorded.
+    ///
+    /// # Errors
+    ///
+    /// The database cannot be read.
+    fn bundle_in_use(&self) -> Result<Option<InUse>, StoreError>;
+
+    /// Records `to` as the version in use, unless the version recorded
+    /// was issued after it (`even_if_older`: also then, for a version
+    /// the operator fixed). Returns the version recorded after the call:
+    /// `to`, or the newer one another process recorded first.
+    ///
+    /// # Errors
+    ///
+    /// The database cannot be read or written; nothing was written.
+    fn move_bundle_to(&self, to: &InUse, even_if_older: bool) -> Result<InUse, StoreError>;
+}
+
 /// Who hears about the bundle harvester's runs: the dataset harvester,
 /// which keeps the job log and checks the stored datasets again when the
-/// rules change. Both calls block.
+/// rules change. Every call blocks.
 pub trait BundleListener: Send + Sync {
     /// Adds a bundle run to the job log.
     fn record(&self, job: JobRecord);
 
-    /// A new version is in use: check the datasets again.
+    /// This process took a new version: check the datasets again, and
+    /// the entries of the source.
     fn rules_changed(&self);
+
+    /// Another process took a new version, and this one moved to it: check
+    /// the stored datasets again, unless that process already did.
+    fn rules_moved(&self);
 }
 
 impl BundleListener for DatasetHarvester {
@@ -147,6 +194,10 @@ impl BundleListener for DatasetHarvester {
     fn rules_changed(&self) {
         // the run logs and stores its own outcome
         let _ = DatasetHarvester::rules_changed(self);
+    }
+
+    fn rules_moved(&self) {
+        DatasetHarvester::rules_moved(self);
     }
 }
 
@@ -164,9 +215,12 @@ pub struct Started {
 pub struct BundleHarvester {
     config: BundleConfig,
     source: Arc<dyn BundleSource>,
+    /// This container's cache folder.
     store: Arc<dyn BundleStore>,
+    /// The version the connector uses, in its database.
+    shared: Arc<dyn SharedBundleVersion>,
     copy: BundleCopy,
-    /// The version in use.
+    /// The version of this process's rules (`copy`).
     in_use: Mutex<InUse>,
     /// Held while a run is going on: one run at a time.
     busy: tokio::sync::Mutex<()>,
@@ -191,18 +245,22 @@ impl BundleHarvester {
     /// when the authority cannot be reached, read back from the store.
     /// With `latest`, a version that cannot be taken (unreachable,
     /// refused, issued before the one in use) leaves the version in use
-    /// before, read back from the store, and the start run says why.
+    /// before, and the start run says why. The version in use is the one
+    /// recorded in `shared`, the connector's database (TD-55); a database
+    /// of 1.2 has none, and the store's record is used.
     ///
     /// # Errors
-    /// No version can be used: the start should stop, as for a missing
-    /// key.
+    /// No version can be used, or the database cannot be read: the start
+    /// should stop, as for a missing key.
     pub async fn start(
         config: BundleConfig,
         source: Arc<dyn BundleSource>,
         store: Arc<dyn BundleStore>,
+        shared: Arc<dyn SharedBundleVersion>,
     ) -> Result<Started, String> {
         let started_at = now_secs();
-        let before = store.in_use();
+        let recorded = shared.bundle_in_use().map_err(cannot_read)?;
+        let before = recorded.or_else(|| store.in_use());
         let attempt = match &config.version {
             VersionChoice::Fixed(version) => {
                 fetch_or_kept(&config, source.as_ref(), store.as_ref(), version).await
@@ -214,7 +272,7 @@ impl BundleHarvester {
                 Err(e) => Err(format!("latest.json: {e}")),
             },
         };
-        let (taken, outcome, summary) = match attempt {
+        let (mut taken, mut outcome, mut summary) = match attempt {
             Ok(taken) => {
                 let summary = format!(
                     "version {} in use{}",
@@ -229,15 +287,9 @@ impl BundleHarvester {
                 let (VersionChoice::Latest, Some(previous)) = (&config.version, before) else {
                     return Err(why);
                 };
-                let bundle = store
-                    .load(&previous.version, &config.authority)
-                    .map_err(|kept| {
-                        format!(
-                            "{why}; and the kept copy of version {} cannot be used: {kept}",
-                            previous.version
-                        )
-                    })?;
-                let rules = rules_of(&bundle).await?;
+                let taken = kept_or_fetched(&config, source.as_ref(), store.as_ref(), &previous)
+                    .await
+                    .map_err(|e| format!("{why}; and {e}"))?;
                 tracing::error!(
                     error = %why,
                     version = %previous.version,
@@ -246,16 +298,27 @@ impl BundleHarvester {
                 let summary = format!(
                     "{why}; keeping version {}{}",
                     previous.version,
-                    skipped_files_note(rules.skipped_files().len())
+                    skipped_files_note(taken.rules.skipped_files().len())
                 );
-                let taken = Taken {
-                    bundle,
-                    rules,
-                    manifest_sha256: None,
-                };
                 (taken, JobOutcome::Failed, summary)
             }
         };
+        // the connector's version: the one taken, unless another process
+        // recorded a newer one in the meantime, which is taken instead
+        let fixed = matches!(config.version, VersionChoice::Fixed(_));
+        let wanted = InUse::of(&taken.bundle);
+        let recorded = shared
+            .move_bundle_to(&wanted, fixed)
+            .map_err(|e| format!("the bundle version in use cannot be recorded: {}", e.0))?;
+        if recorded != wanted {
+            taken = kept_or_fetched(&config, source.as_ref(), store.as_ref(), &recorded).await?;
+            outcome = JobOutcome::Succeeded;
+            summary = format!(
+                "version {} in use, taken by another process of this connector{}",
+                recorded.version,
+                skipped_files_note(taken.rules.skipped_files().len())
+            );
+        }
         let in_use = InUse::of(&taken.bundle);
         if let Err(e) = store.set_in_use(&in_use) {
             tracing::warn!(error = %e, "bundle: the version in use is not recorded in the cache");
@@ -276,6 +339,7 @@ impl BundleHarvester {
             config,
             source,
             store,
+            shared,
             copy: BundleCopy::new(taken.rules),
             in_use: Mutex::new(in_use),
             busy: tokio::sync::Mutex::new(()),
@@ -362,13 +426,23 @@ impl BundleHarvester {
             tracing::warn!(error = %e, "bundle verified, but not written to the cache");
         }
         let in_use = InUse::of(&fetched.bundle);
-        if let Err(e) = self.store.set_in_use(&in_use) {
-            tracing::warn!(error = %e, "bundle: the version in use is not recorded in the cache");
+        // the connector's version first, in the database: every process
+        // moves to it ([`BundleHarvester::follow`])
+        let recorded = match self.shared.move_bundle_to(&in_use, false) {
+            Ok(recorded) => recorded,
+            Err(e) => return failed(format!("the version cannot be recorded: {}", e.0)),
+        };
+        if recorded != in_use {
+            // another process recorded a version issued after this one:
+            // this process moves to it on its next follow
+            let summary = format!(
+                "version {latest} not taken: another process of this connector took version {}",
+                recorded.version
+            );
+            return (job(JobOutcome::Unchanged, summary, None), false);
         }
-        rules.log_start();
         let skipped = skipped_files_note(rules.skipped_files().len());
-        self.copy.replace(rules);
-        *self.in_use.lock().unwrap_or_else(PoisonError::into_inner) = in_use;
+        self.use_rules(rules, in_use);
         tracing::info!(
             from = %current.version,
             to = %latest,
@@ -376,6 +450,64 @@ impl BundleHarvester {
         );
         let summary = format!("version {latest} in use (was {}){skipped}", current.version);
         (job(JobOutcome::Succeeded, summary, manifest_sha256), true)
+    }
+
+    /// Puts `rules`, of version `in_use`, in use in this process, and
+    /// records the version in the cache folder.
+    fn use_rules(&self, rules: BundleRules, in_use: InUse) {
+        if let Err(e) = self.store.set_in_use(&in_use) {
+            tracing::warn!(error = %e, "bundle: the version in use is not recorded in the cache");
+        }
+        rules.log_start();
+        self.copy.replace(rules);
+        *self.in_use.lock().unwrap_or_else(PoisonError::into_inner) = in_use;
+    }
+
+    /// Moves this process to the version recorded in the database, when
+    /// another process took a newer one (TD-55). Returns whether it moved.
+    /// A fixed version never moves. What goes wrong is logged, and the
+    /// rules in use stay until the next try.
+    pub async fn follow(&self) -> bool {
+        if matches!(self.config.version, VersionChoice::Fixed(_)) {
+            return false;
+        }
+        let _running = self.busy.lock().await;
+        let current = self.in_use();
+        let recorded = match self.shared.bundle_in_use() {
+            Ok(Some(recorded)) if recorded.version != current.version => recorded,
+            Ok(_) => return false,
+            Err(e) => {
+                tracing::warn!(error = %e.0, "bundle: cannot read the version in use from the database");
+                return false;
+            }
+        };
+        let taken = kept_or_fetched(
+            &self.config,
+            self.source.as_ref(),
+            self.store.as_ref(),
+            &recorded,
+        )
+        .await;
+        match taken {
+            Ok(taken) => {
+                self.use_rules(taken.rules, recorded.clone());
+                tracing::info!(
+                    from = %current.version,
+                    to = %recorded.version,
+                    "bundle: another process of this connector took a new version; now in use here too"
+                );
+                true
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    version = %recorded.version,
+                    "bundle: cannot move to the version in use; keeping version {}",
+                    current.version
+                );
+                false
+            }
+        }
     }
 
     /// One check, then tells `listener`: the run for the job log and, if
@@ -429,6 +561,53 @@ impl BundleHarvester {
         };
         Some(spawn_supervised("bundle_harvest", schedule))
     }
+
+    /// Every [`FOLLOW_EVERY`], in the background: moves this process to
+    /// the version recorded in the database ([`BundleHarvester::follow`])
+    /// and tells `listener`, which checks the stored datasets again if no
+    /// process did yet. `None` for a fixed version. Must be called inside
+    /// the Tokio runtime.
+    #[must_use]
+    pub fn follow_database(
+        self: &Arc<Self>,
+        listener: Arc<dyn BundleListener>,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        if matches!(self.config.version, VersionChoice::Fixed(_)) {
+            return None;
+        }
+        let harvester = Arc::clone(self);
+        let follow = move || {
+            let harvester = Arc::clone(&harvester);
+            let listener = Arc::clone(&listener);
+            async move {
+                let mut ticks = tokio::time::interval(FOLLOW_EVERY);
+                ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    ticks.tick().await;
+                    if !harvester.follow().await {
+                        continue;
+                    }
+                    let told = Arc::clone(&listener);
+                    // the dataset check (database, SHACL) is blocking work
+                    let ran = tokio::task::spawn_blocking(move || told.rules_moved()).await;
+                    if let Err(e) = ran {
+                        tracing::error!(error = %e, "bundle: the dataset check stopped unexpectedly");
+                        metrics::task_panicked("bundle_follow");
+                    }
+                }
+            }
+        };
+        Some(spawn_supervised("bundle_follow", follow))
+    }
+}
+
+/// A database error at start, as the start's error.
+#[allow(clippy::needless_pass_by_value)] // used as map_err(cannot_read)
+fn cannot_read(e: StoreError) -> String {
+    format!(
+        "the bundle version in use cannot be read from the database: {}",
+        e.0
+    )
 }
 
 /// `version`, fetched (and kept in the store), or, when the source cannot
@@ -471,6 +650,41 @@ async fn fetch_or_kept(
         bundle,
         rules,
         manifest_sha256,
+    })
+}
+
+/// Version `in_use`, which this connector used before or another of its
+/// processes took: the kept copy, checked again, or, when this container
+/// has none, downloaded (and kept).
+async fn kept_or_fetched(
+    config: &BundleConfig,
+    source: &dyn BundleSource,
+    store: &dyn BundleStore,
+    in_use: &InUse,
+) -> Result<Taken, String> {
+    let version = in_use.version.as_str();
+    let bundle = match store.load(version, &config.authority) {
+        Ok(bundle) => bundle,
+        Err(kept) => match source.fetch(version).await {
+            Ok(fetched) => {
+                if let Err(e) = store.keep(&fetched) {
+                    tracing::warn!(error = %e, "bundle verified, but not written to the cache");
+                }
+                fetched.bundle
+            }
+            Err(download) => {
+                return Err(format!(
+                    "the kept copy of version {version} cannot be used: {kept}; \
+                     and it cannot be downloaded: {download}"
+                ));
+            }
+        },
+    };
+    let rules = rules_of(&bundle).await?;
+    Ok(Taken {
+        bundle,
+        rules,
+        manifest_sha256: None,
     })
 }
 

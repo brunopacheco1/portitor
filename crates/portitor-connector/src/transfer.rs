@@ -44,7 +44,7 @@ use serde_json::Value;
 use crate::auth::{AnyVerifier, Caller, credentials_for};
 use crate::flow_membership::EndsTransfers;
 use crate::flow_membership::MembershipStore as _;
-use crate::harvest::DatasetCopy;
+use crate::harvest::StoredCatalog;
 use crate::http_client::outbound_url_allowed;
 use crate::outbox::{self, Link, Message, Outbox, retry_while_busy};
 use crate::ports::{
@@ -59,8 +59,8 @@ use portitor_dataplane::{HttpDataPlane, PushJob};
 pub struct NoDataFlows;
 
 impl DataFlows for NoDataFlows {
-    fn supports(&self, _: &str, _: &str) -> bool {
-        false
+    fn supports(&self, _: &str, _: &str) -> Result<bool, String> {
+        Ok(false)
     }
     fn start(&self, _: &Transfer) -> Result<Option<DataAddress>, String> {
         Err(NO_DATA_PLANE.to_owned())
@@ -90,7 +90,7 @@ type Service = TransferService<
     AnyAgreements,
     AnyDataFlows,
     AnyTransferDecider,
-    DatasetCopy,
+    StoredCatalog,
     SystemEnvironment,
 >;
 
@@ -117,7 +117,7 @@ impl TransferProvider {
     /// The provider, shared. `plane`: the built-in data plane, if any.
     pub(crate) fn new_shared(
         ports: &crate::Ports,
-        catalog: DatasetCopy,
+        catalog: StoredCatalog,
         allow_http: bool,
         plane: Option<Arc<HttpDataPlane>>,
     ) -> Arc<Self> {

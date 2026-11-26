@@ -25,6 +25,7 @@ use portitor_runtime::database::{
 };
 use portitor_runtime::values;
 
+mod bundle_in_use;
 mod consumer_transfers;
 mod data_flows;
 mod harvest;
@@ -251,6 +252,15 @@ const SQLITE_MIGRATIONS: &[&str] = &[
         expires_at INTEGER NOT NULL
      );
      CREATE INDEX used_token_expires_at ON used_token (expires_at)",
+    // 1.3 (catalog): the bundle version the connector uses, which every
+    // process moves to (TD-55; `store/bundle_in_use.rs`). One row, id 1;
+    // `issued` is the manifest's issue date. A file of 1.2 has none: the
+    // cache folder's `.in-use.json` says which version was in use
+    "CREATE TABLE bundle_in_use (
+        id      INTEGER PRIMARY KEY CHECK (id = 1),
+        version TEXT NOT NULL,
+        issued  TEXT NOT NULL
+     )",
 ];
 
 /// The PostgreSQL schema (since 1.3), applied in order as the `SQLite`
@@ -404,6 +414,13 @@ const POSTGRES_MIGRATIONS: &[&str] = &[
         expires_at BIGINT NOT NULL
      );
      CREATE INDEX used_token_expires_at ON used_token (expires_at)",
+    // 1.3 (catalog): the bundle version the connector uses (TD-55), as
+    // the SQLite migration of the same name
+    "CREATE TABLE bundle_in_use (
+        id      BIGINT PRIMARY KEY CHECK (id = 1),
+        version TEXT NOT NULL,
+        issued  TEXT NOT NULL
+     )",
 ];
 
 /// Adapter: every store of the connector, on its database. Cloning it
@@ -857,7 +874,7 @@ mod tests {
 
     /// A store on a `SQLite` connection a test prepared, as it is.
     fn on_connection(conn: Connection) -> ConnectorStore {
-        ConnectorStore::new(Arc::new(Database::Sqlite(Mutex::new(conn))))
+        ConnectorStore::new(Arc::new(Database::Sqlite(Mutex::new(conn), None)))
     }
 
     /// A store on a `SQLite` connection a test prepared, brought up to
@@ -875,7 +892,7 @@ mod tests {
     /// The `SQLite` connection a store was on, to open it again.
     fn into_connection(store: ConnectorStore) -> Connection {
         match Arc::try_unwrap(store.database).unwrap() {
-            Database::Sqlite(conn) => conn.into_inner().unwrap(),
+            Database::Sqlite(conn, _) => conn.into_inner().unwrap(),
             Database::Postgres(_) => panic!("not SQLite"),
         }
     }

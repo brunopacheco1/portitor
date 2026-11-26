@@ -19,7 +19,7 @@ use crate::{Config, data_flows};
 
 /// Builds the built-in HTTP data plane, if the `data-plane` feature is on
 /// and `ports` has a flow store, and makes transfers use it. Transfers
-/// read each dataset's source from the read copy `datasets` and name it in
+/// read each dataset's source from the stored `datasets` and name it in
 /// the data flow's start message (`s3://` sources are read from
 /// `ports.object_storage`); the data plane checks the consumer's
 /// membership with the caller verifier on every request (ADR 0027); the
@@ -28,7 +28,7 @@ use crate::{Config, data_flows};
 pub(crate) fn start(
     config: &Config,
     ports: &mut Ports,
-    datasets: &harvest::DatasetCopy,
+    datasets: &harvest::StoredCatalog,
 ) -> Option<(Arc<HttpDataPlane>, Arc<MembershipGate>)> {
     if !cfg!(feature = "data-plane") {
         return None;

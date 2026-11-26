@@ -8,9 +8,11 @@
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use portitor_dsp::Dataset;
+
 use super::{
-    Commit, DatasetStore, HarvestJob, HarvestStatus, JobWithErrors, KEPT_JOBS, StoreError,
-    StoredDataset,
+    Commit, DatasetState, DatasetStore, HarvestJob, HarvestStatus, JobWithErrors, KEPT_JOBS,
+    StoreError, StoredDataset,
 };
 
 #[derive(Debug, Default)]
@@ -20,7 +22,7 @@ struct Kept {
     status: HarvestStatus,
 }
 
-/// Adapter: the read copy and the jobs in memory.
+/// Adapter: the datasets and the jobs in memory.
 #[derive(Debug, Default)]
 pub struct InMemoryDatasetStore(Mutex<Kept>);
 
@@ -34,6 +36,21 @@ impl InMemoryDatasetStore {
 impl DatasetStore for InMemoryDatasetStore {
     fn datasets(&self) -> Result<Vec<StoredDataset>, StoreError> {
         Ok(self.kept().datasets.values().cloned().collect())
+    }
+
+    fn catalog(&self) -> Result<Vec<Dataset>, StoreError> {
+        // the map is in id order
+        let mut active = Vec::new();
+        for dataset in self.kept().datasets.values() {
+            if dataset.state == DatasetState::Active {
+                active.push(dataset.content.clone());
+            }
+        }
+        Ok(active)
+    }
+
+    fn dataset(&self, id: &str) -> Result<Option<StoredDataset>, StoreError> {
+        Ok(self.kept().datasets.get(id).cloned())
     }
 
     fn status(&self) -> Result<HarvestStatus, StoreError> {

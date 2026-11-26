@@ -545,7 +545,7 @@ impl Agreements for AnyAgreements {
 }
 
 impl DataFlows for AnyDataFlows {
-    fn supports(&self, dataset_id: &str, format: &str) -> bool {
+    fn supports(&self, dataset_id: &str, format: &str) -> Result<bool, String> {
         self.0.supports(dataset_id, format)
     }
     fn start(&self, transfer: &Transfer) -> Result<Option<DataAddress>, String> {
@@ -713,7 +713,7 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
-    use crate::harvest::DatasetCopy;
+    use crate::harvest::StoredCatalog;
     use crate::system::SystemEnvironment;
 
     const PID: &str = "urn:uuid:p";
@@ -749,8 +749,8 @@ mod tests {
     }
 
     impl DataFlows for DataPlane {
-        fn supports(&self, _: &str, _: &str) -> bool {
-            true
+        fn supports(&self, _: &str, _: &str) -> Result<bool, String> {
+            Ok(true)
         }
         fn start(&self, _: &Transfer) -> Result<Option<DataAddress>, String> {
             self.answer().map(|()| None)
@@ -803,7 +803,7 @@ mod tests {
         AnyAgreements,
         DataPlane,
         StartAtOnce,
-        DatasetCopy,
+        StoredCatalog,
         SystemEnvironment,
     > {
         let store = AnyTransferStore::new(Arc::clone(sqlite) as _);
@@ -813,7 +813,7 @@ mod tests {
             agreements,
             DataPlane { refuses },
             StartAtOnce,
-            DatasetCopy::default(),
+            StoredCatalog::empty(),
             SystemEnvironment,
         )
     }

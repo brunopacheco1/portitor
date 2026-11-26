@@ -30,6 +30,7 @@ use rusqlite::Connection;
 
 pub mod postgres;
 mod postgres_tls;
+pub mod sqlite_lease;
 
 /// A value going into a statement or coming out of a row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -336,8 +337,10 @@ pub const SQLITE_DEPRECATED: &str = "SQLite is deprecated since 1.3 and is remov
 #[derive(Debug)]
 pub enum Database {
     /// One `SQLite` connection; the lock makes one statement or
-    /// transaction run at a time.
-    Sqlite(Mutex<Connection>),
+    /// transaction run at a time. A file comes with the lease that keeps
+    /// other processes out of it (ADR 0029, D3; [`sqlite_lease`]); a
+    /// database in memory has none.
+    Sqlite(Mutex<Connection>, Option<sqlite_lease::ProcessLease>),
     /// A pool of PostgreSQL connections.
     Postgres(Box<postgres::Pool>),
 }
@@ -346,15 +349,21 @@ impl Database {
     /// Opens the database `setting` names and brings its schema up to
     /// date.
     ///
+    /// A `SQLite` file is taken for this process first: a second process
+    /// on the same file refuses to start ([`sqlite_lease`]).
+    ///
     /// # Errors
-    /// The database cannot be opened or reached, a migration fails, or the
-    /// schema is newer than this Portitor (or another component's).
+    /// The database cannot be opened or reached, another process uses the
+    /// `SQLite` file, a migration fails, or the schema is newer than this
+    /// Portitor (or another component's).
     pub fn open(setting: &DatabaseSetting, migrations: &Migrations) -> Result<Self, DbError> {
         match setting {
             DatabaseSetting::SqliteFile(path) => {
+                // before the migrations: a file in use is not changed
+                let lease = sqlite_lease::take(path)?;
                 let conn =
                     crate::sqlite::open(Some(path), migrations.sqlite).map_err(DbError::new)?;
-                Ok(Self::Sqlite(Mutex::new(conn)))
+                Ok(Self::Sqlite(Mutex::new(conn), Some(lease)))
             }
             DatabaseSetting::Postgres(settings) => postgres::Pool::open(settings, migrations)
                 .map(|pool| Self::Postgres(Box::new(pool))),
@@ -367,7 +376,8 @@ impl Database {
     /// `SQLite` cannot allocate the database or a migration fails.
     pub fn in_memory(migrations: &Migrations) -> Result<Self, DbError> {
         let conn = crate::sqlite::open(None, migrations.sqlite).map_err(DbError::new)?;
-        Ok(Self::Sqlite(Mutex::new(conn)))
+        // one process by definition: no lease
+        Ok(Self::Sqlite(Mutex::new(conn), None))
     }
 
     /// Whether this is PostgreSQL (several replicas allowed).
@@ -392,7 +402,7 @@ impl Database {
         mut work: impl FnMut(&mut dyn Executor) -> Result<T, DbError>,
     ) -> Result<T, DbError> {
         match self {
-            Self::Sqlite(conn) => {
+            Self::Sqlite(conn, _) => {
                 let mut conn = lock(conn);
                 let tx = conn.transaction()?;
                 let mut runner = SqliteRunner(&tx);
@@ -409,7 +419,7 @@ impl Database {
     #[must_use]
     pub fn sqlite_connection(&self) -> Option<MutexGuard<'_, Connection>> {
         match self {
-            Self::Sqlite(conn) => Some(lock(conn)),
+            Self::Sqlite(conn, _) => Some(lock(conn)),
             Self::Postgres(_) => None,
         }
     }
@@ -418,14 +428,14 @@ impl Database {
 impl Executor for &Database {
     fn query(&mut self, sql: &str, values: &[Value]) -> Result<Vec<Row>, DbError> {
         match *self {
-            Database::Sqlite(conn) => SqliteRunner(&lock(conn)).query(sql, values),
+            Database::Sqlite(conn, _) => SqliteRunner(&lock(conn)).query(sql, values),
             Database::Postgres(pool) => pool.query(sql, values),
         }
     }
 
     fn execute(&mut self, sql: &str, values: &[Value]) -> Result<u64, DbError> {
         match *self {
-            Database::Sqlite(conn) => SqliteRunner(&lock(conn)).execute(sql, values),
+            Database::Sqlite(conn, _) => SqliteRunner(&lock(conn)).execute(sql, values),
             Database::Postgres(pool) => pool.execute(sql, values),
         }
     }
@@ -593,5 +603,29 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("without PORTITOR_DATABASE_URL"), "{err}");
+    }
+
+    /// ADR 0029, D3: a second process on one `SQLite` file refuses to
+    /// start, with an error that says why and what to do; once the first
+    /// one has closed the file, the next one opens it.
+    #[test]
+    fn a_second_open_of_one_sqlite_file_is_refused() {
+        let dir = crate::testing::TempDir::new("database-one-process");
+        let setting = DatabaseSetting::SqliteFile(dir.path().join("component.db"));
+        let first = Database::open(&setting, &MIGRATIONS).unwrap();
+        let refused = Database::open(&setting, &MIGRATIONS).unwrap_err();
+        assert!(
+            refused.message.contains("is in use by another process"),
+            "{refused}"
+        );
+        assert!(refused.message.contains("use PostgreSQL"), "{refused}");
+        drop(first);
+        let again = Database::open(&setting, &MIGRATIONS).unwrap();
+        (&again)
+            .execute(
+                "INSERT INTO item (id, n) VALUES ($1, $2)",
+                values!["a", 1_i64],
+            )
+            .unwrap();
     }
 }

@@ -36,14 +36,23 @@ mod tests {
         }
     }
 
-    /// Two stores on one file (two processes): a token id used through
+    /// Two stores on one database (two processes, on PostgreSQL: a
+    /// `SQLite` file serves one process only): a token id used through
     /// one is refused through the other.
     #[test]
     fn a_token_id_used_by_one_process_is_refused_by_the_other() {
-        let dir = portitor_runtime::testing::TempDir::new("connector-used-tokens");
-        let path = dir.path().join("connector.db");
-        let first = ConnectorStore::open_sqlite_file(&path).unwrap();
-        let second = ConnectorStore::open_sqlite_file(&path).unwrap();
+        let Some(url) = portitor_runtime::testing::databases::postgres_url() else {
+            return;
+        };
+        let settings = portitor_runtime::testing::databases::fresh_postgres_settings(&url);
+        let setting = portitor_runtime::database::DatabaseSetting::Postgres(Box::new(settings));
+        let open = || {
+            let database =
+                portitor_runtime::database::Database::open(&setting, &super::super::MIGRATIONS)
+                    .unwrap();
+            ConnectorStore::new(std::sync::Arc::new(database))
+        };
+        let (first, second) = (open(), open());
         assert!(first.use_token_id("j-1", 200, 100).unwrap());
         assert!(!second.use_token_id("j-1", 200, 100).unwrap());
     }

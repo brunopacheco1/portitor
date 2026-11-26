@@ -24,14 +24,14 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::auth::{AnyVerifier, Caller, credentials_for};
-use crate::harvest::DatasetCopy;
+use crate::harvest::StoredCatalog;
 use crate::http_client::outbound_url_allowed;
 use crate::inbound::read_message;
 use crate::outbox::{self, Link, Message, Outbox};
 use crate::ports::{AnyDecider, AnyStore, Ports};
 use crate::system::SystemEnvironment;
 
-type Service = ProviderService<AnyStore, AnyDecider, DatasetCopy, SystemEnvironment>;
+type Service = ProviderService<AnyStore, AnyDecider, StoredCatalog, SystemEnvironment>;
 
 /// The provider side of negotiation, as used by the HTTP handlers.
 pub(crate) struct Provider {
@@ -45,7 +45,7 @@ pub(crate) struct Provider {
 impl Provider {
     pub(crate) fn new(
         ports: Ports,
-        catalog: DatasetCopy,
+        catalog: StoredCatalog,
         participant_id: String,
         allow_http: bool,
     ) -> Self {
@@ -373,7 +373,7 @@ mod tests {
         let mut ports = Ports::in_memory(Arc::new(PostOnly));
         ports.store = store;
         let participant_id = "did:web:p.example".to_owned();
-        Provider::new(ports, DatasetCopy::default(), participant_id, false)
+        Provider::new(ports, StoredCatalog::empty(), participant_id, false)
     }
 
     /// ADR 0007, amended in 0.13 (TD-44), on the real provider and an

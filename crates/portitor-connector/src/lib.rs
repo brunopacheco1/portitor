@@ -379,7 +379,7 @@ impl Config {
 }
 
 struct AppState {
-    catalog: CatalogService<harvest::DatasetCopy>,
+    catalog: CatalogService<harvest::StoredCatalog>,
     versions: VersionResponse,
 }
 
@@ -597,9 +597,12 @@ impl Negotiator {
     }
 
     /// How many datasets are in the catalog now.
-    #[must_use]
-    pub fn catalog_size(&self) -> usize {
-        self.harvester.copy().active_count()
+    ///
+    /// # Errors
+    ///
+    /// The stored datasets cannot be read.
+    pub fn catalog_size(&self) -> Result<usize, harvest::StoreError> {
+        self.harvester.catalog().active_count()
     }
 
     /// Reads the catalog of the provider `provider_id` (a `did:web` DID)
@@ -744,7 +747,8 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
     let mut ports = ports;
     ports.credential_types = config.credential_types.clone();
     let harvester = Arc::new(start_harvest(config, &ports.harvest, &service_id)?);
-    let datasets = harvester.copy();
+    // read from the database on each request (ADR 0029, D4)
+    let datasets = harvester.catalog();
     let callback_address = format!("{}{CALLBACK_PATH}", config.public_url.trim_end_matches('/'));
     let consumer = Arc::new(consumer::Consumer::new(
         &ports,
@@ -983,6 +987,11 @@ fn respond<T: Serialize>(outcome: Outcome<T>) -> Response {
         Outcome::Ok(body) => Json(body).into_response(),
         Outcome::BadRequest(e) => (StatusCode::BAD_REQUEST, Json(e)).into_response(),
         Outcome::NotFound(e) => (StatusCode::NOT_FOUND, Json(e)).into_response(),
+        Outcome::StoreFailed(e) => {
+            tracing::error!(error = %e.0, "catalog: the stored datasets cannot be read");
+            let e = CatalogError::new("500", "internal error");
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(e)).into_response()
+        }
     }
 }
 

@@ -4,7 +4,8 @@
 
 //! `SQLite` files: opening one with the settings a Portitor store needs,
 //! and bringing its schema up to date (ADR 0006: one file per process, no
-//! sharing between replicas).
+//! sharing between replicas; enforced since 1.3 by a lease row in the
+//! file, `database::sqlite_lease`).
 
 use std::path::Path;
 
@@ -17,7 +18,20 @@ use rusqlite::Connection;
 /// The file cannot be opened or created, it is not a `SQLite` database, a
 /// migration fails, or it was written by a newer version.
 pub fn open(path: Option<&Path>, migrations: &[&str]) -> Result<Connection, String> {
-    let mut conn = match path {
+    let mut conn = connect(path)?;
+    migrate(&mut conn, migrations)?;
+    Ok(conn)
+}
+
+/// Opens (or creates) the database at `path`, or an in-memory one when
+/// `path` is `None`, with the settings every Portitor connection uses,
+/// and nothing else.
+///
+/// # Errors
+/// The file cannot be opened or created, or it is not a `SQLite`
+/// database.
+pub fn connect(path: Option<&Path>) -> Result<Connection, String> {
+    let conn = match path {
         Some(path) => Connection::open(path),
         None => Connection::open_in_memory(),
     }
@@ -30,7 +44,6 @@ pub fn open(path: Option<&Path>, migrations: &[&str]) -> Result<Connection, Stri
         .map_err(sql_error)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(sql_error)?;
-    migrate(&mut conn, migrations)?;
     Ok(conn)
 }
 
