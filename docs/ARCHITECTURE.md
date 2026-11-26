@@ -230,6 +230,13 @@ carry a token that proves it comes from its connector.
 
 ![Dynamic: negotiating a contract and transferring data](diagrams/dynamic-negotiate-transfer.drawio.svg)
 
+The states of a contract negotiation, as both parties keep them (DSP
+2025-1), and the message that moves each one. Gaps between the
+specification and what is stored are in the
+[negotiation spike](spikes/1.x-negotiation-state-machine.md).
+
+![State: contract negotiation](diagrams/state-negotiation.drawio.svg)
+
 Gaia-X (optional): the identity gets its compliance credential from a
 compliance service ([ADR 0021](adr/0021-gaia-x-onboarding.md)), and a
 provider checks it for an offer that requires it

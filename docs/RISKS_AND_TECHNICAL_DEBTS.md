@@ -133,9 +133,10 @@ of work with no release yet.
 | [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | Open | none |
 | [TD-46](#td-46) | The issuer keeps one set of claims per participant | Technical debt | Open | 1.3 |
 | [TD-47](#td-47) | A transfer stays REQUESTED when its provider is revoked | Technical debt | Open | 1.1 |
+| [TD-49](#td-49) | After a failed message, the two parties of a negotiation can stay in different states | Technical debt, interoperability | Accepted | none |
 
-Counts on 2026-11-26, on the 1.2 branch: 36 risks and 29 technical
-debts are not closed (Open 29, Mitigated 21, Accepted 15); 12 risks and
+Counts on 2026-11-26, on the 1.2 branch: 36 risks and 30 technical
+debts are not closed (Open 29, Mitigated 21, Accepted 16); 12 risks and
 19 technical debts are closed.
 
 ## Risks
@@ -1277,6 +1278,26 @@ debts are not closed (Open 29, Mitigated 21, Accepted 15); 12 risks and
   hdab-intermediary scenario, step 6, now expects `TERMINATED`.
 - **Next.** Move to Closed when 1.1 is released, after a run of the
   hdab-intermediary scenario on 1.1.
+
+<a id="td-49"></a>
+### TD-49 After a failed message, the two parties of a negotiation can stay in different states
+
+- **What.** When the other party cannot be reached through all tries,
+  Portitor ends the negotiation on its side; when its termination gets
+  no answer, it stops trying (DSP: "MAY choose to ignore the error").
+  The other party may never hear of it and wait for ever, for example a
+  consumer in `VERIFIED` while the provider is `TERMINATED`. DSP 2025-1
+  says: "In case the states differ, the Contract Negotiation MUST be
+  terminated." Nothing finds such a difference later
+  ([negotiation spike](spikes/1.x-negotiation-state-machine.md), G3).
+- **Why it matters.** Negotiations that will never move stay in the
+  file and in the management API. No data flows: the provider serves
+  data only for a `FINALIZED` negotiation.
+- **Current state: Accepted** (maintainer, 2026-11-26): keep the
+  behaviour as in Eclipse EDC 1.0.0-RC8, which gives up the same way
+  and never asks the other party for a negotiation's state.
+- **Next.** None. An operator who sees a negotiation that does not
+  move can ask the partner, and terminate it from its side.
 
 ## Closed
 
