@@ -56,6 +56,13 @@ right (ADR 0025, freeze point 2). `dataAddress` in the transfer view is
 optional and stays optional: a 1.x release may leave it out for a caller
 without the right to read data (freeze point 3).
 
+From 1.2 a route that changes a provider's transfer (the DSP transfer
+messages, and `POST /v1/provided-transfers/{providerPid}/termination`)
+may answer **HTTP 503** with `Retry-After` while another call is
+changing that transfer; nothing was written, and the call may be made
+again ([ADR 0007](adr/0007-outbox-and-proof-of-delivery.md), note on
+the lease).
+
 ## HTTP routes
 
 The public routes are described in [docs/api/](api/) (`openapi.json`,

@@ -128,19 +128,19 @@ A *let chain* (Rust 2024): `if let` and other conditions joined with
 `&&`. The body runs only if all of them hold (`transfer/provider.rs`).
 
 ```rust
-match (&told, if_refused) {
-    (Ok(address), _) => add_start_message(now, step, address.clone()),
-    (Err(_), IfRefused::TakeBack { before }) if now.version == written.version => { /* ... */ }
-    (Err(reason), _) => { /* ... */ }
+match answer {
+    Ok(address) => add_start_message(&mut recorded, step, address.clone()),
+    Err(reason) => { /* ... */ }
 }
 ```
 
-A `match` on a *reference* (`&told`, and `if_refused`, which is a
-`&IfRefused`) takes nothing out of the value: each name in the pattern
-is a reference into it. `address` is a `&Option<DataAddress>`, so the
-code calls `.clone()` to get a value of its own. With `&mut` the names
-are `&mut` too: `if let Some(pending) = &mut old.pending` lets the code
-change `pending` in place (`flow_steps.rs`;
+A `match` on a *reference* (`answer` is a
+`&Result<Option<DataAddress>, String>`) takes nothing out of the value:
+each name in the pattern is a reference into it. `address` is a
+`&Option<DataAddress>`, so the code calls `.clone()` to get a value of
+its own. With `&mut` the names are `&mut` too: `if let Some(pending) =
+&mut old.pending` lets the code change `pending` in place
+(`record_that_step_ran` in `flow_steps.rs`;
 `portitor-dsp/src/transfer/provider/tests.rs`).
 
 ## More patterns
@@ -323,26 +323,21 @@ Never write `.unwrap()` outside tests. It stops the program when the
 value is missing, and the linter refuses it.
 
 ```rust
-let ended = Cell::new(false);
-let recorded = process::update(self, &lookup, |now| {
-    /* ... */
-    ended.set(false);
-    /* ... */ ended.set(true);
-    Ok(Write::Save)
-})?;
-if ended.get() { /* ... */ }
+let ended = retry_while_busy::<_, Box<Failure>>(
+    |failure| failure.is_busy(),
+    || self.service.push_finished(provider_pid, failure).map_err(Box::new),
+)
+.await;
 ```
 
-A closure that may run more than once and must tell its caller
-something. `process::update` runs the change again whenever another
-write came first, and the closure may only borrow what is around it,
-not change it (it is a `Fn`, not a `FnMut`). A `Cell` is a box whose
-content can be set through a shared borrow: `set` and `get` copy a
-small value in and out. Each run first resets it (`ended.set(false)`),
-so after the call it holds what the last run, the one that was written,
-decided. A `Cell` cannot be shared between threads (it is not `Sync`);
-here it lives only during one call (`after_write` in
-`portitor-dsp/src/transfer/provider/flow_steps.rs`).
+Two closures given to one function: the first says whether a failure
+is worth another try, the second is the call itself, made again after a
+short wait while the first says yes (`retry_while_busy` in
+`portitor-connector/src/outbox.rs`, used in `transfer.rs`). The second
+is an `impl FnMut`: a closure that may change what it captured, here a
+counter in the tests. `::<_, Box<Failure>>` names the failure type
+(the turbofish, below), so the first closure's `failure` has a known
+type before the second closure is read.
 
 ## Traits: ports and adapters
 

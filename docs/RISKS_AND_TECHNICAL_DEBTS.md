@@ -1336,7 +1336,7 @@ entries are in [CHANGELOG](../CHANGELOG.md) under the release named.
 | <a id="td-42"></a>TD-42 | Four near-copies of the negotiation and transfer logic | 1.1 | The shared process core, `crates/portitor-dsp/src/process.rs` (`Record`, `Records`, `receive`, `update`); the in-memory stores moved to `crates/portitor-connector/src/test_stores.rs`, compiled for tests only; [READING-THE-CODE](READING-THE-CODE.md#the-three-siblings) |
 | <a id="td-43"></a>TD-43 | The Gaia-X documents name several versions of the rules | 0.14 | [ARCHITECTURE](ARCHITECTURE.md#specification-versions) |
 | <a id="td-44"></a>TD-44 | A transfer request sent at once after the agreement could be refused | 0.13; the metric in 0.14 | [ADR 0007](adr/0007-outbox-and-proof-of-delivery.md), "Amendment for 0.13" and "Note added in 0.14"; CHANGELOG 0.14.0 |
-| <a id="td-48"></a>TD-48 | Data plane steps ran inside the retried update of a transfer | 1.2 | The write records the step (`transfer.flow_step`); it runs once, right after the write wins, one step at a time; a refused step takes the write back or ends the transfer: `crates/portitor-dsp/src/transfer/provider/flow_steps.rs`; [ADR 0028](adr/0028-separate-pluggable-data-plane.md), decision 6 and note added in 1.2; [ADR 0013](adr/0013-transfer-and-data-plane.md), note added in 1.2 |
+| <a id="td-48"></a>TD-48 | Data plane steps ran inside the retried update of a transfer | 1.2 | The write records the step (`transfer.flow_step`) and takes a lease on the transfer in the database in the same compare-and-update; the step runs once, right after the write wins; any other write while the lease holds gets HTTP 503 (`Retry-After: 1`); a step whose lease ended is taken over by the next call, a sweep or the start; a refused step takes the write back or ends the transfer: `crates/portitor-dsp/src/transfer/provider/flow_steps.rs`; [ADR 0028](adr/0028-separate-pluggable-data-plane.md), decision 6 and note added in 1.2; [ADR 0013](adr/0013-transfer-and-data-plane.md), note added in 1.2 |
 
 ### Left over from closed items
 
@@ -1415,11 +1415,17 @@ plan.
 - **TD-44.** The benchmark that found it was not run again after the
   fix. Until 0.14 a finalization event settled this way was still
   counted in `portitor.outbox.message.given_up`; from 0.14 it is not.
-- **TD-48.** The steps run one at a time under a lock inside the
-  process. That is enough while the connector is one process on one
-  SQLite file ([TD-08](#td-08)) and the data plane is a function call.
-  When signals go over HTTP (ADR 0028, step 2), a step may wait on the
-  network while it holds the lock; look at this again then.
+- **TD-48.** No lock in the process any more (1.2, maintainer,
+  2026-11-26): the transfer is leased in the database, so several
+  processes on one database keep the steps one at a time, and no call
+  waits. Left over: a partner's message that comes while a step runs
+  gets 503, which DSP 2025-1 does not name (it names 4xx for a refused
+  message); Eclipse EDC answers the same and retries 5xx
+  ([ADR 0007](adr/0007-outbox-and-proof-of-delivery.md), note added in
+  1.2). The lease is 30 seconds, a constant: a step of a remote data
+  plane (ADR 0028, step 2) must stay well under it. A message that a
+  step left over makes ready, when a call (not the sweep) ran that step
+  and its own write then failed, waits for the next restart.
 
 <a id="upstream-reports"></a>
 ## Upstream reports

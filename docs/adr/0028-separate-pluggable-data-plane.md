@@ -137,7 +137,9 @@ the process, with one accepted change of behaviour.
   longer reads the transfer store.
 - Decision 6: the provider's transfer service records the data plane
   step in the transfer's own write (`transfer.flow_step`) and runs it
-  right after that write wins, once, one step at a time; our DSP
+  right after that write wins, once, one step at a time (a lease on the
+  transfer in the database, [ADR 0007](0007-outbox-and-proof-of-delivery.md),
+  note on the lease); our DSP
   message waits until the step has run. This is the outbox pattern of
   ADR 0007 applied to the data plane step, in the same call rather
   than by the outbox's sender

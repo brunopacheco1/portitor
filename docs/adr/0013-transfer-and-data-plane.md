@@ -216,7 +216,9 @@ decision 6 and step 1;
   no longer signals the data plane first and saves after. The write
   that changes a transfer records the data plane step it needs
   (`transfer.flow_step`); right after that write, the same call runs
-  the step, one step at a time, and records that it ran. A start
+  the step, one step at a time (the transfer is leased in the database
+  meanwhile; [ADR 0007](0007-outbox-and-proof-of-delivery.md), note on
+  the lease), and records that it ran. A start
   message gets the data address in that second write, and is sent only
   then. A write that loses to another write runs no step, so a save
   that fails starts no data flow (before: started, then terminated). A
