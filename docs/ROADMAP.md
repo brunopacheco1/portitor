@@ -367,8 +367,8 @@ Several containers serve one participant on one shared database
     and every replica serves it from there, as EDC IssuerService does,
     instead of a revocation counter that makes each process sign again
     (D5).
-- Not in 1.3: a tool that copies a SQLite file into PostgreSQL (later
-  1.x, before 2.0; [Later](#later-not-planned-for-a-release-yet)).
+- Not in 1.3: a tool that copies a SQLite file into PostgreSQL (1.4;
+  [TD-59](RISKS_AND_TECHNICAL_DEBTS.md#td-59)).
 - Exit: a test runs two processes of each image on one PostgreSQL
   database, with requests spread over both, and the scenarios pass; one
   process is stopped in the middle and the other finishes its work; the
@@ -413,6 +413,14 @@ Several containers serve one participant on one shared database
   release has yet: a check that the transfer's destination matches a
   claim in the permit. No specification for that is known; research
   first. A folder in `scenarios/` once it runs.
+- Debts and risks assigned to this release (maintainer, 2026-11-26):
+  server-side request forgery: block internal addresses ([R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17));
+  negative credential constraints ([R-43](RISKS_AND_TECHNICAL_DEBTS.md#r-43)); a transfer left
+  REQUESTED when its provider is revoked ([TD-47](RISKS_AND_TECHNICAL_DEBTS.md#td-47)); the written
+  OpenSSF Baseline level 1 self-assessment ([R-05](RISKS_AND_TECHNICAL_DEBTS.md#r-05)); the tool that
+  copies a SQLite file into PostgreSQL ([TD-59](RISKS_AND_TECHNICAL_DEBTS.md#td-59)); a Helm chart
+  ([TD-39](RISKS_AND_TECHNICAL_DEBTS.md#td-39)); a repeated first contract request and the outbox's
+  delivery check ([TD-60](RISKS_AND_TECHNICAL_DEBTS.md#td-60), [TD-61](RISKS_AND_TECHNICAL_DEBTS.md#td-61)).
 - Exit: purpose and permit tested granted and refused; data-permits runs
   with the R-48, TD-46 and TD-20 steps changed to refusals or passes;
   the TCKs and the EDC interop test stay green.
@@ -446,6 +454,10 @@ Several containers serve one participant on one shared database
   [R-39](RISKS_AND_TECHNICAL_DEBTS.md#r-39).
 - Demo step 3: the four questions (below) answered by running the demo,
   each with its evidence, and a note of where Portitor fell short.
+- Debts and risks assigned to this release (maintainer, 2026-11-26):
+  a negotiation started by the provider ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)); why and when a
+  negotiation ended stored ([TD-62](RISKS_AND_TECHNICAL_DEBTS.md#td-62)); source files above 1,000
+  lines split ([TD-63](RISKS_AND_TECHNICAL_DEBTS.md#td-63)).
 - Exit: the four answers written in the docs.
 - Main risk: our design for dependent agreements may not match what EDC
   or Simpl-Open do later.
@@ -460,6 +472,10 @@ Several containers serve one participant on one shared database
   ([TD-14](RISKS_AND_TECHNICAL_DEBTS.md#td-14)); STS token and
   presentation caching only if the 0.11 measurements show the need
   ([TD-07](RISKS_AND_TECHNICAL_DEBTS.md#td-07)).
+- Debts and risks assigned to this release (maintainer, 2026-11-26):
+  one slow holder delaying the issuer ([R-44](RISKS_AND_TECHNICAL_DEBTS.md#r-44)); the STS on its own
+  port ([R-42](RISKS_AND_TECHNICAL_DEBTS.md#r-42)); the cost of DCP per request, with TD-07
+  ([R-29](RISKS_AND_TECHNICAL_DEBTS.md#r-29)); fewer type parameters ([TD-64](RISKS_AND_TECHNICAL_DEBTS.md#td-64)).
 - Exit: a key change in OpenBao with no verification gap (tested).
 - Main risk: OpenBao must stay optional.
 
@@ -475,6 +491,11 @@ Several containers serve one participant on one shared database
   a standard to follow (ISO/IEC TS 27560 and DPV to read first).
 - User to system access is tested against Simpl-Open, which has
   implemented user-to-system actions (maintainer, 2026-11-20).
+- Debts and risks assigned to this release (maintainer, 2026-11-26):
+  a request limit per partner ([R-45](RISKS_AND_TECHNICAL_DEBTS.md#r-45)); token renewal and partial
+  transfers ([TD-10](RISKS_AND_TECHNICAL_DEBTS.md#td-10)); memory per running pull ([TD-45](RISKS_AND_TECHNICAL_DEBTS.md#td-45));
+  `Negotiator` renamed or split ([TD-65](RISKS_AND_TECHNICAL_DEBTS.md#td-65)); consent code
+  ([TD-69](RISKS_AND_TECHNICAL_DEBTS.md#td-69), with TD-15).
 - Exit: set by the ADRs.
 - Main risk: the largest unknown of the plan; the ADRs may split it.
 
@@ -483,10 +504,12 @@ Several containers serve one participant on one shared database
 From the [2026-11-18 review](reviews/2026-11-18-specifications-and-code-quality.md)
 (maintainer, 2026-11-18: all of them, in 1.x). They change no behaviour,
 API or setting. Each goes into the plan of a 1.x release, at most one
-large item per release, so a regression is easy to trace. Which release
-takes which item is decided when that release is planned; the first
-item is best done before 1.1 adds push to the transfer code, so the new
-code is written once.
+large item per release, so a regression is easy to trace. Each item is
+a debt with a release (maintainer, 2026-11-26): files above 1,000 lines
+in 1.5 ([TD-63](RISKS_AND_TECHNICAL_DEBTS.md#td-63)), simpler types in
+1.6 ([TD-64](RISKS_AND_TECHNICAL_DEBTS.md#td-64)), `Negotiator` in 1.7
+([TD-65](RISKS_AND_TECHNICAL_DEBTS.md#td-65)), the Helm chart in 1.4
+([TD-39](RISKS_AND_TECHNICAL_DEBTS.md#td-39)).
 
 - One shared core for the negotiation and transfer logic, as provider
   and as consumer, in place of the four near-copies; the in-memory
@@ -529,7 +552,7 @@ rejects. It runs beside the releases.
 | Consent | 1.7 |
 | How schemas are published ([TD-01](RISKS_AND_TECHNICAL_DEBTS.md#td-01)) | with TD-03 |
 | A dataspace's policy rules as SHACL shapes in the bundle (maintainer, 2026-11-18; [TD-32](RISKS_AND_TECHNICAL_DEBTS.md#td-32)) | 1.4 |
-| Spike: the contract negotiation state machine written out in DSP terms, every state and every transition, and a check that the stored data matches it (maintainer, 2026-11-21) | Done 2026-11-25 ([spike](spikes/1.x-negotiation-state-machine.md)): states and stored data match DSP; gaps G1 to G6 and their next steps are in the spike, release not chosen |
+| Spike: the contract negotiation state machine written out in DSP terms, every state and every transition, and a check that the stored data matches it (maintainer, 2026-11-21) | Done 2026-11-25 ([spike](spikes/1.x-negotiation-state-machine.md)): states and stored data match DSP; gaps G1 to G6 and their next steps are in the spike; G1 and G2 in 1.4 ([TD-60](RISKS_AND_TECHNICAL_DEBTS.md#td-60), [TD-61](RISKS_AND_TECHNICAL_DEBTS.md#td-61)), G5 and G6 in 1.5 ([TD-62](RISKS_AND_TECHNICAL_DEBTS.md#td-62)), G3 accepted ([TD-49](RISKS_AND_TECHNICAL_DEBTS.md#td-49)) |
 
 ### The health dataspace demo
 
@@ -646,6 +669,12 @@ first, with clean hand-overs to the second.
   DCAT-AP harvest.
 - The data quality and utility label (Art. 78) in the description, in
   the place HealthDCAT-AP gives it (to check), never a field of our own.
+- Debts and risks assigned to this release (maintainer, 2026-11-26):
+  how schemas and vocabularies are collected ([TD-01](RISKS_AND_TECHNICAL_DEBTS.md#td-01)); more
+  harvest sources and catalog checks, bundle expiry and bundle key
+  rotation ([TD-16](RISKS_AND_TECHNICAL_DEBTS.md#td-16), [TD-67](RISKS_AND_TECHNICAL_DEBTS.md#td-67), closes [R-22](RISKS_AND_TECHNICAL_DEBTS.md#r-22)); a
+  dataspace-wide registry, only if this release needs it
+  ([TD-68](RISKS_AND_TECHNICAL_DEBTS.md#td-68)).
 - Exit: a description of the demo's dataset passes the HealthDCAT-AP
   shapes and the EU ITB validator, and lists each minimum element.
 - Main risk: the implementing act is adopted after this release; the
@@ -679,6 +708,11 @@ the maintainer's answers to [ADR 0017](adr/0017-simpl-open.md#maintainers-answer
   gets its own ADR.
 - Step 3, users: the user-to-system test of 1.7 run again against the
   newest Simpl-Open release.
+- Debts and risks assigned to this release (maintainer, 2026-11-26):
+  a provider in several dataspaces ([TD-03](RISKS_AND_TECHNICAL_DEBTS.md#td-03)); Simpl-Open facts
+  checked again ([R-24](RISKS_AND_TECHNICAL_DEBTS.md#r-24)); TLS inside the services, with mutual TLS
+  ([TD-19](RISKS_AND_TECHNICAL_DEBTS.md#td-19)); the ADR on Simpl-Open features beyond the protocols:
+  mutual TLS and the API gateway ([TD-69](RISKS_AND_TECHNICAL_DEBTS.md#td-69)).
 - A CI job only if the Simpl-Open stack fits a runner; otherwise a
   runbook, like the demo. Step 1 should fit; step 2 is checked once the
   Compose file exists.
@@ -732,6 +766,53 @@ Research first; code only if the ADR finds a hand-over worth building.
 - Main risk: HealthData@EU and the dataspace protocols stay apart, so a
   bridge serves no one yet.
 
+### 1.12 Separate data plane (added 2026-11-26)
+
+Every risk and debt that needs work gets a release (maintainer,
+2026-11-26). 1.12 to 1.14 hold what fits no earlier release.
+
+- Steps 2 to 4 of [ADR 0028](adr/0028-separate-pluggable-data-plane.md):
+  signaling over HTTP and registration, the separate image, interop with
+  an outside data plane and an EDC control plane ([TD-17](RISKS_AND_TECHNICAL_DEBTS.md#td-17)). Best
+  after Data Plane Signaling 1.0 is released
+  ([R-06](RISKS_AND_TECHNICAL_DEBTS.md#r-06)).
+- A data plane step that no longer runs inside the request: the
+  connector records it and a worker runs it ([TD-66](RISKS_AND_TECHNICAL_DEBTS.md#td-66)).
+- Asynchronous store ports, so a database call no longer blocks its
+  thread ([TD-40](RISKS_AND_TECHNICAL_DEBTS.md#td-40)).
+- Exit: the built-in data plane runs as its own image and as part of the
+  connector, with the same tests; an outside data plane passes the
+  interop test.
+- Main risk: Data Plane Signaling changes before 1.0.
+
+### 1.13 Gaia-X beyond 0.8 (added 2026-11-26)
+
+- A test against the Gaia-X Lab or a production clearing house, once
+  Portitor runs beyond a laptop with a public `did:web` and a CA
+  certificate ([R-12](RISKS_AND_TECHNICAL_DEBTS.md#r-12)); Gaia-X-compatible DCAT descriptions and
+  service offering credentials; OpenID4VCI and OpenID4VP to the
+  Compliance Dispatcher when its wallet flow ships ([R-14](RISKS_AND_TECHNICAL_DEBTS.md#r-14)); label
+  levels 1 to 3; the registration number notary; trust anchors from the
+  Gaia-X Registry; a legal person credential signed by another signer
+  ([TD-21](RISKS_AND_TECHNICAL_DEBTS.md#td-21)).
+- The Gaia-X binding checked again against what Gaia-X then publishes
+  ([R-11](RISKS_AND_TECHNICAL_DEBTS.md#r-11)); EDC asked how it would accept Gaia-X compliance
+  credentials ([R-10](RISKS_AND_TECHNICAL_DEBTS.md#r-10)).
+- Exit: one run against a real Gaia-X service, or each failure written
+  down with its cause.
+- Main risk: it needs a public deployment that does not exist yet.
+
+### 1.14 Operations hardening (added 2026-11-26)
+
+- OTLP logs export, gRPC and compression ([TD-29](RISKS_AND_TECHNICAL_DEBTS.md#td-29)).
+- What the runs of 1.3 to 1.13 showed in operation, each recorded as a
+  debt first.
+- The first yearly risk review: every item with no release is read
+  again ([how](RISKS_AND_TECHNICAL_DEBTS.md#how-to-keep-this-file-up-to-date)).
+- Exit: logs reach an OTLP collector; the review is written in the risks
+  file.
+- Main risk: few; the list grows with what operators report.
+
 ### What Portitor does not plan to do in this year
 
 - Run an HDAB, a national contact point or an application portal for
@@ -744,90 +825,24 @@ Research first; code only if the ADR finds a hand-over worth building.
 
 ## Later (not planned for a release yet)
 
-- A tool that copies a SQLite file into PostgreSQL, in a 1.x release
-  before 2.0 (maintainer, 2026-11-26;
-  [ADR 0029](adr/0029-several-replicas.md)).
-- Asynchronous store ports, so a database call no longer blocks the
-  thread that makes it
-  ([ADR 0029](adr/0029-several-replicas.md), decision 3;
-  [TD-40](RISKS_AND_TECHNICAL_DEBTS.md#td-40)).
-- A separate, pluggable data plane (maintainer, 2026-11-25): the
-  connector drives data planes over Data Plane Signaling, operators
-  register their own data planes for new sources and transfer types
-  without a Portitor release, and the built-in data plane becomes one
-  of them, linked in by default and also an optional image
-  `portitor-dataplane`. Spike done
-  ([spike](spikes/1.x-separate-data-plane.md)); decision in
-  [ADR 0028](adr/0028-separate-pluggable-data-plane.md) (Accepted
-  2026-11-25).
-  Four steps, each its own release: untie the built-in data plane
-  inside the process (no change of behaviour, closes
-  [TD-48](RISKS_AND_TECHNICAL_DEBTS.md#td-48)); signaling over HTTP and
-  registration; the separate image; interop with an outside data plane
-  and an EDC control plane. Closes
-  [TD-17](RISKS_AND_TECHNICAL_DEBTS.md#td-17). Step 1 was done in 1.2
-  (above); steps 2 to 4 later in 1.x, or after Data Plane Signaling 1.0
-  is released (maintainer, 2026-11-25).
-- Two options from the 2026-11-26 discussion of locks in one process
-  (maintainer, 2026-11-26), not chosen yet:
-  - a fully asynchronous data plane step: the connector accepts the
-    request, records the step, and a worker runs it; a refusal by the
-    data plane becomes a termination of the transfer. Needed for
-    [ADR 0028](adr/0028-separate-pluggable-data-plane.md)'s data plane
-    over HTTP (step 2), where a step waits on the network;
-  - a lease on every write of a transfer or a negotiation, together
-    with the outbox loop of 1.3
-    ([TD-53](RISKS_AND_TECHNICAL_DEBTS.md#td-53)).
-- Revise agreements when the scope of the data changes, for example a
-  data subject objects to a use, or the consumer asks to change the
-  scope of the first agreement (maintainer, 2026-11-14). Until then an
-  agreement keeps working after its dataset leaves the source. Planned
-  with consent in 1.7, if the consent ADR finds a standard.
-- More harvest sources for datasets ([ADR 0020](adr/0020-dataset-harvest.md)),
-  such as a DCAT-AP endpoint or CKAN; which catalogues to support is
-  decided later (maintainer, 2026-11-14).
-- A dataspace-wide registry or federated catalogue, run by the
-  authority, only if needed (maintainer, 2026-11-14): it would pull the
-  participants' DSP catalogs, check them with the same bundle and offer
-  search (SPARQL), with its own ADR.
-- Check other participants' catalogs against the bundle (warnings only,
-  ADR 0005); bundle expiry and bundle key rotation (two bundle keys
-  listed need another key id than the fixed `<DID>#bundle-key`;
-  maintainer, 2026-11-17).
-- Gaia-X beyond 0.8 (maintainer, 2026-11-15): a test against the real
-  Gaia-X Lab or a production clearing house, once Portitor runs beyond a
-  laptop (needs a public `did:web` and a CA certificate); Gaia-X-compatible
-  DCAT descriptions and service offering credentials, with a federated
-  catalogue; OpenID4VCI and OpenID4VP to the Gaia-X Compliance Dispatcher
-  when its wallet flow ships; label levels 1 to 3; calling the
-  registration number notary; trust anchors and compliance issuers read
-  from the Gaia-X Registry; asking EDC how it would accept Gaia-X
-  compliance credentials; a legal person credential signed by another
-  signer the participant chooses ([TD-21](RISKS_AND_TECHNICAL_DEBTS.md#td-21), 2026-11-18 review).
-- Explore Simpl-Open features that are not part of DSP, DCP, Data Plane
-  Signaling or EDC, but add security or complete what a dataspace
-  participant can do (maintainer, 2026-11-15). First candidates:
-  - mutual TLS between participants: Simpl-Open's Tier 2 gateway asks
-    every caller for an x509 client certificate from the governance
-    authority's CA and binds the caller's identity attributes to it
-    ([ADR 0017](adr/0017-simpl-open.md));
-  - consent enforcement: honouring a data subject's consent (and its
-    withdrawal) when data is shared (researched for 1.7, above);
-  - a configurable API gateway in front of the participant's services,
-    like Simpl-Open's Tier 1 and Tier 2 gateways (attribute-based access).
+Empty since 2026-11-26: every risk, debt and improvement that needs work
+has a release (maintainer, 2026-11-26). What used to be here moved:
 
-  Most of the work sits in the data plane, but not all of it: mutual
-  TLS protects the link for the DSP messages (control plane) as well as
-  the transfer; for consent, the rule belongs to the policy (control
-  plane) but the check runs in the data plane on every request, because
-  consent can be withdrawn after the agreement; a gateway sits mainly in
-  front of the data source, but could also front the management API.
-  So: data plane first, not data plane only.
+- the SQLite to PostgreSQL copy tool to 1.4 ([TD-59](RISKS_AND_TECHNICAL_DEBTS.md#td-59));
+- harvest sources, the registry, catalog checks, bundle expiry and
+  bundle key rotation to 1.8 ([TD-16](RISKS_AND_TECHNICAL_DEBTS.md#td-16), [TD-67](RISKS_AND_TECHNICAL_DEBTS.md#td-67),
+  [TD-68](RISKS_AND_TECHNICAL_DEBTS.md#td-68));
+- the separate data plane (steps 2 to 4), the asynchronous data plane
+  step and asynchronous store ports to 1.12 ([TD-17](RISKS_AND_TECHNICAL_DEBTS.md#td-17),
+  [TD-66](RISKS_AND_TECHNICAL_DEBTS.md#td-66), [TD-40](RISKS_AND_TECHNICAL_DEBTS.md#td-40));
+- Gaia-X beyond 0.8 to 1.13 ([TD-21](RISKS_AND_TECHNICAL_DEBTS.md#td-21));
+- Simpl-Open features beyond the protocols: consent in 1.7, the ADR on
+  mutual TLS and the gateway in 1.9 ([TD-69](RISKS_AND_TECHNICAL_DEBTS.md#td-69));
+- agreement revision stays with consent in 1.7 ([TD-15](RISKS_AND_TECHNICAL_DEBTS.md#td-15)).
 
-  For each: what it does in Simpl-Open, whether a standard defines it,
-  which plane it touches, and whether Portitor should offer it as its
-  own component, an adapter or a deployment guide. The result is an ADR
-  before any code; consent comes first, as it is not researched yet.
+The "lease on every write" option of 2026-11-26 is dropped: the outbox
+loop of 1.3 ([TD-53](RISKS_AND_TECHNICAL_DEBTS.md#td-53)) covers it. A new idea is recorded in the
+risks file as a debt with a release, not here.
 
 ## For 2.0
 

@@ -39,8 +39,7 @@ to [Closed](#closed) when that release ships.
 > 2. [R-12](#r-12) Gaia-X was never tested with a real trust anchor.
 >    Every Gaia-X claim rests on a local service in test mode.
 > 3. [R-17](#r-17) Server-side request forgery: internal addresses are
->    not blocked on URLs a partner chooses, and no release is named for
->    the fix.
+>    not blocked on URLs a partner chooses. The fix is planned for 1.4.
 > 4. [R-09](#r-09) EDC is tested at a release candidate. Interoperability
 >    with EDC 1.0.0, the first reference counterpart, is not proven.
 > 5. [TD-05](#td-05) Private keys are PEM files.
@@ -65,11 +64,20 @@ checks this file:
    working. If it leaves something behind, add a line to
    [Left over from closed items](#left-over-from-closed-items).
 4. Check the "Top risks" box.
+5. Every item that needs work has a release in its "Target" column
+   (maintainer, 2026-11-26). An item with no work to plan (accepted,
+   waiting on someone else, or a standing check) says why in "Target".
+
+Once a year, with the first release after 26 November, a **yearly risk
+review** re-reads every item with no release and asks: is the reason
+still true, did the upstream event happen, should it get a release
+now? The first one is in [1.14](ROADMAP.md#114-operations-hardening-added-2026-11-26).
 
 ## Items that are not closed
 
-"Target" is the release the roadmap names. "Later" is the roadmap's list
-of work with no release yet.
+"Target" is the release the roadmap names. An item with no work to
+plan says why instead (a standing check, an upstream event, or "none"
+for an accepted residual risk); the yearly risk review re-reads those.
 
 | ID | Title | Kind | Status | Target |
 |---|---|---|---|---|
@@ -77,68 +85,68 @@ of work with no release yet.
 | [R-02](#r-02) | One maintainer: no two-person review | Delivery, security | Accepted | until a second maintainer |
 | [R-03](#r-03) | Pre-1.0 JSON-LD and VC crates | Dependency | Mitigated | none |
 | [R-04](#r-04) | Most dependencies are exempted, not audited (cargo-vet) | Dependency, security | Mitigated | every release |
-| [R-05](#r-05) | No written OpenSSF Baseline level 1 self-assessment | Security | Open | 0.14 |
+| [R-05](#r-05) | No written OpenSSF Baseline level 1 self-assessment | Security | Open | 1.4 |
 | [R-06](#r-06) | Data Plane Signaling is a draft (v1.0-RC4) | Upstream | Mitigated | Signaling 1.0 |
 | [R-08](#r-08) | The DSP TCK v1.0.2 needs a test-only build | Interoperability | Mitigated | a fixed TCK release |
 | [R-09](#r-09) | EDC is tested at a release candidate (1.0.0-RC8) | Interoperability | Mitigated | EDC 1.0.0 |
-| [R-10](#r-10) | EDC as provider refuses the Gaia-X compliance credential | Interoperability | Accepted | Later |
-| [R-11](#r-11) | Gaia-X does not use DCP; the binding and scope rules are Portitor's own reading | Interoperability, upstream | Open | none |
-| [R-12](#r-12) | Gaia-X never tested with a real trust anchor or the Gaia-X Lab | Interoperability, security | Open | Later |
+| [R-10](#r-10) | EDC as provider refuses the Gaia-X compliance credential | Interoperability | Accepted | 1.13 |
+| [R-11](#r-11) | Gaia-X does not use DCP; the binding and scope rules are Portitor's own reading | Interoperability, upstream | Open | 1.13 |
+| [R-12](#r-12) | Gaia-X never tested with a real trust anchor or the Gaia-X Lab | Interoperability, security | Open | 1.13 |
 | [R-13](#r-13) | The Gaia-X test depends on Gaia-X and w3id.org hosts | Delivery | Mitigated | none |
-| [R-14](#r-14) | Gaia-X protocols move: the Compliance Dispatcher is announced, not released | Upstream | Mitigated | Later |
+| [R-14](#r-14) | Gaia-X protocols move: the Compliance Dispatcher is announced, not released | Upstream | Mitigated | 1.13 |
 | [R-16](#r-16) | A Gaia-X compliance credential cannot be revoked | Security | Accepted | none |
-| [R-17](#r-17) | Server-side request forgery through partner-chosen URLs | Security | Mitigated | not named |
+| [R-17](#r-17) | Server-side request forgery through partner-chosen URLs | Security | Mitigated | 1.4 |
 | [R-19](#r-19) | Consumer's data access tokens in the database and the management API | Security | Mitigated | none |
 | [R-20](#r-20) | The issuer key is the root of trust of a dataspace | Security | Mitigated | 1.6 (TD-05) |
 | [R-21](#r-21) | Bugs in Portitor's own SHACL engine; new SHACL components in later profiles | Security, upstream | Mitigated | none |
-| [R-22](#r-22) | Bundle: unsigned `latest.json`; a revoked bundle key not seen while offline | Security | Mitigated | Later (TD-16) |
+| [R-22](#r-22) | Bundle: unsigned `latest.json`; a revoked bundle key not seen while offline | Security | Mitigated | 1.8 |
 | [R-23](#r-23) | A wrong host clock gives wrong policy and token decisions | Security | Mitigated | none |
-| [R-24](#r-24) | Simpl-Open: parked, facts not verified, and it changes fast | Interoperability, upstream | Accepted | Later |
+| [R-24](#r-24) | Simpl-Open: parked, facts not verified, and it changes fast | Interoperability, upstream | Accepted | 1.9 |
 | [R-25](#r-25) | The name Portitor is not exclusive: other projects and a company use it | Delivery, legal | Accepted | none |
 | [R-27](#r-27) | CI downloads from Maven Central and GitHub | Delivery | Mitigated | none |
-| [R-29](#r-29) | DCP costs about 2 ms per request and 8 times fewer requests under load | Performance | Open | with TD-07 |
+| [R-29](#r-29) | DCP costs about 2 ms per request and 8 times fewer requests under load | Performance | Open | 1.6 |
 | [R-36](#r-36) | The OpenTelemetry Rust crates are 0.x and change their API often | Dependency, upstream | Mitigated | none |
 | [R-37](#r-37) | Telemetry costs some throughput at saturation | Performance | Mitigated | none |
 | [R-39](#r-39) | No specification defines agreements that depend on an upstream agreement | Interoperability | Open | 1.5 |
 | [R-40](#r-40) | No shared list of EHDS purposes | Interoperability | Open | 1.4 |
 | [R-41](#r-41) | A key removed from a DID document is still trusted for up to 5 minutes | Security | Mitigated | none |
-| [R-42](#r-42) | The STS shares the identity's public port | Security | Open | not named |
-| [R-43](#r-43) | Negative credential constraints can be met with another credential | Security | Open | not named |
-| [R-44](#r-44) | One slow holder delays every issuer delivery | Security | Open | not named |
-| [R-45](#r-45) | No request limit per partner | Security | Open | not named |
+| [R-42](#r-42) | The STS shares the identity's public port | Security | Open | 1.6 |
+| [R-43](#r-43) | Negative credential constraints can be met with another credential | Security | Open | 1.4 |
+| [R-44](#r-44) | One slow holder delays every issuer delivery | Security | Open | 1.6 |
+| [R-45](#r-45) | No request limit per partner | Security | Open | 1.7 |
 | [R-46](#r-46) | The EDC Issuer Service names a request status address that is not found | Interoperability, upstream | Open | report upstream; the next EDC release |
 | [R-47](#r-47) | The EDC Issuer Service's admin API may change with the next release candidate | Interoperability | Accepted | EDC 1.0.0 |
 | [R-48](#r-48) | An issuer trusted for data permits can also issue memberships | Security | Open | 1.4 |
 | [R-49](#r-49) | Leases in the database depend on the hosts' clocks | Operations | Mitigated | none |
-| [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | Open | research, with TD-03 |
+| [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | Open | 1.8 |
 | [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | Open | research; code 1.7 |
-| [TD-03](#td-03) | A provider in several dataspaces, each with its own rules | Technical debt | Accepted | profiles in one connector: after 1.0 |
+| [TD-03](#td-03) | A provider in several dataspaces, each with its own rules | Technical debt | Accepted | 1.9 |
 | [TD-04](#td-04) | User to system authentication and authorisation | Technical debt | Accepted | code 1.7 |
 | [TD-05](#td-05) | Key custody and key rotation | Technical debt | Open | 1.6 (OpenBao) |
 | [TD-07](#td-07) | STS tokens and presentations are not cached | Technical debt | Open | 1.6, if needed |
 | [TD-08](#td-08) | One replica per SQLite file; no PostgreSQL adapter | Technical debt | Open | 1.3 (in progress) |
 | [TD-09](#td-09) | Used token ids are kept in memory only | Technical debt | Open | 1.3 (in progress) |
-| [TD-10](#td-10) | Transfers: no token renewal; whole sources and whole pushes only | Technical debt | Mitigated | none |
+| [TD-10](#td-10) | Transfers: no token renewal; whole sources and whole pushes only | Technical debt | Mitigated | 1.7 |
 | [TD-11](#td-11) | Consumer refuses offers with credential constraints; the provider cannot suspend from the management API | Technical debt | Open | 1.4 |
 | [TD-12](#td-12) | ODRL: few constraints; prohibitions and duties not enforced | Technical debt | Open | 1.4 (purpose) |
 | [TD-13](#td-13) | The catalog shows every offer to every member | Technical debt | Open | 1.4 |
 | [TD-14](#td-14) | Credential schemas, presentation definitions and issuance policies are not supported | Technical debt | Open | 1.6, if needed |
 | [TD-15](#td-15) | Agreements are not revised when the data's scope changes | Technical debt | Open | 1.7 |
-| [TD-16](#td-16) | One harvest source; no dataspace registry; other catalogs not checked; no bundle expiry or bundle key rotation | Technical debt | Open | Later |
-| [TD-17](#td-17) | The data plane runs inside the connector process | Technical debt | Accepted | Step 1 of 4 done in 1.2; the rest later in 1.x |
-| [TD-19](#td-19) | No TLS inside the services | Technical debt | Accepted | none |
+| [TD-16](#td-16) | One harvest source; no dataspace registry; other catalogs not checked; no bundle expiry or bundle key rotation | Technical debt | Open | 1.8 |
+| [TD-17](#td-17) | The data plane runs inside the connector process | Technical debt | Accepted | 1.12 (steps 2 to 4; step 1 done in 1.2) |
+| [TD-19](#td-19) | No TLS inside the services | Technical debt | Accepted | 1.9 |
 | [TD-20](#td-20) | A holder must delete a revoked credential by hand after a reissue | Technical debt | Open | 1.4 |
-| [TD-21](#td-21) | Gaia-X beyond 0.8 | Technical debt | Open | Later |
+| [TD-21](#td-21) | Gaia-X beyond 0.8 | Technical debt | Open | 1.13 |
 | [TD-22](#td-22) | Migrations run forward only; a rollback needs the backup | Technical debt | Accepted | none |
 | [TD-28](#td-28) | No trace across participants | Technical debt | Accepted | none |
-| [TD-29](#td-29) | No OTLP logs export, no gRPC, no compression | Technical debt | Open | Later |
+| [TD-29](#td-29) | No OTLP logs export, no gRPC, no compression | Technical debt | Open | 1.14 |
 | [TD-31](#td-31) | No audit trail of management actions | Technical debt | Mitigated | 1.7 |
-| [TD-35](#td-35) | No negotiation started by the provider | Technical debt, interoperability | Open | after 1.0 |
-| [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | Mitigated | 1.x (Helm chart) |
-| [TD-40](#td-40) | Database calls block the async runtime | Technical debt | Accepted | measure each release |
-| [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | Open | none |
+| [TD-35](#td-35) | No negotiation started by the provider | Technical debt, interoperability | Open | 1.5 |
+| [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | Mitigated | 1.4 |
+| [TD-40](#td-40) | Database calls block the async runtime | Technical debt | Accepted | 1.12 |
+| [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | Open | 1.7 |
 | [TD-46](#td-46) | The issuer keeps one set of claims per participant | Technical debt | Open | 1.4 |
-| [TD-47](#td-47) | A transfer stays REQUESTED when its provider is revoked | Technical debt | Open | 1.1 |
+| [TD-47](#td-47) | A transfer stays REQUESTED when its provider is revoked | Technical debt | Open | 1.4 |
 | [TD-49](#td-49) | After a failed message, the two parties of a negotiation can stay in different states | Technical debt, interoperability | Accepted | none |
 | [TD-50](#td-50) | Each connector process holds its own copy of the datasets | Technical debt | Open | 1.3 (in progress) |
 | [TD-51](#td-51) | The issuer's signed status lists live in the memory of one process | Technical debt | Open | 1.3 (in progress) |
@@ -149,10 +157,20 @@ of work with no release yet.
 | [TD-56](#td-56) | Scheduled jobs run once in every container | Technical debt | Open | 1.3 (in progress) |
 | [TD-57](#td-57) | The issuer's credential outbox does not claim a delivery before it sends it | Technical debt | Open | 1.3 (in progress) |
 | [TD-58](#td-58) | The DID document is built at start | Technical debt | Open | 1.3 (in progress) |
-| [TD-59](#td-59) | SQLite is deprecated; no tool yet to copy a SQLite file into PostgreSQL | Technical debt | Accepted | the tool: a 1.x release before 2.0; removal: 2.0 |
+| [TD-59](#td-59) | SQLite is deprecated; no tool yet to copy a SQLite file into PostgreSQL | Technical debt | Accepted | the copy tool: 1.4; removal: 2.0 |
+| [TD-60](#td-60) | A repeated first contract request starts a second negotiation | Technical debt, interoperability | Open | 1.4 |
+| [TD-61](#td-61) | The outbox's "it arrived before" check compares the state only | Technical debt | Open | 1.4 |
+| [TD-62](#td-62) | Why and when a negotiation ended is not stored | Technical debt | Open | 1.5 |
+| [TD-63](#td-63) | Source files above 1,000 lines | Technical debt, readability | Open | 1.5 |
+| [TD-64](#td-64) | Too many type parameters; macros that write types | Technical debt, readability | Open | 1.6 |
+| [TD-65](#td-65) | `Negotiator` does more than negotiate | Technical debt, readability | Open | 1.7 |
+| [TD-66](#td-66) | A data plane step runs inside the request that asks for it | Technical debt | Open | 1.12 |
+| [TD-67](#td-67) | Datasets are harvested from one kind of source only | Technical debt | Open | 1.8 |
+| [TD-68](#td-68) | No dataspace-wide registry or federated catalogue | Technical debt | Open | 1.8, only if needed |
+| [TD-69](#td-69) | No Simpl-Open features beyond the protocols (mutual TLS, consent, API gateway) | Technical debt | Open | consent code: 1.7; ADR: 1.9 |
 
-Counts on 2026-11-26, on the 1.3 branch: 37 risks and 40 technical
-debts are not closed (Open 40, Mitigated 22, Accepted 15), of which 11
+Counts on 2026-11-26, on the 1.3 branch: 37 risks and 50 technical
+debts are not closed (Open 50, Mitigated 22, Accepted 15), of which 11
 are in progress for 1.3; 12 risks and 19 technical debts are closed.
 
 ## Risks
@@ -245,6 +263,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   stays level 1 for 1.0.
 - **Next.** ROADMAP 0.14, done last so it assesses the final state, in
   [SECURITY-ASSURANCE](SECURITY-ASSURANCE.md#openssf-baseline).
+  Assigned to 1.4 (maintainer, 2026-11-26).
 
 <a id="r-06"></a>
 ### R-06 Data Plane Signaling is a draft (v1.0-RC4)
@@ -319,6 +338,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   DEPLOYING "Known limits" names the limit.
 - **Next.** Later: ask EDC how it would accept Gaia-X compliance
   credentials ([upstream report 14](#upstream-reports), on hold).
+  Assigned to 1.13 (maintainer, 2026-11-26).
 
 <a id="r-11"></a>
 ### R-11 Gaia-X does not use DCP; the binding and scope rules are Portitor's own reading
@@ -336,7 +356,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   connectors only.
 - **Next.** Follow [upstream reports](#upstream-reports) 9 (scope
   grammar) and 12 (holder binding). The Gaia-X side is not asked yet
-  (report 13).
+  (report 13). Assigned to 1.13 (maintainer, 2026-11-26).
 
 <a id="r-12"></a>
 ### R-12 Gaia-X never tested with a real trust anchor or the Gaia-X Lab
@@ -353,8 +373,8 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   ([spike 0.8](spikes/0.8-gaia-x-compliance.md), "Not checked").
 - **Current state: Open.** [TESTING](TESTING.md#gaia-x-end-to-end-test)
   lists what the test does not prove.
-- **Next.** ROADMAP "Later": a test against the Lab once Portitor runs
-  beyond a laptop.
+- **Next.** ROADMAP 1.13: a test against the Lab once Portitor runs
+  beyond a laptop. Assigned to 1.13 (maintainer, 2026-11-26).
 
 <a id="r-13"></a>
 ### R-13 The Gaia-X test depends on Gaia-X and w3id.org hosts
@@ -382,7 +402,8 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   (`GaiaxCompliance`) with an HTTP adapter, so OpenID4VCI can be a
   second adapter. Validity is read from `validFrom` and `validUntil`
   only.
-- **Next.** ROADMAP "Later" (TD-21).
+- **Next.** ROADMAP 1.13, Gaia-X beyond 0.8 (TD-21).
+  Assigned to 1.13 (maintainer, 2026-11-26).
 
 <a id="r-16"></a>
 ### R-16 A Gaia-X compliance credential cannot be revoked
@@ -428,9 +449,9 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   blocked.
 - **Next.** Block internal addresses with an operator allow list
   (F-01), and check `aud` and the access token before resolving a
-  caller (F-06). No release is named. The 0.13 freeze passed without
+  caller (F-06). The 0.13 freeze passed without
   it, so a block that is on by default would now be a behaviour change
-  to announce.
+  to announce. Assigned to 1.4 (maintainer, 2026-11-26).
 
 <a id="r-19"></a>
 ### R-19 Consumer's data access tokens in the database and the management API
@@ -508,6 +529,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   connector never takes a version issued before the one in use
   ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)).
 - **Next.** Bundle expiry and bundle key rotation (TD-16).
+  Assigned to 1.8 (maintainer, 2026-11-26).
 
 <a id="r-23"></a>
 ### R-23 A wrong host clock gives wrong policy and token decisions
@@ -536,7 +558,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   [STABILITY](STABILITY.md#what-10-does-not-do) says it is not tested.
 - **Next.** ROADMAP 1.9, "Simpl-Open tests" (maintainer, 2026-11-21):
   a Simpl-Open agent run locally from its public code; check the facts
-  again first.
+  again first. Assigned to 1.9 (maintainer, 2026-11-26).
 
 <a id="r-25"></a>
 ### R-25 The name Portitor is not exclusive
@@ -590,6 +612,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   default 5 minutes each); tokens and presentations are not.
 - **Next.** What is left is the STS token and the presentation query of
   each request ([TD-07](#td-07)).
+  Assigned to 1.6 (maintainer, 2026-11-26).
 
 <a id="r-36"></a>
 ### R-36 The OpenTelemetry Rust crates are 0.x and change their API often
@@ -676,6 +699,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   listen address.
 - **Next.** A separate listen address for the STS (a new setting, which
   1.x can add), or a deployment check that the proxy does not route it.
+  Assigned to 1.6 (maintainer, 2026-11-26).
 
 <a id="r-43"></a>
 ### R-43 Negative credential constraints can be met with another credential
@@ -690,7 +714,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   with this value". It is not.
 - **Current state: Open.**
 - **Next.** Say in ADR 0019 and DEPLOYING that negative operators are
-  not deny lists.
+  not deny lists. Assigned to 1.4 (maintainer, 2026-11-26).
 
 <a id="r-44"></a>
 ### R-44 One slow holder delays every issuer delivery
@@ -705,6 +729,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   definition, rejections are not delivered, and retries wait longer
   each time.
 - **Next.** Send to different holders side by side, a few at a time.
+  Assigned to 1.6 (maintainer, 2026-11-26).
 
 <a id="r-45"></a>
 ### R-45 No request limit per partner
@@ -718,6 +743,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
 - **Current state: Open.** DEPLOYING says nothing about rate limits.
 - **Next.** Document rate limits per client at the reverse proxy; a
   limit in Portitor only if measurements show the need.
+  Assigned to 1.7 (maintainer, 2026-11-26).
 
 <a id="r-46"></a>
 ### R-46 The EDC Issuer Service names a request status address that is not found
@@ -829,6 +855,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   Simpl-Open, Gaia-X and HealthData@EU authorities publish schemas,
   whether a DCAT catalogue of schema distributions can replace
   `latest.json`, and where the connector should keep them.
+  Assigned to 1.8 (maintainer, 2026-11-26).
 
 <a id="td-02"></a>
 ### TD-02 Who calls the data plane, and with which credentials
@@ -851,8 +878,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   DCP token or a presentation per request, OpenID4VP, Simpl-Open's mTLS
   at its Tier 2 gateway, what the EDC data plane does; whether the
   policy is checked again on each request; how this fits the consent
-  and gateway items under
-  [Later](ROADMAP.md#later-not-planned-for-a-release-yet).
+  and gateway items of [TD-69](#td-69).
 
 <a id="td-03"></a>
 ### TD-03 A provider in several dataspaces, each with its own rules
@@ -871,6 +897,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
 - **Next.** After 1.0, no release named: one connector with several
   dataspace profiles, behind its own ADR; trusted issuers by
   credential type (threat model finding F-08), which is additive.
+  Assigned to 1.9 (maintainer, 2026-11-26).
 
 <a id="td-04"></a>
 ### TD-04 User to system authentication and authorisation, governed per dataspace
@@ -990,7 +1017,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   401. So a long pull works, and a pull that must start again after the
   token's life does not.
 - **Next.** No release named. Token renewal waits for a DSP or Signaling
-  message for it.
+  message for it. Assigned to 1.7 (maintainer, 2026-11-26).
 
 <a id="td-11"></a>
 ### TD-11 Consumer refuses offers with credential constraints; the provider cannot suspend from the management API
@@ -1074,7 +1101,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   or CKAN; see also R-22.
 - **Current state: Open.** The `DatasetSource` port takes new adapters
   without other changes.
-- **Next.** ROADMAP "Later".
+- **Next.** ROADMAP 1.8. Assigned to 1.8 (maintainer, 2026-11-26).
 
 <a id="td-17"></a>
 ### TD-17 The data plane runs inside the connector process
@@ -1103,7 +1130,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   for the membership check). Steps 2 to 4 (signaling over
   HTTP and registration, the separate image, interop with an outside
   data plane): later in 1.x, or after Data Plane Signaling 1.0 is
-  released (R-06).
+  released (R-06). Assigned to 1.12 (maintainer, 2026-11-26).
 
 <a id="td-19"></a>
 ### TD-19 No TLS inside the services
@@ -1114,7 +1141,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   [ADR 0026](adr/0026-tls-termination.md)): TLS stays the operator's
   job.
 - **Next.** None. Optional TLS in the services would be additive; it is
-  not planned.
+  not planned. Assigned to 1.9 (maintainer, 2026-11-26).
 
 <a id="td-20"></a>
 ### TD-20 A holder must delete a revoked credential by hand after a reissue
@@ -1147,7 +1174,8 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   ([review](reviews/2026-11-18-specifications-and-code-quality.md),
   G2).
 - **Current state: Open.**
-- **Next.** ROADMAP "Later", Gaia-X beyond 0.8.
+- **Next.** ROADMAP 1.13, Gaia-X beyond 0.8.
+  Assigned to 1.13 (maintainer, 2026-11-26).
 
 <a id="td-22"></a>
 ### TD-22 Migrations run forward only; a rollback needs the backup
@@ -1186,7 +1214,8 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   gRPC need a collector in between.
 - **Current state: Open.** Kept out to save binary size and
   dependencies.
-- **Next.** Later; no release named.
+- **Next.** OTLP logs export, gRPC and compression.
+  Assigned to 1.14 (maintainer, 2026-11-26).
 
 <a id="td-31"></a>
 ### TD-31 No audit trail of management actions
@@ -1232,7 +1261,8 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   work is large, and it can be added later without a breaking change
   ([STABILITY](STABILITY.md#what-10-does-not-do); DEPLOYING, "Known
   limits").
-- **Next.** After 1.0; no release named.
+- **Next.** A negotiation started by the provider.
+  Assigned to 1.5 (maintainer, 2026-11-26).
 
 <a id="td-39"></a>
 ### TD-39 DEPLOYING is not in deployment order; the docs are long
@@ -1258,6 +1288,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   operations team; running the demo on a laptop belongs in TESTING.
 - **Next.** A Helm chart in a 1.x release (ROADMAP "Code quality in
   1.x"). Until then there is the Compose example.
+  Assigned to 1.4 (maintainer, 2026-11-26).
 
 <a id="td-40"></a>
 ### TD-40 Database calls block the async runtime
@@ -1284,7 +1315,8 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   a call waits on its thread while a database thread drives the
   connection, so the wait includes a network round trip
   ([ADR 0029](adr/0029-several-replicas.md), decision 3). Asynchronous
-  store ports are in ROADMAP "Later".
+  store ports are in ROADMAP 1.12.
+  Assigned to 1.12 (maintainer, 2026-11-26).
 
 <a id="td-45"></a>
 ### TD-45 Each running pull holds about 0.8 MB of memory
@@ -1299,7 +1331,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
 - **Current state: Open.** DEPLOYING "Known limits" gives the numbers.
 - **Next.** Find where the memory goes (buffers of the proxy, of the
   HTTP client, of TLS) before changing anything; measure again in each
-  release.
+  release. Assigned to 1.7 (maintainer, 2026-11-26).
 
 <a id="td-46"></a>
 ### TD-46 The issuer keeps one set of claims per participant
@@ -1344,6 +1376,7 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
   hdab-intermediary scenario, step 6, now expects `TERMINATED`.
 - **Next.** Move to Closed when 1.1 is released, after a run of the
   hdab-intermediary scenario on 1.1.
+  Assigned to 1.4 (maintainer, 2026-11-26).
 
 <a id="td-49"></a>
 ### TD-49 After a failed message, the two parties of a negotiation can stay in different states
@@ -1532,9 +1565,141 @@ are in progress for 1.3; 12 risks and 19 technical debts are closed.
 - **Current state: Accepted** (maintainer, 2026-11-26: deprecated in
   1.3, not removed, because [STABILITY](STABILITY.md#database) keeps
   `PORTITOR_DB_FILE` for 1.x). A test compares the two schemas.
-- **Next.** The copy tool in a 1.x release before 2.0 (ROADMAP
-  "Later"); SQLite and `PORTITOR_DB_FILE` removed in 2.0 (ROADMAP "For
-  2.0").
+- **Next.** The copy tool in 1.4 (maintainer, 2026-11-26); SQLite and
+  `PORTITOR_DB_FILE` removed in 2.0 (ROADMAP "For 2.0").
+
+<a id="td-60"></a>
+### TD-60 A repeated first contract request starts a second negotiation
+
+- **What.** If the provider's answer to a first contract request is
+  lost, the consumer's outbox sends the request again without a
+  `providerPid`, and the provider starts a second negotiation
+  ([spike](spikes/1.x-negotiation-state-machine.md), G1).
+- **Why it matters.** The first negotiation is an orphan: it sends an
+  agreement the consumer refuses, and the database keeps negotiations
+  and agreements nobody uses. No data flows.
+- **Current state: Open.** DSP has no idempotency rule for contract
+  requests; EDC answers a repeated first request with the negotiation
+  it already started, found by consumer pid and counter-party.
+- **Next.** The same lookup, with an index on
+  `(counter_party, consumer_pid)`, as for transfers since 0.12
+  ([TD-34](#td-34)). Small. Assigned to 1.4 (maintainer, 2026-11-26).
+
+<a id="td-61"></a>
+### TD-61 The outbox's "it arrived before" check compares the state only
+
+- **What.** When a message is refused, the outbox asks the other party
+  for its state and counts the message as delivered if the state is the
+  one it leads to. It does not compare the process ids in the answer
+  ([spike](spikes/1.x-negotiation-state-machine.md), G2).
+- **Why it matters.** With [TD-60](#td-60), an orphan negotiation can
+  count its agreement as delivered.
+- **Current state: Open.**
+- **Next.** Also compare `providerPid` and `consumerPid`. Small, in
+  the same pull request as TD-60. Assigned to 1.4 (maintainer,
+  2026-11-26).
+
+<a id="td-62"></a>
+### TD-62 Why and when a negotiation ended is not stored
+
+- **What.** The `code` and `reason` of a termination, sent or received,
+  are only in the log; negotiations have no creation time and no time
+  of the last change ([spike](spikes/1.x-negotiation-state-machine.md), G5 and G6).
+- **Why it matters.** An operator cannot see why a negotiation ended,
+  find negotiations stuck for days, or remove terminated ones by age.
+  EDC keeps `error_detail`, `created_at`, `updated_at` and
+  `state_timestamp`.
+- **Current state: Open.**
+- **Next.** One migration: the termination's `code` and `reason`, shown
+  in the management API, and two time columns set by the adapter.
+  Assigned to 1.5 (maintainer, 2026-11-26).
+
+<a id="td-63"></a>
+### TD-63 Source files above 1,000 lines
+
+- **What.** `auth/dcp.rs`, the issuer's and the identity's `store.rs`,
+  `dcp/bundle.rs` and `runtime/http.rs` are above 1,000 lines, tests
+  not counted ([2026-11-18 review](reviews/2026-11-18-specifications-and-code-quality.md)).
+- **Why it matters.** Long files are hard to read for the maintainer
+  ([R-01](#r-01)).
+- **Current state: Open.**
+- **Next.** Split each by topic, no change of behaviour. Assigned to
+  1.5 (maintainer, 2026-11-26).
+
+<a id="td-64"></a>
+### TD-64 Too many type parameters; macros that write types
+
+- **What.** Services carry many type parameters (today
+  `ProviderService<S, D, C, E>`), and some macros write types
+  ([2026-11-18 review](reviews/2026-11-18-specifications-and-code-quality.md)).
+- **Why it matters.** Both make the code hard to read ([R-01](#r-01)).
+- **Current state: Open.**
+- **Next.** Fewer type parameters; each macro that writes types
+  replaced by plain code or explained with its output in RUST-IDIOMS.
+  Assigned to 1.6 (maintainer, 2026-11-26).
+
+<a id="td-65"></a>
+### TD-65 `Negotiator` does more than negotiate
+
+- **What.** `Negotiator` runs negotiations, transfers and the harvest
+  ([2026-11-18 review](reviews/2026-11-18-specifications-and-code-quality.md)).
+- **Why it matters.** The name misleads a reader ([R-01](#r-01)).
+- **Current state: Open.**
+- **Next.** A name that fits, or a split. Assigned to 1.7 (maintainer,
+  2026-11-26).
+
+<a id="td-66"></a>
+### TD-66 A data plane step runs inside the request that asks for it
+
+- **What.** When the connector starts, suspends or ends a flow, it
+  calls the data plane inside the request and waits for it. The
+  "fully asynchronous data plane step" option of 2026-11-26 is not
+  built: the connector would record the step and a worker would run it;
+  a refusal would become a termination of the transfer.
+- **Why it matters.** [ADR 0028](adr/0028-separate-pluggable-data-plane.md)'s
+  data plane over HTTP (step 2) waits on the network, which a request
+  should not do.
+- **Current state: Open.**
+- **Next.** Built with steps 2 to 4 of ADR 0028 ([TD-17](#td-17)).
+  Assigned to 1.12 (maintainer, 2026-11-26).
+
+<a id="td-67"></a>
+### TD-67 Datasets are harvested from one kind of source only
+
+- **What.** The harvest reads one datasets file
+  ([ADR 0020](adr/0020-dataset-harvest.md)); a DCAT-AP endpoint or
+  CKAN cannot be a source.
+- **Why it matters.** A data holder with a catalogue must convert it
+  first.
+- **Current state: Open.** Which catalogues to support is to be decided
+  (maintainer, 2026-11-14).
+- **Next.** Assigned to 1.8, the EHDS data holder release (maintainer,
+  2026-11-26).
+
+<a id="td-68"></a>
+### TD-68 No dataspace-wide registry or federated catalogue
+
+- **What.** No component pulls the participants' DSP catalogs, checks
+  them with the bundle and offers search.
+- **Why it matters.** A consumer must know each provider to find data.
+- **Current state: Open.** Only if needed (maintainer, 2026-11-14),
+  with its own ADR.
+- **Next.** Assigned to 1.8, only if that release needs it (maintainer,
+  2026-11-26).
+
+<a id="td-69"></a>
+### TD-69 No Simpl-Open features beyond the protocols
+
+- **What.** Simpl-Open offers mutual TLS between participants, consent
+  enforcement and a configurable API gateway; none is part of DSP, DCP
+  or Data Plane Signaling, and Portitor has none
+  ([ADR 0017](adr/0017-simpl-open.md)).
+- **Why it matters.** They add security, and consent is needed for
+  health data.
+- **Current state: Open.**
+- **Next.** Consent first, with [TD-15](#td-15) in 1.7; an ADR on
+  mutual TLS and the gateway in 1.9 with the Simpl-Open tests
+  (maintainer, 2026-11-26).
 
 ## Closed
 

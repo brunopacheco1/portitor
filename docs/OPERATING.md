@@ -575,9 +575,9 @@ one database ([ADR 0029](adr/0029-several-replicas.md)).
 
 ### From SQLite to PostgreSQL
 
-The tool that copies a SQLite file into PostgreSQL comes in a later
-1.x release, before 2.0 removes SQLite
-([ROADMAP](ROADMAP.md#later-not-planned-for-a-release-yet)). Until
+The tool that copies a SQLite file into PostgreSQL is planned for 1.4,
+before 2.0 removes SQLite
+([ROADMAP](ROADMAP.md#14-purpose-and-data-permit-in-policies)). Until
 then, a component moved to PostgreSQL starts with an empty database:
 
 - the connector forgets its negotiations, agreements, transfers and
