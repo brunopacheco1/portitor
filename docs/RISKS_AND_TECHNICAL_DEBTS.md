@@ -119,7 +119,7 @@ of work with no release yet.
 | [TD-14](#td-14) | Credential schemas, presentation definitions and issuance policies are not supported | Technical debt | Open | 1.5, if needed |
 | [TD-15](#td-15) | Agreements are not revised when the data's scope changes | Technical debt | Open | 1.6 |
 | [TD-16](#td-16) | One harvest source; no dataspace registry; other catalogs not checked; no bundle expiry or bundle key rotation | Technical debt | Open | Later |
-| [TD-17](#td-17) | The data plane runs inside the connector process | Technical debt | Accepted | 1.2 (step 1 of 4); the rest later in 1.x |
+| [TD-17](#td-17) | The data plane runs inside the connector process | Technical debt | Accepted | Step 1 of 4 done in 1.2; the rest later in 1.x |
 | [TD-19](#td-19) | No TLS inside the services | Technical debt | Accepted | none |
 | [TD-20](#td-20) | A holder must delete a revoked credential by hand after a reissue | Technical debt | Open | 1.3 |
 | [TD-21](#td-21) | Gaia-X beyond 0.8 | Technical debt | Open | Later |
@@ -133,11 +133,10 @@ of work with no release yet.
 | [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | Open | none |
 | [TD-46](#td-46) | The issuer keeps one set of claims per participant | Technical debt | Open | 1.3 |
 | [TD-47](#td-47) | A transfer stays REQUESTED when its provider is revoked | Technical debt | Open | 1.1 |
-| [TD-48](#td-48) | Data plane steps run inside the retried update of a transfer | Technical debt | Open | 1.2 |
 
-Counts on 2026-11-24, on the 1.1 branch: 36 risks and 30 technical
-debts are not closed (Open 30, Mitigated 21, Accepted 15); 12 risks and
-18 technical debts are closed.
+Counts on 2026-11-26, on the 1.2 branch: 36 risks and 29 technical
+debts are not closed (Open 29, Mitigated 21, Accepted 15); 12 risks and
+19 technical debts are closed.
 
 ## Risks
 
@@ -163,7 +162,9 @@ debts are not closed (Open 30, Mitigated 21, Accepted 15); 12 risks and
   (`ProviderService<S, D, C, E>`), four macros that write types, five
   files above 1,000 lines, and `Negotiator`, which also handles
   transfers and the harvest. All are planned in ROADMAP "Code quality
-  in 1.x".
+  in 1.x". In 1.2 the data plane left the connector as its own crate,
+  split into one file per topic, none above 1,000 lines (tests not
+  counted).
 
 <a id="r-02"></a>
 ### R-02 One maintainer: no two-person review
@@ -388,10 +389,10 @@ debts are not closed (Open 30, Mitigated 21, Accepted 15); 12 risks and
   ([SECURITY-ASSURANCE](SECURITY-ASSURANCE.md), findings F-01 and F-06).
   Since 1.1 ([ADR 0027](adr/0027-push-transfers-and-object-storage.md)):
   as provider, the data plane POSTs a push to the `endpoint` of the
-  consumer's `dataAddress` (`crates/portitor-connector/src/push.rs`),
+  consumer's `dataAddress` (`crates/portitor-dataplane/src/push.rs`),
   with the dataset as the body. The connector also calls the object
   storage at `AWS_ENDPOINT_URL_S3`
-  (`crates/portitor-connector/src/object_storage.rs`); the operator
+  (`crates/portitor-dataplane/src/object_storage.rs`); the operator
   chooses that address, not a partner.
 - **Why it matters.** A partner could make a component call an internal
   service. A push endpoint that points inside the provider's network
@@ -1033,7 +1034,10 @@ debts are not closed (Open 30, Mitigated 21, Accepted 15); 12 risks and
   ([STABILITY](STABILITY.md#what-10-does-not-do)).
 - **Next.** [ADR 0028](adr/0028-separate-pluggable-data-plane.md)
   (Accepted 2026-11-25), in four steps. Step 1, untie the built-in data
-  plane inside the process: ROADMAP 1.2. Steps 2 to 4 (signaling over
+  plane inside the process, is done in 1.2: the data plane is the crate
+  `portitor-dataplane`, still linked into the connector; it reads none
+  of the control plane's stores, and asks it through ports (`AccessGate`
+  for the membership check). Steps 2 to 4 (signaling over
   HTTP and registration, the separate image, interop with an outside
   data plane): later in 1.x, or after Data Plane Signaling 1.0 is
   released (R-06).
@@ -1140,7 +1144,7 @@ debts are not closed (Open 30, Mitigated 21, Accepted 15); 12 risks and
   push sent and push received writes one INFO line, `data transfer
   done` (target `portitor::audit`), with `flow`, `agreement`,
   `counterParty`, `bytes` and `outcome`
-  (`crates/portitor-connector/src/audit.rs`;
+  (`crates/portitor-dataplane/src/audit.rs`;
   [ADR 0027](adr/0027-push-transfers-and-object-storage.md), section 6;
   [OPERATING](OPERATING.md#traces-and-metrics)). Portitor keeps no audit
   store: the operator ships and keeps the log. DSP 2025-1 does not sign
@@ -1274,33 +1278,6 @@ debts are not closed (Open 30, Mitigated 21, Accepted 15); 12 risks and
 - **Next.** Move to Closed when 1.1 is released, after a run of the
   hdab-intermediary scenario on 1.1.
 
-<a id="td-48"></a>
-### TD-48 Data plane steps run inside the retried update of a transfer
-
-- **What.** A transfer is changed by reading it, changing it, and
-  writing it only if no other write came first; otherwise the change
-  runs again on the new version, a few times
-  (`crates/portitor-dsp/src/process.rs`, `update`). The provider's
-  transfer service tells the data plane inside that change (for example
-  `flows.terminate` in `push_finished`, `flows.suspend` on a
-  suspension). So a data plane step can run although its write then
-  loses to another one, or run twice. Found in the 1.1 review
-  (2026-11-24, finding L3).
-- **Why it matters.** The data flow and the transfer can disagree for
-  a moment: for example the flow is terminated by a push that just
-  failed while the consumer's suspension wins the write, so the
-  transfer is `SUSPENDED` with a terminated flow and cannot start
-  again. Access is never widened: the steps only stop or cut.
-- **Current state: Open.** The steps are written to be repeated
-  (`SignalingDataFlows` treats a step to the state the flow is already
-  in as done), cutting running work is always safe, and a conflict
-  needs two writes to the same transfer at the same moment. The push
-  sender reads the flow's state before it ends a transfer, so a
-  suspension or termination that cut it is not undone.
-- **Next.** ROADMAP 1.2: signals to the data plane go out after the
-  transfer's write, through the outbox
-  ([ADR 0028](adr/0028-separate-pluggable-data-plane.md), decision 6).
-
 ## Closed
 
 One line each. "Where" is the record that describes the fix. Changelog
@@ -1338,6 +1315,7 @@ entries are in [CHANGELOG](../CHANGELOG.md) under the release named.
 | <a id="td-42"></a>TD-42 | Four near-copies of the negotiation and transfer logic | 1.1 | The shared process core, `crates/portitor-dsp/src/process.rs` (`Record`, `Records`, `receive`, `update`); the in-memory stores moved to `crates/portitor-connector/src/test_stores.rs`, compiled for tests only; [READING-THE-CODE](READING-THE-CODE.md#the-three-siblings) |
 | <a id="td-43"></a>TD-43 | The Gaia-X documents name several versions of the rules | 0.14 | [ARCHITECTURE](ARCHITECTURE.md#specification-versions) |
 | <a id="td-44"></a>TD-44 | A transfer request sent at once after the agreement could be refused | 0.13; the metric in 0.14 | [ADR 0007](adr/0007-outbox-and-proof-of-delivery.md), "Amendment for 0.13" and "Note added in 0.14"; CHANGELOG 0.14.0 |
+| <a id="td-48"></a>TD-48 | Data plane steps ran inside the retried update of a transfer | 1.2 | The write records the step (`transfer.flow_step`); it runs once, right after the write wins, one step at a time; a refused step takes the write back or ends the transfer: `crates/portitor-dsp/src/transfer/provider/flow_steps.rs`; [ADR 0028](adr/0028-separate-pluggable-data-plane.md), decision 6 and note added in 1.2; [ADR 0013](adr/0013-transfer-and-data-plane.md), note added in 1.2 |
 
 ### Left over from closed items
 
@@ -1416,6 +1394,11 @@ plan.
 - **TD-44.** The benchmark that found it was not run again after the
   fix. Until 0.14 a finalization event settled this way was still
   counted in `portitor.outbox.message.given_up`; from 0.14 it is not.
+- **TD-48.** The steps run one at a time under a lock inside the
+  process. That is enough while the connector is one process on one
+  SQLite file ([TD-08](#td-08)) and the data plane is a function call.
+  When signals go over HTTP (ADR 0028, step 2), a step may wait on the
+  network while it holds the lock; look at this again then.
 
 <a id="upstream-reports"></a>
 ## Upstream reports
