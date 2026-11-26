@@ -532,7 +532,7 @@ plane gets only this view, so it cannot read the memberships
 pub struct HttpDataPlane { /* ... */ }
 impl HttpDataPlane { pub fn new(/* ... */) /* ... */ }
 // serving.rs
-impl HttpDataPlane { pub fn authorize(/* ... */) /* ... */ }
+impl HttpDataPlane { pub fn source_if_authorized(/* ... */) /* ... */ }
 ```
 
 One type may have `impl` blocks in several files of its crate. The
@@ -554,22 +554,20 @@ signals arrived.
 
 ```rust
 impl MembershipGate {
-    pub async fn check(&self, flow_id: &str) -> Access { /* ... */ }
+    pub async fn check_memberships(&self, flow_id: &str) -> Access { /* ... */ }
 }
 impl AccessGate for MembershipGate {
     fn check<'a>(&'a self, flow_id: &'a str) -> BoxFuture<'a, Access> {
-        Box::pin(MembershipGate::check(self, flow_id))
+        Box::pin(self.check_memberships(flow_id))
     }
 }
 ```
 
-A type may have its own method and a trait method with the same name.
-`gate.check(id)` and `MembershipGate::check(self, id)` call the type's
-own method: Rust looks there first. The trait method is reached through
-the trait, here when the data plane calls it on an `Arc<dyn
-AccessGate>`. So the trait method above is not calling itself: it wraps
-the type's `async fn` in the box its trait asks for
-(`portitor-connector/src/flow_membership.rs`).
+The trait method wraps the type's own `async fn` in the box its trait
+asks for (`portitor-connector/src/flow_membership.rs`). The two have
+different names on purpose: if they had the same name, a call on the
+type would pick the type's own method first, and a reader could take
+the trait method for one that calls itself.
 
 ### `BoxFuture` in a trait
 
@@ -1423,12 +1421,9 @@ port's size limit and its own (`portitor-runtime/src/request_size.rs`).
 - `impl Trait` in an argument (`var: impl Fn(&str) -> Option<OsString>`)
   means "any type that implements `Trait`".
 - `impl Trait` as a return type means "some type that implements
-  `Trait`; the caller needs to know no more". `-> Option<impl Send +
-  use<>>` (`push_watchdog` in `portitor-dataplane/src/push.rs`)
-  returns a value the caller only keeps and drops (dropping it stops
-  the background checks), so its real type stays private. `use<>` says
-  the value borrows nothing from the arguments (not `&self`, not `id`),
-  so the caller may keep it after they are gone.
+  `Trait`; the caller needs to know no more". `-> impl Iterator<Item =
+  (&str, &str)>` (`iter` in `portitor-dsp/src/policy/credentials.rs`)
+  gives something to loop over without naming its real type.
 - `pub(crate)` is visible inside this crate only.
 - `Self` is the type the `impl` is for.
 - `x.wrapping_add(1)` adds one and wraps around at the maximum instead of
