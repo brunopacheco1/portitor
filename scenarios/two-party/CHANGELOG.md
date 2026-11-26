@@ -14,9 +14,10 @@ the release notes these come from.
 
 - `compose.yaml` names the 1.2.0 release images by default.
 
-- The README says purpose and data permits come in 1.3 (was 1.2), as the
-  roadmap was renumbered for 1.2. Nothing else changed; the scenario was
-  not run again.
+- The README says purpose and data permits come in 1.4 (was 1.2), as the
+  roadmap was renumbered for 1.2 and again on 2026-11-26, when 1.3
+  became "Several replicas and PostgreSQL". Nothing else changed; the
+  scenario was not run again.
 
 ## 2026-11-24, for 1.1.0
 

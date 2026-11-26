@@ -119,6 +119,14 @@ transfer keeps the data source it started with. Upgrading from 1.1:
   `docs/diagrams/state-negotiation.drawio.svg`, shown in ARCHITECTURE.
   TD-49 (Accepted): after a failed message the two parties of a
   negotiation can stay in different states, as in EDC.
+- Several replicas (maintainer, 2026-11-26): ARCHITECTURE principle 14
+  (asynchronous, stateless APIs, coordination in the database; not met
+  yet in 1.2) and a rule for contributors in AGENTS.md. ROADMAP: a new
+  release, 1.3 "Several replicas and PostgreSQL"; the releases planned
+  after it move up by one (purpose and data permit are now 1.4, the
+  last is 1.11). RISKS_AND_TECHNICAL_DEBTS: TD-50 to TD-58, from a code
+  review of the state held in one process; TD-08 and TD-09 planned for
+  1.3.
 
 ## [1.1.0] - 2026-11-25
 

@@ -14,11 +14,12 @@ version it ran on.
 - `compose.yaml` names the 1.2.0 release images by default.
 
 - The README gives the release numbers of the roadmap as renumbered for
-  1.2: purpose, the data permit and the fixes of
+  1.2 and again on 2026-11-26, when 1.3 became "Several replicas and
+  PostgreSQL": purpose, the data permit and the fixes of
   [R-48](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#r-48),
   [TD-20](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-20) and
   [TD-46](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-46) are planned for
-  1.3 (was 1.2). Nothing else changed; the scenario was not run again.
+  1.4 (was 1.2). Nothing else changed; the scenario was not run again.
 
 ## 2026-11-25, for 1.1.0
 
