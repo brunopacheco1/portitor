@@ -634,7 +634,8 @@ pub fn credential_scopes<'a>(policy: impl Into<Terms<'a>>, types: &CredentialTyp
 
 `Terms` is a view of the rules of an offer, an agreement or an access
 policy. It borrows them and copies nothing. Each of the three types
-says how it becomes `Terms` (`impl From<...> for Terms`). A function
+says how it becomes `Terms` (`impl From<...> for Terms`); Rust then
+gives `Into` for free, the same conversion seen from the other side. A function
 that takes `impl Into<Terms<'a>>` then accepts any of them:
 `credential_scopes(&offer, types)` and `credential_scopes(&policy,
 types)` both work. Its first line, `let terms = policy.into();`, makes

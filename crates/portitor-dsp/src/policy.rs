@@ -280,8 +280,9 @@ pub fn add_once<T: PartialEq>(list: &mut Vec<T>, item: T) {
     }
 }
 
-/// The terms of a policy (an offer or an agreement): what [`same_terms`]
-/// compares.
+/// The terms of a policy (an offer, an agreement or an access policy),
+/// borrowed: what [`same_terms`] compares, and what the functions that
+/// take `impl Into<Terms>` read.
 #[derive(Debug, Clone, Copy)]
 pub struct Terms<'a> {
     permission: &'a [Rule],
