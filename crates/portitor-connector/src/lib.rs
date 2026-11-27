@@ -49,12 +49,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use portitor_dsp::catalog::{CatalogService, Outcome, read_catalog_request};
+use portitor_dsp::catalog::{CatalogService, Outcome, Requester, read_catalog_request};
 use portitor_dsp::negotiation::provider::Failure;
 use portitor_dsp::policy::CredentialTypes;
 use portitor_dsp::transfer::consumer::{ConsumerTransfer, ConsumerTransferDecision};
@@ -390,6 +390,11 @@ impl Config {
 struct AppState {
     catalog: CatalogService<harvest::StoredCatalog>,
     versions: VersionResponse,
+    /// Reads the caller's credentials for the datasets' access policies
+    /// (ADR 0019, amendment in 1.4).
+    verifier: Arc<dyn auth::CallerVerifier>,
+    /// The credential types policies may use.
+    credential_types: portitor_dsp::policy::CredentialTypes,
 }
 
 /// Starts and follows contract negotiations and transfers as consumer (the
@@ -891,7 +896,12 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         receiving,
         leases,
     };
-    let state = Arc::new(AppState { catalog, versions });
+    let state = Arc::new(AppState {
+        catalog,
+        versions,
+        verifier: Arc::clone(&verifier),
+        credential_types: config.credential_types.clone(),
+    });
     // open: discovery (DSP 2025-1), health, and the data plane, which
     // checks its own tokens (ADR 0013)
     let open = Router::new()
@@ -1078,9 +1088,11 @@ fn respond<T: Serialize>(outcome: Outcome<T>) -> Response {
 }
 
 /// `POST /catalog/request`. Any authenticated caller may read the
-/// catalog; credential rules per dataset come in 0.6.
+/// catalog; a dataset with an access policy is shown only to the callers
+/// it holds for (ADR 0019, amendment in 1.4).
 async fn catalog_request(
     State(s): State<Arc<AppState>>,
+    Extension(caller): Extension<auth::Caller>,
     body: Result<Json<serde_json::Value>, JsonRejection>,
 ) -> Response {
     let refused = |reason: &str| {
@@ -1089,15 +1101,54 @@ async fn catalog_request(
         );
         respond::<()>(Outcome::BadRequest(CatalogError::new("400", reason)))
     };
-    match body {
+    let msg = match body {
         Ok(Json(value)) => match read_catalog_request(value) {
-            Ok(msg) => respond(s.catalog.request(&msg)),
-            Err(reason) => refused(&reason),
+            Ok(msg) => msg,
+            Err(reason) => return refused(&reason),
         },
-        Err(e) => refused(&e.body_text()),
-    }
+        Err(e) => return refused(&e.body_text()),
+    };
+    // the scopes of every access policy, asked for once per request
+    let scopes = match s.catalog.access_scopes(&s.credential_types) {
+        Ok(scopes) => scopes,
+        Err(e) => return respond::<()>(Outcome::StoreFailed(e)),
+    };
+    let credentials = caller_credentials(&s, &caller, &scopes).await;
+    let now = system::xsd_date_time(system::now_secs());
+    let requester = Requester {
+        now: &now,
+        credentials: &credentials,
+    };
+    respond(s.catalog.request(&msg, &requester))
 }
 
-async fn dataset(State(s): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
-    respond(s.catalog.dataset(&id))
+/// `GET /catalog/datasets/{id}`: a dataset whose access policy does not
+/// hold for the caller gets the same answer as an unknown one.
+async fn dataset(
+    State(s): State<Arc<AppState>>,
+    Extension(caller): Extension<auth::Caller>,
+    Path(id): Path<String>,
+) -> Response {
+    let scopes = match s.catalog.dataset_access_scopes(&id, &s.credential_types) {
+        Ok(scopes) => scopes,
+        Err(e) => return respond::<()>(Outcome::StoreFailed(e)),
+    };
+    let credentials = caller_credentials(&s, &caller, &scopes).await;
+    let now = system::xsd_date_time(system::now_secs());
+    let requester = Requester {
+        now: &now,
+        credentials: &credentials,
+    };
+    respond(s.catalog.dataset(&id, &requester))
+}
+
+/// The caller's credentials for `scopes`: those of the access policies.
+/// Without scopes, none are asked for (the credentials checked on the
+/// HTTP edge are used).
+async fn caller_credentials(
+    s: &AppState,
+    caller: &auth::Caller,
+    scopes: &[String],
+) -> portitor_dsp::policy::CallerCredentials {
+    auth::credentials_for(&*s.verifier, &s.credential_types, caller, scopes).await
 }

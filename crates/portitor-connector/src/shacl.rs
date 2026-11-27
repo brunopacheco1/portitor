@@ -501,6 +501,7 @@ impl DatasetCheck for ShaclDatasetCheck {
         Ok(CheckedDataset {
             dataset,
             conforms_to: Some(self.profile.clone()),
+            access_policy: None,
         })
     }
 }

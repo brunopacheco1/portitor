@@ -265,7 +265,8 @@ pub fn plan_recheck(
 /// What a dataset that passed is, compared with the stored one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Change {
-    /// The same content, entry and state: nothing to write.
+    /// The same content, entry, access policy and state: nothing to
+    /// write.
     Unchanged,
     /// New, or back in the source after a withdrawal: it enters the
     /// catalog (again).
@@ -300,11 +301,12 @@ fn record(plan: &mut Plan, previous: Option<&StoredDataset>, fresh: StoredDatase
     }
 }
 
-/// The same content, entry and state: nothing to write.
+/// The same content, entry, access policy and state: nothing to write.
 fn is_same(old: &StoredDataset, fresh: &StoredDataset) -> bool {
     old.state == fresh.state
         && old.content_sha256 == fresh.content_sha256
         && old.entry == fresh.entry
+        && old.access_policy == fresh.access_policy
 }
 
 /// Takes `portitor:source` out of the entry. It must be an `http://` or
@@ -415,6 +417,7 @@ fn stored_dataset(
         entry,
         content: checked.dataset,
         upstream,
+        access_policy: checked.access_policy,
         content_sha256,
         state: DatasetState::Active,
         conforms_to: checked.conforms_to,

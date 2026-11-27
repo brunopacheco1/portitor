@@ -38,8 +38,10 @@
 //! scopes a verifier needs to read the credentials: both sides use it, so
 //! the consumer's token allows what the provider asks for.
 
+mod access;
 mod credentials;
 
+pub use access::{AccessPolicy, access_policy_holds, validate_access_policy};
 pub use credentials::{
     CallerCredentials, CredentialTypes, DEFAULT_MEMBERSHIP_SCOPE, HeldCredential, MEMBERSHIP,
 };

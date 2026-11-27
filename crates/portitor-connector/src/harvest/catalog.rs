@@ -14,7 +14,8 @@
 use std::sync::Arc;
 
 use portitor_dsp::Dataset;
-use portitor_dsp::catalog::CatalogDatasets;
+use portitor_dsp::catalog::{CatalogDatasets, ListedDataset};
+use portitor_dsp::policy::AccessPolicy;
 
 use super::{DatasetState, DatasetStore, StoreError};
 
@@ -77,21 +78,45 @@ impl StoredCatalog {
 impl CatalogDatasets for StoredCatalog {
     /// Active datasets only, in id order.
     fn all(&self) -> Result<Vec<Dataset>, StoreError> {
-        self.0.catalog()
+        let mut datasets = Vec::new();
+        for listed in self.0.catalog()? {
+            datasets.push(listed.dataset);
+        }
+        Ok(datasets)
     }
 
     /// Active datasets only.
     fn get(&self, id: &str) -> Result<Option<Dataset>, StoreError> {
-        match self.0.dataset(id)? {
-            Some(stored) if stored.state == DatasetState::Active => Ok(Some(stored.content)),
-            _ => Ok(None),
-        }
+        Ok(self
+            .get_with_access_policy(id)?
+            .map(|listed| listed.dataset))
     }
 
     /// Active, withdrawn or hidden: an agreement already made keeps its
     /// transfers (ADR 0020).
     fn get_for_agreement(&self, id: &str) -> Result<Option<Dataset>, StoreError> {
         Ok(self.0.dataset(id)?.map(|stored| stored.content))
+    }
+
+    /// Active datasets only, in id order.
+    fn all_with_access_policies(&self) -> Result<Vec<ListedDataset>, StoreError> {
+        self.0.catalog()
+    }
+
+    /// Active datasets only.
+    fn get_with_access_policy(&self, id: &str) -> Result<Option<ListedDataset>, StoreError> {
+        match self.0.dataset(id)? {
+            Some(stored) if stored.state == DatasetState::Active => Ok(Some(ListedDataset {
+                dataset: stored.content,
+                access_policy: stored.access_policy,
+            })),
+            _ => Ok(None),
+        }
+    }
+
+    /// Active datasets only; read from their own column.
+    fn access_policies(&self) -> Result<Vec<AccessPolicy>, StoreError> {
+        self.0.access_policies()
     }
 }
 

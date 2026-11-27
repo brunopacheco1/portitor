@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use portitor_dsp::catalog::{DatasetDefinitionError, prepare_dataset};
-use portitor_dsp::policy::CredentialTypes;
+use portitor_dsp::policy::{AccessPolicy, CredentialTypes, validate_access_policy};
 use portitor_dsp::{Dataset, Offer};
 use serde::Deserialize;
 
@@ -20,6 +20,12 @@ use serde::Deserialize;
 /// SHACL check always runs after it ([`BothChecks`] joins both versions).
 pub const CHECKS_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The key, in an entry, of the dataset's access policy (ADR 0019,
+/// amendment in 1.4): who may see the dataset in the catalog. The DSP
+/// check reads it and takes it out of the dataset, so it never reaches
+/// the catalog.
+pub const ACCESS_POLICY_KEY: &str = "portitor:accessPolicy";
+
 /// Which check rejected an entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckKind {
@@ -28,9 +34,9 @@ pub enum CheckKind {
     /// The DSP `Dataset` form or the DSP catalog rules (including a bad
     /// `portitor:source` and an `@id` used twice).
     Dsp,
-    /// An offer is not understood: a field Portitor does not read (ADR
-    /// 0009, amendment of 2026-11-18) or a constraint it cannot evaluate
-    /// (ADR 0009, ADR 0019).
+    /// An offer or the access policy is not understood: a field Portitor
+    /// does not read (ADR 0009, amendment of 2026-11-18) or a constraint
+    /// it cannot evaluate (ADR 0009, ADR 0019).
     Odrl,
     /// The SHACL shapes of the bundle (ADR 0005).
     Shacl,
@@ -91,6 +97,9 @@ pub struct CheckedDataset {
     /// A shape or profile the dataset conforms to (an IRI); the catalog
     /// shows it as `dct:conformsTo`.
     pub conforms_to: Option<String>,
+    /// Who may see the dataset (`portitor:accessPolicy`); `None`: every
+    /// member. Never shown in the catalog.
+    pub access_policy: Option<AccessPolicy>,
 }
 
 /// Port: the check of one harvested entry.
@@ -103,7 +112,8 @@ pub trait DatasetCheck: Send + Sync {
     fn rules_version(&self) -> String;
 
     /// Checks one entry: the dataset JSON as the source gave it, without
-    /// `portitor:source`.
+    /// `portitor:source`. It may hold `portitor:accessPolicy`, which the
+    /// DSP check reads ([`ACCESS_POLICY_KEY`]).
     ///
     /// # Errors
     ///
@@ -155,17 +165,56 @@ impl DatasetCheck for DspCheck {
                 "the entry is not a JSON object",
             ));
         }
-        read_offers(entry)?;
-        let dataset: Dataset = serde_json::from_value(entry.clone())
+        let access_policy = read_access_policy(entry, &self.types)?;
+        let entry = without_access_policy(entry);
+        read_offers(&entry)?;
+        let dataset: Dataset = serde_json::from_value(entry)
             .map_err(|e| EntryFailure::new(CheckKind::Dsp, format!("not a DSP dataset: {e}")))?;
         match prepare_dataset(dataset, &self.service_id, &self.types) {
             Ok(dataset) => Ok(CheckedDataset {
                 dataset,
                 conforms_to: None,
+                access_policy,
             }),
             Err(e) => Err(definition_failure(&e)),
         }
     }
+}
+
+/// Reads the entry's access policy, if it has one, strictly (as an
+/// offer), and checks that it is understood with the credential `types`
+/// (ADR 0019, amendment in 1.4). One that is not is an `odrl` failure.
+fn read_access_policy(
+    entry: &serde_json::Value,
+    types: &CredentialTypes,
+) -> Result<Option<AccessPolicy>, EntryFailure> {
+    let Some(value) = entry.get(ACCESS_POLICY_KEY) else {
+        return Ok(None);
+    };
+    let not_understood = |why: String| {
+        let id = entry
+            .get("@id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        EntryFailure::new(
+            CheckKind::Odrl,
+            format!("dataset {id:?}: {ACCESS_POLICY_KEY} is not understood: {why}"),
+        )
+    };
+    // `&Value` can be read as a type without copying it first
+    let policy = AccessPolicy::deserialize(value).map_err(|e| not_understood(e.to_string()))?;
+    validate_access_policy(&policy, types).map_err(|e| not_understood(e.to_string()))?;
+    Ok(Some(policy))
+}
+
+/// The entry without its access policy: what the catalog shows, and what
+/// the other checks see.
+fn without_access_policy(entry: &serde_json::Value) -> serde_json::Value {
+    let mut entry = entry.clone();
+    if let Some(fields) = entry.as_object_mut() {
+        fields.remove(ACCESS_POLICY_KEY);
+    }
+    entry
 }
 
 /// Reads each offer of the entry (`hasPolicy`) on its own, before the
@@ -208,8 +257,10 @@ fn definition_failure(error: &DatasetDefinitionError) -> EntryFailure {
 }
 
 /// Two checks, one after the other: an entry passes if it passes both.
-/// The dataset served is the first check's; `conforms_to` is the second's,
-/// or else the first's. The rules version names both, joined by `+`.
+/// The dataset served and its access policy are the first check's (the
+/// DSP check); `conforms_to` is the second's, or else the first's. The
+/// second check sees the entry without its access policy, as the
+/// catalog shows it. The rules version names both, joined by `+`.
 #[derive(Clone)]
 pub struct BothChecks {
     first: Arc<dyn DatasetCheck>,
@@ -241,10 +292,11 @@ impl DatasetCheck for BothChecks {
 
     fn check(&self, entry: &serde_json::Value) -> Result<CheckedDataset, EntryFailure> {
         let first = self.first.check(entry)?;
-        let second = self.second.check(entry)?;
+        let second = self.second.check(&without_access_policy(entry))?;
         Ok(CheckedDataset {
             dataset: first.dataset,
             conforms_to: second.conforms_to.or(first.conforms_to),
+            access_policy: first.access_policy,
         })
     }
 }
@@ -306,6 +358,42 @@ mod tests {
         assert!(failed.message.contains("spatial"), "{}", failed.message);
     }
 
+    #[test]
+    fn the_dsp_check_reads_the_access_policy_and_keeps_it_out_of_the_dataset() {
+        let mut with_policy = entry();
+        with_policy[ACCESS_POLICY_KEY] = json!({"permission": [{"action": "use", "constraint": [
+            {"leftOperand": "MembershipCredential.role", "operator": "eq", "rightOperand": "lab"}]}]});
+        let passed = dsp().check(&with_policy).unwrap();
+        assert_eq!(
+            passed.access_policy.unwrap().permission[0].constraint.len(),
+            1
+        );
+        let shown = serde_json::to_string(&passed.dataset).unwrap();
+        assert!(!shown.contains("accessPolicy"), "{shown}");
+        assert_eq!(dsp().check(&entry()).unwrap().access_policy, None);
+
+        // a purpose, a prohibition, a duty, a type that is not configured
+        for bad in [
+            json!({"permission": [{"action": "use", "constraint": [{"leftOperand": "purpose",
+                "operator": "eq", "rightOperand": "https://example.com/p"}]}]}),
+            json!({"permission": [{"action": "use"}], "prohibition": [{"action": "use"}]}),
+            json!({"permission": [{"action": "use", "duty": [{"action": "notify"}]}]}),
+            json!({"permission": [{"action": "use", "constraint": [{
+                "leftOperand": "OtherCredential.x", "operator": "eq", "rightOperand": "y"}]}]}),
+            json!("members"),
+        ] {
+            let mut entry = entry();
+            entry[ACCESS_POLICY_KEY] = bad.clone();
+            let failed = dsp().check(&entry).unwrap_err();
+            assert_eq!(failed.kind, CheckKind::Odrl, "{bad}");
+            assert!(
+                failed.message.contains(ACCESS_POLICY_KEY),
+                "{}",
+                failed.message
+            );
+        }
+    }
+
     /// Stands for a SHACL check: refuses entries with `"bad": true`.
     struct Shapes;
 
@@ -322,9 +410,13 @@ mod tests {
                 });
             }
             let dataset = serde_json::from_value(entry.clone()).unwrap();
+            if entry.get(ACCESS_POLICY_KEY).is_some() {
+                panic!("the second check sees no access policy");
+            }
             Ok(CheckedDataset {
                 dataset,
                 conforms_to: Some("https://shapes.example/1".to_owned()),
+                access_policy: None,
             })
         }
     }
@@ -339,6 +431,10 @@ mod tests {
                 env!("CARGO_PKG_VERSION")
             )
         );
+        let mut with_policy = entry();
+        with_policy[ACCESS_POLICY_KEY] = json!({"permission": [{"action": "use"}]});
+        let passed = both.check(&with_policy).unwrap();
+        assert!(passed.access_policy.is_some());
         let passed = both.check(&entry()).unwrap();
         // the first check's dataset, with its access service
         assert!(!passed.dataset.distribution[0].access_service.is_empty());

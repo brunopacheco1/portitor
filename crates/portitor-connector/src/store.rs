@@ -280,6 +280,11 @@ const SQLITE_MIGRATIONS: &[&str] = &[
     // second (`LeaseStore::forget_ended`)
     "ALTER TABLE harvest_state ADD COLUMN version INTEGER NOT NULL DEFAULT 0;
      CREATE INDEX lease_until ON lease (lease_until)",
+    // 1.4 (policy): a dataset's access policy, as JSON, NULL for none
+    // (`portitor:accessPolicy`; ADR 0019, amendment in 1.4; TD-13). Its
+    // datasets are checked again at start after the upgrade (ADR 0020),
+    // which fills it from their stored entries
+    "ALTER TABLE dataset ADD COLUMN access_policy TEXT",
 ];
 
 /// The PostgreSQL schema (since 1.3), applied in order as the `SQLite`
@@ -458,6 +463,9 @@ const POSTGRES_MIGRATIONS: &[&str] = &[
     // the SQLite migration of the same name
     "ALTER TABLE harvest_state ADD COLUMN version BIGINT NOT NULL DEFAULT 0;
      CREATE INDEX lease_until ON lease (lease_until)",
+    // 1.4 (policy): a dataset's access policy, as the SQLite migration of
+    // the same name
+    "ALTER TABLE dataset ADD COLUMN access_policy TEXT",
 ];
 
 /// Adapter: every store of the connector, on its database. Cloning it

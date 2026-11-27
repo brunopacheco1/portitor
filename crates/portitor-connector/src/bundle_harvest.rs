@@ -121,6 +121,7 @@ impl DatasetCheck for BundleCopy {
         Ok(CheckedDataset {
             dataset,
             conforms_to: None,
+            access_policy: None,
         })
     }
 }

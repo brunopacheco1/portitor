@@ -446,6 +446,125 @@ async fn an_unreachable_credential_service_ends_the_negotiation() {
     assert_eq!(agreed.state, NegotiationState::Finalized);
 }
 
+/// TD-13 (ADR 0019, amendment in 1.4): the provider has two datasets,
+/// `open` for every member and `reports` with an access policy for EU
+/// data processors. The catalog and the dataset request show `reports`
+/// only to a caller that meets the access policy; the provider asks the
+/// caller's Credential Service once per catalog request.
+#[tokio::test]
+async fn the_catalog_shows_a_dataset_only_to_callers_its_access_policy_holds_for() {
+    let network = Arc::new(Network::default());
+    let fakes = Fakes::default();
+    let membership = credential(MEMBERSHIP, &json!({}));
+    let mut open = reports();
+    open["@id"] = json!("open");
+    open["hasPolicy"] = json!([{"@id": "open:use", "@type": "Offer",
+        "permission": [{"action": "use"}]}]);
+    let mut restricted = reports();
+    restricted["portitor:accessPolicy"] = json!({"permission": [{"action": "use",
+        "constraint": [{"leftOperand": "DataProcessorCredential.processing",
+            "operator": "eq", "rightOperand": "eu"}]}]});
+    let mut provider_ports = fake_ports(&network, PROVIDER_DID, &fakes);
+    provider_ports.harvest.source = Some(Arc::new(FixedSource::new(vec![open, restricted])));
+    let (provider_app, provider) =
+        portitor_connector::build(&config(PROVIDER_DID, PROVIDER), provider_ports).unwrap();
+    assert_eq!(provider.catalog_size().unwrap(), 2);
+    network.join(PROVIDER, provider_app);
+
+    let request = json!({
+        "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+        "@type": "CatalogRequestMessage"
+    });
+    // the caller's token grants the scope, as the management API's
+    // `additionalScopes` asks the consumer's STS to
+    let header = format!("Bearer {CONSUMER_DID}|{MEMBERSHIP_SCOPE} {PROCESSOR_SCOPE}");
+    for (processing, sees_reports) in [("eu", true), ("us", false)] {
+        fakes.wallets.lock().unwrap().insert(
+            CONSUMER_DID.to_owned(),
+            vec![
+                membership.clone(),
+                credential(PROCESSOR, &json!({"processing": processing})),
+            ],
+        );
+        let before = fakes.queries.lock().unwrap().len();
+        let catalog = network
+            .post_authorized(
+                &format!("{PROVIDER}{DSP}/catalog/request"),
+                &request,
+                &header,
+            )
+            .await
+            .unwrap();
+        let ids: Vec<&str> = catalog["dataset"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["@id"].as_str().unwrap())
+            .collect();
+        let expected = if sees_reports {
+            vec!["open", "reports"]
+        } else {
+            vec!["open"]
+        };
+        assert_eq!(ids, expected, "processing {processing}");
+        // the access policy is never shown
+        assert!(!catalog.to_string().contains("accessPolicy"), "{catalog}");
+        // one query for the catalog, with the access policy's scope
+        let asked = fakes.queries.lock().unwrap()[before..].to_vec();
+        assert_eq!(
+            asked,
+            vec![vec![
+                MEMBERSHIP_SCOPE.to_owned(),
+                PROCESSOR_SCOPE.to_owned()
+            ]]
+        );
+
+        let dataset_url = |id: &str| format!("{PROVIDER}{DSP}/catalog/datasets/{id}");
+        let reports = network
+            .get_authorized(&dataset_url("reports"), &header)
+            .await;
+        let unknown = network
+            .get_authorized(&dataset_url("unknown"), &header)
+            .await;
+        if sees_reports {
+            assert_eq!(reports.unwrap()["@id"], "reports");
+        } else {
+            // the same answer as an unknown dataset
+            assert_eq!(reports.unwrap_err(), unknown.unwrap_err());
+        }
+        assert!(
+            network
+                .get_authorized(&dataset_url("open"), &header)
+                .await
+                .is_ok()
+        );
+    }
+}
+
+/// A bad access policy (here a purpose, which is a term of an agreement)
+/// rejects the dataset at harvest, as a bad offer is (check `odrl`).
+#[tokio::test]
+async fn a_bad_access_policy_rejects_the_dataset() {
+    let network = Arc::new(Network::default());
+    let fakes = Fakes::default();
+    let mut restricted = reports();
+    restricted["portitor:accessPolicy"] = json!({"permission": [{"action": "use",
+        "constraint": [{"leftOperand": "purpose", "operator": "eq",
+            "rightOperand": "https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch"}]}]});
+    let mut provider_ports = fake_ports(&network, PROVIDER_DID, &fakes);
+    provider_ports.harvest.source = Some(Arc::new(FixedSource::new(vec![restricted])));
+    let (_, provider) =
+        portitor_connector::build(&config(PROVIDER_DID, PROVIDER), provider_ports).unwrap();
+    assert_eq!(provider.catalog_size().unwrap(), 0);
+    let jobs = provider.harvest_jobs(None, 10).unwrap();
+    let (_, errors) = provider.harvest_job(jobs[0].id).unwrap().unwrap();
+    assert_eq!(errors[0].kind, CheckKind::Odrl);
+    assert!(
+        errors[0].message.contains("portitor:accessPolicy"),
+        "{errors:?}"
+    );
+}
+
 /// A provider that only records the messages it gets, and answers a
 /// contract request with `REQUESTED` and the provider pid `p-<n>`.
 fn recording_provider(received: &Arc<Mutex<Vec<(String, Value)>>>) -> axum::Router {

@@ -34,10 +34,12 @@ use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 use std::time::Duration;
 
 use portitor_dsp::Dataset;
+use portitor_dsp::catalog::ListedDataset;
 /// The error of every store port. The harvest keeps its read copy in the
 /// same database as the negotiations, so it reuses their store error
 /// (named after negotiations, but it means "the store failed").
 pub use portitor_dsp::negotiation::provider::StoreError;
+use portitor_dsp::policy::AccessPolicy;
 use portitor_runtime::leases::Leases;
 use portitor_runtime::panics::spawn_supervised;
 use portitor_runtime::telemetry::metrics;
@@ -50,7 +52,8 @@ mod source;
 
 pub use catalog::{StoredCatalog, UpstreamSources};
 pub use check::{
-    BothChecks, CHECKS_VERSION, CheckKind, CheckedDataset, DatasetCheck, DspCheck, EntryFailure,
+    ACCESS_POLICY_KEY, BothChecks, CHECKS_VERSION, CheckKind, CheckedDataset, DatasetCheck,
+    DspCheck, EntryFailure,
 };
 pub use memory::InMemoryDatasetStore;
 pub(crate) use run::count;
@@ -117,6 +120,11 @@ pub struct StoredDataset {
     /// Where the data plane fetches its data (`portitor:source`). Never
     /// shown.
     pub upstream: Option<String>,
+    /// Who may see the dataset in the catalog (`portitor:accessPolicy`,
+    /// ADR 0019, amendment in 1.4); `None`: every member. Never shown in
+    /// the catalog. It stays in `entry` too, so a check with new rules
+    /// reads it again.
+    pub access_policy: Option<AccessPolicy>,
     /// SHA-256 of the content and the upstream, hex.
     pub content_sha256: String,
     /// Active, withdrawn or hidden.
@@ -345,13 +353,23 @@ pub trait DatasetStore: Send + Sync {
     /// The store cannot be read.
     fn datasets(&self) -> Result<Vec<StoredDataset>, StoreError>;
 
-    /// The catalog: the active datasets as the catalog shows them, in id
-    /// order (the order of the bytes of their ids, on every database).
+    /// The catalog: the active datasets as the catalog shows them, with
+    /// their access policies, in id order (the order of the bytes of their
+    /// ids, on every database).
     ///
     /// # Errors
     ///
     /// The store cannot be read.
-    fn catalog(&self) -> Result<Vec<Dataset>, StoreError>;
+    fn catalog(&self) -> Result<Vec<ListedDataset>, StoreError>;
+
+    /// The access policies of the active datasets, each once, in no set
+    /// order: what a catalog request needs to know which credentials to
+    /// ask for.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be read.
+    fn access_policies(&self) -> Result<Vec<AccessPolicy>, StoreError>;
 
     /// One dataset, in any state.
     ///
