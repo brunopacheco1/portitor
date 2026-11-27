@@ -84,7 +84,9 @@ impl DcpVerifier {
             self.trusted_issuers.contains(issuer) && self.issuer_types.allows(issuer, types);
         if !trusted {
             return Err(VerifyError::Rejected(format!(
-                "the membership's issuer {issuer} is no longer trusted"
+                "the membership's issuer {issuer} is no longer trusted for the types {} \
+                 (PORTITOR_TRUSTED_ISSUERS, PORTITOR_TRUSTED_ISSUER_TYPES)",
+                types.join(", ")
             )));
         }
         let now = self.now();
