@@ -645,7 +645,8 @@ impl Negotiator {
 
     /// Reads the dataset `dataset_id` from the provider `provider_id` at
     /// its DSP endpoint `provider_address`, as [`Negotiator::read_catalog`]
-    /// reads the catalog.
+    /// reads the catalog: with a token of ours that also grants
+    /// `additional_scopes`.
     ///
     /// # Errors
     ///
@@ -655,10 +656,11 @@ impl Negotiator {
         provider_address: &str,
         provider_id: &str,
         dataset_id: &str,
+        additional_scopes: &[String],
     ) -> Result<catalog_reader::ProviderAnswer, catalog_reader::ReadFailure> {
         let reader = &self.catalog_reader;
         reader
-            .dataset(provider_address, provider_id, dataset_id)
+            .dataset(provider_address, provider_id, dataset_id, additional_scopes)
             .await
     }
 
