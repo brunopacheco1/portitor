@@ -64,6 +64,10 @@ setting and file format still works, and every new setting is optional
   ([TD-11](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-11)).
 - hdab-intermediary scenario: Lux Biobank's offer for EU processors
   names a purpose, and a request with another purpose is refused.
+- Code: one helper, `spawn_every` in `portitor-runtime`, runs a
+  background round on a timer; the connector's outbox loop, transfer
+  step sweep, dataset harvest and bundle check use it, with no change
+  of behaviour ([TD-70](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-70)).
 
 ### Fixed
 

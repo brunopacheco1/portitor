@@ -156,7 +156,7 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [TD-67](#td-67) | Datasets are harvested from one kind of source only | Technical debt | Open | 1.8 |
 | [TD-68](#td-68) | No dataspace-wide registry or federated catalogue | Technical debt | Open | 1.8, only if needed |
 | [TD-69](#td-69) | No Simpl-Open features beyond the protocols (mutual TLS, consent, API gateway) | Technical debt | Open | consent code: 1.7; ADR: 1.9 |
-| [TD-70](#td-70) | Four loops that tick each write their own timer | Technical debt, readability | Open | 1.4 (suggested) |
+| [TD-70](#td-70) | Four loops that tick each write their own timer | Technical debt, readability | Open | in progress, 1.4: built |
 | [TD-71](#td-71) | The identity and the issuer each wrap the database the same way | Technical debt, readability | Open | 1.4 (suggested) |
 | [TD-72](#td-72) | Two error types for the database, converted both ways | Technical debt, readability | Open | 1.5 (suggested, with TD-63) |
 | [TD-73](#td-73) | A negotiation step is about 3.5 ms slower on SQLite in 1.3 | Technical debt, performance | Open | 1.4 (one day of profiling; else 1.12) |
@@ -1550,7 +1550,13 @@ to TD-58).
   inside `spawn_supervised` (1.3 readability review, 2026-11-26).
 - **Why it matters.** The same ten lines four times; a reader must
   check each copy to see that they behave alike ([R-01](#r-01)).
-- **Current state: Open.**
+- **Current state: Open; in progress, 1.4: built.** `spawn_every` in
+  `crates/portitor-runtime/src/panics.rs`, with tests on a paused
+  clock (first round one period after the start, missed ticks
+  skipped, a restart after a panic); the four loops use it. The
+  bundle's `follow_database` loop keeps its own timer: its first round
+  is at once, not one period later. The identity and the issuer have
+  no such loop (theirs sleep until the next due time).
 - **Next.** One helper, `spawn_every(name, every, round)`, in
   `portitor-runtime` next to `spawn_supervised`, used by the four
   loops; no change of behaviour. Small: suggested for 1.4, next to the

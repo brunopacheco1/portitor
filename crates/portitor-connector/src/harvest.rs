@@ -41,7 +41,7 @@ use portitor_dsp::catalog::ListedDataset;
 pub use portitor_dsp::negotiation::provider::StoreError;
 use portitor_dsp::policy::AccessPolicy;
 use portitor_runtime::leases::Leases;
-use portitor_runtime::panics::spawn_supervised;
+use portitor_runtime::panics::spawn_every;
 use portitor_runtime::telemetry::metrics;
 
 mod catalog;
@@ -674,25 +674,15 @@ impl DatasetHarvester {
         }
         let harvester = Arc::clone(self);
         let leases = leases.clone();
-        // supervised, as every task that runs as long as the process
-        // (the closure makes the task anew after a panic, with its own
-        // pointer to the harvester). A run that panics does not end the
-        // schedule at all: it runs on its own thread, see below
-        let schedule = move || {
+        // one round; `spawn_every` runs it on the timer, supervised. A run
+        // that panics does not end the schedule at all: it runs on its
+        // own thread, see below
+        let round = move || {
             let harvester = Arc::clone(&harvester);
             let leases = leases.clone();
-            async move {
-                let first = tokio::time::Instant::now() + every;
-                let mut ticks = tokio::time::interval_at(first, every);
-                // a tick missed while a run was going on is skipped, not made up
-                ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                loop {
-                    ticks.tick().await;
-                    run_if_due(&harvester, &leases, every).await;
-                }
-            }
+            async move { run_if_due(&harvester, &leases, every).await }
         };
-        Some(spawn_supervised("dataset_harvest", schedule))
+        Some(spawn_every("dataset_harvest", every, round))
     }
 
     /// Takes a snapshot, decides the changes, and commits them. `full`:
