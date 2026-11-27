@@ -38,6 +38,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+
+use crate::database::{Database, DatabaseSetting};
 use utoipa::{OpenApi, ToSchema};
 
 use crate::BoxFuture;
@@ -428,6 +430,23 @@ pub fn sqlite_file_answers(path: &Path) -> Result<(), String> {
         .query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get(0))
         .map_err(|e| format!("the SQLite file does not answer: {e}"))?;
     Ok(())
+}
+
+/// Check: the component's database answers. A `SQLite` file is checked
+/// as [`sqlite_file_answers`] does, apart from the store's connection;
+/// PostgreSQL answers a `SELECT 1` on a connection of the pool. Blocking.
+///
+/// # Errors
+/// The database cannot be reached or does not answer; the text says why.
+pub fn database_answers(setting: &DatabaseSetting, db: &Database) -> Result<(), String> {
+    use crate::database::Executor as _;
+    match setting {
+        DatabaseSetting::SqliteFile(path) => sqlite_file_answers(path),
+        DatabaseSetting::Postgres(_) => db
+            .query("SELECT 1", &[])
+            .map(|_rows| ())
+            .map_err(|e| format!("the database does not answer: {e}")),
+    }
 }
 
 /// Check: `key` signs, and its signature verifies with its public key:

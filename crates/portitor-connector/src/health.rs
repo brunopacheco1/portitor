@@ -7,7 +7,7 @@
 //! own dependencies are checked, never another participant, so a
 //! partner's outage never makes a healthy connector look broken:
 //!
-//! - `database`: the `SQLite` file answers;
+//! - `database`: the database answers (PostgreSQL, or the `SQLite` file);
 //! - `harvest`: the start harvest ran (the catalog is loaded);
 //! - `bundle`: a bundle version is in force, when a bundle is configured;
 //! - `identity`: our DID document resolves and our STS signs for it (the
@@ -29,13 +29,15 @@
 //! the log (one WARN for each file), in the gauge
 //! `portitor.bundle.file.skipped` and in the bundle run of the job log.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use portitor_runtime::BoxFuture;
+use portitor_runtime::database::{Database, Executor as _};
 use portitor_runtime::health::{Check, HealthChecks, blocking, sqlite_file_answers};
 use portitor_runtime::panics::spawn_supervised;
+use portitor_runtime::values;
 use tokio::task::JoinHandle;
 use tracing::Instrument as _;
 
@@ -225,8 +227,11 @@ impl Check for OwnIdentityCheck {
 /// What the connector's readiness checks look at.
 #[derive(Debug)]
 pub struct Dependencies {
-    /// The `SQLite` file (`PORTITOR_DB_FILE`).
-    pub db_file: PathBuf,
+    /// The database the stores are on.
+    pub database: Arc<Database>,
+    /// Its `SQLite` file (`PORTITOR_DB_FILE`), or `None` for PostgreSQL
+    /// (and in tests, for an in-memory `SQLite` database).
+    pub db_file: Option<PathBuf>,
     /// The handle that knows whether the start harvest ran.
     pub negotiator: Negotiator,
     /// The bundle harvester, when a bundle is configured.
@@ -236,12 +241,30 @@ pub struct Dependencies {
     pub identity: Option<Arc<OwnIdentityCheck>>,
 }
 
+/// Check: the database answers. A `SQLite` file is opened apart from the
+/// store's own connection, so a file the volume lost is seen
+/// (`sqlite_file_answers`). Otherwise the database itself is asked for
+/// `SELECT 1`: on PostgreSQL that takes a connection of the pool, as a
+/// request would. Blocking.
+fn database_answers(database: &Database, db_file: Option<&Path>) -> Result<(), String> {
+    if let Some(file) = db_file {
+        return sqlite_file_answers(file);
+    }
+    match database.query("SELECT 1", values![]) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("the database does not answer: {e}")),
+    }
+}
+
 /// The connector's readiness checks, in the order of the module doc.
 #[must_use]
 pub fn readiness_checks(dependencies: Dependencies) -> HealthChecks {
     let mut checks = HealthChecks::new();
-    let db_file = dependencies.db_file;
-    checks.add("database", blocking(move || sqlite_file_answers(&db_file)));
+    let (database, db_file) = (dependencies.database, dependencies.db_file);
+    checks.add(
+        "database",
+        blocking(move || database_answers(&database, db_file.as_deref())),
+    );
     let negotiator = dependencies.negotiator;
     checks.add(
         "harvest",

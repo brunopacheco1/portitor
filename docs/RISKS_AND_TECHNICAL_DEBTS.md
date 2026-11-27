@@ -25,6 +25,11 @@ Status values:
 - **Addressed**: done. The item is one line in the [Closed](#closed)
   table, which says where the fix is described.
 
+An item whose fix is being built on a release branch keeps its status
+until the release; its "Target" and "Current state" say "in progress"
+with the release, and its "Next" says what is being built. It is moved
+to [Closed](#closed) when that release ships.
+
 > **Top risks for 1.0** (chosen from the items that are not closed, by
 > what they can cost at or after 1.0)
 >
@@ -34,8 +39,7 @@ Status values:
 > 2. [R-12](#r-12) Gaia-X was never tested with a real trust anchor.
 >    Every Gaia-X claim rests on a local service in test mode.
 > 3. [R-17](#r-17) Server-side request forgery: internal addresses are
->    not blocked on URLs a partner chooses, and no release is named for
->    the fix.
+>    not blocked on URLs a partner chooses. The fix is planned for 1.4.
 > 4. [R-09](#r-09) EDC is tested at a release candidate. Interoperability
 >    with EDC 1.0.0, the first reference counterpart, is not proven.
 > 5. [TD-05](#td-05) Private keys are PEM files.
@@ -60,11 +64,20 @@ checks this file:
    working. If it leaves something behind, add a line to
    [Left over from closed items](#left-over-from-closed-items).
 4. Check the "Top risks" box.
+5. Every item that needs work has a release in its "Target" column
+   (maintainer, 2026-11-26). An item with no work to plan (accepted,
+   waiting on someone else, or a standing check) says why in "Target".
+
+Once a year, with the first release after 26 November, a **yearly risk
+review** re-reads every item with no release and asks: is the reason
+still true, did the upstream event happen, should it get a release
+now? The first one is in [1.14](ROADMAP.md#114-operations-hardening-added-2026-11-26).
 
 ## Items that are not closed
 
-"Target" is the release the roadmap names. "Later" is the roadmap's list
-of work with no release yet.
+"Target" is the release the roadmap names. An item with no work to
+plan says why instead (a standing check, an upstream event, or "none"
+for an accepted residual risk); the yearly risk review re-reads those.
 
 | ID | Title | Kind | Status | Target |
 |---|---|---|---|---|
@@ -72,81 +85,98 @@ of work with no release yet.
 | [R-02](#r-02) | One maintainer: no two-person review | Delivery, security | Accepted | until a second maintainer |
 | [R-03](#r-03) | Pre-1.0 JSON-LD and VC crates | Dependency | Mitigated | none |
 | [R-04](#r-04) | Most dependencies are exempted, not audited (cargo-vet) | Dependency, security | Mitigated | every release |
-| [R-05](#r-05) | No written OpenSSF Baseline level 1 self-assessment | Security | Open | 0.14 |
+| [R-05](#r-05) | No written OpenSSF Baseline level 1 self-assessment | Security | Open | 1.4 |
 | [R-06](#r-06) | Data Plane Signaling is a draft (v1.0-RC4) | Upstream | Mitigated | Signaling 1.0 |
 | [R-08](#r-08) | The DSP TCK v1.0.2 needs a test-only build | Interoperability | Mitigated | a fixed TCK release |
 | [R-09](#r-09) | EDC is tested at a release candidate (1.0.0-RC8) | Interoperability | Mitigated | EDC 1.0.0 |
-| [R-10](#r-10) | EDC as provider refuses the Gaia-X compliance credential | Interoperability | Accepted | Later |
-| [R-11](#r-11) | Gaia-X does not use DCP; the binding and scope rules are Portitor's own reading | Interoperability, upstream | Open | none |
-| [R-12](#r-12) | Gaia-X never tested with a real trust anchor or the Gaia-X Lab | Interoperability, security | Open | Later |
+| [R-10](#r-10) | EDC as provider refuses the Gaia-X compliance credential | Interoperability | Accepted | 1.13 |
+| [R-11](#r-11) | Gaia-X does not use DCP; the binding and scope rules are Portitor's own reading | Interoperability, upstream | Open | 1.13 |
+| [R-12](#r-12) | Gaia-X never tested with a real trust anchor or the Gaia-X Lab | Interoperability, security | Open | 1.13 |
 | [R-13](#r-13) | The Gaia-X test depends on Gaia-X and w3id.org hosts | Delivery | Mitigated | none |
-| [R-14](#r-14) | Gaia-X protocols move: the Compliance Dispatcher is announced, not released | Upstream | Mitigated | Later |
+| [R-14](#r-14) | Gaia-X protocols move: the Compliance Dispatcher is announced, not released | Upstream | Mitigated | 1.13 |
 | [R-16](#r-16) | A Gaia-X compliance credential cannot be revoked | Security | Accepted | none |
-| [R-17](#r-17) | Server-side request forgery through partner-chosen URLs | Security | Mitigated | not named |
-| [R-19](#r-19) | Consumer's data access tokens in the SQLite file and the management API | Security | Mitigated | none |
+| [R-17](#r-17) | Server-side request forgery through partner-chosen URLs | Security | Mitigated | 1.4 |
+| [R-19](#r-19) | Consumer's data access tokens in the database and the management API | Security | Mitigated | none |
 | [R-20](#r-20) | The issuer key is the root of trust of a dataspace | Security | Mitigated | 1.6 (TD-05) |
 | [R-21](#r-21) | Bugs in Portitor's own SHACL engine; new SHACL components in later profiles | Security, upstream | Mitigated | none |
-| [R-22](#r-22) | Bundle: unsigned `latest.json`; a revoked bundle key not seen while offline | Security | Mitigated | Later (TD-16) |
+| [R-22](#r-22) | Bundle: unsigned `latest.json`; a revoked bundle key not seen while offline | Security | Mitigated | 1.8 |
 | [R-23](#r-23) | A wrong host clock gives wrong policy and token decisions | Security | Mitigated | none |
-| [R-24](#r-24) | Simpl-Open: parked, facts not verified, and it changes fast | Interoperability, upstream | Accepted | Later |
+| [R-24](#r-24) | Simpl-Open: parked, facts not verified, and it changes fast | Interoperability, upstream | Accepted | 1.9 |
 | [R-25](#r-25) | The name Portitor is not exclusive: other projects and a company use it | Delivery, legal | Accepted | none |
 | [R-27](#r-27) | CI downloads from Maven Central and GitHub | Delivery | Mitigated | none |
-| [R-29](#r-29) | DCP costs about 2 ms per request and 8 times fewer requests under load | Performance | Open | with TD-07 |
+| [R-29](#r-29) | DCP costs about 2 ms per request and 8 times fewer requests under load | Performance | Open | 1.6 |
 | [R-36](#r-36) | The OpenTelemetry Rust crates are 0.x and change their API often | Dependency, upstream | Mitigated | none |
 | [R-37](#r-37) | Telemetry costs some throughput at saturation | Performance | Mitigated | none |
 | [R-39](#r-39) | No specification defines agreements that depend on an upstream agreement | Interoperability | Open | 1.5 |
 | [R-40](#r-40) | No shared list of EHDS purposes | Interoperability | Open | 1.4 |
 | [R-41](#r-41) | A key removed from a DID document is still trusted for up to 5 minutes | Security | Mitigated | none |
-| [R-42](#r-42) | The STS shares the identity's public port | Security | Open | not named |
-| [R-43](#r-43) | Negative credential constraints can be met with another credential | Security | Open | not named |
-| [R-44](#r-44) | One slow holder delays every issuer delivery | Security | Open | not named |
-| [R-45](#r-45) | No request limit per partner | Security | Open | not named |
+| [R-42](#r-42) | The STS shares the identity's public port | Security | Open | 1.6 |
+| [R-43](#r-43) | Negative credential constraints can be met with another credential | Security | Open | 1.4 |
+| [R-44](#r-44) | One slow holder delays every issuer delivery | Security | Open | 1.6 |
+| [R-45](#r-45) | No request limit per partner | Security | Open | 1.7 |
 | [R-46](#r-46) | The EDC Issuer Service names a request status address that is not found | Interoperability, upstream | Open | report upstream; the next EDC release |
 | [R-47](#r-47) | The EDC Issuer Service's admin API may change with the next release candidate | Interoperability | Accepted | EDC 1.0.0 |
 | [R-48](#r-48) | An issuer trusted for data permits can also issue memberships | Security | Open | 1.4 |
-| [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | Open | research, with TD-03 |
+| [R-49](#r-49) | Leases in the database depend on the hosts' clocks | Operations | Mitigated | none |
+| [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | Open | 1.8 |
 | [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | Open | research; code 1.7 |
-| [TD-03](#td-03) | A provider in several dataspaces, each with its own rules | Technical debt | Accepted | profiles in one connector: after 1.0 |
+| [TD-03](#td-03) | A provider in several dataspaces, each with its own rules | Technical debt | Accepted | 1.9 |
 | [TD-04](#td-04) | User to system authentication and authorisation | Technical debt | Accepted | code 1.7 |
 | [TD-05](#td-05) | Key custody and key rotation | Technical debt | Open | 1.6 (OpenBao) |
 | [TD-07](#td-07) | STS tokens and presentations are not cached | Technical debt | Open | 1.6, if needed |
-| [TD-08](#td-08) | One replica per SQLite file; no PostgreSQL adapter | Technical debt | Open | 1.3 |
-| [TD-09](#td-09) | Used token ids are kept in memory only | Technical debt | Open | 1.3 |
-| [TD-10](#td-10) | Transfers: no token renewal; whole sources and whole pushes only | Technical debt | Mitigated | none |
+| [TD-08](#td-08) | One replica per SQLite file; no PostgreSQL adapter | Technical debt | Open | 1.3 (in progress) |
+| [TD-09](#td-09) | Used token ids are kept in memory only | Technical debt | Open | 1.3 (in progress) |
+| [TD-10](#td-10) | Transfers: no token renewal; whole sources and whole pushes only | Technical debt | Mitigated | 1.7 |
 | [TD-11](#td-11) | Consumer refuses offers with credential constraints; the provider cannot suspend from the management API | Technical debt | Open | 1.4 |
 | [TD-12](#td-12) | ODRL: few constraints; prohibitions and duties not enforced | Technical debt | Open | 1.4 (purpose) |
 | [TD-13](#td-13) | The catalog shows every offer to every member | Technical debt | Open | 1.4 |
 | [TD-14](#td-14) | Credential schemas, presentation definitions and issuance policies are not supported | Technical debt | Open | 1.6, if needed |
 | [TD-15](#td-15) | Agreements are not revised when the data's scope changes | Technical debt | Open | 1.7 |
-| [TD-16](#td-16) | One harvest source; no dataspace registry; other catalogs not checked; no bundle expiry or bundle key rotation | Technical debt | Open | Later |
-| [TD-17](#td-17) | The data plane runs inside the connector process | Technical debt | Accepted | Step 1 of 4 done in 1.2; the rest later in 1.x |
-| [TD-19](#td-19) | No TLS inside the services | Technical debt | Accepted | none |
+| [TD-16](#td-16) | One harvest source; no dataspace registry; other catalogs not checked; no bundle expiry or bundle key rotation | Technical debt | Open | 1.8 |
+| [TD-17](#td-17) | The data plane runs inside the connector process | Technical debt | Accepted | 1.12 (steps 2 to 4; step 1 done in 1.2) |
+| [TD-19](#td-19) | No TLS inside the services | Technical debt | Accepted | 1.9 |
 | [TD-20](#td-20) | A holder must delete a revoked credential by hand after a reissue | Technical debt | Open | 1.4 |
-| [TD-21](#td-21) | Gaia-X beyond 0.8 | Technical debt | Open | Later |
+| [TD-21](#td-21) | Gaia-X beyond 0.8 | Technical debt | Open | 1.13 |
 | [TD-22](#td-22) | Migrations run forward only; a rollback needs the backup | Technical debt | Accepted | none |
 | [TD-28](#td-28) | No trace across participants | Technical debt | Accepted | none |
-| [TD-29](#td-29) | No OTLP logs export, no gRPC, no compression | Technical debt | Open | Later |
+| [TD-29](#td-29) | No OTLP logs export, no gRPC, no compression | Technical debt | Open | 1.14 |
 | [TD-31](#td-31) | No audit trail of management actions | Technical debt | Mitigated | 1.7 |
-| [TD-35](#td-35) | No negotiation started by the provider | Technical debt, interoperability | Open | after 1.0 |
-| [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | Mitigated | 1.x (Helm chart) |
-| [TD-40](#td-40) | Database calls block the async runtime | Technical debt | Accepted | measure each release |
-| [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | Open | none |
+| [TD-35](#td-35) | No negotiation started by the provider | Technical debt, interoperability | Open | 1.5 |
+| [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | Mitigated | 1.4 |
+| [TD-40](#td-40) | Database calls block the async runtime | Technical debt | Accepted | 1.12 |
+| [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | Open | 1.7 |
 | [TD-46](#td-46) | The issuer keeps one set of claims per participant | Technical debt | Open | 1.4 |
-| [TD-47](#td-47) | A transfer stays REQUESTED when its provider is revoked | Technical debt | Open | 1.1 |
+| [TD-47](#td-47) | A transfer stays REQUESTED when its provider is revoked | Technical debt | Open | 1.4 |
 | [TD-49](#td-49) | After a failed message, the two parties of a negotiation can stay in different states | Technical debt, interoperability | Accepted | none |
-| [TD-50](#td-50) | Each connector process holds its own copy of the datasets | Technical debt | Open | 1.3 |
-| [TD-51](#td-51) | The issuer's signed status lists live in the memory of one process | Technical debt | Open | 1.3 |
-| [TD-52](#td-52) | A cut of a running download or push reaches only its own process | Technical debt | Open | 1.3 |
-| [TD-53](#td-53) | The DSP outbox is taken up again only at start, and retried in memory | Technical debt | Open | 1.3 |
-| [TD-54](#td-54) | Pushes are resumed only at start; one push or upload per transfer is guarded in one process | Technical debt | Open | 1.3 |
-| [TD-55](#td-55) | Each connector process holds its own copy of the rules bundle and its own cache folder | Technical debt | Open | 1.3 |
-| [TD-56](#td-56) | Scheduled jobs run once in every container | Technical debt | Open | 1.3 |
-| [TD-57](#td-57) | The issuer's credential outbox does not claim a delivery before it sends it | Technical debt | Open | 1.3 |
-| [TD-58](#td-58) | The DID document is built at start | Technical debt | Open | 1.3 |
+| [TD-50](#td-50) | Each connector process holds its own copy of the datasets | Technical debt | Open | 1.3 (in progress) |
+| [TD-51](#td-51) | The issuer's signed status lists live in the memory of one process | Technical debt | Open | 1.3 (in progress) |
+| [TD-52](#td-52) | A cut of a running download or push reaches only its own process | Technical debt | Open | 1.3 (in progress) |
+| [TD-53](#td-53) | The DSP outbox is taken up again only at start, and retried in memory | Technical debt | Open | 1.3 (in progress) |
+| [TD-54](#td-54) | Pushes are resumed only at start; one push or upload per transfer is guarded in one process | Technical debt | Open | 1.3 (in progress) |
+| [TD-55](#td-55) | Each connector process holds its own copy of the rules bundle and its own cache folder | Technical debt | Open | 1.3 (in progress) |
+| [TD-56](#td-56) | Scheduled jobs run once in every container | Technical debt | Open | 1.3 (in progress) |
+| [TD-57](#td-57) | The issuer's credential outbox does not claim a delivery before it sends it | Technical debt | Open | 1.3 (in progress) |
+| [TD-58](#td-58) | The DID document is built at start | Technical debt | Open | 1.3 (in progress) |
+| [TD-59](#td-59) | SQLite is deprecated; no tool yet to copy a SQLite file into PostgreSQL | Technical debt | Accepted | the copy tool: 1.4; removal: 2.0 |
+| [TD-60](#td-60) | A repeated first contract request starts a second negotiation | Technical debt, interoperability | Open | 1.4 |
+| [TD-61](#td-61) | The outbox's "it arrived before" check compares the state only | Technical debt | Open | 1.4 |
+| [TD-62](#td-62) | Why and when a negotiation ended is not stored | Technical debt | Open | 1.5 |
+| [TD-63](#td-63) | Source files above 1,000 lines | Technical debt, readability | Open | 1.5 |
+| [TD-64](#td-64) | Too many type parameters; macros that write types | Technical debt, readability | Open | 1.6 |
+| [TD-65](#td-65) | `Negotiator` does more than negotiate | Technical debt, readability | Open | 1.7 |
+| [TD-66](#td-66) | A data plane step runs inside the request that asks for it | Technical debt | Open | 1.12 |
+| [TD-67](#td-67) | Datasets are harvested from one kind of source only | Technical debt | Open | 1.8 |
+| [TD-68](#td-68) | No dataspace-wide registry or federated catalogue | Technical debt | Open | 1.8, only if needed |
+| [TD-69](#td-69) | No Simpl-Open features beyond the protocols (mutual TLS, consent, API gateway) | Technical debt | Open | consent code: 1.7; ADR: 1.9 |
+| [TD-70](#td-70) | Four loops that tick each write their own timer | Technical debt, readability | Open | 1.4 (suggested) |
+| [TD-71](#td-71) | The identity and the issuer each wrap the database the same way | Technical debt, readability | Open | 1.4 (suggested) |
+| [TD-72](#td-72) | Two error types for the database, converted both ways | Technical debt, readability | Open | 1.5 (suggested, with TD-63) |
+| [TD-73](#td-73) | A negotiation step is about 3.5 ms slower on SQLite in 1.3 | Technical debt, performance | Open | 1.4 (suggested) |
 
-Counts on 2026-11-26, on the 1.2 branch: 36 risks and 39 technical
-debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
-19 technical debts are closed.
+Counts on 2026-11-26, on the 1.3 branch: 37 risks and 54 technical
+debts are not closed (Open 54, Mitigated 22, Accepted 15), of which 11
+(TD-08, TD-09, TD-50 to TD-58) are done on the 1.3 branch and close at
+the release; 12 risks and 19 technical debts are closed.
 
 ## Risks
 
@@ -221,6 +251,12 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   ([TESTING](TESTING.md#what-runs-where)).
 - **Next.** Review or exempt again each bump of an exempted crate, so
   the list shrinks. Count the exemptions at each release.
+- **1.3.** `tokio-postgres` (ADR 0029) brings 32 crate versions that
+  the imported audits do not cover; they are exempted (maintainer,
+  2026-11-26), and so are the six versions audited before, because an
+  audit must mean a person read the code. On 2026-11-26: 57 crate
+  versions fully audited by the imported sets, 1 partly, 185 exempted
+  in `supply-chain/config.toml`; `audits.toml` is empty.
 
 <a id="r-05"></a>
 ### R-05 No written OpenSSF Baseline level 1 self-assessment
@@ -234,6 +270,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   stays level 1 for 1.0.
 - **Next.** ROADMAP 0.14, done last so it assesses the final state, in
   [SECURITY-ASSURANCE](SECURITY-ASSURANCE.md#openssf-baseline).
+  Assigned to 1.4 (maintainer, 2026-11-26).
 
 <a id="r-06"></a>
 ### R-06 Data Plane Signaling is a draft (v1.0-RC4)
@@ -308,6 +345,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   DEPLOYING "Known limits" names the limit.
 - **Next.** Later: ask EDC how it would accept Gaia-X compliance
   credentials ([upstream report 14](#upstream-reports), on hold).
+  Assigned to 1.13 (maintainer, 2026-11-26).
 
 <a id="r-11"></a>
 ### R-11 Gaia-X does not use DCP; the binding and scope rules are Portitor's own reading
@@ -325,7 +363,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   connectors only.
 - **Next.** Follow [upstream reports](#upstream-reports) 9 (scope
   grammar) and 12 (holder binding). The Gaia-X side is not asked yet
-  (report 13).
+  (report 13). Assigned to 1.13 (maintainer, 2026-11-26).
 
 <a id="r-12"></a>
 ### R-12 Gaia-X never tested with a real trust anchor or the Gaia-X Lab
@@ -342,8 +380,8 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   ([spike 0.8](spikes/0.8-gaia-x-compliance.md), "Not checked").
 - **Current state: Open.** [TESTING](TESTING.md#gaia-x-end-to-end-test)
   lists what the test does not prove.
-- **Next.** ROADMAP "Later": a test against the Lab once Portitor runs
-  beyond a laptop.
+- **Next.** ROADMAP 1.13: a test against the Lab once Portitor runs
+  beyond a laptop. Assigned to 1.13 (maintainer, 2026-11-26).
 
 <a id="r-13"></a>
 ### R-13 The Gaia-X test depends on Gaia-X and w3id.org hosts
@@ -371,7 +409,8 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   (`GaiaxCompliance`) with an HTTP adapter, so OpenID4VCI can be a
   second adapter. Validity is read from `validFrom` and `validUntil`
   only.
-- **Next.** ROADMAP "Later" (TD-21).
+- **Next.** ROADMAP 1.13, Gaia-X beyond 0.8 (TD-21).
+  Assigned to 1.13 (maintainer, 2026-11-26).
 
 <a id="r-16"></a>
 ### R-16 A Gaia-X compliance credential cannot be revoked
@@ -417,16 +456,16 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   blocked.
 - **Next.** Block internal addresses with an operator allow list
   (F-01), and check `aud` and the access token before resolving a
-  caller (F-06). No release is named. The 0.13 freeze passed without
+  caller (F-06). The 0.13 freeze passed without
   it, so a block that is on by default would now be a behaviour change
-  to announce.
+  to announce. Assigned to 1.4 (maintainer, 2026-11-26).
 
 <a id="r-19"></a>
-### R-19 Consumer's data access tokens in the SQLite file and the management API
+### R-19 Consumer's data access tokens in the database and the management API
 
 - **What.** As consumer, the connector keeps each usable transfer's
-  data address, token included, in its SQLite file, and shows it on the
-  management API ([ADR 0014](adr/0014-transfers-as-consumer.md)). Push
+  data address, token included, in its database (a SQLite file before
+  1.3), and shows it on the management API ([ADR 0014](adr/0014-transfers-as-consumer.md)). Push
   transfers (1.1, [ADR 0027](adr/0027-push-transfers-and-object-storage.md))
   add two more tokens to the file, never to the management API:
   - as consumer, the push token our receiving route takes is in the
@@ -437,18 +476,18 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
     with the transfer and its data flow until the transfer ends
     (`transfer.data_address`, `data_flow.push_address`), so that a
     restart can still send the push.
-- **Why it matters.** Whoever reads the file or its backups, or holds
-  the API key, can fetch the data until the transfer ends or the token
+- **Why it matters.** Whoever reads the database or its backups, or
+  holds the API key, can fetch the data until the transfer ends or the token
   expires; with a push token, they can write into the consumer's push
   bucket (as consumer) or into the consumer's endpoint (as provider).
 - **Current state: Mitigated.** The token is removed when the transfer
   ends; tokens expire (`PORTITOR_DATA_TOKEN_SECONDS`, default one
   hour); only an HMAC of the API key is kept; DEPLOYING ("Security")
-  says to protect the volume and the key alike. The provider empties
+  says to protect the database, its backups and the key alike. The provider empties
   the push columns when the transfer ends; our push token works only
   while the transfer is `REQUESTED` or `STARTED`.
-- **Next.** Encrypting the token in the file is later work (ADR 0014);
-  no release named.
+- **Next.** Encrypting the token in the database is later work
+  (ADR 0014); no release named.
 
 <a id="r-20"></a>
 ### R-20 The issuer key is the root of trust of a dataspace
@@ -497,6 +536,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   connector never takes a version issued before the one in use
   ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)).
 - **Next.** Bundle expiry and bundle key rotation (TD-16).
+  Assigned to 1.8 (maintainer, 2026-11-26).
 
 <a id="r-23"></a>
 ### R-23 A wrong host clock gives wrong policy and token decisions
@@ -525,7 +565,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   [STABILITY](STABILITY.md#what-10-does-not-do) says it is not tested.
 - **Next.** ROADMAP 1.9, "Simpl-Open tests" (maintainer, 2026-11-21):
   a Simpl-Open agent run locally from its public code; check the facts
-  again first.
+  again first. Assigned to 1.9 (maintainer, 2026-11-26).
 
 <a id="r-25"></a>
 ### R-25 The name Portitor is not exclusive
@@ -579,6 +619,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   default 5 minutes each); tokens and presentations are not.
 - **Next.** What is left is the STS token and the presentation query of
   each request ([TD-07](#td-07)).
+  Assigned to 1.6 (maintainer, 2026-11-26).
 
 <a id="r-36"></a>
 ### R-36 The OpenTelemetry Rust crates are 0.x and change their API often
@@ -665,6 +706,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   listen address.
 - **Next.** A separate listen address for the STS (a new setting, which
   1.x can add), or a deployment check that the proxy does not route it.
+  Assigned to 1.6 (maintainer, 2026-11-26).
 
 <a id="r-43"></a>
 ### R-43 Negative credential constraints can be met with another credential
@@ -679,7 +721,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   with this value". It is not.
 - **Current state: Open.**
 - **Next.** Say in ADR 0019 and DEPLOYING that negative operators are
-  not deny lists.
+  not deny lists. Assigned to 1.4 (maintainer, 2026-11-26).
 
 <a id="r-44"></a>
 ### R-44 One slow holder delays every issuer delivery
@@ -694,6 +736,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   definition, rejections are not delivered, and retries wait longer
   each time.
 - **Next.** Send to different holders side by side, a few at a time.
+  Assigned to 1.6 (maintainer, 2026-11-26).
 
 <a id="r-45"></a>
 ### R-45 No request limit per partner
@@ -707,6 +750,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
 - **Current state: Open.** DEPLOYING says nothing about rate limits.
 - **Next.** Document rate limits per client at the reverse proxy; a
   limit in Portitor only if measurements show the need.
+  Assigned to 1.7 (maintainer, 2026-11-26).
 
 <a id="r-46"></a>
 ### R-46 The EDC Issuer Service names a request status address that is not found
@@ -770,6 +814,41 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   additive), in ROADMAP 1.4, with the data permit (maintainer,
   2026-11-24).
 
+<a id="r-49"></a>
+### R-49 Leases in the database depend on the hosts' clocks
+
+- **What.** From 1.3, processes that share a database take leases of
+  30 seconds on the work they run (outbox messages, pushes, uploads,
+  scheduled jobs, deliveries, a transfer's data plane step). Each
+  process writes and reads the end of a lease with its own clock, as
+  Eclipse EDC does ([ADR 0029](adr/0029-several-replicas.md)).
+- **Why it matters.** A host whose clock runs ahead sees the others'
+  leases end too early, and a host whose clock runs behind writes
+  leases that end too early for the others. Either way a process can
+  take over work that is still running: a message is sent twice, or a
+  push starts twice. A host whose clock runs ahead also writes leases
+  that last longer after its process died.
+- **Also.** Used token ids (TD-09) are deleted once their token has
+  expired by the clock of the process that deletes them: a host whose
+  clock runs ahead by some seconds deletes them that much early, and a
+  token replayed in that window to a process whose clock is right is
+  accepted again.
+- **Current state: Mitigated.** DEPLOYING asks for NTP on every host
+  ([Database](DEPLOYING.md#database)). Each lease is held by one claim
+  (the process id and a random id), and a process whose lease was taken
+  over, or that could not renew it for about 20 seconds (a database
+  failover), stops that work (a push, an upload, a message, a Gaia-X
+  run), so that it does not run beside the process that took it over;
+  what already went out may go out twice. Work done twice is safe in
+  most places: a partner that gets a DSP message twice answers with an
+  error and the state check goes on
+  ([ADR 0007](adr/0007-outbox-and-proof-of-delivery.md)); a data plane
+  step may run twice. Dataset harvest runs do not depend on clocks: a
+  run is written only if no other run was written since it read the
+  store. Related: [R-23](#r-23).
+- **Next.** None. Leases from the database's own clock (`now()`) would
+  remove it; not planned.
+
 ## Technical debt
 
 <a id="td-01"></a>
@@ -795,6 +874,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   Simpl-Open, Gaia-X and HealthData@EU authorities publish schemas,
   whether a DCAT catalogue of schema distributions can replace
   `latest.json`, and where the connector should keep them.
+  Assigned to 1.8 (maintainer, 2026-11-26).
 
 <a id="td-02"></a>
 ### TD-02 Who calls the data plane, and with which credentials
@@ -817,8 +897,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   DCP token or a presentation per request, OpenID4VP, Simpl-Open's mTLS
   at its Tier 2 gateway, what the EDC data plane does; whether the
   policy is checked again on each request; how this fits the consent
-  and gateway items under
-  [Later](ROADMAP.md#later-not-planned-for-a-release-yet).
+  and gateway items of [TD-69](#td-69).
 
 <a id="td-03"></a>
 ### TD-03 A provider in several dataspaces, each with its own rules
@@ -837,6 +916,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
 - **Next.** After 1.0, no release named: one connector with several
   dataspace profiles, behind its own ADR; trusted issuers by
   credential type (threat model finding F-08), which is additive.
+  Assigned to 1.9 (maintainer, 2026-11-26).
 
 <a id="td-04"></a>
 ### TD-04 User to system authentication and authorisation, governed per dataspace
@@ -900,28 +980,49 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   [TD-58](#td-58), found in a code review on 2026-11-26.
 - **Why it matters.** No horizontal scaling or failover; ARCHITECTURE
   principles 8 and 14 are not fully met.
-- **Current state: Open** (was Accepted, maintainer, 2026-11-12; planned
-  for 1.3 by the maintainer, 2026-11-26). Migrations are plain,
-  portable SQL; the store ports are ready. No PostgreSQL code exists.
-- **Next.** ROADMAP 1.3, "Several replicas and PostgreSQL": an ADR
-  "Several replicas", then the adapter and the items above.
+- **Current state: Open; in progress (1.3)** (was Accepted, maintainer,
+  2026-11-12; planned for 1.3 by the maintainer, 2026-11-26). Done on
+  the 1.3 branch: the database layer for both databases
+  (`crates/portitor-runtime/src/database.rs` and `database/`), and the
+  stores of all three images on it (`ConnectorStore` in the
+  connector's `store.rs`, `DatabaseStore` in the `store.rs` of the
+  identity and the issuer). A second process on a SQLite file refuses
+  to start (`database/sqlite_lease.rs`). Tested: every store test runs
+  on SQLite and on PostgreSQL in CI, and
+  `scenarios/two-party/run-replicas.sh` runs two processes of each
+  image on one PostgreSQL database. The status changes at the release.
+- **Next.** [ADR 0029](adr/0029-several-replicas.md) (Accepted
+  2026-11-26): PostgreSQL 16 to 19 behind the same synchronous ports,
+  with `tokio-postgres`; one SQL text; `SERIALIZABLE` transactions
+  tried again on a collision; a PostgreSQL migration list per
+  component under an advisory lock; one database per component
+  (`portitor_schema`); `PORTITOR_DATABASE_URL` and
+  `PORTITOR_DATABASE_PASSWORD_FILE`. A second process on a SQLite file
+  refuses to start. SQLite is deprecated ([TD-59](#td-59)). The items
+  above as in ADR 0029, decision 6. Done on the 1.3 branch; close at
+  the 1.3 release.
 
 <a id="td-09"></a>
 ### TD-09 Used token ids are kept in memory only
 
-- **What.** The `jti` replay list lives in memory, at most 100,000
-  entries (ADR 0015, ADR 0016), in each of the three images: the
+- **What.** In 1.2 the `jti` replay list lived in memory, at most
+  100,000 entries (ADR 0015, ADR 0016), in each of the three images: the
   connector (`crates/portitor-connector/src/auth/dcp.rs`), the identity
   and the issuer (`used_token_ids` in their `lib.rs`).
 - **Why it matters.** A restart forgets them; with two replicas, a
   token used on one is accepted again on the other.
-- **Current state: Open** (was Accepted, maintainer, 0.5 review: tokens
-  live at most an hour, so the window is small; planned for 1.3 by the
-  maintainer, 2026-11-26).
-- **Next.** ROADMAP 1.3: used token ids in the database, until the
-  token expires, in all three images. The maintainer named EDC's SQL
-  store of token ids as the model (2026-11-26); the ADR reads EDC's
-  code first.
+- **Current state: Open; in progress (1.3)** (was Accepted,
+  maintainer, 0.5 review: tokens live at most an hour, so the window is
+  small; planned for 1.3 by the maintainer, 2026-11-26). Done on the
+  1.3 branch: a table `used_token (token_id, expires_at)` in the
+  database of all three images, kept until the token expires
+  (`crates/portitor-runtime/src/used_tokens.rs`). One
+  `INSERT ... ON CONFLICT DO NOTHING` decides whether a token was used
+  before, as EDC's `edc_jti_validation` table does. Expired rows are
+  deleted before each insert. Test:
+  `of_two_replicas_only_one_accepts_a_token`. The status changes at
+  the release.
+- **Next.** Close at the 1.3 release.
 
 <a id="td-10"></a>
 ### TD-10 Transfers: no token renewal; whole sources and whole pushes only
@@ -947,7 +1048,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   401. So a long pull works, and a pull that must start again after the
   token's life does not.
 - **Next.** No release named. Token renewal waits for a DSP or Signaling
-  message for it.
+  message for it. Assigned to 1.7 (maintainer, 2026-11-26).
 
 <a id="td-11"></a>
 ### TD-11 Consumer refuses offers with credential constraints; the provider cannot suspend from the management API
@@ -1031,7 +1132,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   or CKAN; see also R-22.
 - **Current state: Open.** The `DatasetSource` port takes new adapters
   without other changes.
-- **Next.** ROADMAP "Later".
+- **Next.** ROADMAP 1.8. Assigned to 1.8 (maintainer, 2026-11-26).
 
 <a id="td-17"></a>
 ### TD-17 The data plane runs inside the connector process
@@ -1060,7 +1161,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   for the membership check). Steps 2 to 4 (signaling over
   HTTP and registration, the separate image, interop with an outside
   data plane): later in 1.x, or after Data Plane Signaling 1.0 is
-  released (R-06).
+  released (R-06). Assigned to 1.12 (maintainer, 2026-11-26).
 
 <a id="td-19"></a>
 ### TD-19 No TLS inside the services
@@ -1071,7 +1172,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   [ADR 0026](adr/0026-tls-termination.md)): TLS stays the operator's
   job.
 - **Next.** None. Optional TLS in the services would be additive; it is
-  not planned.
+  not planned. Assigned to 1.9 (maintainer, 2026-11-26).
 
 <a id="td-20"></a>
 ### TD-20 A holder must delete a revoked credential by hand after a reissue
@@ -1104,7 +1205,8 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   ([review](reviews/2026-11-18-specifications-and-code-quality.md),
   G2).
 - **Current state: Open.**
-- **Next.** ROADMAP "Later", Gaia-X beyond 0.8.
+- **Next.** ROADMAP 1.13, Gaia-X beyond 0.8.
+  Assigned to 1.13 (maintainer, 2026-11-26).
 
 <a id="td-22"></a>
 ### TD-22 Migrations run forward only; a rollback needs the backup
@@ -1143,7 +1245,8 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   gRPC need a collector in between.
 - **Current state: Open.** Kept out to save binary size and
   dependencies.
-- **Next.** Later; no release named.
+- **Next.** OTLP logs export, gRPC and compression.
+  Assigned to 1.14 (maintainer, 2026-11-26).
 
 <a id="td-31"></a>
 ### TD-31 No audit trail of management actions
@@ -1189,7 +1292,8 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   work is large, and it can be added later without a breaking change
   ([STABILITY](STABILITY.md#what-10-does-not-do); DEPLOYING, "Known
   limits").
-- **Next.** After 1.0; no release named.
+- **Next.** A negotiation started by the provider.
+  Assigned to 1.5 (maintainer, 2026-11-26).
 
 <a id="td-39"></a>
 ### TD-39 DEPLOYING is not in deployment order; the docs are long
@@ -1215,6 +1319,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   operations team; running the demo on a laptop belongs in TESTING.
 - **Next.** A Helm chart in a 1.x release (ROADMAP "Code quality in
   1.x"). Until then there is the Compose example.
+  Assigned to 1.4 (maintainer, 2026-11-26).
 
 <a id="td-40"></a>
 ### TD-40 Database calls block the async runtime
@@ -1237,7 +1342,12 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   second. The rule was not met. The lock and the disk limit
   negotiations (p99 92 ms at 260 per second), not pulls.
 - **Next.** Measure again in each release; look again if the p99 passes
-  100 ms, or with [TD-08](#td-08).
+  100 ms. From 1.3 the store ports stay synchronous on PostgreSQL too:
+  a call waits on its thread while a database thread drives the
+  connection, so the wait includes a network round trip
+  ([ADR 0029](adr/0029-several-replicas.md), decision 3). Asynchronous
+  store ports are in ROADMAP 1.12.
+  Assigned to 1.12 (maintainer, 2026-11-26).
 
 <a id="td-45"></a>
 ### TD-45 Each running pull holds about 0.8 MB of memory
@@ -1252,7 +1362,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
 - **Current state: Open.** DEPLOYING "Known limits" gives the numbers.
 - **Next.** Find where the memory goes (buffers of the proxy, of the
   HTTP client, of TLS) before changing anything; measure again in each
-  release.
+  release. Assigned to 1.7 (maintainer, 2026-11-26).
 
 <a id="td-46"></a>
 ### TD-46 The issuer keeps one set of claims per participant
@@ -1297,6 +1407,7 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   hdab-intermediary scenario, step 6, now expects `TERMINATED`.
 - **Next.** Move to Closed when 1.1 is released, after a run of the
   hdab-intermediary scenario on 1.1.
+  Assigned to 1.4 (maintainer, 2026-11-26).
 
 <a id="td-49"></a>
 ### TD-49 After a failed message, the two parties of a negotiation can stay in different states
@@ -1321,35 +1432,61 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
 <a id="td-50"></a>
 ### TD-50 Each connector process holds its own copy of the datasets
 
-- **What.** The read copy of the datasets (`DatasetCopy` in
-  `crates/portitor-connector/src/harvest/copy.rs`) is loaded into
+- **What.** In 1.2 the read copy of the datasets (`DatasetCopy` in
+  `crates/portitor-connector/src/harvest/copy.rs`) was loaded into
   memory at start and after this process's own harvest commit
   (`reload` in `crates/portitor-connector/src/harvest.rs`). Nothing
-  tells another process that the stored copy changed.
+  told another process that the stored copy changed.
 - **Why it matters.** With two containers, the one that did not run the
   harvest keeps offering a withdrawn dataset, with its old policy and
   source, until it restarts.
-- **Current state: Open** (code review, 2026-11-26). Fine with one
-  replica.
-- **Next.** ROADMAP 1.3: a copy generation number in the database that
-  each process checks, or the catalog read from the database for each
-  request, as EDC reads its catalog from the asset index for each
-  request (maintainer, 2026-11-26).
+- **Current state: Open; in progress (1.3)** (code review,
+  2026-11-26). Fine with one replica. Done on the 1.3 branch: the copy
+  in memory is gone. `StoredCatalog`
+  (`crates/portitor-connector/src/harvest/catalog.rs`) reads the
+  catalog, and each dataset that an offer, an agreement, a transfer
+  request or a data flow start needs, from the database on each
+  request (`DatasetStore::catalog` and `DatasetStore::dataset`,
+  `store/harvest.rs`). The catalog keeps its content and its order (the
+  bytes of the ids, also on PostgreSQL). A database that cannot be read
+  gives HTTP 500, not an empty catalog or a refusal. Test: a harvest
+  written through one store is in the next answer of another store on
+  the same PostgreSQL database
+  (`a_harvest_through_one_store_is_seen_through_another_on_postgres`).
+  The status changes at the release.
+- **Next.** ADR 0029, D4 (option B, maintainer, 2026-11-26): the
+  catalog, and each dataset the DSP code needs, is read from the
+  database on each request, as EDC reads its catalog from its asset
+  index. No copy in memory decides an answer. (The first
+  recommendation, a copy generation number, was not chosen.) Done on
+  the 1.3 branch.
 
 <a id="td-51"></a>
 ### TD-51 The issuer's signed status lists live in the memory of one process
 
-- **What.** The issuer signs its status lists at start and after a
-  revocation, in the process that revoked, and keeps them in memory
+- **What.** In 1.2 the issuer signed its status lists at start and
+  after a revocation, in the process that revoked, and kept them in
+  memory
   (`StatusLists`, `refresh` in
   `crates/portitor-issuer/src/status_lists.rs`).
 - **Why it matters.** Another issuer replica never serves the
   revocation, so a revoked credential still looks valid when its
   status list is read from that replica.
-- **Current state: Open** (code review, 2026-11-26). Fine with one
-  replica.
-- **Next.** ROADMAP 1.3: a revocation counter in the database; a
-  process signs its lists again when the counter has moved.
+- **Current state: Open; in progress (1.3)** (code review,
+  2026-11-26). Fine with one replica. Done on the 1.3 branch (ADR 0029,
+  D5): the process that revokes signs the new status list in the same
+  transaction and stores it in the database (table `status_list`, with
+  the id of the key that signed it); every replica serves it from
+  there, as EDC IssuerService does. At start a process signs a list
+  only when none is stored or another key signed it (a key rotation;
+  `sign_status_list_if_needed` in
+  `crates/portitor-issuer/src/store.rs`). Tests:
+  `a_status_list_is_stored_with_each_revocation`,
+  `two_replicas_share_the_outbox_and_the_status_lists` and
+  `two_replicas_on_postgres_share_the_outbox_and_the_lists`. (The
+  earlier plan, a revocation counter, was not chosen.) The status
+  changes at the release.
+- **Next.** Close at the 1.3 release.
 
 <a id="td-52"></a>
 ### TD-52 A cut of a running download or push reaches only its own process
@@ -1361,11 +1498,19 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
   that lands on one container does not cut a download that runs on the
   other, and a start again on another container begins a second push
   of the same transfer.
-- **Current state: Open** (code review, 2026-11-26). Fine with one
-  replica.
-- **Next.** ROADMAP 1.3: a watchdog in each running download and push
-  reads the flow's state from the database again, and stops when it
-  has changed.
+- **Current state: Open; in progress (1.3)** (code review,
+  2026-11-26). Fine with one replica. Done on the 1.3 branch: a
+  watchdog next to each running download and push reads its flow's
+  state every 5 seconds and cuts it once the flow is suspended,
+  terminated or gone (`state_watchdog` in
+  `crates/portitor-dataplane/src/download.rs`); the switches of
+  `RunningFlows` stay, so a cut in the same process is still immediate.
+  Tested with two replicas on one PostgreSQL database
+  (`a_suspension_on_another_replica_cuts_a_running_download`). Left: a
+  suspension and a start again on another container within the same
+  5 seconds are not seen (the flow reads `STARTED` again); a counter of
+  state changes on the flow would close it.
+- **Next.** Close at the 1.3 release.
 
 <a id="td-53"></a>
 ### TD-53 The DSP outbox is taken up again only at start, and retried in memory
@@ -1377,11 +1522,22 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
 - **Why it matters.** With two containers, the messages of a container
   that died wait until some container restarts, and a container that
   starts sends again messages that another container is still sending.
-- **Current state: Open** (code review, 2026-11-26). Fine with one
-  replica: at start, no other process sends.
-- **Next.** ROADMAP 1.3: lease columns on the outbox and a loop in each
-  process that takes the due messages nobody holds a lease on, as EDC
-  does with `nextNotLeased` (maintainer, 2026-11-26).
+- **Current state: Open; in progress (1.3)** (code review,
+  2026-11-26). Fine with one replica: at start, no other process
+  sends. Done on the 1.3 branch: each saved message is sent under a
+  lease in the database (`lease` table, `portitor_runtime::leases`;
+  id: the process id and the SHA-256 of the message's URL and body, so
+  a counter-party's message racing ours still lets our next one go out
+  at once, ADR 0007). 30 seconds, renewed while it is sent, ended once
+  the outcome is recorded; left to end when the recording failed, so it
+  is sent again about 30 s later. A loop in every process
+  (`Negotiator::schedule_outbox`, every second) takes up the pending
+  messages nobody leases. Tested with two replicas on one PostgreSQL
+  database (`pending_messages_are_sent_once_by_two_replicas`). The loop
+  reads every pending message of the four process tables each round,
+  not only the free ones as EDC's `nextNotLeased` does; fine while few
+  messages are pending at once.
+- **Next.** Close at the 1.3 release.
 
 <a id="td-54"></a>
 ### TD-54 Pushes are resumed only at start; one push or upload per transfer is guarded in one process
@@ -1397,10 +1553,22 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
 - **Why it matters.** With two containers, the push of a container that
   died waits for a restart, and two containers can push the same
   transfer at once.
-- **Current state: Open** (code review, 2026-11-26). Fine with one
-  replica.
-- **Next.** ROADMAP 1.3: a lease per running push in the database,
-  taken by a loop like the outbox's ([TD-53](#td-53)).
+- **Current state: Open; in progress (1.3)** (code review,
+  2026-11-26). Fine with one replica. Done on the 1.3 branch: a push
+  runs under the lease `push` of its transfer (`PUSH_LEASE` in
+  `crates/portitor-connector/src/transfer.rs`), renewed while it runs
+  and ended once its end is recorded; the loop of TD-53 starts the
+  pushes of `STARTED` push transfers that nobody leases. A push or an
+  upload whose lease is lost stops (`HeldLease::lost` in
+  `portitor_runtime::leases`), and `watch_if_idle` stays as a cheap
+  second guard in each process. An upload as consumer runs under the
+  lease `upload`; a second one gets 409 on any container, and 503 when
+  the database does not answer. The limit of 8 uploads at once stays
+  per process (it bounds that process's memory). Tested with two
+  replicas on one PostgreSQL database
+  (`a_push_left_by_a_replica_that_stopped_is_taken_over_once`,
+  `one_upload_per_transfer_among_replicas`).
+- **Next.** Close at the 1.3 release.
 
 <a id="td-55"></a>
 ### TD-55 Each connector process holds its own copy of the rules bundle and its own cache folder
@@ -1411,11 +1579,22 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
 - **Why it matters.** With two containers, each downloads and checks
   the bundle on its own schedule, so for a while they can check
   datasets and messages against different rules.
-- **Current state: Open** (code review, 2026-11-26). Fine with one
-  replica.
-- **Next.** ROADMAP 1.3: the version in use kept in the database, and
-  each process moves to it; the ADR decides whether the cache folder
-  stays per container.
+- **Current state: Open; in progress (1.3)** (code review,
+  2026-11-26). Fine with one replica. Done on the 1.3 branch: the
+  version in use is a row of the connector's database (`bundle_in_use`,
+  `crates/portitor-connector/src/store/bundle_in_use.rs`). The process
+  that takes a newer version records it there in one transaction (a
+  version issued before the recorded one is never recorded, except a
+  fixed `PORTITOR_BUNDLE_VERSION`). Every process takes the recorded
+  version at start, before it serves, and looks at the record every
+  5 seconds (`BundleHarvester::follow`), moving to it from its own cache
+  folder or by downloading it. So another process checks with the
+  version before for at most 5 seconds and the time it takes to load
+  the new one. The rules themselves stay in each process's memory, one
+  set per version. The status changes at the release.
+- **Next.** ADR 0029 (S3): the bundle version in use moves to the
+  database, and each process moves to it. The cache folder stays per
+  container. Done on the 1.3 branch.
 
 <a id="td-56"></a>
 ### TD-56 Scheduled jobs run once in every container
@@ -1428,23 +1607,45 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
 - **Why it matters.** With two containers, each job runs twice; two
   harvests can pick the same job id; a starting identity marks as
   failed a Gaia-X run that another replica is still running.
-- **Current state: Open** (code review, 2026-11-26). Fine with one
-  replica.
-- **Next.** ROADMAP 1.3: a lease in the database per kind of job, and
-  ids from a database sequence.
+- **Current state: Open; in progress (1.3)** (code review,
+  2026-11-26). Fine with one replica.
+- **Done on the 1.3 branch.** The scheduled dataset harvest runs under
+  the lease `job`/`dataset_harvest`, renewed during the run and kept
+  after it until the next interval, so one run per interval among the
+  processes (`two_replicas_run_one_scheduled_harvest_per_interval`).
+  Harvest job ids come from the database (`INSERT ... RETURNING id`;
+  `runs_of_two_replicas_get_different_ids`). A Gaia-X run, scheduled or
+  started by the operator, needs the lease `job`/`gaiax_compliance`; the
+  start no longer marks every `RUNNING` run as failed: the next run that
+  takes the lease marks those left by a process that stopped
+  (`a_run_waits_for_the_lease_of_another_process`). Left: the retry
+  pauses after a failed Gaia-X run are counted per process, so with two
+  replicas a failing service is asked about twice as often; the bundle
+  harvest still runs in each container (its cache is per container,
+  TD-55); the start harvest runs in each container.
+- **Next.** Close at the 1.3 release.
 
 <a id="td-57"></a>
 ### TD-57 The issuer's credential outbox does not claim a delivery before it sends it
 
-- **What.** The issuer reads the due deliveries and sends them
+- **What.** In 1.2 the issuer read the due deliveries and sent them
   (`send_due_at` in `crates/portitor-issuer/src/delivery.rs`) without
   marking them as taken.
 - **Why it matters.** With two issuer replicas, both send the same
   credential to the holder.
-- **Current state: Open** (code review, 2026-11-26). Fine with one
-  replica.
-- **Next.** ROADMAP 1.3: a lease on each delivery, as for the DSP
-  outbox ([TD-53](#td-53)).
+- **Current state: Open; in progress (1.3)** (code review,
+  2026-11-26). Fine with one replica. Done on the 1.3 branch: a process
+  claims a delivery before it sends it, with one compare-and-swap
+  update of the outbox row (columns `lease_holder` and `lease_until`,
+  30 seconds; `claim_due_delivery` in
+  `crates/portitor-issuer/src/store.rs`). The lease ends when the try
+  is recorded; a process that stops leaves it to run out, then another
+  process takes the delivery over. A try that outlasts its lease may be
+  sent twice, which the holder takes (same `issuerPid`). Tests:
+  `a_delivery_is_held_by_one_process_until_its_lease_ends` and
+  `two_replicas_on_postgres_share_the_outbox_and_the_lists`. The status
+  changes at the release.
+- **Next.** Close at the 1.3 release.
 
 <a id="td-58"></a>
 ### TD-58 The DID document is built at start
@@ -1455,11 +1656,247 @@ debts are not closed (Open 40, Mitigated 21, Accepted 14); 12 risks and
 - **Why it matters.** During a rolling key rotation, the replicas not
   yet restarted show the old document, so a partner can read a document
   without the new key.
-- **Current state: Open** (code review, 2026-11-26). Fine with one
-  replica.
-- **Next.** ROADMAP 1.3: the ADR decides whether the document is read
-  from shared storage or the steps of
-  [OPERATING, "Rotating a key"](OPERATING.md#rotating-a-key) are enough.
+- **Current state: Open; in progress (1.3)** (code review,
+  2026-11-26). Fine with one replica. Done on the 1.3 branch, in the
+  docs only (ADR 0029, D7): the DID document is still built at start.
+- **Next.** Close at the 1.3 release. No code: a two-step rolling
+  rotation in
+  [OPERATING](OPERATING.md#rotating-a-key-with-several-replicas): first
+  list the new public key as retired on every replica, then switch the
+  key file and list the old public key as retired; a rolling restart
+  after each step. The start checks already allow the first step.
+
+<a id="td-59"></a>
+### TD-59 SQLite is deprecated; no tool yet to copy a SQLite file into PostgreSQL
+
+- **What.** From 1.3 each image runs on PostgreSQL or on a SQLite file
+  ([ADR 0029](adr/0029-several-replicas.md)). SQLite is deprecated and
+  removed in 2.0, with `PORTITOR_DB_FILE`. Until then each image keeps
+  two migration lists, one per database, and every store test runs on
+  both.
+- **Why it matters.** A deployment on SQLite cannot move to PostgreSQL
+  without losing its state: no tool copies the data yet
+  ([OPERATING](OPERATING.md#from-sqlite-to-postgresql)). Two schemas
+  can drift apart.
+- **Current state: Accepted** (maintainer, 2026-11-26: deprecated in
+  1.3, not removed, because [STABILITY](STABILITY.md#database) keeps
+  `PORTITOR_DB_FILE` for 1.x). A test compares the two schemas.
+- **Next.** The copy tool in 1.4 (maintainer, 2026-11-26); SQLite and
+  `PORTITOR_DB_FILE` removed in 2.0 (ROADMAP "For 2.0").
+
+<a id="td-60"></a>
+### TD-60 A repeated first contract request starts a second negotiation
+
+- **What.** If the provider's answer to a first contract request is
+  lost, the consumer's outbox sends the request again without a
+  `providerPid`, and the provider starts a second negotiation
+  ([spike](spikes/1.x-negotiation-state-machine.md), G1).
+- **Why it matters.** The first negotiation is an orphan: it sends an
+  agreement the consumer refuses, and the database keeps negotiations
+  and agreements nobody uses. No data flows.
+- **Current state: Open.** DSP has no idempotency rule for contract
+  requests; EDC answers a repeated first request with the negotiation
+  it already started, found by consumer pid and counter-party.
+- **Next.** The same lookup, with an index on
+  `(counter_party, consumer_pid)`, as for transfers since 0.12
+  ([TD-34](#td-34)). Small. Assigned to 1.4 (maintainer, 2026-11-26).
+
+<a id="td-61"></a>
+### TD-61 The outbox's "it arrived before" check compares the state only
+
+- **What.** When a message is refused, the outbox asks the other party
+  for its state and counts the message as delivered if the state is the
+  one it leads to. It does not compare the process ids in the answer
+  ([spike](spikes/1.x-negotiation-state-machine.md), G2).
+- **Why it matters.** With [TD-60](#td-60), an orphan negotiation can
+  count its agreement as delivered.
+- **Current state: Open.**
+- **Next.** Also compare `providerPid` and `consumerPid`. Small, in
+  the same pull request as TD-60. Assigned to 1.4 (maintainer,
+  2026-11-26).
+
+<a id="td-62"></a>
+### TD-62 Why and when a negotiation ended is not stored
+
+- **What.** The `code` and `reason` of a termination, sent or received,
+  are only in the log; negotiations have no creation time and no time
+  of the last change ([spike](spikes/1.x-negotiation-state-machine.md), G5 and G6).
+- **Why it matters.** An operator cannot see why a negotiation ended,
+  find negotiations stuck for days, or remove terminated ones by age.
+  EDC keeps `error_detail`, `created_at`, `updated_at` and
+  `state_timestamp`.
+- **Current state: Open.**
+- **Next.** One migration: the termination's `code` and `reason`, shown
+  in the management API, and two time columns set by the adapter.
+  Assigned to 1.5 (maintainer, 2026-11-26).
+
+<a id="td-63"></a>
+### TD-63 Source files above 1,000 lines
+
+- **What.** `auth/dcp.rs`, the issuer's and the identity's `store.rs`,
+  `dcp/bundle.rs` and `runtime/http.rs` are above 1,000 lines, tests
+  not counted ([2026-11-18 review](reviews/2026-11-18-specifications-and-code-quality.md)).
+  The 1.3 readability review (2026-11-26) adds two: the connector's
+  `lib.rs` (about 1,100 lines) and the issuer's `store.rs`, which grew
+  from about 940 to about 1,260 lines with PostgreSQL. It also found
+  two long functions, to split with them: `BundleHarvester::start`
+  (`crates/portitor-connector/src/bundle_harvest.rs`, about 90 lines)
+  and `Pool::migrate`
+  (`crates/portitor-runtime/src/database/postgres.rs`, one block of
+  about 60 lines).
+- **Why it matters.** Long files and functions are hard to read for the
+  maintainer ([R-01](#r-01)).
+- **Current state: Open.**
+- **Next.** Split each by topic, no change of behaviour. Assigned to
+  1.5 (maintainer, 2026-11-26).
+
+<a id="td-64"></a>
+### TD-64 Too many type parameters; macros that write types
+
+- **What.** Services carry many type parameters (today
+  `ProviderService<S, D, C, E>`), and some macros write types
+  ([2026-11-18 review](reviews/2026-11-18-specifications-and-code-quality.md)).
+- **Why it matters.** Both make the code hard to read ([R-01](#r-01)).
+- **Current state: Open.**
+- **Next.** Fewer type parameters; each macro that writes types
+  replaced by plain code or explained with its output in RUST-IDIOMS.
+  Assigned to 1.6 (maintainer, 2026-11-26).
+
+<a id="td-65"></a>
+### TD-65 `Negotiator` does more than negotiate
+
+- **What.** `Negotiator` runs negotiations, transfers and the harvest
+  ([2026-11-18 review](reviews/2026-11-18-specifications-and-code-quality.md)).
+- **Why it matters.** The name misleads a reader ([R-01](#r-01)).
+- **Current state: Open.**
+- **Next.** A name that fits, or a split. Assigned to 1.7 (maintainer,
+  2026-11-26).
+
+<a id="td-66"></a>
+### TD-66 A data plane step runs inside the request that asks for it
+
+- **What.** When the connector starts, suspends or ends a flow, it
+  calls the data plane inside the request and waits for it. The
+  "fully asynchronous data plane step" option of 2026-11-26 is not
+  built: the connector would record the step and a worker would run it;
+  a refusal would become a termination of the transfer.
+- **Why it matters.** [ADR 0028](adr/0028-separate-pluggable-data-plane.md)'s
+  data plane over HTTP (step 2) waits on the network, which a request
+  should not do.
+- **Current state: Open.**
+- **Next.** Built with steps 2 to 4 of ADR 0028 ([TD-17](#td-17)).
+  Assigned to 1.12 (maintainer, 2026-11-26).
+
+<a id="td-67"></a>
+### TD-67 Datasets are harvested from one kind of source only
+
+- **What.** The harvest reads one datasets file
+  ([ADR 0020](adr/0020-dataset-harvest.md)); a DCAT-AP endpoint or
+  CKAN cannot be a source.
+- **Why it matters.** A data holder with a catalogue must convert it
+  first.
+- **Current state: Open.** Which catalogues to support is to be decided
+  (maintainer, 2026-11-14).
+- **Next.** Assigned to 1.8, the EHDS data holder release (maintainer,
+  2026-11-26).
+
+<a id="td-68"></a>
+### TD-68 No dataspace-wide registry or federated catalogue
+
+- **What.** No component pulls the participants' DSP catalogs, checks
+  them with the bundle and offers search.
+- **Why it matters.** A consumer must know each provider to find data.
+- **Current state: Open.** Only if needed (maintainer, 2026-11-14),
+  with its own ADR.
+- **Next.** Assigned to 1.8, only if that release needs it (maintainer,
+  2026-11-26).
+
+<a id="td-69"></a>
+### TD-69 No Simpl-Open features beyond the protocols
+
+- **What.** Simpl-Open offers mutual TLS between participants, consent
+  enforcement and a configurable API gateway; none is part of DSP, DCP
+  or Data Plane Signaling, and Portitor has none
+  ([ADR 0017](adr/0017-simpl-open.md)).
+- **Why it matters.** They add security, and consent is needed for
+  health data.
+- **Current state: Open.**
+- **Next.** Consent first, with [TD-15](#td-15) in 1.7; an ADR on
+  mutual TLS and the gateway in 1.9 with the Simpl-Open tests
+  (maintainer, 2026-11-26).
+
+<a id="td-70"></a>
+### TD-70 Four loops that tick each write their own timer
+
+- **What.** The connector's background loops that run every few
+  seconds or minutes (the outbox loop in `lib.rs`, the sweep of
+  recorded data plane steps in `transfer.rs`, the dataset harvest in
+  `harvest.rs`, the bundle check in `bundle_harvest.rs`) each build the
+  same `tokio::time::interval_at` with `MissedTickBehavior::Skip`
+  inside `spawn_supervised` (1.3 readability review, 2026-11-26).
+- **Why it matters.** The same ten lines four times; a reader must
+  check each copy to see that they behave alike ([R-01](#r-01)).
+- **Current state: Open.**
+- **Next.** One helper, `spawn_every(name, every, round)`, in
+  `portitor-runtime` next to `spawn_supervised`, used by the four
+  loops; no change of behaviour. Small: suggested for 1.4, next to the
+  Helm chart (to be confirmed by the maintainer).
+
+<a id="td-71"></a>
+### TD-71 The identity and the issuer each wrap the database the same way
+
+- **What.** `DatabaseStore` in `crates/portitor-identity/src/store.rs`
+  and in `crates/portitor-issuer/src/store.rs` are the same wrapper
+  around `Arc<Database>`: the same `new`, `open`, `in_memory`, `db()`,
+  and the same `UsedTokenStore` and `LeaseStore` impls that only pass
+  the call on (1.3 readability review, 2026-11-26).
+- **Why it matters.** Two copies to keep alike, in two files that are
+  long already ([TD-63](#td-63), [R-01](#r-01)).
+- **Current state: Open.**
+- **Next.** One shared piece in `portitor-runtime` (the wrapper, or the
+  two pass-through impls), used by both stores; no change of
+  behaviour. Small: suggested for 1.4 (to be confirmed by the
+  maintainer).
+
+<a id="td-72"></a>
+### TD-72 Two error types for the database, converted both ways
+
+- **What.** The database returns `DbError`
+  (`crates/portitor-runtime/src/database.rs`); each store port returns
+  its `StoreError`. A store converts `DbError` to `StoreError` (with
+  `From`, or `map_err(err)` in the connector), and inside a transaction
+  it converts its own `StoreError` back to `DbError`
+  (`map_err(|e| DbError::new(e.0))`), because the transaction's closure
+  must return `DbError` so that a collision on PostgreSQL is seen and
+  the transaction run again (1.3 readability review, 2026-11-26).
+- **Why it matters.** A reader must follow the conversions to see which
+  error comes out, and the SQLSTATE code of a `DbError` is lost in a
+  `StoreError` ([R-01](#r-01)).
+- **Current state: Open.**
+- **Next.** One error type that keeps the code, or a transaction that
+  takes the store's error type; no change of behaviour. It touches
+  every store file, so it is done with their split in 1.5
+  ([TD-63](#td-63)) and is not a large item of its own: suggested for
+  1.5 (to be confirmed by the maintainer).
+
+<a id="td-73"></a>
+### TD-73 A negotiation step is about 3.5 ms slower on SQLite in 1.3
+
+- **What.** The 1.3 benchmark ([BENCHMARKS](BENCHMARKS.md#13-compared-with-12-on-sqlite-and-on-postgresql),
+  1.2.0 against the 1.3 branch on one machine, 2026-11-27) shows a new
+  negotiation at p50 14.7 ms on SQLite against 11.3 ms in 1.2 (+30 % to
+  +46 % over three rounds), and filling 2,000 negotiations 38 % slower.
+  The cause is not measured yet; the likely one is the extra writes of
+  1.3 for each message (the outbox claim and the lease rows, for several
+  replicas).
+- **Why it matters.** It is a few milliseconds for each step, on a
+  storage that is deprecated; data throughput and the TD-40 check are
+  unchanged. On PostgreSQL the same steps take about twice as long
+  again, because each write is a network round trip.
+- **Current state: Open.**
+- **Next.** Profile one negotiation on both databases and count the
+  statements and transactions per message; remove writes that are not
+  needed. Suggested for 1.4 (to be confirmed by the maintainer).
 
 ## Closed
 

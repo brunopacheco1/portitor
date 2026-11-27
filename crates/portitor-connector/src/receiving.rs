@@ -25,16 +25,24 @@
 //! the body is read. These limits apply instead:
 //!
 //! - One upload at a time per transfer: a second request while one runs
-//!   gets 409.
-//! - At most [`MAX_CONCURRENT_UPLOADS`] uploads at once, for all
-//!   transfers; one more gets 503, as the public port answers when it is
-//!   too busy. Each upload holds up to one part
+//!   gets 409, also when the upload runs in another replica that shares
+//!   the database. The upload holds a lease in the database
+//!   ([`UPLOAD_LEASE`], `portitor_runtime::leases`), renewed while it
+//!   runs and ended with it; the lease of a replica that stopped ends on
+//!   its own, 30 seconds later at most (TD-54). When the database cannot
+//!   say whether one runs, the answer is 503: try again. An upload whose
+//!   lease is lost (the database did not answer until it ended) stops,
+//!   with 503 and nothing stored, so that it never runs beside another
+//!   upload of the same transfer.
+//! - At most [`MAX_CONCURRENT_UPLOADS`] uploads at once in each replica,
+//!   for all transfers; one more gets 503, as the public port answers
+//!   when it is too busy. This bounds the memory of the replica, so it is
+//!   counted in the replica. Each upload holds up to one part
 //!   ([`portitor_dataplane::object_storage::PART_BYTES`], 8 MiB) in memory.
 //! - A body that sends nothing for [`portitor_dataplane::push::IDLE_TIMEOUT`] is
 //!   treated as one that broke off: the upload is aborted, the answer is
 //!   400 and the audit line says `cut`.
 
-use std::collections::BTreeSet;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -55,6 +63,7 @@ use portitor_dsp::transfer::{
     DataAddress, DataAddressType, EndpointProperty, HTTP_PUSH_ENDPOINT_TYPE, TransferState,
 };
 use portitor_runtime::http::bearer_token_in;
+use portitor_runtime::leases::{Claim, HeldLease, Leases};
 
 use crate::Config;
 use crate::consumer_transfer::TransferConsumer;
@@ -72,6 +81,10 @@ pub const PUSH_PATH: &str = "/push";
 /// 64 MiB in all.
 pub const MAX_CONCURRENT_UPLOADS: usize = 8;
 
+/// The kind of the lease on a running upload in the database; its id is
+/// the transfer's consumer pid (TD-54).
+pub(crate) const UPLOAD_LEASE: &str = "upload";
+
 /// What is kept of a push transfer as consumer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PushReceipt {
@@ -83,8 +96,8 @@ pub struct PushReceipt {
     pub object_key: Option<String>,
 }
 
-/// Where push receipts are kept: the `SQLite` file
-/// (`crate::store::SqliteNegotiations`).
+/// Where push receipts are kept: the connector's database
+/// (`crate::store::ConnectorStore`).
 pub trait PushReceipts {
     /// Keeps `token_hash` for transfer `consumer_pid` until `expires_at`,
     /// in place of an older one. The object key, if any, stays.
@@ -182,11 +195,15 @@ pub(crate) struct Receiver {
     uploads: Uploads,
 }
 
-/// The uploads that run now, by consumer pid.
+/// The uploads that run now: how many run in this replica, and their
+/// leases in the database.
 struct Uploads {
-    running: Mutex<BTreeSet<String>>,
-    /// The most that may run at once.
+    /// How many run in this replica.
+    running: Mutex<usize>,
+    /// The most that may run at once in this replica.
     max: usize,
+    /// One upload per transfer, among all replicas.
+    leases: Leases,
 }
 
 /// Why an upload cannot begin now.
@@ -196,48 +213,75 @@ enum Busy {
     SameTransfer,
     /// [`Uploads::max`] run: 503.
     Full,
+    /// The database could not say whether one runs: 503.
+    Unknown,
 }
 
-/// Held while one upload runs; dropping it ends the upload's turn.
+/// Held while one upload runs; dropping it ends the upload's turn and
+/// its lease.
 struct UploadTurn<'a> {
     uploads: &'a Uploads,
-    consumer_pid: String,
+    /// `None` only once dropped.
+    lease: Option<HeldLease>,
 }
 
 impl Uploads {
-    fn new(max: usize) -> Self {
+    fn new(max: usize, leases: Leases) -> Self {
         Self {
-            running: Mutex::new(BTreeSet::new()),
+            running: Mutex::new(0),
             max,
+            leases,
         }
     }
 
     /// The turn of an upload for transfer `consumer_pid`, if it may run
     /// now.
     fn begin(&self, consumer_pid: &str) -> Result<UploadTurn<'_>, Busy> {
-        let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
-        if running.contains(consumer_pid) {
-            return Err(Busy::SameTransfer);
+        // the count is only this replica's memory: taken first, so that
+        // the lock is not held while the database answers
+        {
+            let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
+            if *running >= self.max {
+                return Err(Busy::Full);
+            }
+            *running += 1;
         }
-        if running.len() >= self.max {
-            return Err(Busy::Full);
-        }
-        running.insert(consumer_pid.to_owned());
-        Ok(UploadTurn {
+        // from here on, dropping the turn gives the count back
+        let mut turn = UploadTurn {
             uploads: self,
-            consumer_pid: consumer_pid.to_owned(),
-        })
+            lease: None,
+        };
+        // the database decides, for every replica
+        match self.leases.claim(UPLOAD_LEASE, consumer_pid) {
+            Claim::Taken(lease) => turn.lease = Some(lease),
+            Claim::HeldByOther => return Err(Busy::SameTransfer),
+            Claim::Failed => return Err(Busy::Unknown),
+        }
+        Ok(turn)
+    }
+}
+
+impl UploadTurn<'_> {
+    /// Finishes when the upload's lease is lost.
+    async fn lost(&self) {
+        match &self.lease {
+            Some(lease) => lease.lost().wait().await,
+            None => std::future::pending().await,
+        }
     }
 }
 
 impl Drop for UploadTurn<'_> {
     fn drop(&mut self) {
+        if let Some(lease) = self.lease.take() {
+            lease.release();
+        }
         let mut running = self
             .uploads
             .running
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        running.remove(&self.consumer_pid);
+        *running = running.saturating_sub(1);
     }
 }
 
@@ -301,6 +345,7 @@ pub(crate) fn consumer_transfers(
         Arc::clone(&transfers),
         ports.push_receipts.clone(),
         ports.object_storage.clone(),
+        ports.leases.clone(),
     );
     (transfers, routes)
 }
@@ -311,6 +356,7 @@ fn routes(
     transfers: Arc<TransferConsumer>,
     receipts: AnyPushReceipts,
     storage: Option<Arc<ObjectStorage>>,
+    leases: Leases,
 ) -> Router {
     let Some(storage) = storage else {
         return Router::new();
@@ -323,7 +369,7 @@ fn routes(
         receipts,
         storage,
         bucket,
-        uploads: Uploads::new(MAX_CONCURRENT_UPLOADS),
+        uploads: Uploads::new(MAX_CONCURRENT_UPLOADS, leases),
     });
     Router::new()
         .route(
@@ -352,10 +398,12 @@ pub(crate) async fn receive(
         Err(Refused::Unauthorized) => return unauthorized(),
         Err(Refused::Store) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    let _turn = match receiver.uploads.begin(&consumer_pid) {
+    let turn = match receiver.uploads.begin(&consumer_pid) {
         Ok(turn) => turn,
         Err(Busy::SameTransfer) => return StatusCode::CONFLICT.into_response(),
-        Err(Busy::Full) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Err(Busy::Full | Busy::Unknown) => {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
     };
     let content_type = headers
         .get(header::CONTENT_TYPE)
@@ -372,12 +420,24 @@ pub(crate) async fn receive(
         Body::new(counted),
         portitor_dataplane::push::IDLE_TIMEOUT,
     ));
-    let stored = receiver
+    let upload = receiver
         .storage
-        .upload(&receiver.bucket, &consumer_pid, content_type, body)
-        .await;
+        .upload(&receiver.bucket, &consumer_pid, content_type, body);
+    // a lost lease stops the upload: dropping it stops reading the body
+    // and leaves the object as it was (module doc)
+    let stored = tokio::select! {
+        stored = upload => Some(stored),
+        () = turn.lost() => None,
+    };
     let (outcome, response) = match stored {
-        Ok(_) => match receiver
+        None => {
+            tracing::warn!(flow = %consumer_pid, "push received: the upload's lease was lost; it stopped");
+            (
+                Outcome::Cut,
+                StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            )
+        }
+        Some(Ok(_)) => match receiver
             .receipts
             .0
             .set_object_key(&consumer_pid, &consumer_pid)
@@ -389,8 +449,8 @@ pub(crate) async fn receive(
             ),
         },
         // the sender's body broke off: nothing was stored
-        Err(StorageError::Body(_)) => (Outcome::Cut, StatusCode::BAD_REQUEST.into_response()),
-        Err(error) => {
+        Some(Err(StorageError::Body(_))) => (Outcome::Cut, StatusCode::BAD_REQUEST.into_response()),
+        Some(Err(error)) => {
             // the error names a status or a cause, never a key
             tracing::warn!(flow = %consumer_pid, %error, "push received: the object storage failed");
             (Outcome::Failed, StatusCode::BAD_GATEWAY.into_response())
@@ -471,15 +531,88 @@ impl hyper::body::Body for StopsWhenIdle {
 mod tests {
     use super::*;
 
+    /// The leases of the replica `holder` in `store`.
+    fn leases(store: &crate::store::ConnectorStore, holder: &str) -> Leases {
+        let lease_store =
+            Arc::clone(store.database()) as Arc<dyn portitor_runtime::leases::LeaseStore>;
+        Leases::new(lease_store, holder)
+    }
+
     #[test]
     fn one_upload_per_transfer_and_a_few_in_all() {
-        let uploads = Uploads::new(2);
+        let store = crate::store::ConnectorStore::in_memory().unwrap();
+        let uploads = Uploads::new(2, leases(&store, "p-1"));
         let first = uploads.begin("t1").unwrap();
         assert_eq!(uploads.begin("t1").err(), Some(Busy::SameTransfer));
         let _second = uploads.begin("t2").unwrap();
         assert_eq!(uploads.begin("t3").err(), Some(Busy::Full));
         drop(first);
         assert!(uploads.begin("t1").is_ok(), "its turn ended");
+    }
+
+    /// The leases of a database that does not answer.
+    struct Down;
+
+    impl portitor_runtime::leases::LeaseStore for Down {
+        fn claim(&self, _: &str, _: &str, _: &str, _: u64, _: u64) -> Result<bool, String> {
+            Err("down".to_owned())
+        }
+        fn extend(&self, _: &str, _: &str, _: &str, _: u64) -> Result<bool, String> {
+            Err("down".to_owned())
+        }
+        fn release(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+            Err("down".to_owned())
+        }
+        fn held(&self, _: &str, _: u64) -> Result<Vec<String>, String> {
+            Err("down".to_owned())
+        }
+        fn forget_ended(&self, _: u64) -> Result<u64, String> {
+            Err("down".to_owned())
+        }
+    }
+
+    /// A database that does not answer is not "another upload runs"
+    /// (409), but "try again" (503); the turn is given back.
+    #[test]
+    fn a_database_outage_is_not_a_conflict() {
+        let uploads = Uploads::new(1, Leases::new(Arc::new(Down), "p-1"));
+        assert_eq!(uploads.begin("t1").err(), Some(Busy::Unknown));
+        assert_eq!(uploads.begin("t2").err(), Some(Busy::Unknown), "not Full");
+    }
+
+    /// Two replicas on one PostgreSQL database: an upload
+    /// that runs on one is refused on the other (409), until it ends; the
+    /// upload of a replica that stopped holds the transfer only until its
+    /// lease ends (TD-54).
+    #[test]
+    fn one_upload_per_transfer_among_replicas() {
+        let Some([one, two]) = crate::store::two_replicas() else {
+            return;
+        };
+        let first = Uploads::new(2, leases(&one, "replica-1"));
+        let second = Uploads::new(2, leases(&two, "replica-2"));
+        let running = first.begin("t1").unwrap();
+        assert_eq!(second.begin("t1").err(), Some(Busy::SameTransfer));
+        drop(running);
+        let taken = second.begin("t1").unwrap();
+        // replica 2 stops without ending its upload: its lease is left,
+        // and ends 30 seconds after it was taken
+        std::mem::forget(taken);
+        assert_eq!(first.begin("t1").err(), Some(Busy::SameTransfer));
+        let now = crate::system::now_secs();
+        let database = one.database();
+        let ended = now + portitor_runtime::leases::LEASE_SECONDS;
+        let claim = |holder| {
+            portitor_runtime::leases::LeaseStore::claim(
+                &**database,
+                UPLOAD_LEASE,
+                "t1",
+                holder,
+                ended + 30,
+                ended,
+            )
+        };
+        assert!(claim("replica-1").unwrap(), "taken over once it ended");
     }
 
     /// A body that gives one piece, then waits forever.

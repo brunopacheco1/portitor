@@ -8,6 +8,7 @@
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
+use portitor_runtime::database::DatabaseSetting;
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
@@ -92,7 +93,7 @@ fn provider_config(datasets_file: Option<&str>) -> portitor_connector::Config {
         datasets_file: datasets_file.map(Into::into),
         harvest_interval_seconds: 0,
         allow_http: false,
-        db_file: "unused.db".into(),
+        database: DatabaseSetting::SqliteFile("unused.db".into()),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     }
@@ -492,6 +493,40 @@ fn a_wrong_id_url_or_switch_stops_the_start() {
     }
 }
 
+/// The `SQLite` file a configuration names, or `None` for PostgreSQL.
+fn sqlite_file(config: &portitor_connector::Config) -> Option<std::path::PathBuf> {
+    match &config.database {
+        DatabaseSetting::SqliteFile(file) => Some(file.clone()),
+        DatabaseSetting::Postgres(_) => None,
+    }
+}
+
+/// PostgreSQL instead of the `SQLite` file: `PORTITOR_DATABASE_URL`, never
+/// together with `PORTITOR_DB_FILE`.
+#[test]
+fn the_database_is_a_url_or_a_file() {
+    let url = (
+        "PORTITOR_DATABASE_URL",
+        "postgresql://portitor@db.example/portitor",
+    );
+    let config = config_with(&[url]).unwrap();
+    let DatabaseSetting::Postgres(settings) = &config.database else {
+        panic!("{:?}", config.database);
+    };
+    assert_eq!(
+        settings.shown(),
+        "postgresql://portitor@db.example/portitor"
+    );
+    let error = config_with(&[url, ("PORTITOR_DB_FILE", "/data/x.db")]).unwrap_err();
+    assert!(error.to_string().contains("not both"), "{error}");
+    let password = ("PORTITOR_DATABASE_PASSWORD_FILE", "/run/secrets/db");
+    let error = config_with(&[password]).unwrap_err();
+    assert!(
+        error.to_string().contains("without PORTITOR_DATABASE_URL"),
+        "{error}"
+    );
+}
+
 /// The rule of every setting: spaces around a value are dropped, and an
 /// empty value means "not set", so the default is used.
 #[test]
@@ -506,7 +541,7 @@ fn an_empty_setting_is_not_set_and_values_are_trimmed() {
     ])
     .unwrap();
     assert_eq!(trimmed.participant_id, "did:web:q.example");
-    assert_eq!(trimmed.db_file, std::path::PathBuf::from("/data/y.db"));
+    assert_eq!(sqlite_file(&trimmed), Some("/data/y.db".into()));
     assert_eq!(trimmed.data_token_seconds, 60);
     assert!(trimmed.allow_http);
     let empty = read(&[
@@ -521,7 +556,7 @@ fn an_empty_setting_is_not_set_and_values_are_trimmed() {
     ])
     .unwrap();
     assert_eq!(empty.datasets_file, None);
-    assert_eq!(empty.db_file, defaults.db_file);
+    assert_eq!(sqlite_file(&empty), sqlite_file(&defaults));
     assert_eq!(empty.harvest_interval_seconds, 3_600);
     assert_eq!(empty.data_token_seconds, 3_600);
     assert!(!empty.allow_http);
@@ -556,7 +591,7 @@ fn config_from_variables() {
     assert_eq!(defaults.datasets_file, None);
     assert_eq!(defaults.harvest_interval_seconds, 3_600);
     assert!(!defaults.allow_http);
-    assert_eq!(defaults.db_file, std::path::PathBuf::from("portitor.db"));
+    assert_eq!(sqlite_file(&defaults), Some("portitor.db".into()));
 
     let set = read(&[
         ("PORTITOR_DATASETS_FILE", file),
@@ -567,7 +602,7 @@ fn config_from_variables() {
     .unwrap();
     assert_eq!(set.participant_id, "did:web:p.example");
     assert!(set.allow_http);
-    assert_eq!(set.db_file, std::path::PathBuf::from("/data/x.db"));
+    assert_eq!(sqlite_file(&set), Some("/data/x.db".into()));
     assert_eq!(set.datasets_file, Some(std::path::PathBuf::from(file)));
     assert_eq!(set.harvest_interval_seconds, 0);
 

@@ -16,11 +16,13 @@ use std::pin::Pin;
 
 pub mod api_key;
 pub mod caller;
+pub mod database;
 pub mod did;
 pub mod did_document;
 pub mod directory;
 pub mod health;
 pub mod http;
+pub mod leases;
 pub mod management;
 pub mod panics;
 pub mod request_size;
@@ -32,6 +34,7 @@ pub mod system;
 pub mod telemetry;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
+pub mod used_tokens;
 
 /// A task that finishes later with a `T`: what the async methods of
 /// Portitor's ports return (the [`http::Sender`], the connector's

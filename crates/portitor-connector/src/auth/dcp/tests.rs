@@ -21,6 +21,12 @@ use serde_json::json;
 
 use super::*;
 
+/// The used token ids in an in-memory store of the connector, as in
+/// production (TD-09).
+fn used_token_ids() -> Arc<dyn UsedTokenStore> {
+    Arc::new(crate::store::ConnectorStore::in_memory().unwrap())
+}
+
 /// One participant: its DID and key, and its DID document as served.
 struct Party {
     did: String,
@@ -312,7 +318,8 @@ async fn dataspace_caching_did_documents(did_cache_seconds: u64) -> Dataspace {
         did_cache_seconds,
     };
     let me_did = me.did.clone();
-    let mut verifier = DcpVerifier::new(&settings, Arc::new(LocalSts(me))).unwrap();
+    let mut verifier =
+        DcpVerifier::new(&settings, Arc::new(LocalSts(me)), used_token_ids()).unwrap();
     verifier.start_tries = 1;
     Dataspace {
         base,
@@ -1142,7 +1149,8 @@ async fn our_identity_must_match_the_sts() {
         did_cache_seconds: 300,
     };
     let other = Party::new(&ds.base, "third");
-    let mut verifier = DcpVerifier::new(&settings, Arc::new(LocalSts(other))).unwrap();
+    let mut verifier =
+        DcpVerifier::new(&settings, Arc::new(LocalSts(other)), used_token_ids()).unwrap();
     verifier.start_tries = 1;
     assert!(
         verifier
@@ -1154,8 +1162,12 @@ async fn our_identity_must_match_the_sts() {
     // our DID document cannot be read
     let mut lost = settings.clone();
     lost.participant_id = format!("{}x", ds.me_did);
-    let mut verifier =
-        DcpVerifier::new(&lost, Arc::new(LocalSts(Party::new(&ds.base, "mex")))).unwrap();
+    let mut verifier = DcpVerifier::new(
+        &lost,
+        Arc::new(LocalSts(Party::new(&ds.base, "mex"))),
+        used_token_ids(),
+    )
+    .unwrap();
     verifier.start_tries = 1;
     assert!(
         verifier
@@ -1168,8 +1180,12 @@ async fn our_identity_must_match_the_sts() {
     let mut doc = ds.world.lock().unwrap().documents["me"].clone();
     doc["service"] = json!([]);
     ds.world.lock().unwrap().documents.insert("me".into(), doc);
-    let fresh =
-        DcpVerifier::new(&settings, Arc::new(LocalSts(Party::new(&ds.base, "me")))).unwrap();
+    let fresh = DcpVerifier::new(
+        &settings,
+        Arc::new(LocalSts(Party::new(&ds.base, "me"))),
+        used_token_ids(),
+    )
+    .unwrap();
     assert!(
         fresh
             .check_own_identity()

@@ -3,14 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Adapter: the harvest store in memory (lost on restart; tests and
-//! development). It follows the same rules as the `SQLite` one.
+//! development). It follows the same rules as the database one
+//! (`crate::store::harvest`).
 
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use portitor_dsp::Dataset;
+
 use super::{
-    Commit, DatasetStore, HarvestJob, HarvestStatus, JobWithErrors, KEPT_JOBS, StoreError,
-    StoredDataset,
+    Commit, DatasetState, DatasetStore, HarvestJob, HarvestStatus, JobWithErrors, KEPT_JOBS,
+    StoreError, StoredDataset,
 };
 
 #[derive(Debug, Default)]
@@ -20,7 +23,7 @@ struct Kept {
     status: HarvestStatus,
 }
 
-/// Adapter: the read copy and the jobs in memory.
+/// Adapter: the datasets and the jobs in memory.
 #[derive(Debug, Default)]
 pub struct InMemoryDatasetStore(Mutex<Kept>);
 
@@ -36,12 +39,31 @@ impl DatasetStore for InMemoryDatasetStore {
         Ok(self.kept().datasets.values().cloned().collect())
     }
 
+    fn catalog(&self) -> Result<Vec<Dataset>, StoreError> {
+        // the map is in id order
+        let mut active = Vec::new();
+        for dataset in self.kept().datasets.values() {
+            if dataset.state == DatasetState::Active {
+                active.push(dataset.content.clone());
+            }
+        }
+        Ok(active)
+    }
+
+    fn dataset(&self, id: &str) -> Result<Option<StoredDataset>, StoreError> {
+        Ok(self.kept().datasets.get(id).cloned())
+    }
+
     fn status(&self) -> Result<HarvestStatus, StoreError> {
         Ok(self.kept().status.clone())
     }
 
-    fn commit(&self, commit: &Commit) -> Result<u64, StoreError> {
+    fn commit(&self, commit: &Commit) -> Result<Option<u64>, StoreError> {
         let mut kept = self.kept();
+        if kept.status.version != commit.status.version {
+            // another run was written since this one read the status
+            return Ok(None);
+        }
         // the highest job id so far (the keys are sorted), 0 for none
         let newest = kept.jobs.keys().next_back().copied().unwrap_or(0);
         let id = newest + 1;
@@ -59,8 +81,11 @@ impl DatasetStore for InMemoryDatasetStore {
         kept.jobs.insert(id, (job, commit.errors.clone()));
         // keep the last KEPT_JOBS jobs: ids id - KEPT_JOBS + 1 to id
         kept.jobs.retain(|job_id, _| job_id + KEPT_JOBS > id);
-        kept.status = commit.status.clone();
-        Ok(id)
+        kept.status = HarvestStatus {
+            version: commit.status.version + 1,
+            ..commit.status.clone()
+        };
+        Ok(Some(id))
     }
 
     fn jobs(&self, before: Option<u64>, limit: usize) -> Result<Vec<HarvestJob>, StoreError> {

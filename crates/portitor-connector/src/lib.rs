@@ -32,7 +32,8 @@
 //!   0005; source and read copy in `portitor-bundle`), new versions pulled
 //!   without a restart, and its rules: the SHACL check of each harvested
 //!   dataset, and the SHACL guard on DSP messages.
-//! - [`store`]: everything kept in the `SQLite` file.
+//! - [`store`]: everything kept in the database (PostgreSQL or a `SQLite`
+//!   file).
 //! - [`management`]: the management API for your own systems.
 //! - [`auth`]: who calls a DSP endpoint, and our tokens on the DSP
 //!   requests we send (DCP, ADR 0016).
@@ -59,6 +60,7 @@ use portitor_dsp::policy::CredentialTypes;
 use portitor_dsp::transfer::consumer::{ConsumerTransfer, ConsumerTransferDecision};
 use portitor_dsp::transfer::provider::Failure as TransferFailure;
 use portitor_dsp::{Binding, CatalogError, ProtocolVersion, VERSION, VersionResponse};
+use portitor_runtime::database::{self, DatabaseSetting};
 use portitor_runtime::request_size::small_message;
 use portitor_runtime::settings::{self, RemovedSetting};
 use serde::Serialize;
@@ -140,8 +142,10 @@ pub struct Config {
     /// Development and the TCK only: partners choose most of these
     /// addresses, so this widens what the connector can be made to call.
     pub allow_http: bool,
-    /// The `SQLite` file that keeps negotiations.
-    pub db_file: std::path::PathBuf,
+    /// Where the connector keeps its state: PostgreSQL
+    /// (`PORTITOR_DATABASE_URL`, `PORTITOR_DATABASE_PASSWORD_FILE`) or a
+    /// `SQLite` file (`PORTITOR_DB_FILE`, deprecated since 1.3).
+    pub database: DatabaseSetting,
     /// How long a data access token stays valid, in seconds
     /// (`PORTITOR_DATA_TOKEN_SECONDS`, default one hour, at most
     /// [`MAX_SETTING_SECONDS`]).
@@ -152,8 +156,33 @@ pub struct Config {
     pub credential_types: CredentialTypes,
 }
 
-/// The `SQLite` file unless `PORTITOR_DB_FILE` says otherwise.
+/// The `SQLite` file, unless `PORTITOR_DB_FILE` says otherwise or
+/// `PORTITOR_DATABASE_URL` names PostgreSQL.
 pub const DEFAULT_DB_FILE: &str = "portitor.db";
+
+/// The folder of the connector's image that holds its volume.
+const IMAGE_DATA_FOLDER: &str = "/data";
+
+/// Where the bundle cache goes unless `PORTITOR_BUNDLE_CACHE_DIR` says
+/// otherwise: `bundle-cache` next to the `SQLite` file. PostgreSQL has no
+/// file: then `/data/bundle-cache` when there is a `/data` folder (the
+/// image's volume), and `bundle-cache` in the working directory when
+/// there is none.
+#[must_use]
+pub fn default_bundle_cache_dir(database: &DatabaseSetting) -> PathBuf {
+    use portitor_bundle::source::{DEFAULT_CACHE_FOLDER, cache_dir_next_to};
+    match database {
+        DatabaseSetting::SqliteFile(file) => cache_dir_next_to(file),
+        DatabaseSetting::Postgres(_) => {
+            let data = std::path::Path::new(IMAGE_DATA_FOLDER);
+            if data.is_dir() {
+                data.join(DEFAULT_CACHE_FOLDER)
+            } else {
+                PathBuf::from(DEFAULT_CACHE_FOLDER)
+            }
+        }
+    }
+}
 
 /// Where the public port listens unless `PORTITOR_BIND` says otherwise.
 pub const DEFAULT_BIND: &str = "0.0.0.0:8080";
@@ -169,9 +198,18 @@ pub const DEFAULT_DATA_TOKEN_SECONDS: u64 = 3_600;
 /// setting: settings are frozen (`docs/STABILITY.md`).
 pub const TRANSFER_SWEEP_EVERY: Duration = Duration::from_secs(10);
 
+/// How often each process looks for work that nobody leases
+/// ([`Negotiator::schedule_outbox`]; ADR 0029, TD-53 and TD-54): pending
+/// DSP messages, and pushes that should run. One second, as the wait of
+/// Eclipse EDC's state machines between two rounds. A round reads the
+/// pending messages and the leases; when nothing is left over it sends
+/// nothing. Not a setting: settings are frozen (`docs/STABILITY.md`).
+pub const OUTBOX_LOOP_EVERY: Duration = Duration::from_secs(1);
+
 /// The largest value of a setting in seconds: one year (365 days).
 /// Larger values are refused, as a time that far ahead can overflow the
-/// clock types (a schedule `Instant`, a token expiry stored in `SQLite`).
+/// clock types (a schedule `Instant`, a token expiry stored in the
+/// database).
 pub const MAX_SETTING_SECONDS: u64 = 31_536_000;
 
 /// Reads a setting in whole seconds, from 0 to [`MAX_SETTING_SECONDS`];
@@ -206,6 +244,9 @@ pub enum ConfigError {
     Refused(&'static str, String),
     /// `PORTITOR_POLICY_CREDENTIALS` cannot be used; the text says why.
     PolicyCredentials(String),
+    /// The database settings cannot be used; the text says why
+    /// (`portitor_runtime::database::setting`).
+    Database(String),
 }
 
 impl std::fmt::Display for ConfigError {
@@ -215,7 +256,7 @@ impl std::fmt::Display for ConfigError {
             Self::Missing(name, what) => write!(f, "{name}: required ({what})"),
             Self::Invalid(name, value) => write!(f, "{name} has an invalid value {value:?}"),
             Self::Refused(name, problem) => write!(f, "{name}: {problem}"),
-            Self::PolicyCredentials(why) => f.write_str(why),
+            Self::PolicyCredentials(why) | Self::Database(why) => f.write_str(why),
         }
     }
 }
@@ -247,8 +288,10 @@ impl std::error::Error for StartError {}
 impl Config {
     /// Reads `PORTITOR_PARTICIPANT_ID` and `PORTITOR_PUBLIC_URL` (both
     /// required: there is no default that is right for anyone),
-    /// `PORTITOR_ALLOW_HTTP` (`true` to allow), `PORTITOR_DB_FILE`
-    /// (default `portitor.db`), `PORTITOR_DATA_TOKEN_SECONDS` (default
+    /// `PORTITOR_ALLOW_HTTP` (`true` to allow), the database
+    /// (`PORTITOR_DATABASE_URL` and `PORTITOR_DATABASE_PASSWORD_FILE`, or
+    /// `PORTITOR_DB_FILE`, default `portitor.db`; see
+    /// `portitor_runtime::database::setting`), `PORTITOR_DATA_TOKEN_SECONDS` (default
     /// 3600), `PORTITOR_POLICY_CREDENTIALS` (see
     /// [`auth::policy_credentials`]), `PORTITOR_HARVEST_INTERVAL_SECONDS`
     /// (default 3600) and, when set, `PORTITOR_DATASETS_FILE` from the
@@ -273,8 +316,8 @@ impl Config {
     /// URL (or has a query or fragment), `PORTITOR_ALLOW_HTTP` is neither
     /// `true` nor `false`, a number is not a number, a number of seconds is above
     /// [`MAX_SETTING_SECONDS`] (one year), `PORTITOR_DATA_TOKEN_SECONDS` is
-    /// 0, `PORTITOR_POLICY_CREDENTIALS` cannot be used, or one of the
-    /// [`REMOVED_SETTINGS`] is set.
+    /// 0, `PORTITOR_POLICY_CREDENTIALS` cannot be used, the database
+    /// settings cannot be used, or one of the [`REMOVED_SETTINGS`] is set.
     pub fn from_vars(var: impl Fn(&str) -> Option<OsString>) -> Result<Self, ConfigError> {
         settings::refuse_removed(&var, REMOVED_SETTINGS).map_err(ConfigError::Removed)?;
         // required, as the identity's and the issuer's id and URL are: a
@@ -330,16 +373,14 @@ impl Config {
         )?;
         let credential_types =
             auth::policy_credentials(&var).map_err(ConfigError::PolicyCredentials)?;
+        let database = database::setting(&var, DEFAULT_DB_FILE).map_err(ConfigError::Database)?;
         Ok(Self {
             participant_id,
             public_url,
             datasets_file: settings::text(&var, "PORTITOR_DATASETS_FILE").map(PathBuf::from),
             harvest_interval_seconds,
             allow_http,
-            db_file: match settings::text(&var, "PORTITOR_DB_FILE") {
-                Some(file) => PathBuf::from(file),
-                None => PathBuf::from(DEFAULT_DB_FILE),
-            },
+            database,
             data_token_seconds,
             credential_types,
         })
@@ -347,7 +388,7 @@ impl Config {
 }
 
 struct AppState {
-    catalog: CatalogService<harvest::DatasetCopy>,
+    catalog: CatalogService<harvest::StoredCatalog>,
     versions: VersionResponse,
 }
 
@@ -363,6 +404,8 @@ pub struct Negotiator {
     harvester: Arc<harvest::DatasetHarvester>,
     catalog_reader: Arc<catalog_reader::CatalogReader>,
     receiving: Router,
+    /// The leases of this process (ADR 0029, decision 6).
+    leases: portitor_runtime::leases::Leases,
 }
 
 impl std::fmt::Debug for Negotiator {
@@ -532,11 +575,12 @@ impl Negotiator {
 
     /// Runs a dataset harvest every `every`, in the background, the first
     /// one `every` after now (the start run is done by [`build`]). A zero
-    /// `every` means no schedule (`None`). Must be called inside the Tokio
-    /// runtime.
+    /// `every` means no schedule (`None`). Processes that share the
+    /// database run one harvest per interval between them (TD-56). Must
+    /// be called inside the Tokio runtime.
     #[must_use]
     pub fn schedule_harvest(&self, every: Duration) -> Option<tokio::task::JoinHandle<()>> {
-        self.harvester.schedule(every)
+        self.harvester.schedule(every, &self.leases)
     }
 
     /// Starts the sweep of the transfers as provider, every `every` in the
@@ -565,9 +609,12 @@ impl Negotiator {
     }
 
     /// How many datasets are in the catalog now.
-    #[must_use]
-    pub fn catalog_size(&self) -> usize {
-        self.harvester.copy().active_count()
+    ///
+    /// # Errors
+    ///
+    /// The stored datasets cannot be read.
+    pub fn catalog_size(&self) -> Result<usize, harvest::StoreError> {
+        self.harvester.catalog().active_count()
     }
 
     /// Reads the catalog of the provider `provider_id` (a `did:web` DID)
@@ -636,16 +683,84 @@ impl Negotiator {
         self.harvester.store().job(id)
     }
 
-    /// Sends again, in the background, every message that was saved but
-    /// not acknowledged (negotiations and transfers, as provider and as
-    /// consumer), for example after a restart. Call it once at start.
-    /// Returns how many.
+    /// One round of the loop of [`Negotiator::schedule_outbox`], now:
+    /// sends in the background every message that was saved but not
+    /// acknowledged and that no process leases (negotiations and
+    /// transfers, as provider and as consumer), and starts the pushes
+    /// that should run and that no process sends. The binary calls it
+    /// once at start, before the loop. Returns how many messages it took
+    /// up.
     ///
     /// # Errors
     ///
     /// The store failed.
     pub fn resume(&self) -> Result<usize, Box<Failure>> {
-        // reported like a negotiation store failure: all are the same file
+        self.outboxes().take_up()
+    }
+
+    /// Runs [`Negotiator::resume`] every `every` (the binary:
+    /// [`OUTBOX_LOOP_EVERY`]) in the background, the first round `every`
+    /// after now, until the process stops (ADR 0029, TD-53 and TD-54).
+    /// So the messages and pushes of a process that stopped are taken
+    /// over once their leases have ended, without waiting for a restart.
+    /// A round that fails is logged; the next one tries again. Must be
+    /// called inside the Tokio runtime; aborting the handle stops it.
+    #[must_use]
+    pub fn schedule_outbox(&self, every: Duration) -> tokio::task::JoinHandle<()> {
+        let outboxes = self.outboxes();
+        // supervised, as every task that runs as long as the process: the
+        // closure makes the task anew after a panic
+        let rounds = move || {
+            let outboxes = outboxes.clone();
+            async move {
+                let first = tokio::time::Instant::now() + every;
+                let mut ticks = tokio::time::interval_at(first, every);
+                ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    ticks.tick().await;
+                    match outboxes.take_up() {
+                        Ok(0) => {}
+                        Ok(count) => tracing::info!(count, "pending messages taken up"),
+                        Err(failure) => {
+                            tracing::error!(?failure, "cannot read pending messages");
+                        }
+                    }
+                    outboxes.leases.forget_old();
+                }
+            }
+        };
+        portitor_runtime::panics::spawn_supervised("outbox_loop", rounds)
+    }
+
+    /// The four senders of DSP messages, for the loop.
+    fn outboxes(&self) -> Outboxes {
+        Outboxes {
+            provider: Arc::clone(&self.provider),
+            consumer: Arc::clone(&self.consumer),
+            transfers: Arc::clone(&self.transfers),
+            transfer_consumer: Arc::clone(&self.transfer_consumer),
+            leases: self.leases.clone(),
+        }
+    }
+}
+
+/// The four senders of DSP messages (negotiations and transfers, as
+/// provider and as consumer), as the loop of
+/// [`Negotiator::schedule_outbox`] holds them.
+#[derive(Clone)]
+struct Outboxes {
+    provider: Arc<negotiation::Provider>,
+    consumer: Arc<consumer::Consumer>,
+    transfers: Arc<transfer::TransferProvider>,
+    transfer_consumer: Arc<consumer_transfer::TransferConsumer>,
+    leases: portitor_runtime::leases::Leases,
+}
+
+impl Outboxes {
+    /// One round of the loop ([`Negotiator::resume`]).
+    fn take_up(&self) -> Result<usize, Box<Failure>> {
+        // reported like a negotiation store failure: all are the same
+        // database
         let as_store_failure = |f: Box<TransferFailure>| {
             Box::new(Failure::Store(
                 portitor_dsp::negotiation::provider::StoreError(format!("{f:?}")),
@@ -699,7 +814,7 @@ fn versions(service_id: String) -> VersionResponse {
 /// dataset that fails does not stop it (ADR 0020).
 ///
 /// That first run is blocking work (it reads the source, checks every
-/// entry, writes `SQLite`) done on the calling thread, also when called
+/// entry, writes the database) done on the calling thread, also when called
 /// from async code. That is acceptable once at start, before anything is
 /// served; the scheduled runs use `spawn_blocking`.
 ///
@@ -712,7 +827,8 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
     let mut ports = ports;
     ports.credential_types = config.credential_types.clone();
     let harvester = Arc::new(start_harvest(config, &ports.harvest, &service_id)?);
-    let datasets = harvester.copy();
+    // read from the database on each request (ADR 0029, D4)
+    let datasets = harvester.catalog();
     let callback_address = format!("{}{CALLBACK_PATH}", config.public_url.trim_end_matches('/'));
     let consumer = Arc::new(consumer::Consumer::new(
         &ports,
@@ -750,6 +866,7 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         let ender = transfer::EndsThroughProvider(Arc::downgrade(&transfers));
         gate.ends_transfers_with(Arc::new(ender));
     }
+    let leases = ports.leases.clone();
     let provider = Arc::new(negotiation::Provider::new(
         ports,
         datasets.clone(),
@@ -772,6 +889,7 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         harvester,
         catalog_reader,
         receiving,
+        leases,
     };
     let state = Arc::new(AppState { catalog, versions });
     // open: discovery (DSP 2025-1), health, and the data plane, which
@@ -951,6 +1069,11 @@ fn respond<T: Serialize>(outcome: Outcome<T>) -> Response {
         Outcome::Ok(body) => Json(body).into_response(),
         Outcome::BadRequest(e) => (StatusCode::BAD_REQUEST, Json(e)).into_response(),
         Outcome::NotFound(e) => (StatusCode::NOT_FOUND, Json(e)).into_response(),
+        Outcome::StoreFailed(e) => {
+            tracing::error!(error = %e.0, "catalog: the stored datasets cannot be read");
+            let e = CatalogError::new("500", "internal error");
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(e)).into_response()
+        }
     }
 }
 

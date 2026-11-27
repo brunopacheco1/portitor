@@ -12,6 +12,212 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+Portitor 1.3 (in progress): several containers of each image (connector,
+identity, issuer) share one PostgreSQL database, and SQLite is
+deprecated ([ADR 0029](docs/adr/0029-several-replicas.md)). Every 1.2
+route, setting and file format still works
+([STABILITY](docs/STABILITY.md)).
+
+**Upgrading from 1.2.** Back up first: migrations run at start, forward
+only. A component on a SQLite file keeps working, for one process; a
+second process on the same file now refuses to start. To use
+PostgreSQL, start with an empty database: the tool that copies a
+SQLite file into PostgreSQL comes in 1.4
+([TD-59](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-59)). Several replicas
+need PostgreSQL and the two-step key rotation. Details:
+[OPERATING, From 1.2 to 1.3](docs/OPERATING.md#from-12-to-13).
+
+### Added
+
+- PostgreSQL 16 to 19 as the database of each image, behind the same
+  store ports. The database layer is in `portitor-runtime`
+  (`database.rs`, `database/`): SQL written once for both databases,
+  `SERIALIZABLE` transactions on PostgreSQL that run again when two
+  collide, a PostgreSQL migration list per component that runs under an
+  advisory lock (replicas that start together migrate once), and one
+  database per component (`portitor_schema`). The client is
+  `tokio-postgres`, with Portitor's own TLS on `tokio-rustls` and the
+  system's CA certificates. Each process opens at most 10 connections.
+- Settings `PORTITOR_DATABASE_URL` (a libpq URI; `sslmode`
+  `verify-full` by default, `verify-ca` and `require` also check the
+  host name, `disable` turns TLS off, `prefer` and `allow` are refused;
+  `sslrootcert`, as in libpq, a PEM file whose CAs are then the only
+  ones trusted, or `system`; without it the image's CAs) and
+  `PORTITOR_DATABASE_PASSWORD_FILE`.
+- Timeouts on PostgreSQL connections, each settable in the URL as in
+  libpq: `connect_timeout` (10 s), a `statement_timeout` (30 s, in
+  `options`), `tcp_user_timeout` (30 s) and TCP keepalives (after 15 s
+  idle, every 5 s). A call without an answer after 40 s fails and its
+  connection is closed, so a connection to a server that went away (a
+  failover, a network cut) no longer blocks a request or a lease
+  renewal without limit.
+  A URL that holds a password is refused, and so is a start with both
+  `PORTITOR_DATABASE_URL` and `PORTITOR_DB_FILE`
+  ([DEPLOYING, Database](docs/DEPLOYING.md#database)).
+- CI runs the store tests on SQLite and on PostgreSQL 16 and 19, and
+  the TLS test of the database layer on a PostgreSQL 16 with TLS
+  ([TESTING, PostgreSQL](docs/TESTING.md#postgresql)). The schema test
+  of each component compares column types, `NOT NULL`, primary keys and
+  unique indexes of the two databases, and a test per component opens a
+  SQLite file of 1.2 with 1.3. Test databases are dropped after their
+  test.
+- A replica test, `scenarios/two-party/run-replicas.sh`, run by CI on
+  PostgreSQL 19: two processes of each image, each pair on one
+  database, behind a round-robin proxy (`scripts/round-robin-proxy.py`).
+  It stops a process in the middle of a negotiation, a transfer and a
+  credential delivery and checks that the other process finishes, then
+  runs the two-party steps with every request spread over both
+  ([TESTING, Several replicas](docs/TESTING.md#several-replicas)).
+- `scenarios/two-party/replicas.yaml`: a Compose override that runs the
+  demo's provider as two connectors behind nginx, for the test before a
+  release ([TESTING](docs/TESTING.md#two-connectors-behind-nginx)).
+
+### Deprecated
+
+- SQLite and `PORTITOR_DB_FILE`. A component on a SQLite file still
+  works, for one process, and logs at start `SQLite is deprecated since
+  1.3 and is removed in 2.0`. Both are removed in 2.0. A tool that
+  copies a SQLite file into PostgreSQL comes in 1.4
+  ([TD-59](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-59)).
+
+### Changed
+
+State that one process held is now in the database, so several
+replicas give the same answers (ADR 0029, decision 6). One entry per
+change:
+
+- Used token ids (`jti`) are kept in the database of each image (table
+  `used_token`) until their token expires, so a token used on one
+  replica is refused on the others, also after a restart. The limit of
+  100,000 ids in memory is gone
+  ([TD-09](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-09)).
+- The connector reads the catalog, and each dataset that an offer, an
+  agreement, a transfer request or a data flow start needs, from the
+  database on each request; the copy of the datasets in memory is gone.
+  When the database cannot be read, a catalog or dataset request gets
+  HTTP 500 (`internal error`), and a contract or transfer request HTTP
+  500 instead of a refusal. The catalog's content and order are
+  unchanged ([TD-50](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-50)).
+- The issuer stores each signed status list in its database (table
+  `status_list`, with the id of the signing key). A revocation signs
+  the new list in the same transaction, and every replica serves the
+  stored list. At start a list is signed only when none is stored or
+  another key signed it (a key rotation)
+  ([TD-51](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-51)).
+- Each running download and push reads its flow's state every
+  5 seconds, so a suspension or termination handled by another
+  container cuts it within 5 seconds
+  ([TD-52](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-52)).
+- The connector's background work runs under leases in its database
+  (table `lease`, as Eclipse EDC's lease columns; 30 seconds, renewed
+  while the work runs). Each saved DSP message is sent under a lease,
+  and a loop in every process, every second, sends the pending messages
+  that nobody leases, instead of only at start
+  ([TD-53](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-53)). A push runs under
+  a lease, and the same loop starts the pushes that nobody leases; a
+  second upload of one transfer gets 409 also when the first runs on
+  another container ([TD-54](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-54)).
+  The scheduled dataset harvest runs once per interval among the
+  processes, and its job ids come from the database
+  ([TD-56](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-56)).
+- The identity's Gaia-X run, scheduled or started by the operator, runs
+  under a lease too. The identity no longer marks every `RUNNING` run as
+  failed at start: the next run that takes the lease marks those of a
+  process that stopped (error `its process stopped`)
+  ([TD-56](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-56)).
+- The connector's bundle version in use is recorded in its database
+  (table `bundle_in_use`): the process that takes a new version records
+  it, and every other process moves to it at start and within 5 seconds
+  after, from its own cache folder or downloaded. A version issued
+  before the recorded one is never recorded, except a fixed
+  `PORTITOR_BUNDLE_VERSION`
+  ([TD-55](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-55)).
+- The issuer takes a lease of 30 seconds on a credential delivery
+  before it sends it, so two replicas do not both send it; a process
+  that stops leaves the lease to run out, then another one sends it
+  ([TD-57](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-57)).
+- A second process on the same SQLite file refuses to start, with `the
+  SQLite file ... is in use by another process`. The process that uses
+  the file holds a lease row in it (`portitor_process_lease`, made by
+  `portitor-runtime` in all three images), renewed every 10 seconds and
+  removed when it stops; after a crash the next process starts at most
+  30 seconds later (ADR 0029, D3).
+- The images no longer set `PORTITOR_DB_FILE` (it would conflict with
+  `PORTITOR_DATABASE_URL`). The SQLite defaults stay `/data/...`; the
+  connector image now runs in the working directory `/data`, so a
+  relative path in a connector setting is read from there.
+- The demo, the quickstart and the scenarios in Docker Compose
+  (two-party, data-permits, hdab-intermediary, gaiax-compliance,
+  edc-interop) keep their state in PostgreSQL: one `postgres` 19
+  container (pinned by digest) with one database and role per
+  component, made by `examples/postgres/init-databases.sh`; TLS with
+  the server's certificate and host name checked against a test CA made
+  for each run (`scripts/demo-database.sh`), and the passwords in
+  Compose secrets. Each scenario's changelog has the details.
+  `init-databases.sh` reads each password from its file inside `psql`,
+  never on a command line, and, when the server runs with TLS, lets
+  connections over the network in only with TLS (`hostssl` in
+  `pg_hba.conf`).
+  `two-data-spaces`, which runs processes, uses PostgreSQL when
+  `PORTITOR_TEST_DATABASE_URL` names a server (`scripts/test-databases.sh`).
+- The DSP TCK run in CI keeps the connector's state in PostgreSQL 19.
+- A lease is held by one claim (the process id and a random id), not
+  by the process. Work whose lease is lost stops: when another holder
+  took it over, or when no renewal succeeded for about 20 seconds (a
+  database failover). A push or an upload is cut (the upload is
+  answered 503), a message is left to the process that took it over, a
+  Gaia-X run is recorded failed and stores nothing. In one process, a
+  push of a transfer never starts while another one of it runs (as in
+  1.2). An upload whose lease cannot be taken because the database does
+  not answer gets 503, not 409.
+- Dataset harvest runs of several connector containers no longer undo
+  each other: a run (at start, after new rules, a bundle job, or
+  scheduled) is written only if no other run was written since it read
+  the store, and is otherwise planned again from the stored datasets.
+  The connector's database gets a migration: a `version` column in
+  `harvest_state` and an index on `lease.lease_until`.
+- The issuer's outbox reads the clock again for each delivery it
+  claims and records, not once per round: after a slow try, the next
+  delivery's lease could end at once and another issuer container send
+  it too.
+- On SQLite, a transaction takes the file's write lock when it starts
+  (`BEGIN IMMEDIATE`). A transaction that read and then wrote failed at
+  once with `database is locked` when the lease thread of 1.3 wrote the
+  file in between.
+- On PostgreSQL, the connector's keys that lists are paged by
+  (negotiations, transfers, data flows) sort by their bytes
+  (`COLLATE "C"`), as on SQLite, whatever the server's collation.
+
+### Dependencies
+
+- `tokio-postgres` 0.7 and the crates it brings: 32 crate versions not
+  covered by the imported cargo-vet audits, exempted
+  ([R-04](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-04)).
+- cargo-vet: the six delta audits recorded before 1.3 are replaced by
+  exemptions, because an audit must mean a person read the code
+  (maintainer, 2026-11-26). Now 57 crate versions are covered by imported
+  audits, 1 partly, and 185 are exempted; `supply-chain/audits.toml` is
+  empty ([CONTRIBUTING](CONTRIBUTING.md#dependency-audits-cargo-vet)).
+
+### Documentation
+
+- ADR 0029 "Several replicas on one PostgreSQL database"; ADR 0006 gets
+  a dated note. DEPLOYING: a "Database" section, a Compose example of
+  the database, and PostgreSQL in the first deployment and the
+  `docker run` examples. OPERATING: backup with `pg_dump`, a two-step
+  rolling key rotation for several replicas
+  ([TD-58](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-58)), when status lists
+  are signed again after a key change, upgrades with several replicas,
+  and moving from SQLite to PostgreSQL. STABILITY: PostgreSQL, and
+  SQLite deprecated. ARCHITECTURE: principle 14 met by design, and a
+  "Storage" section. The C2, C3 and deployment diagrams show each
+  image's database as PostgreSQL, shared by the replicas, or a SQLite
+  file (deprecated). ROADMAP, RISKS_AND_TECHNICAL_DEBTS (TD-08, TD-09
+  and TD-50 to TD-58 done on the 1.3 branch; new R-49 and TD-59),
+  TESTING (store tests on PostgreSQL; "What runs where" with the
+  replica test, the DSP TCK on PostgreSQL and the nginx test; the
+  scenarios' database), SECURITY-ASSURANCE.
+
 ## [1.2.0] - 2026-11-26
 
 Portitor 1.2: the built-in data plane in its own crate, the first step

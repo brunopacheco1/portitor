@@ -19,6 +19,7 @@ use portitor_connector::auth::sts::{SecureTokenService, StsClient, TokenRequest}
 use portitor_connector::auth::{AuthSettings, CallerVerifier as _};
 use portitor_connector::health::OwnIdentityCheck;
 use portitor_connector::management::{ApiKey, router};
+use portitor_runtime::database::DatabaseSetting;
 use portitor_runtime::health::Check as _;
 use portitor_runtime::telemetry::testing::{
     Recorded, recorded, trace_on_this_thread, traceparent_recorder,
@@ -77,7 +78,7 @@ async fn the_outbox_sends_no_trace_context() {
         datasets_file: None,
         harvest_interval_seconds: 0,
         allow_http: true,
-        db_file: "unused.db".into(),
+        database: DatabaseSetting::SqliteFile("unused.db".into()),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     };
@@ -127,7 +128,8 @@ async fn the_dcp_verifier_sends_no_trace_context() {
     let (base, recorder) = traceparent_recorder().await;
     let settings = settings(&base);
     let sts: Arc<dyn SecureTokenService> = Arc::new(StsClient::new(&settings).unwrap());
-    let verifier = DcpVerifier::new(&settings, sts).unwrap();
+    let used_token_ids = Arc::new(portitor_connector::store::ConnectorStore::in_memory().unwrap());
+    let verifier = DcpVerifier::new(&settings, sts, used_token_ids).unwrap();
     let authorization = format!("Bearer {}", token_from(&did_of(&base)));
     let span = tracing::info_span!(target: "portitor_test", "request");
     // the caller is refused (the recorder serves no DID document); what

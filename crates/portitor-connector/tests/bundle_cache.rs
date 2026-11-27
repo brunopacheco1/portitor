@@ -27,11 +27,12 @@ use portitor_bundle::source::{
 use portitor_bundle::store::CacheFolder;
 use portitor_connector::bundle_harvest::{BundleHarvester, Started};
 use portitor_connector::harvest::JobOutcome;
+use portitor_connector::store::ConnectorStore;
 use portitor_dcp::SigningKey;
 use portitor_dcp::bundle::{BundleError, MAX_FILE_BYTES};
 use portitor_issuer::bundle_build::{Options, build};
 use portitor_issuer::config::Config;
-use portitor_issuer::store::SqliteStore;
+use portitor_issuer::store::DatabaseStore;
 use portitor_issuer::{Issuer, Ports};
 use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::http::HttpSender;
@@ -116,7 +117,7 @@ impl Authority {
             credential_definitions_file: "unused".into(),
             issuer_service_url: format!("http://127.0.0.1:{port}/issuer"),
             bind: "unused".to_owned(),
-            db_file: "unused".into(),
+            database: portitor_runtime::database::DatabaseSetting::SqliteFile("unused".into()),
             management: portitor_issuer::config::ManagementConfig::health_only(
                 portitor_issuer::config::DEFAULT_MANAGEMENT_BIND,
             ),
@@ -126,7 +127,7 @@ impl Authority {
             bundle_dir: None,
         };
         let ports = Ports {
-            store: Arc::new(SqliteStore::in_memory().unwrap()),
+            store: Arc::new(DatabaseStore::in_memory().unwrap()),
             directory: Arc::new(WebDirectory::new(true, 300).unwrap()),
             sender: Arc::new(HttpSender::new(true).unwrap()),
         };
@@ -213,7 +214,10 @@ fn source(settings: &BundleConfig) -> Arc<dyn BundleSource> {
 /// A connector start: the bundle harvester takes the version.
 async fn start(settings: &BundleConfig) -> Result<Started, String> {
     let store = Arc::new(CacheFolder::new(&settings.cache_dir));
-    BundleHarvester::start(settings.clone(), source(settings), store).await
+    // a new, empty database each time: the version in use comes from
+    // the cache folder, as for a database of 1.2
+    let database = Arc::new(ConnectorStore::in_memory().unwrap());
+    BundleHarvester::start(settings.clone(), source(settings), store, database).await
 }
 
 #[tokio::test]

@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The data plane's flows and where it keeps them: [`Flow`], the
-//! [`FlowStore`] port (the connector's adapter is a table of its `SQLite`
-//! file), and the access tokens of pull flows, which are kept only as
+//! [`FlowStore`] port (the connector's adapter is a table of its
+//! database), and the access tokens of pull flows, which are kept only as
 //! their SHA-256 hash ([`hash`], [`new_token`]).
 
 use base64::Engine as _;

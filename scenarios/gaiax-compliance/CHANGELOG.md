@@ -11,6 +11,21 @@ version it ran on. Before 2026-11-24 it was `scripts/gaiax-e2e.sh` with
 `interop/gaiax/`; the repository's [CHANGELOG](../../CHANGELOG.md) has
 those entries in full.
 
+## 2026-11-26, for 1.3.0
+
+- The Portitor components keep their state in PostgreSQL (1.3,
+  [ADR 0029](../../docs/adr/0029-several-replicas.md)): `compose.yaml`
+  has a `database` service (`postgres` 19, pinned by digest) with one
+  database and role per component, made by
+  `examples/postgres/init-databases.sh`. `run.sh` writes a test CA, the
+  server's certificate and one password per component into
+  `run/database/` (`scripts/demo-database.sh`); the components connect
+  with TLS, checking the certificate and the host name, and read their
+  password from a Compose secret. Images before 1.3 ignore
+  `PORTITOR_DATABASE_URL` and keep their SQLite file. The steps are
+  unchanged.
+  Not run with the change yet.
+
 ## 2026-11-24, on 1.0.0-rc.1
 
 - Moved to `scenarios/gaiax-compliance/`, with this README and

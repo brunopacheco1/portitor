@@ -35,7 +35,9 @@ backups, key changes and upgrades.
   | `GET /api/check/startup`, `GET /api/check/health` | the same as readiness |
 
   Readiness of the connector:
-  - `database`: the SQLite file answers.
+  - `database`: the database answers. PostgreSQL answers a query on a
+    connection of the pool, as a request would; a SQLite file is opened
+    and read on its own, so a file the volume lost is seen.
   - `harvest` (the start harvest ran) and `bundle` (a version is in
     force; only with a bundle): start gates. The connector binds its
     ports only after both, so they cannot fail while it serves.
@@ -109,11 +111,16 @@ export on, `telemetry: exporting` (INFO).
 | `inbound DSP message is not valid; answered 400` (INFO) | A partner's negotiation or transfer message could not be read; `reason` says why. `unknown field ...` in an offer or agreement: a policy term the connector does not read (for example a `duty` inside a permission), refused on purpose. The partner got HTTP 400 and nothing changed | Nothing, unless you want that offer: then ask the partner for one with only the terms listed under [Policies](DEPLOYING.md#policies) |
 | `transfer request is refused; answered 400` (INFO) | A partner asked for a transfer under an agreement that is not finalized here, is not its own, or does not exist (`reason`: `no finalized agreement with this id for the caller`). It got HTTP 400 and no transfer was made. The line names neither the agreement nor the partner. A request that arrives just before the partner's acknowledgement of the finalization is recorded is accepted, not refused (ADR 0007) | Nothing, unless a partner asks: its negotiation must reach `FINALIZED` on your side first (look for its `negotiation state changed` lines) |
 | `message had arrived before` (INFO) | A send failed, but the partner's state shows it had received the message (a lost answer, or a resend after a restart); the negotiation goes on | Nothing |
-| `sending pending negotiation messages again` (INFO, at start) | Messages saved but not acknowledged before the last stop are being sent | Nothing |
+| `sending pending negotiation messages again` (INFO, at start) | Messages saved but not acknowledged before the last stop, and that no other process is sending, are being sent | Nothing |
+| `pending messages taken up` (INFO, 1.3) | The loop that runs every second in each process found messages saved but not sent that no process leases (`count`): those of a container that stopped, once its leases ended (30 s at most), or one whose recording failed (ADR 0029, TD-53) | Nothing. If it repeats for the same messages, look for `outgoing message not recorded` (the database) |
+| `a lease was lost; another process took the work over; its work here stops` (WARN, 1.3) | A process did not renew a lease within 30 s (stalled, or its clock is behind), and another process took the work (a message, a push, an upload, a scheduled job, a Gaia-X run) over. The work stops here: a push or an upload is cut (`cut` in its audit line; the upload is answered 503), a message is left to the other process, a Gaia-X run is recorded failed. What already went out may go out twice (a message, part of a push) | Check the hosts' clocks (NTP) and the database's response time |
+| `cannot renew a lease before it ends; its work here stops` (ERROR, 1.3) | The database did not answer two renewals of a lease (about 20 s, a failover for example): the work stops before the lease ends, so that another process can take it over without doing it twice. A `pending messages taken up` or a push started again follows | Look at the database: why it did not answer |
+| `harvest: another process wrote a run first; planning again` (INFO, 1.3) | Two containers ran a dataset harvest (or a check after new rules) at once; the one that wrote second plans its run again from the stored datasets, so neither undoes the other | Nothing |
+| `running download or push cut: its flow was suspended or terminated` (INFO, 1.3) | Another container handled the suspension or termination of a data flow; this container read the new state (every 5 s) and stopped its running download or push (ADR 0029, TD-52) | Nothing |
 | `counter-party not reachable; process not started` (WARN) | The first request of a negotiation or transfer we started as consumer failed (tried as above); it ends without a message, as the provider never knew it | Same as above |
 | `termination not acknowledged` (WARN) | The partner did not take a termination; DSP allows this, the negotiation is terminated anyway | Nothing, unless it repeats for one partner |
 | `no CA certificates: https calls will fail` (WARN, at start) | The CA bundle was not found (for example `SSL_CERT_DIR` points to an empty folder) | Fix the mount or the variable |
-| `negotiation store failed` (ERROR) | The SQLite file could not be read or written; partners get HTTP 500 | Check disk space and the `/data` volume |
+| `negotiation store failed` (ERROR) | The database could not be read or written; partners get HTTP 500 | PostgreSQL: check that the server answers and the readiness check `database`. SQLite: check disk space and the `/data` volume |
 | `DSP request refused: caller not authenticated` (WARN) | A DSP request was refused: the caller got HTTP 404 on a negotiation or transfer route, HTTP 401 on a catalog route (`status` says which). `reason` says why (token, presentation, credential or status list); the caller is not told | If a partner should be admitted: check its credential, its issuer against `PORTITOR_TRUSTED_ISSUERS`, and clock skew (60 s allowed) |
 | A partner says a call got HTTP 404 `unauthorized`, or its side ended with `no such negotiation` although the process exists | The 404 for a caller that is not authenticated does not say why (DSP 2025-1; Eclipse EDC does the same) | Look in **your** log for the line above at that time. A 404 with reason `no such negotiation` or `no such transfer` and without that line means the process id is unknown, or belongs to another participant |
 | `counter-party not reachable; terminating` (WARN) with `HTTP 404` in `error` | The partner does not know the process, or it refused your credentials (a Portitor from 0.12 and Eclipse EDC answer 404 for both). The message is not sent again | Ask the partner for the reason in its log; check that your credential is valid and not revoked, and that the partner trusts its issuer |
@@ -162,6 +169,9 @@ export on, `telemetry: exporting` (INFO).
 | `bundle: the newest version cannot be taken; keeping the version in use` (ERROR, at start) | With `latest`: the newest version could not be downloaded, failed a check or is older than the one in use; the cached version in use before is kept | Check the reason in the log line or in `GET /v1/harvest-jobs`; ask the authority |
 | `bundle: no new version taken; keeping the version in use` (WARN) | A scheduled check failed for the same reasons; nothing changed | As above; the next check tries again |
 | `bundle: new version in use; checking the stored datasets again` (INFO) | A newer version was put in use without a restart | Nothing; watch the next harvest jobs for hidden datasets |
+| `bundle: another process of this connector took a new version; now in use here too` (INFO, 1.3) | Another replica took a newer version and recorded it in the database; this process moved to it (`from`, `to`) within 5 seconds, from its cache folder or downloaded, and checks the stored datasets again unless that replica did already | Nothing |
+| `bundle: cannot move to the version in use; keeping version ...` (ERROR, 1.3) | The version recorded in the database cannot be read from this container's cache folder nor downloaded (`error`); this process keeps checking with its own version and tries again in 5 seconds | Check the network to the authority and `PORTITOR_BUNDLE_CACHE_DIR` on this container |
+| `catalog: the stored datasets cannot be read` (ERROR, 1.3) | A catalog or dataset request could not read the datasets from the database (they are read on each request); the partner got HTTP 500 | Check that the database answers (readiness check `database`) |
 | `bundle verified, but not written to the cache` (WARN) | The cache folder is not writable | Check `PORTITOR_BUNDLE_CACHE_DIR` and the volume |
 | `bundle rules in force` (INFO, at start) | The bundle's `version`, `profile`, the `access_rights` it has dataset shapes for, and whether it has `message_shapes` | Nothing |
 | `bundle shapes: ignored by the SHACL engine` (INFO or WARN, at start) | A SHACL term the engine ignores (`sh:extends`, `sh:shape`, `sh:property` without `sh:path` at INFO: expected for HealthDCAT-AP and DCAT-AP; anything else at WARN) | Nothing at INFO; at WARN, ask the authority |
@@ -183,14 +193,16 @@ export on, `telemetry: exporting` (INFO).
 | `credential request outcome unknown; kept open` (WARN) | No answer in time, a network error, or HTTP 408, 429 or 5xx from the issuer; the request stays open for a late delivery |
 | `repeated delivery acknowledged` (INFO) | The issuer sent an answer again that closed a request before; nothing was stored twice |
 | `the issuer gave no usable Location for the request` (WARN) | The issuer took the request but gave no status URL on its own host; the delivery is still accepted, only the issuer's status cannot be shown |
-| `identity store failed` (ERROR) | The SQLite file could not be read or written |
+| `identity store failed` (ERROR) | The database could not be read or written |
 | `certificate chain reloaded` (INFO) | A renewed certificate chain for the same key is in use |
 | `new certificate chain refused; the old one stays` (ERROR) | The chain file changed but cannot be used: unreadable, not PEM, or for another key; `reason` says which |
 | `Gaia-X compliance credential stored` (INFO) | A run succeeded; `valid_until` is when the compliance credential expires |
 | `Gaia-X compliance run failed; the stored credentials stay` (ERROR) | A run failed; `error` says why (the service refused, its answer did not check out, ...). It is tried again |
 
-Used token ids (`jti`) are kept in memory until their token expires
-(ADR 0016), so run one replica per database file.
+Used token ids (`jti`) are kept in the database until their token
+expires, so a token used on one replica is refused on the others
+([ADR 0029](adr/0029-several-replicas.md); before 1.3 they were kept in
+memory). This holds for all three components, and after a restart too.
 
 ### Issuer logs
 
@@ -406,11 +418,22 @@ attributes.
 
 ## Backup and restore
 
-The connector's database is `/data/portitor.db` plus, while it runs,
-`portitor.db-wal` and `portitor.db-shm`. The identity
+Keep the issuer's key backup separate from its database backup.
+
+**PostgreSQL.** Back up each component's database with the tools of
+PostgreSQL, for example `pg_dump --format=custom` while the components
+run, and restore with `pg_restore` into an empty database while they
+are stopped. Which tool fits your server (dumps, base backups,
+point-in-time recovery) is in the PostgreSQL manual, chapter "Backup
+and Restore" (<https://www.postgresql.org/docs/current/backup.html>).
+Replicas of a component share one database, so there is one backup per
+component, not one per container.
+
+**SQLite (deprecated).** The connector's database is
+`/data/portitor.db` plus, while it runs, `portitor.db-wal` and
+`portitor.db-shm`. The identity
 (`/data/portitor-identity.db*`) and the issuer
-(`/data/portitor-issuer.db*`) work the same way. Keep the issuer's key
-backup separate from its database backup.
+(`/data/portitor-issuer.db*`) work the same way.
 
 - **Simple and safe:** stop the container, copy all `portitor.db*` files,
   start it again.
@@ -458,9 +481,17 @@ the same way: the old key stays listed until it is revoked
      the signing key, and the chain is published for the current key
      only. When the run succeeds, the Gaia-X credentials of the old key
      are replaced;
-   - issuer: every credential it issued (their `validityDays`). Status
-     lists are signed again with the new key at start. To end sooner,
-     reissue the credentials with the new key.
+   - issuer: every credential it issued (their `validityDays`). To end
+     sooner, reissue the credentials with the new key. The status lists
+     need no wait. They are kept in the database with the id of the key
+     that signed them. An issuer that starts with the new key (step 3)
+     signs each list again when another key signed it, and logs
+     `status list signed and stored`; a revocation also signs its list
+     again. So from step 3 on, the lists carry the new key, long before
+     step 6 removes the old one. With several replicas, this happens
+     when the replicas restart with the new key (step 4 below); the
+     last replica that restarts signs again a list that a replica with
+     the old key signed in the meantime.
 6. Remove the file from the setting and restart. The old key id leaves
    the DID document; what the old key signed no longer verifies.
 
@@ -470,6 +501,35 @@ Verifiers cache DID documents (Portitor for
 refused for that long after step 3 by a verifier that has not seen the
 new document. Do step 3 when the component is quiet. For the same
 reason a key removed in step 6 is still accepted for that long.
+
+### Rotating a key with several replicas
+
+With several containers of the identity or the issuer, a partner may
+read the DID document from any of them. Restarting them one by one with
+the steps above would let some show the old key only while others
+already sign with the new one. Do it in two rolling steps instead, so
+every replica lists both keys before any signs with the new one
+([ADR 0029](adr/0029-several-replicas.md), D7;
+[TD-58](RISKS_AND_TECHNICAL_DEBTS.md#td-58)):
+
+1. Make the new key (step 1 above) and write **its public key** to a
+   file: `openssl pkey -in new-key.pem -pubout -out new-key.pub.pem`.
+2. On every replica, keep the old key as the key file and list
+   `new-key.pub.pem` in `PORTITOR_IDENTITY_RETIRED_KEY_FILES` (or
+   `PORTITOR_ISSUER_RETIRED_KEY_FILES`). Restart the replicas one by
+   one. The new key is now listed on every replica and signs nothing.
+   The start checks allow this: the file holds a public key that is not
+   the current one.
+3. Wait `PORTITOR_DID_CACHE_SECONDS` of your partners (5 minutes by
+   default), so their caches hold the document with both keys.
+4. On every replica, mount `new-key.pem` as the key file and list the
+   old public key (`old-key.pub.pem`, step 2 above) as retired, instead
+   of the new one. With Gaia-X, mount the chain of the new key too.
+   Restart the replicas one by one. While some replicas still run the
+   old key, every replica lists both, and each accepts the access
+   tokens the others signed.
+5. Go on with steps 4 to 6 above: destroy the old private key, wait,
+   then remove the retired file and restart the replicas one by one.
 
 **A leaked or lost key.** Never list a leaked key as retired: anyone
 with it could sign in your name while it is listed. Change the key
@@ -481,13 +541,21 @@ leaked) can be listed as retired, since only its public key is needed.
 
 1. Read the [CHANGELOG](../CHANGELOG.md) entries between your version and
    the new one.
-2. Back up `/data`.
-3. Replace the container with the new image. Database migrations run at
+2. Back up the database ([Backup and restore](#backup-and-restore)).
+3. Replace the containers with the new image. Database migrations run at
    start, forward only.
 4. Check the start log and the readiness check on the management port
    (`GET /api/check/readiness` answers HTTP 200;
    [Health and logs](#health-and-logs)). `/health` only shows that the
    process runs.
+
+With several replicas on PostgreSQL, the first replica of the new
+release that starts runs the migrations, under a lock in the database;
+replicas that start at the same time wait for it, then find nothing to
+do. Migrations run forward only, so a replica of the older release
+that starts after them refuses the database. Unless the notes of the
+release say that its replicas may run next to older ones, stop every
+replica of the older release, then start the new ones.
 
 Rollback: an older version refuses a database that a newer version
 migrated (`database schema version N is newer than this Portitor`). Restore
@@ -496,8 +564,62 @@ after the backup is lost. This stays so in 1.x
 ([TD-22](RISKS_AND_TECHNICAL_DEBTS.md#td-22), [STABILITY](STABILITY.md#database)).
 
 Messages the connector was sending when it stopped are saved and sent
-again at start (ADR 0007), so an upgrade does not leave negotiations
-waiting. A partner may receive such a message twice; that is handled.
+again (ADR 0007): from 1.3 by any running replica once their lease
+of 30 seconds ends (each process looks for them every second), or at
+the next start, so an upgrade does not leave negotiations waiting. A
+partner may receive such a message twice; that is handled.
+
+### From 1.2 to 1.3
+
+1.3 adds PostgreSQL and lets several containers of each component share
+one database ([ADR 0029](adr/0029-several-replicas.md)).
+
+1. **Back up first.** Migrations run at start, forward only. To go back
+   to 1.2, restore the backup.
+2. **SQLite is deprecated.** A component on a SQLite file keeps
+   working, for one process, and logs at start `SQLite is deprecated
+   since 1.3 and is removed in 2.0`. A second process on the same file
+   now refuses to start, with `the SQLite file ... is in use by another
+   process`. The first process holds a lease row in the file (table
+   `portitor_process_lease`), renews it every 10 seconds and removes it
+   when it stops. After a crash the row stays until its lease ends: a
+   new process can start at most 30 seconds later (a container that is
+   restarted at once stops with that error once or twice). Nothing else
+   to do until 2.0.
+3. **PostgreSQL is optional in 1.3** for an existing deployment. To use
+   it, read [From SQLite to PostgreSQL](#from-sqlite-to-postgresql)
+   first: there is no tool yet that copies your data.
+4. **Several replicas** need PostgreSQL
+   ([DEPLOYING, Database](DEPLOYING.md#database)), and the two-step
+   [key rotation](#rotating-a-key-with-several-replicas).
+5. **What each replica asks of the database.** Every second, each
+   connector replica reads the pending messages of its four outboxes,
+   the started pushes and their leases, and deletes the leases that
+   ended an hour ago (an index on `lease.lease_until` keeps that
+   cheap). With many replicas, or many pending messages, count this in
+   the database's load and its connection pool.
+
+### From SQLite to PostgreSQL
+
+The tool that copies a SQLite file into PostgreSQL is planned for 1.4,
+before 2.0 removes SQLite
+([ROADMAP](ROADMAP.md#14-purpose-and-data-permit-in-policies)). Until
+then, a component moved to PostgreSQL starts with an empty database:
+
+- the connector forgets its negotiations, agreements, transfers and
+  data flows, while partners keep theirs. Existing agreements can no
+  longer be used, and running transfers stop;
+- the identity forgets its credentials: ask the issuers again
+  ([Getting a credential](DEPLOYING.md#getting-a-credential));
+- the issuer forgets its participants, the credentials it issued and
+  their status lists, so it can no longer revoke them.
+
+So move a component only if it can start over, for example a new
+dataspace or a test. Otherwise keep it on its SQLite file, with one
+container, until the copy tool exists. For a move: set
+`PORTITOR_DATABASE_URL` and `PORTITOR_DATABASE_PASSWORD_FILE`, and
+leave `PORTITOR_DB_FILE` unset (a component with both refuses to
+start).
 
 ### From 1.1 to 1.2
 

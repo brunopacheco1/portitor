@@ -31,6 +31,7 @@ use portitor_dcp::bundle::{self, FileEntry, Manifest, MediaType, Role, VerifiedB
 use portitor_dsp::CONTEXT;
 use portitor_dsp::negotiation::NegotiationState;
 use portitor_runtime::BoxFuture;
+use portitor_runtime::database::DatabaseSetting;
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
@@ -210,7 +211,7 @@ fn config(participant: &str, public_url: &str) -> Config {
         datasets_file: None,
         harvest_interval_seconds: 0,
         allow_http: false,
-        db_file: "unused.db".into(),
+        database: DatabaseSetting::SqliteFile("unused.db".into()),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     }
@@ -630,14 +631,14 @@ fn stricter_files() -> Vec<File> {
 #[tokio::test]
 async fn a_new_bundle_version_hides_a_failing_dataset_and_keeps_its_transfers() {
     use common::network::Network;
-    use portitor_connector::store::SqliteNegotiations;
+    use portitor_connector::store::ConnectorStore;
 
     const PROVIDER_URL: &str = "https://provider.example";
     const CONSUMER_URL: &str = "https://consumer.example";
     let mut entry = health_entry("urn:example:health-1");
     entry["portitor:source"] = json!(upstream().await);
     let network = Arc::new(Network::default());
-    let store = Arc::new(SqliteNegotiations::in_memory().unwrap());
+    let store = Arc::new(ConnectorStore::in_memory().unwrap());
     let provider_config = config(PROVIDER, PROVIDER_URL);
     // the provider with a bundle version; on `store`, so a restart keeps its copy
     let start_provider = |version: &str, files: Vec<File>| {
@@ -646,7 +647,7 @@ async fn a_new_bundle_version_hides_a_failing_dataset_and_keeps_its_transfers() 
             common::ports(Arc::clone(&network) as Arc<dyn Sender>),
             PROVIDER,
         );
-        ports.use_sqlite(&store);
+        ports.use_database(&store);
         ports.harvest.source = Some(Arc::new(FixedSource::new(vec![entry.clone()])));
         ports.use_bundle_rules(&BundleCopy::new(rules.clone()));
         let (app, negotiator) = portitor_connector::build(&provider_config, ports).unwrap();

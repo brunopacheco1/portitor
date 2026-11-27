@@ -180,10 +180,16 @@ CI runs [cargo-vet](https://mozilla.github.io/cargo-vet/) (`cargo vet
   same audits every time (`--locked` fetches no newer ones).
 
 Imported sets (from [cargo-vet's registry](https://github.com/mozilla/cargo-vet/blob/main/registry.toml)):
-Mozilla, Google, Bytecode Alliance, ISRG and Zcash. On 2026-11-16 they
-cover 45 of the 204 crate versions; the other 159 are exempted at the
-versions locked that day. An exemption means "trusted as it is, not
-reviewed"; it does not cover a newer version.
+Mozilla, Google, Bytecode Alliance, ISRG and Zcash. On 2026-11-26 they
+cover 57 of the 243 crate versions fully and 1 partly; the other 185
+are exempted at the versions locked that day. An exemption means
+"trusted as it is, not reviewed"; it does not cover a newer version.
+
+Since 2026-11-26 (maintainer) `audits.toml` holds no audit: the six
+delta audits recorded before were replaced by exemptions, because an
+audit must mean that a person read every line of the change. Record an
+audit only for code you actually read; otherwise exempt the version
+(step 3 below).
 
 Install it once with `cargo install cargo-vet --version 0.10.3 --locked`
 (the version CI uses).

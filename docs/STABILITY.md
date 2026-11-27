@@ -231,6 +231,8 @@ set", but spaces around a value are not dropped.
 PORTITOR_BIND
 PORTITOR_PARTICIPANT_ID
 PORTITOR_DB_FILE
+PORTITOR_DATABASE_URL
+PORTITOR_DATABASE_PASSWORD_FILE
 PORTITOR_ALLOW_HTTP
 PORTITOR_MANAGEMENT_BIND
 PORTITOR_MANAGEMENT_API_KEY_FILE
@@ -328,9 +330,17 @@ named in the CHANGELOG.
 
 ## Database
 
-Each component keeps its state in one SQLite file (`PORTITOR_DB_FILE`).
-The tables are not an interface: read the state through the management
-APIs.
+Each component keeps its state in a database: PostgreSQL (since 1.3),
+or a SQLite file (`PORTITOR_DB_FILE`). The tables are not an
+interface: read the state through the management APIs. Which
+PostgreSQL versions are supported is in
+[DEPLOYING, Database](DEPLOYING.md#database).
+
+**SQLite is deprecated since 1.3** (maintainer, 2026-11-26;
+[ADR 0029](adr/0029-several-replicas.md)). It keeps working in 1.x,
+for one process per file, and `PORTITOR_DB_FILE` stays in the list
+above until 2.0. 2.0 removes SQLite and `PORTITOR_DB_FILE`. A tool to
+copy a SQLite file into PostgreSQL comes in a 1.x release before 2.0.
 
 Migrations run at start and **forward only**. An older release refuses a
 database that a newer one migrated. To go back, restore the backup taken

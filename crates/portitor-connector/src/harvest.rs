@@ -9,15 +9,24 @@
 //!   datasets; [`FileSource`] reads the datasets file.
 //! - [`DatasetCheck`] (port) checks one entry; [`DspCheck`] holds the DSP
 //!   and ODRL rules, and [`BothChecks`] adds another check (SHACL) after it.
-//! - [`DatasetStore`] (port) keeps the read copy, the jobs and their
-//!   errors; the `SQLite` adapter is in `store/harvest.rs`.
+//! - [`DatasetStore`] (port) keeps the stored datasets, the jobs and their
+//!   errors; the database adapter is in `store/harvest.rs`.
 //! - `run` decides what a run changes, without I/O; [`DatasetHarvester`] runs it:
 //!   at start, then on a schedule, one run at a time.
-//! - [`DatasetCopy`] is what the DSP code and the data plane read: the copy in
-//!   memory, replaced after each run that changed it.
+//! - [`StoredCatalog`] is what the DSP code and the data plane read: the
+//!   stored datasets, read from the store on each request (ADR 0029, D4),
+//!   so every process that shares the database answers the same.
 //!
-//! The rule: the read copy changes only when a run succeeds, and a bad
-//! entry never replaces a good one.
+//! The rule: the stored datasets change only when a run succeeds, and a
+//! bad entry never replaces a good one.
+//!
+//! Several processes may share the store (ADR 0029). The scheduled run
+//! takes a lease, so one process runs it per interval ([`HARVEST_LEASE`]);
+//! the other runs (at start, after new rules, a bundle job) need none.
+//! What keeps every run right is the store: a run is written only if no
+//! other run was written since it read the store, and is otherwise
+//! planned again from the stored copy ([`DatasetStore::commit`]). A lock
+//! in the process (`busy`) keeps its own runs apart.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,22 +35,23 @@ use std::time::Duration;
 
 use portitor_dsp::Dataset;
 /// The error of every store port. The harvest keeps its read copy in the
-/// same `SQLite` file as the negotiations, so it reuses their store error
+/// same database as the negotiations, so it reuses their store error
 /// (named after negotiations, but it means "the store failed").
 pub use portitor_dsp::negotiation::provider::StoreError;
+use portitor_runtime::leases::Leases;
 use portitor_runtime::panics::spawn_supervised;
 use portitor_runtime::telemetry::metrics;
 
+mod catalog;
 mod check;
-mod copy;
 mod memory;
 mod run;
 mod source;
 
+pub use catalog::{StoredCatalog, UpstreamSources};
 pub use check::{
     BothChecks, CHECKS_VERSION, CheckKind, CheckedDataset, DatasetCheck, DspCheck, EntryFailure,
 };
-pub use copy::{DatasetCopy, UpstreamSources};
 pub use memory::InMemoryDatasetStore;
 pub(crate) use run::count;
 pub use run::{MAX_REPORT_RESULTS, MAX_STORED_ERRORS, SOURCE_KEY};
@@ -306,6 +316,10 @@ pub struct HarvestStatus {
     pub rules_version: Option<String>,
     /// SHA-256 of the last snapshot taken; none forces a full run.
     pub snapshot_sha256: Option<String>,
+    /// How many runs were written: each commit counts it up. A run
+    /// writes only if it is still the number it read before it read the
+    /// datasets (compare-and-swap, [`DatasetStore::commit`]).
+    pub version: u64,
 }
 
 /// Everything one run writes, in one transaction.
@@ -317,7 +331,8 @@ pub struct Commit {
     pub errors: Vec<EntryError>,
     /// Datasets added or changed (their `last_job` is set to the new job).
     pub writes: Vec<StoredDataset>,
-    /// The status after the run.
+    /// The status after the run. Its `version` is the one the run read
+    /// before it read anything else; the store counts it up.
     pub status: HarvestStatus,
 }
 
@@ -329,6 +344,21 @@ pub trait DatasetStore: Send + Sync {
     ///
     /// The store cannot be read.
     fn datasets(&self) -> Result<Vec<StoredDataset>, StoreError>;
+
+    /// The catalog: the active datasets as the catalog shows them, in id
+    /// order (the order of the bytes of their ids, on every database).
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be read.
+    fn catalog(&self) -> Result<Vec<Dataset>, StoreError>;
+
+    /// One dataset, in any state.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be read.
+    fn dataset(&self, id: &str) -> Result<Option<StoredDataset>, StoreError>;
 
     /// The rules version and the last snapshot hash.
     ///
@@ -342,10 +372,16 @@ pub trait DatasetStore: Send + Sync {
     /// the jobs older than the last [`KEPT_JOBS`] with their errors.
     /// Returns the new job's id.
     ///
+    /// Several processes may run at once (ADR 0029): the run is written
+    /// only if no other run was written since it read the status, which
+    /// the status's `version` tells. Otherwise nothing is written and the
+    /// answer is `None`: the run was planned from a copy that is no
+    /// longer the stored one, and must be planned again.
+    ///
     /// # Errors
     ///
     /// The store cannot be written; nothing was written.
-    fn commit(&self, commit: &Commit) -> Result<u64, StoreError>;
+    fn commit(&self, commit: &Commit) -> Result<Option<u64>, StoreError>;
 
     /// Up to `limit` jobs older than job `before` (all when `None`), newest
     /// first.
@@ -386,7 +422,8 @@ impl std::fmt::Debug for HarvestPorts {
 }
 
 impl Default for HarvestPorts {
-    /// The copy in memory, the source from the configuration, DSP rules only.
+    /// The datasets in memory, the source from the configuration, DSP
+    /// rules only.
     fn default() -> Self {
         Self {
             store: Shared(Arc::new(InMemoryDatasetStore::default())),
@@ -401,7 +438,6 @@ pub struct DatasetHarvester {
     source: Arc<dyn DatasetSource>,
     check: Arc<dyn DatasetCheck>,
     store: Arc<dyn DatasetStore>,
-    copy: DatasetCopy,
     /// Held while a run is going on.
     busy: Mutex<()>,
     /// Set once [`DatasetHarvester::start`] has run (readiness, ADR 0023).
@@ -439,16 +475,16 @@ impl DatasetHarvester {
             source,
             check,
             store,
-            copy: DatasetCopy::default(),
             busy: Mutex::new(()),
             started: AtomicBool::new(false),
         }
     }
 
-    /// The read copy the DSP code and the data plane use.
+    /// The catalog the DSP code and the data plane use: read from the
+    /// store on each call, never from memory.
     #[must_use]
-    pub fn copy(&self) -> DatasetCopy {
-        self.copy.clone()
+    pub fn catalog(&self) -> StoredCatalog {
+        StoredCatalog::new(Arc::clone(&self.store))
     }
 
     /// The store, for the management API.
@@ -457,16 +493,15 @@ impl DatasetHarvester {
         &self.store
     }
 
-    /// The start: loads the stored copy, checks it again if the rules
-    /// changed (a `bundle` job), then runs a harvest (a `start` job). A
-    /// source that fails leaves the stored copy (empty on the first start).
+    /// The start: checks the stored datasets again if the rules changed
+    /// (a `bundle` job), then runs a harvest (a `start` job). A source
+    /// that fails leaves the stored datasets (none on the first start).
     ///
     /// # Errors
     ///
-    /// The stored copy cannot be read.
+    /// The stored datasets cannot be read.
     pub fn start(&self) -> Result<(), StoreError> {
         let _running = self.busy.lock().unwrap_or_else(PoisonError::into_inner);
-        self.reload()?;
         let rules_changed = self.recheck_if_rules_changed()?;
         // new rules: every entry of the source is checked again, even if
         // the snapshot is the same, as some rejected before may pass now
@@ -476,7 +511,7 @@ impl DatasetHarvester {
                 "harvest: cannot store the run; the catalog keeps the stored datasets"
             );
         }
-        tracing::info!(datasets = self.copy.active_count(), "catalog ready");
+        tracing::info!(datasets = self.catalog().active_count()?, "catalog ready");
         self.started.store(true, Ordering::SeqCst);
         Ok(())
     }
@@ -510,6 +545,18 @@ impl DatasetHarvester {
         }
     }
 
+    /// Another process of the connector took a new bundle version, and
+    /// this process moved to it (TD-55): checks the stored datasets again
+    /// with the new rules, unless the store says they were checked with
+    /// them already (by that process). The check clears the snapshot
+    /// hash, so the next run checks every entry of the source. Blocking.
+    pub fn rules_moved(&self) {
+        let _running = self.busy.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Err(e) = self.recheck_if_rules_changed() {
+            tracing::error!(error = %e, "harvest: cannot check the stored datasets again");
+        }
+    }
+
     /// Adds a run of the bundle harvester (kind `bundle`) to the job log.
     /// It writes no dataset and keeps the harvest status. Waits for a
     /// run going on, so the status it keeps is the latest. Blocking.
@@ -517,31 +564,45 @@ impl DatasetHarvester {
     /// # Errors
     ///
     /// The store cannot be written.
-    pub fn record_bundle_run(&self, job: JobRecord) -> Result<u64, StoreError> {
+    pub fn record_bundle_run(&self, job: &JobRecord) -> Result<u64, StoreError> {
         let _running = self.busy.lock().unwrap_or_else(PoisonError::into_inner);
-        let status = self.store.status()?;
-        let commit = Commit {
-            job,
-            errors: Vec::new(),
-            writes: Vec::new(),
-            status,
-        };
-        let id = self.store.commit(&commit)?;
-        measure_run(&commit);
-        Ok(id)
+        until_committed("bundle job", || {
+            let commit = Commit {
+                job: job.clone(),
+                errors: Vec::new(),
+                writes: Vec::new(),
+                status: self.store.status()?,
+            };
+            let id = self.store.commit(&commit)?;
+            if id.is_some() {
+                measure_run(&commit);
+            }
+            Ok(id)
+        })
     }
 
     /// Checks the stored datasets again if the rules are not the ones
     /// they were last checked with. Returns whether they changed. A check
     /// that cannot be stored is logged; the caller goes on.
     fn recheck_if_rules_changed(&self) -> Result<bool, StoreError> {
-        let status = self.store.status()?;
         let rules = self.check.rules_version();
-        let changed = status.rules_version.as_deref() != Some(rules.as_str());
-        if changed && let Err(e) = self.recheck(&rules) {
+        let checked_with =
+            |status: &HarvestStatus| status.rules_version.as_deref() == Some(rules.as_str());
+        if checked_with(&self.store.status()?) {
+            return Ok(false);
+        }
+        let rechecked = until_committed("check again", || {
+            let status = self.store.status()?;
+            if checked_with(&status) {
+                // another process checked them with these rules meanwhile
+                return Ok(Some(()));
+            }
+            self.recheck(&rules, status.version)
+        });
+        if let Err(e) = rechecked {
             tracing::error!(error = %e, "harvest: cannot check the stored datasets again");
         }
-        Ok(changed)
+        Ok(true)
     }
 
     /// One run, unless one is going on. Blocking: it reads the source and
@@ -577,18 +638,31 @@ impl DatasetHarvester {
     /// `every` after now (the start run is done by [`DatasetHarvester::start`]).
     /// A zero `every` means no schedule (`None`). Must be called inside
     /// the Tokio runtime.
+    ///
+    /// Several processes on one database run one harvest per interval
+    /// between them (TD-56): a run needs the job's lease in `leases`
+    /// ([`HARVEST_LEASE`]), renewed while it runs, and kept after it until
+    /// the next run is due. A process that finds the lease held skips its
+    /// turn. A process that stops in a run leaves its lease to end; the
+    /// next tick of any process after that runs.
     #[must_use]
-    pub fn schedule(self: &Arc<Self>, every: Duration) -> Option<tokio::task::JoinHandle<()>> {
+    pub fn schedule(
+        self: &Arc<Self>,
+        every: Duration,
+        leases: &Leases,
+    ) -> Option<tokio::task::JoinHandle<()>> {
         if every.is_zero() {
             return None;
         }
         let harvester = Arc::clone(self);
+        let leases = leases.clone();
         // supervised, as every task that runs as long as the process
         // (the closure makes the task anew after a panic, with its own
         // pointer to the harvester). A run that panics does not end the
         // schedule at all: it runs on its own thread, see below
         let schedule = move || {
             let harvester = Arc::clone(&harvester);
+            let leases = leases.clone();
             async move {
                 let first = tokio::time::Instant::now() + every;
                 let mut ticks = tokio::time::interval_at(first, every);
@@ -596,31 +670,23 @@ impl DatasetHarvester {
                 ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
                     ticks.tick().await;
-                    let runner = Arc::clone(&harvester);
-                    // the run reads a file and writes SQLite: blocking work
-                    let ran = tokio::task::spawn_blocking(move || runner.run(Trigger::Interval));
-                    // a run that panicked: logged and counted; the schedule
-                    // goes on with the next tick
-                    if let Err(e) = ran.await {
-                        tracing::error!(error = %e, "harvest run stopped unexpectedly");
-                        metrics::task_panicked("dataset_harvest");
-                    }
+                    run_if_due(&harvester, &leases, every).await;
                 }
             }
         };
         Some(spawn_supervised("dataset_harvest", schedule))
     }
 
-    /// Loads the copy from the store into memory.
-    fn reload(&self) -> Result<(), StoreError> {
-        let datasets = self.store.datasets()?;
-        self.copy.replace(&datasets);
-        Ok(())
+    /// Takes a snapshot, decides the changes, and commits them. `full`:
+    /// check every entry even if the snapshot is unchanged. Planned again
+    /// when another process wrote a run meanwhile ([`until_committed`]).
+    fn run_now(&self, trigger: Trigger, full: bool) -> Result<HarvestJob, StoreError> {
+        until_committed("harvest", || self.run_once(trigger, full))
     }
 
-    /// Takes a snapshot, decides the changes, and commits them. `full`:
-    /// check every entry even if the snapshot is unchanged.
-    fn run_now(&self, trigger: Trigger, full: bool) -> Result<HarvestJob, StoreError> {
+    /// One try of [`DatasetHarvester::run_now`]: `None` when another run
+    /// was written since this one read the status.
+    fn run_once(&self, trigger: Trigger, full: bool) -> Result<Option<HarvestJob>, StoreError> {
         let started_at = now_secs();
         let status = self.store.status()?;
         // the job record of this run: only how it ended differs
@@ -668,25 +734,30 @@ impl DatasetHarvester {
         let after = HarvestStatus {
             rules_version: Some(self.check.rules_version()),
             snapshot_sha256: Some(snapshot.sha256),
+            // what this run read, before the datasets
+            version: status.version,
         };
         self.commit(done, plan, after)
     }
 
     /// Checks the stored active and hidden datasets again with the rules
     /// now in force, `rules` (a `bundle` job), and clears the snapshot hash
-    /// so the next run checks every entry of the source again.
-    fn recheck(&self, rules: &str) -> Result<(), StoreError> {
+    /// so the next run checks every entry of the source again. `version`:
+    /// the status's, read before the datasets. `None` when another run
+    /// was written since.
+    fn recheck(&self, rules: &str, version: u64) -> Result<Option<()>, StoreError> {
         let started_at = now_secs();
         let stored = self.stored_by_id()?;
         let after = HarvestStatus {
             rules_version: Some(rules.to_owned()),
             snapshot_sha256: None,
+            version,
         };
         let plan = run::plan_recheck(&stored, self.check.as_ref(), started_at);
         if plan.counts.seen == 0 {
             // nothing stored to check: the start run that follows checks
             // every entry and remembers the rules
-            return Ok(());
+            return Ok(Some(()));
         }
         let job = JobRecord {
             kind: JobKind::Datasets,
@@ -699,7 +770,8 @@ impl DatasetHarvester {
             counts: plan.counts,
             summary: format!("rules changed to {rules}: {}", run::summary(&plan.counts)),
         };
-        self.commit(job, plan, after).map(|_| ())
+        let committed = self.commit(job, plan, after)?;
+        Ok(committed.map(|_| ()))
     }
 
     fn stored_by_id(&self) -> Result<BTreeMap<String, StoredDataset>, StoreError> {
@@ -710,32 +782,62 @@ impl DatasetHarvester {
         Ok(by_id)
     }
 
-    /// Commits a run, logs it, and refreshes the copy in memory if the run
-    /// changed it.
+    /// Commits a run and logs it. The next request reads what it wrote.
+    /// `None`, with nothing written, when another run was written since
+    /// this one read `status` ([`DatasetStore::commit`]).
     fn commit(
         &self,
         job: JobRecord,
         plan: run::Plan,
         status: HarvestStatus,
-    ) -> Result<HarvestJob, StoreError> {
-        let changed = !plan.writes.is_empty();
+    ) -> Result<Option<HarvestJob>, StoreError> {
         let commit = Commit {
             job,
             errors: plan.errors,
             writes: plan.writes,
             status,
         };
-        let id = self.store.commit(&commit)?;
-        if changed {
-            self.reload()?;
-        }
+        let Some(id) = self.store.commit(&commit)? else {
+            return Ok(None);
+        };
         log_run(id, &commit);
         measure_run(&commit);
-        Ok(HarvestJob {
+        Ok(Some(HarvestJob {
             id,
             record: commit.job,
-        })
+        }))
     }
+}
+
+/// How many times a run is planned when other processes keep writing
+/// runs first. Each time one of them wins, so with fewer replicas than
+/// this all of them get through, also when they start together.
+const PLAN_TRIES: usize = 10;
+
+/// Runs `attempt` until it writes its run. `None` from `attempt` says
+/// that another run was written since it read the store (by another
+/// process: in this one the `busy` lock keeps runs apart), so it plans
+/// again from what is stored now. Why plan again rather than skip: the
+/// other run may have been of another kind (a bundle job, a check with
+/// new rules), so this one's work may still be needed; planned again, a
+/// run whose work is done already finds it so (the same rules, the same
+/// snapshot) and writes only its job.
+fn until_committed<T>(
+    what: &str,
+    mut attempt: impl FnMut() -> Result<Option<T>, StoreError>,
+) -> Result<T, StoreError> {
+    for _ in 0..PLAN_TRIES {
+        if let Some(done) = attempt()? {
+            return Ok(done);
+        }
+        tracing::info!(
+            run = what,
+            "harvest: another process wrote a run first; planning again"
+        );
+    }
+    Err(StoreError(format!(
+        "{what}: other processes wrote runs first, {PLAN_TRIES} times"
+    )))
 }
 
 /// The run's metrics: how it ended, and the rejected entries by check.
@@ -795,6 +897,36 @@ fn log_run(id: u64, commit: &Commit) {
         rejected = counts.rejected,
         "harvest run"
     );
+}
+
+/// The kind and the id of the lease of the scheduled dataset harvest in
+/// the database (TD-56, `portitor_runtime::leases`).
+pub const HARVEST_LEASE: (&str, &str) = ("job", "dataset_harvest");
+
+/// One tick of [`DatasetHarvester::schedule`]: a run, if this process can
+/// take the job's lease. After the run, the lease is kept until a second
+/// before the next tick of this process, so that no process runs again
+/// within the interval, and this process finds it ended at its next tick.
+async fn run_if_due(harvester: &Arc<DatasetHarvester>, leases: &Leases, every: Duration) {
+    let ticked = leases.now();
+    let (kind, id) = HARVEST_LEASE;
+    // held by another process in this interval, or the store failed
+    // (logged): the next tick tries again
+    let Some(lease) = leases.claim(kind, id).taken() else {
+        tracing::debug!("harvest: another process runs it in this interval");
+        return;
+    };
+    let runner = Arc::clone(harvester);
+    // the run reads a file and writes the store: blocking work
+    let ran = tokio::task::spawn_blocking(move || runner.run(Trigger::Interval));
+    // a run that panicked: logged and counted; the schedule goes on with
+    // the next tick
+    if let Err(e) = ran.await {
+        tracing::error!(error = %e, "harvest run stopped unexpectedly");
+        metrics::task_panicked("dataset_harvest");
+    }
+    let next_due = ticked.saturating_add(every.as_secs()).saturating_sub(1);
+    lease.hold_until(next_due);
 }
 
 #[cfg(test)]

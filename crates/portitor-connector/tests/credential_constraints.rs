@@ -40,6 +40,7 @@ use portitor_dsp::negotiation::NegotiationState;
 use portitor_dsp::policy::{CredentialTypes, HeldCredential, MEMBERSHIP};
 use portitor_dsp::transfer::TransferState;
 use portitor_runtime::BoxFuture;
+use portitor_runtime::database::DatabaseSetting;
 use portitor_runtime::system::{new_uuid, now_secs};
 use serde_json::{Value, json};
 
@@ -190,7 +191,7 @@ fn config(participant: &str, public_url: &str) -> Config {
         datasets_file: None,
         harvest_interval_seconds: 0,
         allow_http: false,
-        db_file: "unused.db".into(),
+        database: DatabaseSetting::SqliteFile("unused.db".into()),
         data_token_seconds: 3_600,
         credential_types: types(),
     }
@@ -402,7 +403,7 @@ async fn an_offer_on_a_type_that_is_not_configured_is_rejected() {
     let mut provider_ports = ports(&network, PROVIDER_DID, &wallets, &queries);
     provider_ports.harvest.source = Some(Arc::new(FixedSource::new(vec![reports()])));
     let (_, provider) = portitor_connector::build(&provider, provider_ports).unwrap();
-    assert_eq!(provider.catalog_size(), 0);
+    assert_eq!(provider.catalog_size().unwrap(), 0);
     let jobs = provider.harvest_jobs(None, 10).unwrap();
     let (job, errors) = provider.harvest_job(jobs[0].id).unwrap().unwrap();
     assert_eq!(job.record.counts.rejected, 1);
@@ -822,7 +823,9 @@ fn verified_connectors(network: &Arc<Network>, dataspace: &LocalDataspace) -> Ne
         did_cache_seconds: 300,
     };
     let mut provider_ports = common::ports(Arc::clone(network) as Arc<dyn Sender>);
-    provider_ports.verifier = Arc::new(DcpVerifier::new(&settings, Arc::new(ProviderSts)).unwrap());
+    let used_token_ids = Arc::new(portitor_connector::store::ConnectorStore::in_memory().unwrap());
+    provider_ports.verifier =
+        Arc::new(DcpVerifier::new(&settings, Arc::new(ProviderSts), used_token_ids).unwrap());
     provider_ports.prover = Arc::new(common::NameSelf {
         did: PROVIDER_DID.to_owned(),
         audiences: common::Audiences::default(),

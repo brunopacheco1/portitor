@@ -23,11 +23,12 @@ use portitor_dcp::{
     Claims, DidDocument, JtiCache, Jws, Relationship, Service, SigningKey, VerificationMethod,
     validate_self_issued,
 };
-use portitor_issuer::config::Config;
+use portitor_issuer::config::{Config, DatabaseSetting};
 use portitor_issuer::management::openapi_json;
 use portitor_issuer::store::{
-    CredentialRequest, Delivery, DeliveryState, IssueOutcome, IssueRules, IssuedWithDelivery,
-    IssuerStore, Participant, Planned, Revocation, SignCredentials, SqliteStore, StoreError,
+    CredentialRequest, DatabaseStore, Delivery, DeliveryState, IssueOutcome, IssueRules,
+    IssuedWithDelivery, IssuerStore, Lease, Participant, Planned, Revocation, SignCredentials,
+    SignStatusList, SignedStatusList, StoreError,
 };
 use portitor_issuer::{Issuer, Ports, definitions, delivery, issue};
 use portitor_runtime::BoxFuture;
@@ -35,10 +36,11 @@ use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::directory::Directory;
 use portitor_runtime::http::Sender;
 use portitor_runtime::system::{new_uuid, now_secs};
-use portitor_runtime::testing::TempDir;
 use portitor_runtime::testing::management_calls::{
     Call, statuses_other_than, with_a_wrong_body, with_odd_paths_and_queries, without_the_key,
 };
+use portitor_runtime::testing::{TempDir, databases};
+use portitor_runtime::used_tokens::UsedTokenStore;
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
@@ -282,7 +284,7 @@ struct World {
     issuer: Arc<Issuer>,
     app: Router,
     management: Router,
-    store: Arc<SqliteStore>,
+    store: Arc<DatabaseStore>,
     directory: Arc<FakeDirectory>,
     sender: Arc<FakeSender>,
     holder: Party,
@@ -291,7 +293,7 @@ struct World {
 
 /// How a [`World`] is built.
 struct Setup {
-    store: SqliteStore,
+    store: DatabaseStore,
     key: SigningKey,
     max_active_per_holder: u64,
     /// `PORTITOR_ISSUER_BUNDLE_DIR`.
@@ -303,7 +305,7 @@ struct Setup {
 impl Setup {
     fn in_memory() -> Self {
         Self {
-            store: SqliteStore::in_memory().unwrap(),
+            store: DatabaseStore::in_memory().unwrap(),
             key: SigningKey::generate().unwrap(),
             max_active_per_holder: 10,
             bundle_dir: None,
@@ -314,8 +316,14 @@ impl Setup {
     /// The issuer on a file, with `key`: started again on the same file
     /// and key, it is the same issuer after a restart.
     fn on_file(path: &Path, key: &SigningKey) -> Self {
+        Self::on(&DatabaseSetting::SqliteFile(path.to_owned()), key)
+    }
+
+    /// The issuer on the database of `setting`, with `key`: two of them
+    /// on one PostgreSQL database are two replicas of one issuer.
+    fn on(setting: &DatabaseSetting, key: &SigningKey) -> Self {
         Self {
-            store: SqliteStore::open(path).unwrap(),
+            store: DatabaseStore::open(setting).unwrap(),
             key: SigningKey::from_pkcs8(key.pkcs8()).unwrap(),
             max_active_per_holder: 10,
             bundle_dir: None,
@@ -337,7 +345,7 @@ impl World {
     /// `port(store)`: a test can put a store that misbehaves in between.
     fn with_store_port(
         setup: Setup,
-        port: impl FnOnce(Arc<SqliteStore>) -> Arc<dyn IssuerStore>,
+        port: impl FnOnce(Arc<DatabaseStore>) -> Arc<dyn IssuerStore>,
     ) -> Self {
         let directory = Arc::new(FakeDirectory::default());
         let holder = Party::new(HOLDER);
@@ -353,7 +361,7 @@ impl World {
             credential_definitions_file: "unused".into(),
             issuer_service_url: SERVICE.to_owned(),
             bind: "unused".to_owned(),
-            db_file: "unused".into(),
+            database: portitor_runtime::database::DatabaseSetting::SqliteFile("unused".into()),
             management: portitor_issuer::config::ManagementConfig::health_only(
                 portitor_issuer::config::DEFAULT_MANAGEMENT_BIND,
             ),
@@ -976,6 +984,36 @@ async fn a_failed_delivery_is_retried_later() {
     assert_eq!(world.delivery().await, ("DELIVERED".to_owned(), None));
 }
 
+/// Each try takes long here: the clock moves 40 seconds each time it is
+/// read. Each claim and each record reads it again, so a lease and the
+/// next try count from when they are taken, not from when the round
+/// began (where the second delivery's lease would have ended before it
+/// was taken).
+#[tokio::test]
+async fn each_try_reads_the_clock_again() {
+    let world = World::new();
+    world.register(HOLDER, json!({})).await;
+    world.sender.fail_with(Some("HTTP 503 Service Unavailable"));
+    assert_eq!(world.ask("h-1", &["membership-vc20"]).await, "ISSUED");
+    assert_eq!(world.ask("h-2", &["membership-vc20"]).await, "ISSUED");
+    let start = now_secs();
+    let time = std::sync::atomic::AtomicU64::new(start);
+    let clock = || time.fetch_add(40, std::sync::atomic::Ordering::SeqCst);
+    // reads: the round at start; claim, record, claim, record 40 s apart
+    delivery::send_due_with(&world.issuer, &clock).await;
+    assert_eq!(world.sender.tries(), 2);
+    let mut next: Vec<u64> = world
+        .store
+        .due_deliveries(u64::MAX)
+        .unwrap()
+        .iter()
+        .map(|waiting| waiting.next_attempt_at)
+        .collect();
+    next.sort_unstable();
+    // recorded at start + 80 and start + 160, then one second
+    assert_eq!(next, [start + 81, start + 161]);
+}
+
 #[tokio::test]
 async fn a_delivery_is_given_up_after_the_last_try() {
     let world = World::new();
@@ -1076,7 +1114,7 @@ async fn revocation_sets_the_bit_and_signs_the_list_again() {
 
     for jwt in &jwts {
         let id = Credential::parse(jwt).unwrap().id.unwrap();
-        // revoking again signs the list again, and is fine
+        // revoking again changes nothing, and is fine
         for _ in 0..2 {
             assert_eq!(world.revoke(&id).await, StatusCode::NO_CONTENT);
         }
@@ -1227,11 +1265,45 @@ async fn after_a_restart_waiting_work_is_done_and_revocations_kept() {
     }
 }
 
+/// Two issuer processes on one PostgreSQL database (TD-51, TD-57): both
+/// outboxes run, and the holder gets the message once; a credential
+/// revoked on one is shown revoked by the lists of both.
+#[tokio::test]
+async fn two_replicas_on_postgres_share_the_outbox_and_the_lists() {
+    let Some(url) = databases::postgres_url() else {
+        return;
+    };
+    let setting = DatabaseSetting::Postgres(Box::new(databases::fresh_postgres_settings(&url)));
+    let key = SigningKey::generate().unwrap();
+    let a = World::with(Setup::on(&setting, &key));
+    let b = World::with(Setup::on(&setting, &key));
+    a.register(HOLDER, json!({})).await;
+    assert_eq!(a.ask("h-1", &["membership-vc20"]).await, "ISSUED");
+    tokio::join!(delivery::send_due(&a.issuer), delivery::send_due(&b.issuer));
+    let (sent_by_a, sent_by_b) = (a.sender.sent().len(), b.sender.sent().len());
+    assert_eq!(sent_by_a + sent_by_b, 1, "sent once");
+    let sender = if sent_by_a == 1 { &a } else { &b };
+    let jwt = sender.delivered(0)[0].clone();
+    let id = Credential::parse(&jwt).unwrap().id.unwrap();
+    assert_eq!(a.status_in_list(&jwt).await, Status::Clear);
+    assert_eq!(b.revoke(&id).await, StatusCode::NO_CONTENT);
+    assert_eq!(a.status_in_list(&jwt).await, Status::Set);
+    assert_eq!(b.status_in_list(&jwt).await, Status::Set);
+    // the delivery is recorded once, as delivered
+    assert_eq!(a.listed("").await[0]["delivery"], "DELIVERED");
+}
+
 /// A store whose `request` panics for one request, as a bug in deciding
 /// that request would; everything else goes to the real store.
 struct PanicsOnRequest {
-    inner: Arc<SqliteStore>,
+    inner: Arc<DatabaseStore>,
     issuer_pid: &'static str,
+}
+
+impl UsedTokenStore for PanicsOnRequest {
+    fn use_token_id(&self, token_id: &str, expires_at: u64, now: u64) -> Result<bool, String> {
+        self.inner.use_token_id(token_id, expires_at, now)
+    }
 }
 
 impl IssuerStore for PanicsOnRequest {
@@ -1273,20 +1345,53 @@ impl IssuerStore for PanicsOnRequest {
     fn due_deliveries(&self, now: u64) -> Result<Vec<Delivery>, StoreError> {
         self.inner.due_deliveries(now)
     }
+    fn claim_due_delivery(&self, now: u64, lease: Lease) -> Result<Option<Delivery>, StoreError> {
+        self.inner.claim_due_delivery(now, lease)
+    }
     fn next_delivery_at(&self) -> Result<Option<u64>, StoreError> {
         self.inner.next_delivery_at()
     }
-    fn retry_later(&self, issuer_pid: &str, attempts: u32, at: u64) -> Result<(), StoreError> {
-        self.inner.retry_later(issuer_pid, attempts, at)
+    fn retry_later(
+        &self,
+        issuer_pid: &str,
+        holder: &str,
+        attempts: u32,
+        at: u64,
+    ) -> Result<bool, StoreError> {
+        self.inner.retry_later(issuer_pid, holder, attempts, at)
     }
-    fn end_delivery(&self, issuer_pid: &str, state: DeliveryState) -> Result<(), StoreError> {
-        self.inner.end_delivery(issuer_pid, state)
+    fn end_delivery(
+        &self,
+        issuer_pid: &str,
+        holder: &str,
+        state: DeliveryState,
+    ) -> Result<bool, StoreError> {
+        self.inner.end_delivery(issuer_pid, holder, state)
     }
     fn issued(&self, holder: Option<&str>) -> Result<Vec<IssuedWithDelivery>, StoreError> {
         self.inner.issued(holder)
     }
-    fn revoke(&self, id: &str, now: u64) -> Result<Revocation, StoreError> {
-        self.inner.revoke(id, now)
+    fn revoke(
+        &self,
+        id: &str,
+        now: u64,
+        sign: &mut SignStatusList<'_>,
+    ) -> Result<Revocation, StoreError> {
+        self.inner.revoke(id, now, sign)
+    }
+    fn status_list(
+        &self,
+        profile: portitor_dcp::credential::Profile,
+    ) -> Result<Option<SignedStatusList>, StoreError> {
+        self.inner.status_list(profile)
+    }
+    fn sign_status_list_if_needed(
+        &self,
+        profile: portitor_dcp::credential::Profile,
+        kid: &str,
+        sign: &mut SignStatusList<'_>,
+    ) -> Result<bool, StoreError> {
+        self.inner.sign_status_list_if_needed(profile, kid, sign)
     }
     fn revoked_indexes(
         &self,
@@ -1424,7 +1529,7 @@ fn the_issuer_does_not_start_with_its_own_key_as_retired() {
         credential_definitions_file: "unused".into(),
         issuer_service_url: SERVICE.to_owned(),
         bind: "unused".to_owned(),
-        db_file: "unused".into(),
+        database: portitor_runtime::database::DatabaseSetting::SqliteFile("unused".into()),
         management: portitor_issuer::config::ManagementConfig::health_only(
             portitor_issuer::config::DEFAULT_MANAGEMENT_BIND,
         ),
@@ -1434,7 +1539,7 @@ fn the_issuer_does_not_start_with_its_own_key_as_retired() {
         bundle_dir: None,
     };
     let ports = Ports {
-        store: Arc::new(SqliteStore::in_memory().unwrap()),
+        store: Arc::new(DatabaseStore::in_memory().unwrap()),
         directory: Arc::new(FakeDirectory::default()),
         sender: Arc::new(FakeSender::default()),
     };
@@ -1673,7 +1778,8 @@ async fn health_checks_its_own_dependencies_without_the_key() {
     let world = World::with(Setup::on_file(&path, &SigningKey::generate().unwrap()));
     let checks = Arc::new(portitor_issuer::health::readiness_checks(
         &world.issuer,
-        path.clone(),
+        DatabaseSetting::SqliteFile(path.clone()),
+        Arc::clone(world.store.database()),
     ));
     let full = management_app(Arc::clone(&checks), Some(world.management.clone()));
     let get = |path: &str| Request::get(path).body(Body::empty()).unwrap();

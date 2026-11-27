@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: Portitor contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Product names that docs write without backticks; ".." keeps clippy's own list
+doc-valid-idents = ["PostgreSQL", ".."]

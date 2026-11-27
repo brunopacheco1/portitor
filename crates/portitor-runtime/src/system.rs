@@ -18,6 +18,18 @@ pub fn now_secs() -> u64 {
     }
 }
 
+/// This process's id: a random UUID, made the first time it is asked for
+/// and the same until the process stops. It names who holds a lease in
+/// the database (TD-48, ADR 0029 decision 6). Random, not the host name:
+/// two containers on one host, or a container started again, are other
+/// processes.
+static PROCESS_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// This process's id ([`PROCESS_ID`]).
+pub fn process_id() -> &'static str {
+    PROCESS_ID.get_or_init(new_uuid)
+}
+
 /// `bytes` as lower-case hexadecimal, two characters per byte.
 #[must_use]
 pub fn hex(bytes: &[u8]) -> String {

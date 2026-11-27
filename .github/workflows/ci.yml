@@ -37,6 +37,26 @@ jobs:
     if: ${{ needs.changes.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    # The store tests run on SQLite and on PostgreSQL (ADR 0029): the oldest and the newest
+    # version Portitor supports (DEPLOYING, "Database"). Test servers only: trust, no TLS
+    # (the TLS test has a server of its own, started in a step).
+    services:
+      postgres-oldest:
+        image: docker.io/library/postgres:16.16-alpine3.24@sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d
+        env:
+          POSTGRES_USER: portitor
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5416:5432"]
+        options: --health-cmd "pg_isready -U portitor" --health-interval 2s --health-timeout 5s --health-retries 30
+      postgres-newest:
+        image: docker.io/library/postgres:19.0-alpine3.24@sha256:cac45fb483caee3668946088a1c0532db89d5285c28dbfeac889b4068296e06f
+        env:
+          POSTGRES_USER: portitor
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5419:5432"]
+        options: --health-cmd "pg_isready -U portitor" --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      PORTITOR_TEST_REQUIRE_POSTGRES: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,15 +73,51 @@ jobs:
         run: |
           cargo clippy --workspace --all-targets --locked -- -D warnings
           cargo clippy -p portitor-connector --features tck --all-targets --locked -- -D warnings
-      - name: Test
+      # TLS for the database layer's TLS test (crates/portitor-runtime/tests/postgres.rs,
+      # tls_connections_check_the_server): a server whose certificate, for localhost, comes
+      # from a test CA made here. Started with docker run, as a service container starts
+      # before the steps and so before the certificate exists.
+      - name: Start PostgreSQL 16 with TLS
+        run: |
+          dir="$RUNNER_TEMP/postgres-tls"
+          mkdir -p "$dir"
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 \
+            -subj "/CN=Portitor CI database CA" -keyout "$dir/ca.key" -out "$dir/ca.crt"
+          openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=localhost" \
+            -keyout "$dir/server.key" -out "$dir/server.csr"
+          printf 'subjectAltName=DNS:localhost\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n' \
+            > "$dir/server.ext"
+          openssl x509 -req -in "$dir/server.csr" -CA "$dir/ca.crt" -CAkey "$dir/ca.key" \
+            -CAcreateserial -days 2 -extfile "$dir/server.ext" -out "$dir/server.crt"
+          # PostgreSQL reads its key only when its own user (70 in the alpine image) owns it
+          sudo chown 70:70 "$dir/server.key"
+          sudo chmod 600 "$dir/server.key"
+          docker run -d --name postgres-tls -p 5417:5432 -v "$dir:/tls:ro" \
+            -e POSTGRES_USER=portitor -e POSTGRES_HOST_AUTH_METHOD=trust \
+            docker.io/library/postgres:16.16-alpine3.24@sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d \
+            -c ssl=on -c ssl_cert_file=/tls/server.crt -c ssl_key_file=/tls/server.key
+          # over TCP: the image's first, temporary server listens on its socket only
+          for _ in $(seq 60); do
+            docker exec postgres-tls pg_isready -h 127.0.0.1 -U portitor && break
+            sleep 1
+          done
+          docker exec postgres-tls pg_isready -h 127.0.0.1 -U portitor
+          echo "PORTITOR_TEST_DATABASE_TLS_URL=postgresql://portitor@localhost:5417/postgres?sslmode=verify-full&sslrootcert=$dir/ca.crt" >> "$GITHUB_ENV"
+      - name: Test (PostgreSQL 19)
+        env:
+          PORTITOR_TEST_DATABASE_URL: postgresql://portitor@localhost:5419/postgres?sslmode=disable
         run: |
           cargo test --workspace --locked
           # the TCK scripts (test-only feature, never in a release build)
           cargo test -p portitor-connector --features tck --locked
+      - name: Test (PostgreSQL 16)
+        env:
+          PORTITOR_TEST_DATABASE_URL: postgresql://portitor@localhost:5416/postgres?sslmode=disable
+        run: cargo test --workspace --locked
       - name: Domain crates have no I/O dependencies (ADR 0004)
         run: |
           # web servers and clients, async I/O, databases, TLS
-          io='axum|hyper|hyper-util|hyper-rustls|tokio|mio|socket2|reqwest|ureq|rusqlite|libsqlite3-sys|sqlx|postgres|rustls'
+          io='axum|hyper|hyper-util|hyper-rustls|tokio|mio|socket2|reqwest|ureq|rusqlite|libsqlite3-sys|sqlx|postgres|tokio-postgres|rustls'
           for c in portitor-dsp portitor-dcp portitor-dps portitor-time portitor-shacl; do
             if cargo tree -p "$c" -e normal --prefix none | grep -E "^($io) "; then
               echo "::error::$c depends on an I/O crate"; exit 1
@@ -81,6 +137,16 @@ jobs:
       - name: Two participants get their credentials from the issuer, agree contracts and transfer a file
         run: |
           scenarios/two-party/run-local.sh target/x86_64-unknown-linux-musl/release/portitor-connector \
+            target/x86_64-unknown-linux-musl/release/portitor-identity \
+            target/x86_64-unknown-linux-musl/release/portitor-issuer
+      # ADR 0029, section 7: two processes of each component on one PostgreSQL
+      # database each, every request spread over both; one process stopped in
+      # the middle, the other finishes its work
+      - name: Two processes of each component share a database; one stops, the other finishes
+        env:
+          PORTITOR_TEST_DATABASE_URL: postgresql://portitor@localhost:5419/postgres?sslmode=disable
+        run: |
+          scenarios/two-party/run-replicas.sh target/x86_64-unknown-linux-musl/release/portitor-connector \
             target/x86_64-unknown-linux-musl/release/portitor-identity \
             target/x86_64-unknown-linux-musl/release/portitor-issuer
       - name: Build images
@@ -187,6 +253,17 @@ jobs:
       # only whether there is a token; the token itself goes to the scan step alone, so the
       # build scripts and tests of the dependencies (coverage step) never see it
       HAS_SONAR_TOKEN: ${{ secrets.SONAR_TOKEN != '' }}
+      # coverage includes the PostgreSQL half of the store tests
+      PORTITOR_TEST_REQUIRE_POSTGRES: "true"
+      PORTITOR_TEST_DATABASE_URL: postgresql://portitor@localhost:5432/postgres?sslmode=disable
+    services:
+      postgres:
+        image: docker.io/library/postgres:19.0-alpine3.24@sha256:cac45fb483caee3668946088a1c0532db89d5285c28dbfeac889b4068296e06f
+        env:
+          POSTGRES_USER: portitor
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U portitor" --health-interval 2s --health-timeout 5s --health-retries 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

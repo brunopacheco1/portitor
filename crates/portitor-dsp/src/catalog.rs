@@ -5,24 +5,36 @@
 //! Catalog protocol (domain). Pure logic; datasets come through the
 //! [`CatalogDatasets`] port.
 
+pub use crate::process::StoreError;
 use crate::{
     Catalog, CatalogError, CatalogRequestMessage, CatalogType, Context, DataService,
     DataServiceType, Dataset,
 };
 
-/// Port: where the provider's datasets come from.
+/// Port: where the provider's datasets come from. Each call reads them
+/// where they are kept (the connector's database, ADR 0029, D4), so every
+/// call can fail.
 pub trait CatalogDatasets {
     /// All datasets visible to the requester.
-    fn all(&self) -> Vec<Dataset>;
+    ///
+    /// # Errors
+    /// The datasets cannot be read.
+    fn all(&self) -> Result<Vec<Dataset>, StoreError>;
     /// One dataset by id, if it is in the catalog.
-    fn get(&self, id: &str) -> Option<Dataset>;
+    ///
+    /// # Errors
+    /// The datasets cannot be read.
+    fn get(&self, id: &str) -> Result<Option<Dataset>, StoreError>;
     /// One dataset by id, for a transfer under an agreement already made.
     /// It may be a dataset that has left the catalog since (the provider
     /// withdrew or hid it): the agreement is a contract, so its transfers
     /// keep working. Use it only for transfers; catalog, dataset and
     /// contract requests use [`CatalogDatasets::get`]. The default is `get`,
     /// for stores whose datasets never leave the catalog.
-    fn get_for_agreement(&self, id: &str) -> Option<Dataset> {
+    ///
+    /// # Errors
+    /// The datasets cannot be read.
+    fn get_for_agreement(&self, id: &str) -> Result<Option<Dataset>, StoreError> {
         self.get(id)
     }
 }
@@ -36,6 +48,8 @@ pub enum Outcome<T> {
     BadRequest(CatalogError),
     /// The resource does not exist (HTTP 404 in the HTTPS binding).
     NotFound(CatalogError),
+    /// The datasets could not be read (HTTP 500 in the HTTPS binding).
+    StoreFailed(StoreError),
 }
 
 /// The DSP 2025-1 namespace: in expanded JSON-LD, every DSP term is this
@@ -302,24 +316,29 @@ impl<S: CatalogDatasets> CatalogService<S> {
                 "filter expressions are not supported",
             ));
         }
+        let dataset = match self.store.all() {
+            Ok(datasets) => datasets,
+            Err(e) => return Outcome::StoreFailed(e),
+        };
         Outcome::Ok(Catalog {
             context: Context::default(),
             id: self.catalog_id.clone(),
             kind: CatalogType,
             participant_id: self.participant_id.clone(),
             service: vec![self.service.clone()],
-            dataset: self.store.all(),
+            dataset,
         })
     }
 
     /// Answers a dataset request.
     pub fn dataset(&self, id: &str) -> Outcome<Dataset> {
         match self.store.get(id) {
-            Some(mut d) => {
+            Ok(Some(mut d)) => {
                 d.context = Some(Context::default());
                 Outcome::Ok(d)
             }
-            None => Outcome::NotFound(CatalogError::new("404", "dataset not found")),
+            Ok(None) => Outcome::NotFound(CatalogError::new("404", "dataset not found")),
+            Err(e) => Outcome::StoreFailed(e),
         }
     }
 }
@@ -497,5 +516,35 @@ mod tests {
         ] {
             assert!(read_catalog_request(refused.clone()).is_err(), "{refused}");
         }
+    }
+
+    /// Datasets that cannot be read now (their database is down).
+    struct Unreadable;
+
+    impl CatalogDatasets for Unreadable {
+        fn all(&self) -> Result<Vec<Dataset>, StoreError> {
+            Err(StoreError("database down".to_owned()))
+        }
+        fn get(&self, _: &str) -> Result<Option<Dataset>, StoreError> {
+            Err(StoreError("database down".to_owned()))
+        }
+    }
+
+    #[test]
+    fn datasets_that_cannot_be_read_are_a_store_failure_not_an_empty_catalog() {
+        let service = CatalogService::new(
+            Unreadable,
+            "cat".to_owned(),
+            "did:web:p".to_owned(),
+            "svc".to_owned(),
+            "https://p.example/dsp".to_owned(),
+        );
+        let request: CatalogRequestMessage = serde_json::from_value(serde_json::json!({
+            "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+            "@type": "CatalogRequestMessage"
+        }))
+        .unwrap();
+        assert!(matches!(service.request(&request), Outcome::StoreFailed(_)));
+        assert!(matches!(service.dataset("a"), Outcome::StoreFailed(_)));
     }
 }

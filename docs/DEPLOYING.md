@@ -42,6 +42,8 @@ images and deploy them by digest
 ([rules for all three components](#rules-for-all-three-components)).
 The "management key" of a component is the API key of its management
 port; its readiness check is `GET /api/check/readiness` on that port.
+Each component needs its own PostgreSQL database and user, made before
+you deploy it ([Database](#database)).
 
 **The dataspace authority, once.** It runs the dataspace's issuer and
 decides its rules.
@@ -50,8 +52,10 @@ decides its rules.
    the trusted issuer DIDs and the scope strings.
 2. Deploy the [issuer](#step-1-issuer-dataspace-authority-only). Make
    its key, its [credential definitions file](#credential-definitions-file)
-   and a management key ([checklist](#before-you-deploy-the-issuer)).
+   a management key and its database
+   ([checklist](#before-you-deploy-the-issuer)).
    Set, with values as in [Run the issuer](#run-the-issuer):
+   `PORTITOR_DATABASE_URL`, `PORTITOR_DATABASE_PASSWORD_FILE`,
    `PORTITOR_PARTICIPANT_ID`, `PORTITOR_ISSUER_SERVICE_URL`,
    `PORTITOR_ISSUER_KEY_FILE`,
    `PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE`,
@@ -63,10 +67,11 @@ decides its rules.
 **Each participant:**
 
 5. Deploy the [identity](#step-2-identity-every-participant). Make its
-   key, a management key and an STS client secret
+   key, a management key, an STS client secret and its database
    ([checklist](#before-you-deploy-the-identity)); the STS is the
    identity's token service, which only your connector calls. Set,
    with values as in [Run the identity](#run-the-identity):
+   `PORTITOR_DATABASE_URL`, `PORTITOR_DATABASE_PASSWORD_FILE`,
    `PORTITOR_PARTICIPANT_ID`, `PORTITOR_IDENTITY_KEY_FILE`,
    `PORTITOR_CREDENTIAL_SERVICE_URL`, `PORTITOR_STS_CLIENT_SECRET_FILE`,
    `PORTITOR_TRUSTED_ISSUERS`, `PORTITOR_MANAGEMENT_API_KEY_FILE`,
@@ -85,9 +90,11 @@ decides its rules.
    request is `ISSUED`.
 9. Write your [datasets file](#datasets-file), if you offer data.
 10. Deploy the [connector](#step-3-connector-every-participant)
-    ([checklist](#before-you-deploy-the-connector)). It must reach
+    ([checklist](#before-you-deploy-the-connector)), with a database of
+    its own. It must reach
     `https://identity.example.com`: it reads its own DID document
     there. Set, with values as in [Run the connector](#run-the-connector):
+    `PORTITOR_DATABASE_URL`, `PORTITOR_DATABASE_PASSWORD_FILE`,
     `PORTITOR_PARTICIPANT_ID` (the identity's DID), `PORTITOR_PUBLIC_URL`,
     `PORTITOR_STS_URL` (with `PORTITOR_STS_ALLOW_HTTP=true` for an
     internal `http://` address), `PORTITOR_STS_CLIENT_SECRET_FILE` (the
@@ -142,13 +149,15 @@ done
 
 **Containers.**
 
-- **One container per database file.** Never run two replicas on the
-  same `/data` volume. Several replicas need the PostgreSQL adapter
-  (planned for 1.3, ADR 0006,
-  [TD-08](RISKS_AND_TECHNICAL_DEBTS.md#td-08)).
+- **Replicas.** With PostgreSQL, run as many containers of a component
+  as you need on its one database
+  ([several replicas](#several-replicas)). With a SQLite file
+  (deprecated), run one container per file.
 - Each image runs as user `65532`, has no shell and holds only the
-  binary, the CA bundle and `/data`. Only `/data` needs to be writable:
-  give it a persistent volume. Files you mount (keys, secrets, the
+  binary, the CA bundle and `/data`. Only `/data` needs to be writable.
+  With PostgreSQL the identity and the issuer keep nothing there, and
+  the connector keeps only its bundle cache; with a SQLite file, give
+  `/data` a persistent volume. Files you mount (keys, secrets, the
   datasets file) must be readable by user `65532`.
 - `docker stop` (SIGTERM) stops a component cleanly; it stops taking
   requests and exits.
@@ -157,9 +166,11 @@ done
 - Each binary takes no arguments, except `health`
   ([Health and logs](OPERATING.md#health-and-logs)) and, for the issuer,
   `bundle build`. Any other argument stops it with exit code 2.
-- Kubernetes: one replica (`Deployment` with `strategy: Recreate`, or a
-  `StatefulSet`), a `PersistentVolumeClaim` on `/data`, keys and secrets
-  from `Secret`s mounted as files, and the
+- Kubernetes: with PostgreSQL, a `Deployment` with the replicas you
+  need; with a SQLite file, one replica (`Deployment` with
+  `strategy: Recreate`, or a `StatefulSet`) and a
+  `PersistentVolumeClaim` on `/data`. Keys, secrets and the database
+  password from `Secret`s mounted as files, and the
   [health checks](OPERATING.md#health-and-logs) as probes. Put only the public port
   in an `Ingress`, never the management port. There is no Helm chart
   yet.
@@ -181,8 +192,179 @@ it**: keep it on the host's loopback or an internal network, never on
 the public proxy.
 
 **Clock.** Tokens, credentials and offer constraints such as a date
-limit are checked against the host clock (ADR 0009). Keep it
-synchronised (NTP); a container uses the host's clock.
+limit are checked against the host clock (ADR 0009). With several
+replicas, the leases in the database use each host's clock too
+([several replicas](#several-replicas)). Keep it synchronised (NTP); a
+container uses the host's clock.
+
+### Database
+
+Each component keeps its state in a database: PostgreSQL, or a SQLite
+file, which is deprecated since 1.3 and removed in 2.0
+([ADR 0029](adr/0029-several-replicas.md)). Use PostgreSQL for a new
+deployment.
+
+**PostgreSQL versions.** 16 to 19. CI tests 16 and 19.
+
+**One database per component.** The issuer, the identity and the
+connector each need their own database and user. A participant with
+two connectors ([two data spaces](#two-data-spaces)) gives each its
+own. A component refuses a database that holds another component's
+tables (`this database holds the schema of portitor-identity; give
+portitor-connector a database of its own`).
+
+**User rights.** The user owns its database: at start the component
+creates and changes its tables there (migrations, forward only). It
+needs no other right: not superuser, not `CREATEDB`. For example, in
+`psql` as an administrator:
+
+```sql
+CREATE ROLE portitor_connector LOGIN;
+\password portitor_connector
+CREATE DATABASE portitor_connector OWNER portitor_connector;
+```
+
+**URL and password.** `PORTITOR_DATABASE_URL` is a PostgreSQL URI, in
+the form libpq reads:
+`postgresql://portitor_connector@db.internal:5432/portitor_connector?sslmode=verify-full`.
+It must name a user, a host and a database. The password goes only in
+a file, named by `PORTITOR_DATABASE_PASSWORD_FILE` (one line; a line
+break at its end is dropped). These stop the start: a URL that holds a
+password, a password file without a URL, an empty password file, and
+both `PORTITOR_DATABASE_URL` and `PORTITOR_DB_FILE` set. Portitor logs
+in with the password; with SCRAM-SHA-256, PostgreSQL's default, it
+does not use channel binding.
+
+**TLS.** Set with `sslmode` in the URL:
+
+| `sslmode` | What Portitor does |
+|---|---|
+| missing, `verify-full`, `verify-ca`, `require` | TLS. The server's certificate must chain to a trusted CA **and** name the host of the URL. Portitor checks the host name also for `verify-ca` and `require`, which libpq does not |
+| `disable` | No TLS. Only on a private network you trust, for example a database next to the container on one host |
+| `prefer`, `allow` | Refused: they fall back to plain text without saying so |
+
+The trusted CAs are set with `sslrootcert`, as in libpq:
+
+| `sslrootcert` | The server's certificate must chain to |
+|---|---|
+| missing | a CA of the image, or of `SSL_CERT_DIR` and `SSL_CERT_FILE` ([Private CAs](#private-cas)). libpq would read `~/.postgresql/root.crt` instead, which a container does not have |
+| `system` | the same: a CA of the image, `SSL_CERT_DIR` or `SSL_CERT_FILE` |
+| a PEM file | a CA in that file, **and no other** |
+
+For a database with a certificate from a private CA, add
+`sslrootcert=<PEM file>` to the URL and mount that file read-only.
+
+**Timeouts.** Each can be set in the URL as libpq reads it; without
+it, Portitor's default applies:
+
+| URL parameter | Default | What it limits |
+|---|---|---|
+| `connect_timeout` (seconds) | 10 | Connecting. `0`: no limit |
+| `options=-c%20statement_timeout%3D<time>` | `30s` | How long one statement runs on the server, as long as a lease ([Several replicas](#several-replicas)) |
+| `tcp_user_timeout` (milliseconds) | 30000 | How long sent data may stay unacknowledged before the connection is closed. `0`: the system's default |
+| `keepalives_idle`, `keepalives_interval` (seconds) | 15, 5 | When TCP starts to check an idle connection, and how often |
+
+With these, a connection to a server that went away without closing
+it (a failover, a network cut) is closed within about 30 seconds,
+instead of the system's two hours. On top of them, a call that has no
+answer after 40 seconds fails, and its connection is closed and
+replaced. The statement timeout goes to the server as the `options`
+startup parameter; a pooler in front of PostgreSQL must pass it on
+(PgBouncer refuses it unless `ignore_startup_parameters` names it, and
+then drops it: only the 40-second limit is left).
+
+**In Docker Compose.** The scenarios run one PostgreSQL container for
+all components, each with its own database and role
+([scenarios/two-party/compose.yaml](../scenarios/two-party/compose.yaml)).
+[examples/postgres/init-databases.sh](../examples/postgres/init-databases.sh)
+makes the roles and databases when the server's data folder is new,
+with the passwords from secret files. For a connector, in short:
+
+```yaml
+services:
+  database:
+    image: docker.io/library/postgres:19.0-alpine3.24@sha256:<digest>
+    # TLS: PostgreSQL reads its key only when its own user owns it
+    entrypoint: ["/bin/sh", "-c", "install -m 600 -o postgres -g postgres /run/secrets/database-server-key /var/lib/postgresql/server.key && exec docker-entrypoint.sh \"$$@\"", "--"]
+    command: ["postgres", "-c", "ssl=on", "-c", "ssl_cert_file=/run/secrets/database-server-cert",
+              "-c", "ssl_key_file=/var/lib/postgresql/server.key"]
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/database-admin-password
+      PORTITOR_DATABASES: portitor_connector   # one role and database per name
+    secrets: [database-server-cert, database-server-key, database-admin-password,
+              portitor-connector-database-password]
+    volumes:
+      - ./init-databases.sh:/docker-entrypoint-initdb.d/portitor.sh:ro
+      - database-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
+  connector:
+    image: ghcr.io/brunopacheco1/portitor-connector@sha256:<digest>
+    environment:
+      PORTITOR_DATABASE_URL: postgresql://portitor_connector@database:5432/portitor_connector?sslmode=verify-full&sslrootcert=/run/secrets/database-ca
+      PORTITOR_DATABASE_PASSWORD_FILE: /run/secrets/portitor-connector-database-password
+      # and the settings of "Run the connector"
+    secrets: [database-ca, portitor-connector-database-password]
+    depends_on:
+      database: {condition: service_healthy}
+secrets:
+  database-ca: {file: /srv/portitor/database/ca.pem}
+  database-server-cert: {file: /srv/portitor/database/server.pem}   # names the host "database"
+  database-server-key: {file: /srv/portitor/database/server.key}
+  database-admin-password: {file: /srv/portitor/database/admin-password}
+  portitor-connector-database-password: {file: /srv/portitor/database/portitor-connector-password}
+volumes:
+  database-data:
+```
+
+The password file of `<name>` is mounted as
+`/run/secrets/<name>-database-password`, with `_` written `-`. Back up
+the `database-data` volume ([OPERATING](OPERATING.md#backup-and-restore)).
+The demo makes a test CA for each run (`scripts/demo-database.sh`); use
+your own CA's certificate for the server.
+
+<a id="several-replicas"></a>
+**Several replicas.** Run as many containers of a component as you
+need, all with the same settings and the same database, behind your
+proxy or load balancer. Any container serves any request; no sticky
+sessions. The processes share the work through the database: each
+takes a lease of 30 seconds on what it runs (a message to send, a push,
+a scheduled job), and another process takes the work over when a
+container dies. So:
+
+- keep the hosts' clocks in sync (NTP, "Clock" in
+  [Rules for all three components](#rules-for-all-three-components)): a
+  host whose clock runs ahead takes leases over too early;
+- a suspension or termination that reaches one container cuts a
+  download or a push running on another within 5 seconds;
+- replicas that start together migrate the database once, under a
+  lock; the others wait for it;
+- the connector's bundle cache folder stays per container
+  (`PORTITOR_BUNDLE_CACHE_DIR`); the bundle version in use is in the
+  database. The container that takes a new version records it there,
+  and the others move to it within 5 seconds (from their own cache
+  folder, or downloaded from the authority). Give all containers the
+  same bundle settings: a fixed `PORTITOR_BUNDLE_VERSION` is used as
+  set, whatever the database records;
+- the catalog and each dataset are read from the database on each
+  request, so a harvest that one container ran is served by every
+  container at once;
+- each process opens at most 10 connections to the database. Allow for
+  that in the server's `max_connections`.
+
+**SQLite (deprecated).** Without `PORTITOR_DATABASE_URL`, a component
+uses the SQLite file `PORTITOR_DB_FILE` (default in
+[Settings of every component](#settings-of-every-component)), and logs
+at start: `SQLite is deprecated since 1.3 and is removed in 2.0`. One
+process per file: a second process on the same file refuses to start,
+with `the SQLite file ... is in use by another process`. The process
+that uses the file holds a lease row in it, renewed every 10 seconds
+and removed when it stops; after a crash, a new process can start once
+the lease has ended, at most 30 seconds later.
+There is no tool yet to copy a SQLite file into PostgreSQL; it is
+planned for 1.4 ([TD-59](RISKS_AND_TECHNICAL_DEBTS.md#td-59)). Moving
+to PostgreSQL before then starts from an empty database; see
+[OPERATING](OPERATING.md#from-sqlite-to-postgresql).
 
 ### Settings of every component
 
@@ -203,7 +385,9 @@ settings are in its step.
 | `PORTITOR_BIND` | `0.0.0.0:8070` issuer, `0.0.0.0:8090` identity, `0.0.0.0:8080` connector | Address of the public port |
 | `PORTITOR_MANAGEMENT_BIND` | `127.0.0.1:8071` issuer, `127.0.0.1:8091` identity, `127.0.0.1:8081` connector | Address of the management port |
 | `PORTITOR_MANAGEMENT_API_KEY_FILE` | none (management API off) | File with the management API key, at least 32 characters (`openssl rand -hex 32`) |
-| `PORTITOR_DB_FILE` | `/data/portitor-issuer.db`, `/data/portitor-identity.db`, `portitor.db` (connector; `/data/portitor.db` in its image) | The SQLite file; one process per file |
+| `PORTITOR_DB_FILE` | `/data/portitor-issuer.db`, `/data/portitor-identity.db`, `portitor.db` (connector; `/data/portitor.db` in its image) | The SQLite file, one process per file. Deprecated since 1.3; not together with `PORTITOR_DATABASE_URL` ([Database](#database)) |
+| `PORTITOR_DATABASE_URL` | none (the SQLite file) | Since 1.3. PostgreSQL to keep the component's state in, as `postgresql://user@host:5432/database?sslmode=verify-full`, without the password; not together with `PORTITOR_DB_FILE` |
+| `PORTITOR_DATABASE_PASSWORD_FILE` | none | Since 1.3. File with the PostgreSQL password, only with `PORTITOR_DATABASE_URL` |
 | `PORTITOR_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | Largest request body on the public port, `1` to `67108864` (64 MiB) |
 | `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | The same for the management port |
 | `PORTITOR_ALLOW_HTTP` | `false` | `true` allows plain `http://` for the addresses partners give. **Never in production** |
@@ -212,8 +396,7 @@ settings are in its step.
 | `RUST_LOG` | `info` | Log level; `debug` only while diagnosing |
 | `SSL_CERT_DIR`, `SSL_CERT_FILE` | the image's CA bundle | Only to trust a private CA ([Private CAs](#private-cas)) |
 
-- Leave `PORTITOR_BIND`, `PORTITOR_DB_FILE` and the two size limits at
-  their defaults.
+- Leave `PORTITOR_BIND` and the two size limits at their defaults.
 - Management port: in a container set `0.0.0.0:<port>` and publish it
   only on an internal interface; the default is unreachable from outside
   the container. If the port is taken, the component does not start. A
@@ -294,12 +477,14 @@ DID. A participant's operations team can skip to
 - [ ] **Management API key.** `openssl rand -hex 32`, mounted as a
   file. It registers participants and revokes credentials, so guard it
   like the issuer key.
-- [ ] **Storage.** A persistent volume for `/data`: participants,
-  requests, issued credentials, status lists and the outbox. Losing it
-  loses the revocation state; back it up, apart from the key backup.
+- [ ] **Database.** A PostgreSQL database and user for the issuer
+  ([Database](#database)): participants, requests, issued credentials,
+  status lists and the outbox. Losing it loses the revocation state;
+  back it up, apart from the key backup.
 - [ ] **Network.** Inbound, through your proxy: the DID document, the
   issuer service, the status lists and the bundles. Outbound:
-  participants' DID documents and Storage APIs (`https://`).
+  participants' DID documents and Storage APIs (`https://`), and its
+  database.
 
 ### Issuer settings
 
@@ -364,13 +549,16 @@ it does not mean the issuer is offering anything (ADR 0018).
 ### Run the issuer
 
 Docker (keys and secrets as read-only mounts; the management port is
-published on the host's loopback only):
+published on the host's loopback only; `db.internal` is your
+PostgreSQL server, [Database](#database)):
 
 ```sh
 docker run -d --name portitor-issuer --restart unless-stopped \
   -p 8070:8070 \
   -p 127.0.0.1:8071:8071 \
-  -v portitor-issuer-data:/data \
+  -v /srv/portitor/issuer-db-password:/run/secrets/db-password:ro \
+  -e PORTITOR_DATABASE_URL='postgresql://portitor_issuer@db.internal:5432/portitor_issuer?sslmode=verify-full' \
+  -e PORTITOR_DATABASE_PASSWORD_FILE=/run/secrets/db-password \
   -v /srv/portitor/issuer-key.pem:/run/secrets/issuer-key.pem:ro \
   -v /srv/portitor/issuer-credentials.json:/issuer-credentials.json:ro \
   -v /srv/portitor/issuer-management-key:/run/secrets/issuer-management-key:ro \
@@ -553,15 +741,17 @@ Deploy it before the connector: the connector checks it at start.
 - [ ] **Management API key.** `openssl rand -hex 32`, kept in your
   secret store and mounted as a file. You need it to ask issuers for
   credentials and to manage credentials.
-- [ ] **Storage.** A persistent volume for `/data` (credentials, SQLite).
+- [ ] **Database.** A PostgreSQL database and user for the identity
+  ([Database](#database)): credentials, requests, offers, Gaia-X runs.
 - [ ] **Gaia-X** (optional): a certificate for the identity
   key, the notary's registration number credential and a participant
   file ([Gaia-X onboarding](#gaia-x-onboarding-optional)).
 - [ ] **Network.** Inbound from other participants, through your proxy:
   the DID document and the credential service. Inbound from your own
   connector only: the STS (`/sts/token`). Outbound: other participants'
-  and trusted issuers' DID documents (`https://`), and the issuers'
-  `IssuerService` (metadata, credential requests, request status).
+  and trusted issuers' DID documents (`https://`), the issuers'
+  `IssuerService` (metadata, credential requests, request status), and
+  its database.
 
 ### Identity settings
 
@@ -618,7 +808,9 @@ Docker (keys and secrets as read-only mounts):
 docker run -d --name portitor-identity --restart unless-stopped \
   -p 8090:8090 \
   -p 127.0.0.1:8091:8091 \
-  -v portitor-identity-data:/data \
+  -v /srv/portitor/identity-db-password:/run/secrets/db-password:ro \
+  -e PORTITOR_DATABASE_URL='postgresql://portitor_identity@db.internal:5432/portitor_identity?sslmode=verify-full' \
+  -e PORTITOR_DATABASE_PASSWORD_FILE=/run/secrets/db-password \
   -v /srv/portitor/identity-key.pem:/run/secrets/identity-key.pem:ro \
   -v /srv/portitor/sts-client-secret:/run/secrets/sts-client-secret:ro \
   -v /srv/portitor/identity-management-key:/run/secrets/identity-management-key:ro \
@@ -908,8 +1100,10 @@ Check each item and keep the answers in your own runbook.
   jobs and, as consumer, to read catalogs, negotiate and transfer.
   Decide who may reach the management port; never expose it to the
   Internet.
-- [ ] **Storage.** A persistent volume for `/data` (negotiations,
-  transfers, the dataset copy, the bundle cache; SQLite).
+- [ ] **Database.** A PostgreSQL database and user for the connector
+  ([Database](#database)): negotiations, transfers, the dataset copy,
+  the harvest jobs. With a bundle, `/data` holds the bundle cache, one
+  per container.
 - [ ] **Network.** Inbound: partners reach the DSP endpoints, including
   the consumer callbacks under `/dsp/2025-1/callback`, and the data
   plane (`/data`), through your proxy. Inbound from your probes and
@@ -918,9 +1112,9 @@ Check each item and keep the answers in your own runbook.
   at start and for the readiness check); partners'
   DID documents and credential services; the issuers' status list URLs;
   the callback addresses partners give it and, as consumer, the
-  providers' DSP endpoints; your data sources; with a bundle, the
-  authority's host; with telemetry on, your OTLP receiver. Allow only
-  what it needs ([Security](#security)).
+  providers' DSP endpoints; your data sources; its database; with a
+  bundle, the authority's host; with telemetry on, your OTLP receiver.
+  Allow only what it needs ([Security](#security)).
 
 ### Connector settings
 
@@ -981,6 +1175,9 @@ docker run -d --name portitor-connector --restart unless-stopped \
   -p 127.0.0.1:8081:8081 \
   -v /srv/portitor/datasets.json:/datasets.json:ro \
   -v portitor-data:/data \
+  -v /srv/portitor/connector-db-password:/run/secrets/db-password:ro \
+  -e PORTITOR_DATABASE_URL='postgresql://portitor_connector@db.internal:5432/portitor_connector?sslmode=verify-full' \
+  -e PORTITOR_DATABASE_PASSWORD_FILE=/run/secrets/db-password \
   -e PORTITOR_PARTICIPANT_ID=did:web:identity.example.com \
   -e PORTITOR_PUBLIC_URL=https://connector.example.com \
   -e PORTITOR_DATASETS_FILE=/datasets.json \
@@ -996,7 +1193,8 @@ docker run -d --name portitor-connector --restart unless-stopped \
 
 The STS lines point at the identity component of
 [step 2](#step-2-identity-every-participant), reached on an internal
-network as `identity`; without them the connector does not start.
+network as `identity`; without them the connector does not start. The
+`/data` volume holds only the bundle cache.
 
 The management lines: without `PORTITOR_MANAGEMENT_BIND` the port
 cannot be reached from outside the container, and without the key it
@@ -1501,7 +1699,7 @@ endpoint takes no data and gives no answer for 120 seconds. Suspend or
 terminate, by either side, cuts a running push; a start again sends
 everything again. A push cut because the membership check could not
 finish terminates the transfer.
-The consumer's endpoint and token are kept in the SQLite file until the
+The consumer's endpoint and token are kept in the database until the
 transfer ends, and are never logged or shown. The consumer's membership
 is checked before each push and while it runs, as for a download
 ([Revocation and running transfers](#revocation-and-running-transfers)).
@@ -1772,14 +1970,14 @@ consumer's DID (`counterPartyId`), never the data token or its hash.
   `OTEL_EXPORTER_OTLP_HEADERS`. Your data sources receive a
   `traceparent` header with telemetry on; partners never do
   ([Traces and metrics](OPERATING.md#traces-and-metrics)).
-- **The database file holds access tokens.** As consumer, the connector
+- **The database holds access tokens.** As consumer, the connector
   keeps the data address of each usable transfer, token included, in
-  `/data/portitor.db` until the transfer ends (ADR 0014). Since 1.1 it
+  its database until the transfer ends (ADR 0014). Since 1.1 it
   also holds push tokens: as consumer, our push token in the transfer
   request until the provider has it (then only its SHA-256); as
   provider, the consumer's push token and endpoint until the transfer
-  ends ([R-19](RISKS_AND_TECHNICAL_DEBTS.md#r-19)). Protect the volume
-  and its backups like the management key.
+  ends ([R-19](RISKS_AND_TECHNICAL_DEBTS.md#r-19)). Protect the
+  database, its password and its backups like the management key.
 - Do not set `PORTITOR_ALLOW_HTTP=true` outside development and tests.
 - Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
 
@@ -1803,7 +2001,7 @@ dataspace**. Each connector has its own:
 - host name and `PORTITOR_PUBLIC_URL` (the connector serves
   `/dsp/2025-1` at the root of its host), and its own management port
   and key;
-- database and volume (`PORTITOR_DB_FILE`; one connector per file);
+- database ([Database](#database));
 - datasets file, with the description and the offers that dataspace
   asks for; the `portitor:source` of a dataset can be the same in both;
 - `PORTITOR_TRUSTED_ISSUERS`, with the issuers of **that dataspace
@@ -1921,11 +2119,13 @@ known risk and technical debt, with its status and target release.
   credential itself; another signer cannot be named. A Gaia-X compliance
   credential is checked between Portitor connectors only; EDC does not
   accept it (ADR 0022).
-- **Scale.** One replica per database file; no PostgreSQL adapter yet.
+- **Scale.** Several replicas need PostgreSQL; a SQLite file serves one
+  process ([Database](#database)). A database call blocks its thread
+  until it answers ([TD-40](RISKS_AND_TECHNICAL_DEBTS.md#td-40)).
   STS tokens are not cached: each DSP request costs one STS call, and
-  each incoming one a presentation query. Every request waits for its
-  database write to reach the disk, one write at a time per database
-  file; measured for 0.12, new negotiations did not slow 100 pulls in
+  each incoming one a presentation query. On SQLite, every request
+  waits for its database write to reach the disk, one write at a time
+  per file; measured for 0.12, new negotiations did not slow 100 pulls in
   flight beyond the agreed limit
   ([BENCHMARKS](BENCHMARKS.md#td-40-do-negotiations-slow-the-data-plane-down),
   [TD-40](RISKS_AND_TECHNICAL_DEBTS.md#td-40)). Each pull in flight uses

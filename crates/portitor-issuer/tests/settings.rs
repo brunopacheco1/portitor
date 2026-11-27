@@ -19,7 +19,7 @@ use portitor_runtime::testing::settings_rule::{
     Case, Read, SWITCH_TRUTH_TABLE, check_binary_refuses_to_start, check_removed, check_rule,
     switch_truth_table,
 };
-use portitor_runtime::testing::{Lookup, frozen};
+use portitor_runtime::testing::{Lookup, TempDir, frozen, vars};
 
 /// Settings of `docs/STABILITY.md` that the table leaves out, because no
 /// function reads them from a lookup: `main` or the `OpenTelemetry` code
@@ -33,6 +33,13 @@ const READ_FROM_THE_ENVIRONMENT_ONLY: [&str; 5] = [
     "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
     "OTEL_SERVICE_NAME",
 ];
+
+/// The settings of PostgreSQL, which the table leaves out: set together
+/// with `PORTITOR_DB_FILE`, as the table sets every setting, they stop
+/// the start (one database or the other). Their rule is checked by
+/// [`the_database_url_follows_the_rule`] and
+/// [`the_password_file_is_read_with_the_url_only`].
+const POSTGRES_SETTINGS: [&str; 2] = ["PORTITOR_DATABASE_URL", "PORTITOR_DATABASE_PASSWORD_FILE"];
 
 /// One line per setting: a value, another value, and whether the issuer
 /// refuses to start without it.
@@ -94,7 +101,10 @@ fn the_table_has_every_setting_of_the_stability_document() {
     for case in table() {
         in_the_table.insert(case.name.to_owned());
     }
-    for name in READ_FROM_THE_ENVIRONMENT_ONLY {
+    for name in READ_FROM_THE_ENVIRONMENT_ONLY
+        .into_iter()
+        .chain(POSTGRES_SETTINGS)
+    {
         assert!(
             in_the_table.insert(name.to_owned()),
             "{name} is in both lists"
@@ -108,6 +118,63 @@ fn every_setting_is_trimmed_and_an_empty_one_is_not_set() {
     if let Err(failures) = check_rule(&table(), read) {
         panic!("{failures}");
     }
+}
+
+/// The table with `PORTITOR_DATABASE_URL` in place of
+/// `PORTITOR_DB_FILE`: the rule holds for the URL too.
+fn table_with_the_database_url() -> Vec<Case> {
+    let mut table = table();
+    table.retain(|case| case.name != "PORTITOR_DB_FILE");
+    table.push(Case::optional(
+        "PORTITOR_DATABASE_URL",
+        "postgresql://portitor@db.example/a?sslmode=disable",
+        "postgresql://portitor@db.example/b?sslmode=disable",
+    ));
+    table
+}
+
+#[test]
+fn the_database_url_follows_the_rule() {
+    if let Err(failures) = check_rule(&table_with_the_database_url(), read) {
+        panic!("{failures}");
+    }
+}
+
+/// The password file is read at start, trimmed and empty as every
+/// setting, and only with the URL. What it holds is never shown, so
+/// this test reads it through whether the start succeeds.
+#[test]
+fn the_password_file_is_read_with_the_url_only() {
+    let dir = TempDir::new("settings-password");
+    let password = dir.path().join("password");
+    std::fs::write(&password, "s3cret\n").unwrap();
+    let password = password.to_string_lossy().into_owned();
+    let pairs_with = |extra: &[(&'static str, &str)], table: &[Case]| {
+        let mut pairs: Vec<(&str, &str)> = Vec::new();
+        for case in table {
+            pairs.push((case.name, &case.value));
+        }
+        pairs.extend_from_slice(extra);
+        read(&vars(&pairs))
+    };
+    let postgres = table_with_the_database_url();
+    let spaced = format!(" {password} ");
+    for value in [password.as_str(), spaced.as_str(), ""] {
+        let read = pairs_with(&[("PORTITOR_DATABASE_PASSWORD_FILE", value)], &postgres);
+        assert!(read.is_ok(), "{value:?}: {read:?}");
+    }
+    let missing = pairs_with(
+        &[("PORTITOR_DATABASE_PASSWORD_FILE", "/nowhere/password")],
+        &postgres,
+    );
+    assert!(missing.unwrap_err().contains("/nowhere/password"));
+    // with the SQLite file, a password file is a mistake
+    let without_url = pairs_with(&[("PORTITOR_DATABASE_PASSWORD_FILE", &password)], &table());
+    assert!(
+        without_url
+            .unwrap_err()
+            .contains("PORTITOR_DATABASE_PASSWORD_FILE is set without PORTITOR_DATABASE_URL")
+    );
 }
 
 /// `PORTITOR_ALLOW_HTTP_CALLBACKS` and `PORTITOR_ISSUER_CREDENTIALS_FILE`

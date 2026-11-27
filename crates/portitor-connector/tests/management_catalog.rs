@@ -25,6 +25,7 @@ use portitor_connector::catalog_reader::MAX_CATALOG_ANSWER;
 use portitor_connector::http_client::Sender;
 use portitor_connector::management::{ApiKey, DSP_HTTP_2025_1, openapi_json, router};
 use portitor_runtime::BoxFuture;
+use portitor_runtime::database::DatabaseSetting;
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
@@ -102,7 +103,7 @@ fn config(participant_id: &str, public_url: &str, datasets_file: Option<&str>) -
         datasets_file: datasets_file.map(Into::into),
         harvest_interval_seconds: 0,
         allow_http: false,
-        db_file: "unused.db".into(),
+        database: DatabaseSetting::SqliteFile("unused.db".into()),
         data_token_seconds: 3_600,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     }

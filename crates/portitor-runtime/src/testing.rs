@@ -9,8 +9,10 @@
 //! ([`settings_rule`]) and wrong calls to a management API
 //! ([`management_calls`]).
 
+pub mod databases;
 pub mod frozen;
 pub mod management_calls;
+pub mod schema;
 pub mod settings_rule;
 
 use std::ffi::OsString;

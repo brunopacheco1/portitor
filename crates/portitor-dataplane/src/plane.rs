@@ -129,17 +129,25 @@ impl HttpDataPlane {
         Arc::clone(&self.running)
     }
 
-    /// The membership checks of a running download or push of flow `id`
-    /// (`download.rs`); they stop when the value is dropped. `None`
-    /// without a gate: there is nothing to check again.
-    pub(crate) fn membership_watchdog(&self, id: &str) -> Option<AbortOnDrop> {
-        // no gate: `?` returns `None` here
-        let gate = self.gate.as_ref()?;
-        Some(download::watchdog(
-            Arc::clone(gate),
+    /// The checks that run next to a download or push of flow `id`
+    /// (`download.rs`); they stop when the values are dropped: the reads
+    /// of the flow's state (TD-52), and the membership checks when there
+    /// is a gate.
+    pub(crate) fn watchdogs(&self, id: &str) -> Vec<AbortOnDrop> {
+        let mut watchdogs = vec![download::state_watchdog(
+            Arc::clone(&self.flows),
             self.running_flows(),
             id,
-        ))
+        )];
+        // no gate: nothing to check again, as in 1.0 (unit tests)
+        if let Some(gate) = &self.gate {
+            watchdogs.push(download::membership_watchdog(
+                Arc::clone(gate),
+                self.running_flows(),
+                id,
+            ));
+        }
+        watchdogs
     }
 
     /// A flow store failure as the answer to a signal.

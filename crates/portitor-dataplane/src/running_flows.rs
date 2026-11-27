@@ -83,7 +83,10 @@ impl RunningFlows {
     }
 
     /// Like [`RunningFlows::watch`], but only when no work of flow
-    /// `flow_id` runs: one push at a time per flow (ADR 0027, section 1).
+    /// `flow_id` runs in this process: one push at a time per flow (ADR
+    /// 0027, section 1). The push lease in the database keeps it so among
+    /// processes; this is a cheap second guard in each one, for a push
+    /// whose lease was lost and taken again here while it still stops.
     pub fn watch_if_idle(&self, flow_id: &str) -> Option<CutSignal> {
         let mut switches = self.switches();
         switches.retain(|_, switch| switch.receiver_count() > 0);

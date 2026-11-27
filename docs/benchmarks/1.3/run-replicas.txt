@@ -1,0 +1,199 @@
+# 2026-11-27T03:15:57+00:00 run-replicas.sh at 25bcb82 (snapshot a copy of the tree) with release binaries target/release; no images/docker needed: the script runs local processes
+
+== One database per component on the test server
+issuer: postgresql://portitor@localhost:5432/portitor_4120ff6b_issuer?sslmode=disable
+provider-identity: postgresql://portitor@localhost:5432/portitor_4120ff6b_provider_identity?sslmode=disable
+consumer-identity: postgresql://portitor@localhost:5432/portitor_4120ff6b_consumer_identity?sslmode=disable
+provider-connector: postgresql://portitor@localhost:5432/portitor_4120ff6b_provider_connector?sslmode=disable
+consumer-connector: postgresql://portitor@localhost:5432/portitor_4120ff6b_consumer_connector?sslmode=disable
+
+== Build and sign the HealthDCAT-AP demo bundle for did:web:127.0.0.1%3A18260
+
+== Two issuer processes behind 127.0.0.1:18260
+
+== Two identity processes per participant: provider did:web:127.0.0.1%3A18282, consumer did:web:127.0.0.1%3A18292
+
+== The issuer registers both participants; each identity asks it for its credentials
+
+== Two connector processes per participant: the provider on 127.0.0.1:18280, the consumer on 127.0.0.1:18290
+
+== The consumer's catalog of the provider, and the hospital-admissions offer
+
+== 4a. Negotiation: the consumer process that took it stops before its request is sent
+stopped consumer-connector, process 2
+the other consumer process finished it: FINALIZED, agreement urn:uuid:f2886fe0-d1f1-409b-a77c-a96ddef8d0bc
+
+== 4b. Transfer: the provider process that took it stops before its start message is sent
+stopped provider-connector, process 2
+the other provider process finished it: STARTED
+fetched the data through the other provider process
+
+== 4c. Credential delivery: the issuer process that accepted the request stops before it delivers
+stopped issuer, process 2
+the other issuer process delivered the credential
+
+== 5. The scenario's steps, every request spread over both processes of each component
+
+== Read the provider's catalog without a DCP token: the provider refuses
+the provider answered 401
+
+== Read the provider's catalog through the consumer's management API
+{"@context":["https://w3id.org/dspace/2025/1/context.jsonld"],"dataset":[{"@id":"https://provider.example/datasets/cancer-registry-extract","dct:conformsTo":{"@id":"https://data.health.europa.eu/healthdcat-ap/releases/release-8/","@type":"dct:Standard"}},{"@id":"https://provider.example/datasets/hospital-admissions","dct:conformsTo":{"@id":"https://data.health.europa.eu/healthdcat-ap/releases/release-8/","@type":"dct:Standard"}}]}
+
+== Read one dataset the same way
+{"@id":"https://provider.example/datasets/hospital-admissions","offers":["hospital-admissions:offer:until-2030","hospital-admissions:offer:eu-processors"]}
+
+== The catalog follows the bundle: dct:conformsTo, the metadata as full IRIs, no bed-occupancy
+both valid datasets conform to https://data.health.europa.eu/healthdcat-ap/releases/release-8/; https://provider.example/datasets/bed-occupancy is not offered
+
+== The provider's harvest jobs: the bundle taken at start, and bed-occupancy rejected by the SHACL check, with its report
+version r8-demo-1 in use
+{
+  "id": 3,
+  "trigger": "start",
+  "outcome": "partial",
+  "summary": "3 seen, 0 added, 0 updated, 2 unchanged, 0 withdrawn, 1 rejected"
+}
+7 SHACL violations in dataset "https://provider.example/datasets/bed-occupancy" against the shapes for dct:accessRights http://publications.europa.eu/resource/authority/access-right/PUBLIC (bundle r8-demo-1); the report lists them; first: Each dcat:Dataset must have at least one dcatap:applicableLegislation. (focus node https://provider.example/datasets/bed-occupancy, path http://data.europa.eu/r5r/applicableLegislation)
+
+== Negotiate the hospital-admissions offer unchanged: the provider agrees
+provider did:web:127.0.0.1%3A18282 offers: {"@id":"hospital-admissions:offer:until-2030","@type":"Offer","permission":[{"action":"use","constraint":[{"leftOperand":"dateTime","operator":"lteq","rightOperand":"2030-12-31"}]}]}
+{
+  "consumerPid": "urn:uuid:2217c1b5-2522-40c2-ba05-6e2932a922f9",
+  "providerPid": "urn:uuid:8bf1339c-ec1b-41be-9bea-893b1e99f44c",
+  "state": "FINALIZED",
+  "agreement": {
+    "@id": "urn:uuid:fda969bf-e011-4986-89a2-dbae7dfcd599",
+    "@type": "Agreement",
+    "assignee": "did:web:127.0.0.1%3A18292",
+    "assigner": "did:web:127.0.0.1%3A18282",
+    "permission": [
+      {
+        "action": "use",
+        "constraint": [
+          {
+            "leftOperand": "dateTime",
+            "operator": "lteq",
+            "rightOperand": "2030-12-31"
+          }
+        ]
+      }
+    ],
+    "target": "https://provider.example/datasets/hospital-admissions",
+    "timestamp": "2026-11-27T03:17:59Z"
+  }
+}
+
+== Negotiate the same offer id without its constraint: the provider refuses
+{
+  "consumerPid": "urn:uuid:9bb47c9a-5a58-4504-ae87-dc6cbd3efe72",
+  "providerPid": "urn:uuid:235c1615-452e-4d01-9068-05b88baca837",
+  "state": "TERMINATED"
+}
+
+== Negotiate the restricted dataset's offer for members: the provider checks the consumer's MembershipCredential claim
+{
+  "state": "FINALIZED",
+  "constraint": [
+    {
+      "leftOperand": "MembershipCredential.memberOf",
+      "operator": "eq",
+      "rightOperand": "Portitor interop dataspace"
+    }
+  ]
+}
+
+== Negotiate its offer for auditors: the consumer's credential has no role claim, the provider refuses
+{
+  "state": "TERMINATED"
+}
+
+== Request a transfer under agreement urn:uuid:fda969bf-e011-4986-89a2-dbae7dfcd599: the provider starts it
+
+== Fetch the data with the token
+data address: http://127.0.0.1:18280/data/urn:uuid:d156b923-32cf-46f0-99ea-7c8697b9066d (token not shown)
+month,region,admissions
+2026-01,North,1204
+2026-01,South,987
+2026-02,North,1150
+2026-02,South,1012
+2026-03,North,1098
+2026-03,South,955
+
+== Suspend the transfer: the provider's data plane refuses the token
+while SUSPENDED the data plane answered 401
+
+== Start the transfer again: the same token works
+fetched again with the same token
+
+== The provider's log has an audit line for each of the two fetches
+{"message":"data transfer done","flow":"urn:uuid:d156b923-32cf-46f0-99ea-7c8697b9066d","agreement":"urn:uuid:fda969bf-e011-4986-89a2-dbae7dfcd599","counterParty":"did:web:127.0.0.1%3A18292","direction":"sent","bytes":136,"outcome":"complete"}
+{"message":"data transfer done","flow":"urn:uuid:d156b923-32cf-46f0-99ea-7c8697b9066d","agreement":"urn:uuid:fda969bf-e011-4986-89a2-dbae7dfcd599","counterParty":"did:web:127.0.0.1%3A18292","direction":"sent","bytes":136,"outcome":"complete"}
+
+== Complete the transfer: the token is dropped and refused
+
+== Transfer the restricted dataset under the members' agreement urn:uuid:8c03a5e2-fe46-4279-8cc4-85111c216531
+data address: http://127.0.0.1:18280/data/urn:uuid:be75f60a-7c3b-49f3-accd-3bf81f8eb72a (token not shown)
+pseudonym,year_of_diagnosis,icd10,stage
+p-0001,2021,C50,II
+p-0002,2022,C18,III
+p-0003,2022,C34,I
+p-0004,2023,C61,II
+
+== Negotiate the offer for EU processors: the provider checks the consumer's DataProcessorCredential
+{
+  "state": "FINALIZED",
+  "constraint": [
+    {
+      "leftOperand": "DataProcessorCredential.processing",
+      "operator": "eq",
+      "rightOperand": "eu"
+    }
+  ]
+}
+transfer urn:uuid:395b89ea-c5b1-48bb-97f0-50e79d8b41bb STARTED
+
+== The issuer revokes the consumer's DataProcessorCredential: a new transfer is refused
+revoked urn:uuid:d9bd04c6-94fb-473f-8a96-b8261ac9cb5b
+{
+  "state": "TERMINATED"
+}
+
+== The provider ends the members' transfer on its own: access ends at once
+{
+  "providerPid": "urn:uuid:be75f60a-7c3b-49f3-accd-3bf81f8eb72a",
+  "consumerPid": "urn:uuid:f81901b7-9a2f-47ad-a9fd-7d97b263b9df",
+  "state": "STARTED",
+  "counterPartyId": "did:web:127.0.0.1%3A18292"
+}
+the data plane refuses the token: 401
+the consumer's transfer is TERMINATED
+
+== The issuer revokes the consumer's MembershipCredential: its next request for data is refused
+data fetched while a member
+revoked urn:uuid:598bac16-b54c-4516-879f-c80c77fb71a1
+the data plane refuses the next request: 401
+the provider ended the transfer: TERMINATED
+
+== Done: the consumer authenticated with DCP, the catalog checked against the data space's HealthDCAT-AP bundle, a contract agreed, changed terms refused, credential claims checked, data transferred, the transfer suspended and started again, each pull in the provider's audit log, the transfer completed, a revoked credential refused, a transfer ended by the provider, and a revoked membership refused at the data plane
+
+== 6. Each process served requests
+issuer, process 1: 178 requests
+issuer, process 2: 66 requests
+provider, process 1: 18 requests
+provider, process 2: 16 requests
+provider-identity, process 1: 62 requests
+provider-identity, process 2: 61 requests
+consumer, process 1: 10 requests
+consumer, process 2: 7 requests
+consumer-identity, process 1: 64 requests
+consumer-identity, process 2: 64 requests
+issuer-management, process 1: 3 requests
+issuer-management, process 2: 3 requests
+provider-management, process 1: 3 requests
+provider-management, process 2: 3 requests
+consumer-management, process 1: 112 requests
+consumer-management, process 2: 53 requests
+
+== Done: two processes of each component on one PostgreSQL database each; the scenario's steps passed with requests spread over both, and the other process finished the work of a stopped one
+exit=0

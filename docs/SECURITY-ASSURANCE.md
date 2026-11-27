@@ -86,10 +86,10 @@ dataspace participants over HTTPS.
 - TLS termination inside the services: it stays the operator's job
   ([ADR 0026](adr/0026-tls-termination.md), 2026-11-20). Run them behind a
   TLS-terminating proxy, with the management ports on a private network.
-- Multi-instance safety: negotiations are kept in one SQLite file per
-  process (ADR 0006); several replicas need the PostgreSQL adapter
-  *(planned for 1.3,
-  [TD-08](RISKS_AND_TECHNICAL_DEBTS.md#td-08))*.
+- Several processes on one SQLite file: a SQLite file (deprecated)
+  serves one process, and a second process on the same file refuses to
+  start. Several replicas need PostgreSQL, from 1.3
+  ([ADR 0029](adr/0029-several-replicas.md)).
 - Offers hidden by credentials: the catalog shows every offer to every
   caller with a trusted membership credential (DCP, ADR 0016); credential
   constraints (ADR 0019) are checked at negotiation and transfer only.
@@ -221,7 +221,7 @@ Settings, the datasets file, the volumes and the management ports.
 | | Threat | Countered by, or finding |
 |---|---|---|
 | S | Someone else calls the management API or the STS | An API key of at least 32 characters, only an HMAC of it kept, compared in constant time (`portitor-runtime/src/api_key.rs`); management ports bind to `127.0.0.1` by default (`DEFAULT_MANAGEMENT_BIND` in the connector's `management.rs`, the identity's and the issuer's `config.rs`); the API is off without a key file. The STS client secret is checked the same way (`portitor-identity/src/sts.rs`), but the STS shares the identity's public port: **F-05** |
-| T | The datasets file or a volume is changed | Each harvested dataset is checked before it reaches the catalog (ADR 0020). The volumes are trusted: the SQLite files, and the bundle cache with the bundle key stored next to it (`portitor-bundle/src/store.rs`); DEPLOYING asks to protect them (not countered in code) |
+| T | The datasets file or a volume is changed | Each harvested dataset is checked before it reaches the catalog (ADR 0020). The databases and volumes are trusted: the PostgreSQL databases or SQLite files, and the bundle cache with the bundle key stored next to it (`portitor-bundle/src/store.rs`); DEPLOYING asks to protect them (not countered in code). The connection to PostgreSQL is TLS with the server's certificate and host name checked unless the operator sets `sslmode=disable`, and its password is read from a file, never from the URL (ADR 0029) |
 | R | An operator's action cannot be traced to a person | One key per component; failed key checks and some changes (for example `DELETE /v1/credentials/{id}` on the identity) are not logged (`portitor-identity/src/management.rs`): **F-02**, **F-03** |
 | I | The management API or a health answer shows secrets | The management API shows consumer data tokens ([R-19](RISKS_AND_TECHNICAL_DEBTS.md#r-19), known); health checks name a check and a reason, never a secret (ADR 0023; `tests/health.rs` of the connector and the identity, the issuer's `tests/issuer.rs`) |
 | D | Load on the management port | No request limits there (`with_limits` is applied to the public ports only); the port is on the operator's network. Accepted, no finding |
@@ -253,8 +253,10 @@ The authority's bundle and its issuer, as seen by participants.
 
 The supply chain is not a runtime boundary; the row "Users' supply
 chain" above was checked: `cargo vet --locked` runs in
-`.github/workflows/dependencies.yml`, with 159 exemptions in
-`supply-chain/config.toml` ([R-04](RISKS_AND_TECHNICAL_DEBTS.md#r-04)).
+`.github/workflows/dependencies.yml`, with 185 exemptions in
+`supply-chain/config.toml` and 57 crate versions covered by imported
+audits (2026-11-26; [R-04](RISKS_AND_TECHNICAL_DEBTS.md#r-04)). 1.3
+added the 32 crate versions of `tokio-postgres`, all exempted.
 
 #### Findings
 
@@ -337,7 +339,8 @@ or sent, only the place in the code: the message can quote the value
 that caused it, which may come from a request.
 
 Data stays consistent: a database write of several statements is one
-transaction, which `rusqlite` rolls back when the panic drops it, and
+transaction, which `rusqlite` (or, on PostgreSQL, the database) rolls
+back when the panic drops it, and
 every other write is one statement. A lock held during a panic is taken
 again (Rust marks it "poisoned"); each place says why that is safe, and
 each store has a test for it (`store/poison_tests.rs`; the checks are

@@ -2,18 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! The harvest's read copy, jobs and entry errors, in the same `SQLite`
-//! file (ADR 0020). A run's changes are written in one transaction.
+//! The harvest's read copy, jobs and entry errors, in the same database
+//! (ADR 0020). A run's changes are written in one transaction.
 
-use rusqlite::{OptionalExtension as _, Row, Transaction, params};
+use portitor_dsp::Dataset;
+use portitor_runtime::database::{DbError, Executor, Row, Value};
+use portitor_runtime::values;
 
-use super::{SqliteNegotiations, StoreError, col, err, json, parsed};
+use super::{ConnectorStore, StoreError, col, json, parsed};
 use crate::harvest::{
     CheckKind, Commit, Counts, DatasetState, DatasetStore, EntryError, HarvestJob, HarvestStatus,
     JobKind, JobOutcome, JobRecord, JobWithErrors, KEPT_JOBS, StoredDataset, Trigger, count,
 };
 
-/// A number as `SQLite` stores it.
+/// A number as the database stores it.
 fn int(n: u64) -> Result<i64, StoreError> {
     i64::try_from(n).map_err(|_| StoreError(format!("number {n} out of range")))
 }
@@ -33,7 +35,7 @@ fn named<T>(what: &str, text: &str, from_name: fn(&str) -> Option<T>) -> Result<
 const DATASET_COLUMNS: &str = "id, entry, content, upstream, content_sha256, state, \
      conforms_to, first_seen, last_changed, last_job";
 
-fn dataset_from_row(row: &Row<'_>) -> Result<StoredDataset, StoreError> {
+fn dataset_from_row(row: &Row) -> Result<StoredDataset, StoreError> {
     Ok(StoredDataset {
         id: col(row, 0)?,
         entry: parsed("dataset entry", &col::<String>(row, 1)?)?,
@@ -52,10 +54,14 @@ fn dataset_from_row(row: &Row<'_>) -> Result<StoredDataset, StoreError> {
     })
 }
 
-const JOB_COLUMNS: &str = "id, started_at, finished_at, run_trigger, source, snapshot_sha256, \
-     outcome, seen, added, updated, unchanged, withdrawn, rejected, summary, kind";
+/// The columns of `harvest_job` but its `id`, which the database gives
+/// (an insert names these; a `SELECT` puts `id` in front of them).
+const JOB_COLUMNS_WITHOUT_ID: &str = "started_at, finished_at, run_trigger, source, \
+     snapshot_sha256, outcome, seen, added, updated, unchanged, withdrawn, rejected, summary, \
+     kind";
 
-fn job_from_row(row: &Row<'_>) -> Result<HarvestJob, StoreError> {
+/// A row of `SELECT id, ` and then [`JOB_COLUMNS_WITHOUT_ID`].
+fn job_from_row(row: &Row) -> Result<HarvestJob, StoreError> {
     Ok(HarvestJob {
         id: uint(col(row, 0)?)?,
         record: JobRecord {
@@ -79,7 +85,7 @@ fn job_from_row(row: &Row<'_>) -> Result<HarvestJob, StoreError> {
     })
 }
 
-fn error_from_row(row: &Row<'_>) -> Result<EntryError, StoreError> {
+fn error_from_row(row: &Row) -> Result<EntryError, StoreError> {
     let position: Option<i64> = col(row, 0)?;
     let report: Option<String> = col(row, 4)?;
     Ok(EntryError {
@@ -91,190 +97,273 @@ fn error_from_row(row: &Row<'_>) -> Result<EntryError, StoreError> {
     })
 }
 
+fn status_from_row(row: &Row) -> Result<HarvestStatus, StoreError> {
+    Ok(HarvestStatus {
+        rules_version: col(row, 0)?,
+        snapshot_sha256: col(row, 1)?,
+        version: uint(col(row, 2)?)?,
+    })
+}
+
+/// A run's rows, made before its transaction: the transaction only
+/// writes them (it may run more than once, see
+/// `ConnectorStore::transaction`). The job's id is known only inside the
+/// transaction, so it is added at the end of each list of dataset and
+/// error values there, as the last placeholder ([`with_job_id`]).
+struct RunRows {
+    job: Vec<Value>,
+    datasets: Vec<Vec<Value>>,
+    errors: Vec<Vec<Value>>,
+    status: Vec<Value>,
+    kept_jobs: i64,
+}
+
+/// The values of the job's row, without its id (the database gives it).
+fn job_values(job: &JobRecord) -> Result<Vec<Value>, StoreError> {
+    let counts = &job.counts;
+    Ok(vec![
+        Value::from(int(job.started_at)?),
+        Value::from(int(job.finished_at)?),
+        Value::from(job.trigger.name()),
+        Value::from(&job.source),
+        Value::from(job.snapshot_sha256.as_deref()),
+        Value::from(job.outcome.name()),
+        Value::from(int(counts.seen)?),
+        Value::from(int(counts.added)?),
+        Value::from(int(counts.updated)?),
+        Value::from(int(counts.unchanged)?),
+        Value::from(int(counts.withdrawn)?),
+        Value::from(int(counts.rejected)?),
+        Value::from(&job.summary),
+        Value::from(job.kind.name()),
+    ])
+}
+
+/// The values of a dataset's row, `$1` to `$9`, in the order of
+/// [`DATASET_COLUMNS`]; the job's id (its `last_job`) is added as `$10`.
+fn dataset_values(dataset: &StoredDataset) -> Result<Vec<Value>, StoreError> {
+    Ok(vec![
+        Value::from(&dataset.id),
+        Value::from(json(&dataset.entry)?),
+        Value::from(json(&dataset.content)?),
+        Value::from(dataset.upstream.as_deref()),
+        Value::from(&dataset.content_sha256),
+        Value::from(dataset.state.name()),
+        Value::from(dataset.conforms_to.as_deref()),
+        Value::from(int(dataset.first_seen)?),
+        Value::from(int(dataset.last_changed)?),
+    ])
+}
+
+/// The values of an entry error's row, `$1` to `$6`; the job's id is
+/// added as `$7`.
+fn error_values(seq: usize, error: &EntryError) -> Result<Vec<Value>, StoreError> {
+    Ok(vec![
+        Value::from(int(count(seq))?),
+        Value::from(error.position.map(int).transpose()?),
+        Value::from(error.dataset_id.as_deref()),
+        Value::from(error.kind.name()),
+        Value::from(&error.message),
+        Value::from(error.report.as_ref().map(json).transpose()?),
+    ])
+}
+
+impl RunRows {
+    fn of(commit: &Commit) -> Result<Self, StoreError> {
+        let mut datasets = Vec::with_capacity(commit.writes.len());
+        for dataset in &commit.writes {
+            datasets.push(dataset_values(dataset)?);
+        }
+        let mut errors = Vec::with_capacity(commit.errors.len());
+        for (seq, error) in commit.errors.iter().enumerate() {
+            errors.push(error_values(seq, error)?);
+        }
+        let status = &commit.status;
+        Ok(Self {
+            job: job_values(&commit.job)?,
+            datasets,
+            errors,
+            status: vec![
+                Value::from(status.rules_version.as_deref()),
+                Value::from(status.snapshot_sha256.as_deref()),
+                Value::from(int(status.version)?),
+            ],
+            kept_jobs: int(KEPT_JOBS)?,
+        })
+    }
+}
+
+/// `values` with the job's id added at the end, as the last placeholder.
+fn with_job_id(values: &[Value], job_id: i64) -> Vec<Value> {
+    let mut all = Vec::with_capacity(values.len() + 1);
+    all.extend_from_slice(values);
+    all.push(Value::Int(job_id));
+    all
+}
+
+/// Writes one run in the transaction `tx` and returns the job's id;
+/// `None`, with nothing written, when another run was written since this
+/// one read the status (`DatasetStore::commit`).
+///
+/// The status is written first, and only if its version is still the one
+/// the run read (compare-and-swap). Of two processes that write a run at
+/// once, one changes the row; the other changes none (or, on PostgreSQL,
+/// collides and runs again, and then changes none).
+///
+/// The database gives the job's id (TD-56): the row id of `SQLite`, the
+/// identity column of PostgreSQL. Two processes that write a run at once
+/// get two ids, never the same one, and no process keeps a count of its
+/// own.
+fn write_run(tx: &dyn Executor, rows: &RunRows) -> Result<Option<i64>, DbError> {
+    let status_written = tx.execute(
+        "UPDATE harvest_state
+         SET rules_version = $1, snapshot_sha256 = $2, version = version + 1
+         WHERE id = 1 AND version = $3",
+        &rows.status,
+    )?;
+    if status_written == 0 {
+        return Ok(None);
+    }
+    let insert_job = format!(
+        "INSERT INTO harvest_job ({JOB_COLUMNS_WITHOUT_ID})
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+         RETURNING id"
+    );
+    let id = match tx.query_one(&insert_job, &rows.job)? {
+        Some(row) => row.get::<i64>(0)?,
+        None => return Err(DbError::new("the new harvest job has no id")),
+    };
+    for dataset in &rows.datasets {
+        write_dataset(tx, &with_job_id(dataset, id))?;
+    }
+    for error in &rows.errors {
+        tx.execute(
+            "INSERT INTO harvest_error
+                 (seq, entry_position, dataset_id, kind, message, report, job_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            &with_job_id(error, id),
+        )?;
+    }
+    // keep the newest KEPT_JOBS jobs. Ids count up but may have gaps (a
+    // PostgreSQL identity skips the ids of transactions that ran again),
+    // so the oldest kept job is looked up, not computed
+    let oldest_kept = match tx.query_one(
+        "SELECT id FROM harvest_job ORDER BY id DESC LIMIT 1 OFFSET $1",
+        values![rows.kept_jobs - 1],
+    )? {
+        Some(row) => row.get::<i64>(0)?,
+        // fewer jobs than that: nothing to delete
+        None => 0,
+    };
+    tx.execute(
+        "DELETE FROM harvest_error WHERE job_id < $1",
+        values![oldest_kept],
+    )?;
+    tx.execute(
+        "DELETE FROM harvest_job WHERE id < $1",
+        values![oldest_kept],
+    )?;
+    Ok(Some(id))
+}
+
 /// Writes one dataset: an update of its row, or a new row. (Two plain
-/// statements rather than an upsert, so the SQL stays portable.)
-fn write_dataset(
-    tx: &Transaction<'_>,
-    dataset: &StoredDataset,
-    job_id: i64,
-) -> Result<(), StoreError> {
-    let entry = json(&dataset.entry)?;
-    let content = json(&dataset.content)?;
-    let first_seen = int(dataset.first_seen)?;
-    let last_changed = int(dataset.last_changed)?;
-    let values = params![
-        dataset.id,
-        entry,
-        content,
-        dataset.upstream,
-        dataset.content_sha256,
-        dataset.state.name(),
-        dataset.conforms_to,
-        first_seen,
-        last_changed,
-        job_id,
-    ];
-    let updated = tx
-        .execute(
-            "UPDATE dataset
-             SET entry = ?2, content = ?3, upstream = ?4, content_sha256 = ?5, state = ?6,
-                 conforms_to = ?7, first_seen = ?8, last_changed = ?9, last_job = ?10
-             WHERE id = ?1",
-            values,
-        )
-        .map_err(err)?;
+/// statements rather than an upsert; they run in the run's transaction.)
+/// `values`: the dataset's columns, in the order of [`DATASET_COLUMNS`],
+/// the job's id (`last_job`) last.
+fn write_dataset(tx: &dyn Executor, values: &[Value]) -> Result<(), DbError> {
+    let updated = tx.execute(
+        "UPDATE dataset
+         SET entry = $2, content = $3, upstream = $4, content_sha256 = $5, state = $6,
+             conforms_to = $7, first_seen = $8, last_changed = $9, last_job = $10
+         WHERE id = $1",
+        values,
+    )?;
     if updated == 0 {
         let sql = format!(
-            "INSERT INTO dataset ({DATASET_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+            "INSERT INTO dataset ({DATASET_COLUMNS})
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
         );
-        tx.execute(&sql, values).map_err(err)?;
+        tx.execute(&sql, values)?;
     }
     Ok(())
 }
 
-fn insert_job(tx: &Transaction<'_>, id: i64, job: &JobRecord) -> Result<(), StoreError> {
-    let sql = format!(
-        "INSERT INTO harvest_job ({JOB_COLUMNS})
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"
-    );
-    let counts = &job.counts;
-    tx.execute(
-        &sql,
-        params![
-            id,
-            int(job.started_at)?,
-            int(job.finished_at)?,
-            job.trigger.name(),
-            job.source,
-            job.snapshot_sha256,
-            job.outcome.name(),
-            int(counts.seen)?,
-            int(counts.added)?,
-            int(counts.updated)?,
-            int(counts.unchanged)?,
-            int(counts.withdrawn)?,
-            int(counts.rejected)?,
-            job.summary,
-            job.kind.name(),
-        ],
-    )
-    .map_err(err)?;
-    Ok(())
+/// The catalog's form of a dataset, from its `content` column.
+fn content_from_row(row: &Row) -> Result<(String, Dataset), StoreError> {
+    let id: String = col(row, 0)?;
+    let content = parsed("dataset", &col::<String>(row, 1)?)?;
+    Ok((id, content))
 }
 
-fn insert_error(
-    tx: &Transaction<'_>,
-    job_id: i64,
-    seq: usize,
-    error: &EntryError,
-) -> Result<(), StoreError> {
-    tx.execute(
-        "INSERT INTO harvest_error
-             (job_id, seq, entry_position, dataset_id, kind, message, report)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![
-            job_id,
-            int(count(seq))?,
-            error.position.map(int).transpose()?,
-            error.dataset_id,
-            error.kind.name(),
-            error.message,
-            error.report.as_ref().map(json).transpose()?,
-        ],
-    )
-    .map_err(err)?;
-    Ok(())
-}
-
-impl DatasetStore for SqliteNegotiations {
+impl DatasetStore for ConnectorStore {
     fn datasets(&self) -> Result<Vec<StoredDataset>, StoreError> {
-        let sql = format!("SELECT {DATASET_COLUMNS} FROM dataset ORDER BY id");
-        self.query(&sql, [], dataset_from_row)
+        let sql = format!("SELECT {DATASET_COLUMNS} FROM dataset");
+        let mut datasets = self.query(&sql, values![], dataset_from_row)?;
+        // sorted here, not with ORDER BY: PostgreSQL sorts text by the
+        // database's collation, which may differ from the bytes' order
+        datasets.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(datasets)
+    }
+
+    fn catalog(&self) -> Result<Vec<Dataset>, StoreError> {
+        // read on every catalog request (ADR 0029, D4): only the columns
+        // the catalog shows
+        let mut active = self.query(
+            "SELECT id, content FROM dataset WHERE state = $1",
+            values![DatasetState::Active.name()],
+            content_from_row,
+        )?;
+        // the order of the bytes of the ids, as for `datasets`
+        active.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(active.into_iter().map(|(_, content)| content).collect())
+    }
+
+    fn dataset(&self, id: &str) -> Result<Option<StoredDataset>, StoreError> {
+        let sql = format!("SELECT {DATASET_COLUMNS} FROM dataset WHERE id = $1");
+        self.query_first(&sql, values![id], dataset_from_row)
     }
 
     fn status(&self) -> Result<HarvestStatus, StoreError> {
-        let conn = self.conn();
         // the one row of harvest_state: both columns may be NULL
-        let found: Option<(Option<String>, Option<String>)> = conn
-            .query_row(
-                "SELECT rules_version, snapshot_sha256 FROM harvest_state WHERE id = 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .map_err(err)?;
+        let found = self.query_first(
+            "SELECT rules_version, snapshot_sha256, version FROM harvest_state WHERE id = 1",
+            values![],
+            status_from_row,
+        )?;
         // no row (cannot happen after the migration): nothing known yet
-        let (rules_version, snapshot_sha256) = found.unwrap_or((None, None));
-        Ok(HarvestStatus {
-            rules_version,
-            snapshot_sha256,
-        })
+        Ok(found.unwrap_or_default())
     }
 
-    fn commit(&self, commit: &Commit) -> Result<u64, StoreError> {
-        let mut conn = self.conn();
-        // dropped without `commit()` on any error: nothing is written
-        let tx = conn.transaction().map_err(err)?;
-        let newest: i64 = tx
-            .query_row("SELECT COALESCE(MAX(id), 0) FROM harvest_job", [], |row| {
-                row.get(0)
-            })
-            .map_err(err)?;
-        let id = newest + 1;
-        insert_job(&tx, id, &commit.job)?;
-        for dataset in &commit.writes {
-            write_dataset(&tx, dataset, id)?;
-        }
-        for (seq, error) in commit.errors.iter().enumerate() {
-            insert_error(&tx, id, seq, error)?;
-        }
-        // keep the newest KEPT_JOBS jobs: ids have no gaps, as each job
-        // takes the next one and the newest is never deleted
-        let oldest_kept = id - int(KEPT_JOBS)? + 1;
-        tx.execute(
-            "DELETE FROM harvest_error WHERE job_id < ?1",
-            params![oldest_kept],
-        )
-        .map_err(err)?;
-        tx.execute(
-            "DELETE FROM harvest_job WHERE id < ?1",
-            params![oldest_kept],
-        )
-        .map_err(err)?;
-        tx.execute(
-            "UPDATE harvest_state SET rules_version = ?1, snapshot_sha256 = ?2 WHERE id = 1",
-            params![commit.status.rules_version, commit.status.snapshot_sha256],
-        )
-        .map_err(err)?;
-        tx.commit().map_err(err)?;
-        uint(id)
+    fn commit(&self, commit: &Commit) -> Result<Option<u64>, StoreError> {
+        let rows = RunRows::of(commit)?;
+        // on any error nothing is written
+        let id = self.transaction(|tx| write_run(tx, &rows))?;
+        id.map(uint).transpose()
     }
 
     fn jobs(&self, before: Option<u64>, limit: usize) -> Result<Vec<HarvestJob>, StoreError> {
+        // no `before`: from the newest. The CAST gives PostgreSQL the type
+        // of $1, which it cannot tell from `$1 IS NULL`
         let sql = format!(
-            "SELECT {JOB_COLUMNS} FROM harvest_job
-             WHERE ?1 IS NULL OR id < ?1
-             ORDER BY id DESC LIMIT ?2"
+            "SELECT id, {JOB_COLUMNS_WITHOUT_ID} FROM harvest_job
+             WHERE CAST($1 AS BIGINT) IS NULL OR id < $1
+             ORDER BY id DESC LIMIT $2"
         );
         let before = before.map(int).transpose()?;
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        self.query(&sql, params![before, limit], job_from_row)
+        self.query(&sql, values![before, limit], job_from_row)
     }
 
     fn job(&self, id: u64) -> Result<Option<JobWithErrors>, StoreError> {
         let id = int(id)?;
-        let sql = format!("SELECT {JOB_COLUMNS} FROM harvest_job WHERE id = ?1");
-        let Some(job) = self
-            .query(&sql, params![id], job_from_row)?
-            .into_iter()
-            .next()
-        else {
+        let sql = format!("SELECT id, {JOB_COLUMNS_WITHOUT_ID} FROM harvest_job WHERE id = $1");
+        let Some(job) = self.query_first(&sql, values![id], job_from_row)? else {
             return Ok(None);
         };
         let errors = self.query(
             "SELECT entry_position, dataset_id, kind, message, report FROM harvest_error
-             WHERE job_id = ?1 ORDER BY seq",
-            params![id],
+             WHERE job_id = $1 ORDER BY seq",
+            values![id],
             error_from_row,
         )?;
         Ok(Some((job, errors)))
@@ -292,6 +381,7 @@ mod tests {
 
     use super::*;
     use crate::harvest::{DatasetHarvester, DspCheck, FixedSource, RunResult};
+    use crate::store::on_every_database;
 
     fn entry(id: &str) -> serde_json::Value {
         json!({
@@ -302,10 +392,7 @@ mod tests {
         })
     }
 
-    fn harvester(
-        store: &Arc<SqliteNegotiations>,
-        entries: Vec<serde_json::Value>,
-    ) -> DatasetHarvester {
+    fn harvester(store: &Arc<ConnectorStore>, entries: Vec<serde_json::Value>) -> DatasetHarvester {
         let check = DspCheck::new("https://p.example/dsp/2025-1", &CredentialTypes::default());
         let harvester = DatasetHarvester::new(
             Arc::new(FixedSource::new(entries)),
@@ -316,9 +403,44 @@ mod tests {
         harvester
     }
 
+    /// Two processes ("replicas") on one PostgreSQL database write runs
+    /// at once: each run gets its own id from the database (TD-56).
+    #[test]
+    fn runs_of_two_replicas_get_different_ids() {
+        let Some(replicas) = crate::store::two_replicas() else {
+            return;
+        };
+        let threads: Vec<_> = replicas
+            .into_iter()
+            .map(|store| {
+                std::thread::spawn(move || {
+                    let store = Arc::new(store);
+                    let harvester = harvester(&store, vec![entry("a")]);
+                    for _ in 0..5 {
+                        assert!(matches!(
+                            harvester.run(Trigger::Interval),
+                            RunResult::Done(_)
+                        ));
+                    }
+                    store
+                })
+            })
+            .collect();
+        let stores: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+        let jobs = stores[0].jobs(None, 100).unwrap();
+        // the start run and 5 more, on each replica
+        assert_eq!(jobs.len(), 12, "{jobs:?}");
+        let ids: std::collections::BTreeSet<u64> = jobs.iter().map(|job| job.id).collect();
+        assert_eq!(ids.len(), 12, "no id given twice: {ids:?}");
+    }
+
     #[test]
     fn the_copy_and_the_jobs_survive_a_restart() {
-        let store = Arc::new(SqliteNegotiations::in_memory().unwrap());
+        on_every_database(the_copy_and_the_jobs_survive_a_restart_on);
+    }
+
+    fn the_copy_and_the_jobs_survive_a_restart_on(store: &ConnectorStore) {
+        let store = Arc::new(store.clone());
         let mut broken = entry("b");
         broken["hasPolicy"] = json!([]);
         harvester(&store, vec![entry("a"), broken]);
@@ -347,27 +469,44 @@ mod tests {
             Arc::clone(&store) as _,
         );
         restarted.start().unwrap();
-        assert_eq!(restarted.copy().all().len(), 1);
+        assert_eq!(restarted.catalog().all().unwrap().len(), 1);
         assert_eq!(
             store.jobs(None, 10).unwrap()[0].record.outcome,
             JobOutcome::Failed
         );
     }
 
+    /// Makes every write of an entry error fail, as a full disk would:
+    /// a trigger, written in each database's own SQL.
+    fn make_entry_errors_fail(store: &ConnectorStore) {
+        let statements: &[&str] = if store.database.is_postgres() {
+            &[
+                "CREATE FUNCTION disk_full() RETURNS trigger LANGUAGE plpgsql
+                 AS $$ BEGIN RAISE EXCEPTION 'disk full'; END $$",
+                "CREATE TRIGGER fail_errors BEFORE INSERT ON harvest_error
+                 FOR EACH ROW EXECUTE FUNCTION disk_full()",
+            ]
+        } else {
+            &["CREATE TRIGGER fail_errors BEFORE INSERT ON harvest_error
+               BEGIN SELECT RAISE(ABORT, 'disk full'); END"]
+        };
+        for sql in statements {
+            store.execute(sql, values![]).unwrap();
+        }
+    }
+
     /// A failure in the middle of a run's transaction (here: storing its
     /// entry errors, after the datasets) leaves the copy as it was.
     #[test]
     fn a_failure_mid_run_changes_nothing() {
-        let store = Arc::new(SqliteNegotiations::in_memory().unwrap());
+        on_every_database(a_failure_mid_run_changes_nothing_on);
+    }
+
+    fn a_failure_mid_run_changes_nothing_on(store: &ConnectorStore) {
+        let store = Arc::new(store.clone());
         let harvester = harvester(&store, vec![entry("a")]);
         let before = store.datasets().unwrap();
-        store
-            .conn()
-            .execute_batch(
-                "CREATE TRIGGER fail_errors BEFORE INSERT ON harvest_error
-                 BEGIN SELECT RAISE(ABORT, 'disk full'); END",
-            )
-            .unwrap();
+        make_entry_errors_fail(&store);
         let mut broken = entry("c");
         broken["hasPolicy"] = json!([]);
         let failing = DatasetHarvester::new(
@@ -382,13 +521,123 @@ mod tests {
         assert!(matches!(result, RunResult::StoreFailed(_)), "{result:?}");
         assert_eq!(store.datasets().unwrap(), before);
         assert_eq!(store.jobs(None, 10).unwrap().len(), 1);
-        assert_eq!(harvester.copy().all().len(), 1);
+        assert_eq!(harvester.catalog().all().unwrap().len(), 1);
+    }
+
+    /// The catalog is read from the database on each request (TD-50,
+    /// ADR 0029 D4): what a harvest wrote through one store is what the
+    /// next request through another store on the same database sees, with
+    /// nothing reloaded.
+    fn a_harvest_is_seen_through_another_store(
+        writer: &Arc<ConnectorStore>,
+        reader: &Arc<ConnectorStore>,
+    ) {
+        let first = harvester(writer, vec![entry("a"), entry("b")]);
+        // the reader's harvester only reads: its source is empty and its
+        // start run fails, which keeps the stored datasets
+        let other = DatasetHarvester::new(
+            Arc::new(crate::harvest::FileSource::new("/nonexistent.json")),
+            Arc::new(DspCheck::new(
+                "https://p.example/dsp/2025-1",
+                &CredentialTypes::default(),
+            )),
+            Arc::clone(reader) as Arc<dyn DatasetStore>,
+        );
+        let catalog = other.catalog();
+        let ids = |catalog: &crate::harvest::StoredCatalog| -> Vec<String> {
+            catalog.all().unwrap().into_iter().map(|d| d.id).collect()
+        };
+        assert_eq!(ids(&catalog), ["a", "b"]);
+
+        // the writer's next run withdraws a and changes b's source
+        let mut moved = entry("b");
+        moved["portitor:source"] = json!("http://upstream.example/b2");
+        let second = DatasetHarvester::new(
+            Arc::new(FixedSource::new(vec![moved])),
+            Arc::new(DspCheck::new(
+                "https://p.example/dsp/2025-1",
+                &CredentialTypes::default(),
+            )),
+            Arc::clone(writer) as Arc<dyn DatasetStore>,
+        );
+        assert!(matches!(second.run(Trigger::Interval), RunResult::Done(_)));
+        drop(first);
+        assert_eq!(ids(&catalog), ["b"]);
+        assert_eq!(catalog.get("a").unwrap(), None, "withdrawn");
+        assert_eq!(
+            catalog.get_for_agreement("a").unwrap().unwrap().id,
+            "a",
+            "kept for agreements already made"
+        );
+        assert_eq!(
+            crate::harvest::UpstreamSources::upstream_of(&catalog, "b").unwrap(),
+            Some("http://upstream.example/b2".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_harvest_through_one_store_is_seen_through_another_on_postgres() {
+        let Some(url) = portitor_runtime::testing::databases::postgres_url() else {
+            return;
+        };
+        let settings = portitor_runtime::testing::databases::fresh_postgres_settings(&url);
+        let setting = portitor_runtime::database::DatabaseSetting::Postgres(Box::new(settings));
+        let open = || {
+            let database =
+                portitor_runtime::database::Database::open(&setting, &super::super::MIGRATIONS)
+                    .unwrap();
+            Arc::new(ConnectorStore::new(Arc::new(database)))
+        };
+        // two pools on one database: two replicas of the connector
+        a_harvest_is_seen_through_another_store(&open(), &open());
+    }
+
+    #[test]
+    fn a_harvest_through_one_store_is_seen_through_another_on_every_database() {
+        // two stores on one database (on SQLite, a file serves one
+        // process: the two share its connection)
+        on_every_database(|store| {
+            let writer = Arc::new(store.clone());
+            let reader = Arc::new(ConnectorStore::new(Arc::clone(store.database())));
+            a_harvest_is_seen_through_another_store(&writer, &reader);
+        });
+    }
+
+    /// The catalog lists ids in the order of their bytes on every
+    /// database, as the copy in memory did: PostgreSQL's own order of
+    /// text may follow a language's rules instead.
+    #[test]
+    fn the_catalog_is_in_the_order_of_the_ids_bytes() {
+        on_every_database(|store| {
+            let store = Arc::new(store.clone());
+            let harvester = harvester(
+                &store,
+                vec![
+                    entry("b"),
+                    entry("B"),
+                    entry("a-1"),
+                    entry("a_1"),
+                    entry("a"),
+                ],
+            );
+            let ids: Vec<String> = harvester
+                .catalog()
+                .all()
+                .unwrap()
+                .into_iter()
+                .map(|d| d.id)
+                .collect();
+            assert_eq!(ids, ["B", "a", "a-1", "a_1", "b"]);
+        });
     }
 
     #[test]
     fn only_the_last_jobs_are_kept_with_their_errors() {
-        let store = Arc::new(SqliteNegotiations::in_memory().unwrap());
-        let status = HarvestStatus::default();
+        on_every_database(only_the_last_jobs_are_kept_with_their_errors_on);
+    }
+
+    fn only_the_last_jobs_are_kept_with_their_errors_on(store: &ConnectorStore) {
+        let store = Arc::new(store.clone());
         for n in 0..KEPT_JOBS + 3 {
             let commit = Commit {
                 job: JobRecord {
@@ -410,19 +659,20 @@ mod tests {
                     report: Some(json!({"conforms": false})),
                 }],
                 writes: Vec::new(),
-                status: status.clone(),
+                status: store.status().unwrap(),
             };
-            assert_eq!(store.commit(&commit).unwrap(), n + 1);
+            assert_eq!(store.commit(&commit).unwrap(), Some(n + 1));
         }
         let jobs = store.jobs(None, 1_000).unwrap();
         assert_eq!(u64::try_from(jobs.len()).unwrap(), KEPT_JOBS);
         assert_eq!((jobs[0].id, jobs[99].id), (KEPT_JOBS + 3, 4));
         assert!(store.job(3).unwrap().is_none());
-        let errors: i64 = store
-            .conn()
-            .query_row("SELECT COUNT(*) FROM harvest_error", [], |row| row.get(0))
+        let errors = store
+            .query_first("SELECT COUNT(*) FROM harvest_error", values![], |row| {
+                col::<i64>(row, 0)
+            })
             .unwrap();
-        assert_eq!(errors, 100);
+        assert_eq!(errors, Some(100));
         let (_, kept) = store.job(4).unwrap().unwrap();
         assert_eq!(kept[0].report, Some(json!({"conforms": false})));
         let page: Vec<u64> = store
@@ -432,5 +682,41 @@ mod tests {
             .map(|j| j.id)
             .collect();
         assert_eq!(page, [9, 8, 7]);
+    }
+
+    #[test]
+    fn a_run_is_written_only_on_the_status_it_read() {
+        on_every_database(a_run_is_written_only_on_the_status_it_read_on);
+    }
+
+    /// Two runs read the same status; the first is written, the second
+    /// is not (nothing of it: no job, no dataset, no status).
+    fn a_run_is_written_only_on_the_status_it_read_on(store: &ConnectorStore) {
+        let read = store.status().unwrap();
+        let run = |summary: &str, rules: &str| Commit {
+            job: JobRecord {
+                kind: JobKind::Datasets,
+                started_at: 1,
+                finished_at: 2,
+                trigger: Trigger::Interval,
+                source: "test".to_owned(),
+                snapshot_sha256: None,
+                outcome: JobOutcome::Succeeded,
+                counts: Counts::default(),
+                summary: summary.to_owned(),
+            },
+            errors: Vec::new(),
+            writes: Vec::new(),
+            status: HarvestStatus {
+                rules_version: Some(rules.to_owned()),
+                ..read.clone()
+            },
+        };
+        assert_eq!(store.commit(&run("first", "r1")).unwrap(), Some(1));
+        assert_eq!(store.commit(&run("second", "r2")).unwrap(), None);
+        let status = store.status().unwrap();
+        assert_eq!(status.rules_version.as_deref(), Some("r1"));
+        assert_eq!(status.version, read.version + 1);
+        assert_eq!(store.jobs(None, 10).unwrap().len(), 1);
     }
 }

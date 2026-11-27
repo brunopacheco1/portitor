@@ -28,6 +28,8 @@ on:
       - "scripts/require-bash.sh"
       - "scripts/gaiax-lib.sh"
       - "scripts/gaiax_test_notary.py"
+      - "scripts/demo-database.sh" # the PostgreSQL server: its test CA and passwords
+      - "examples/postgres/**" # its databases and roles
       - ".github/workflows/gaiax.yml"
   schedule:
     - cron: "53 2 * * *" # nightly: the Gaia-X Registry's shapes change without our code changing

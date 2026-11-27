@@ -82,6 +82,21 @@ fn memory() -> Arc<dyn DatasetStore> {
     Arc::new(InMemoryDatasetStore::default())
 }
 
+/// The leases of process `holder` in `store`'s database, on Tokio's clock
+/// (paused in the tests that schedule runs): a second of that clock is a
+/// second for the leases.
+fn leases_in(store: &crate::store::ConnectorStore, holder: &str) -> Leases {
+    let begun = tokio::time::Instant::now();
+    let clock = Arc::new(move || 1_800_000_000 + begun.elapsed().as_secs());
+    let lease_store = Arc::clone(store.database()) as Arc<dyn portitor_runtime::leases::LeaseStore>;
+    Leases::with_clock(lease_store, holder, clock)
+}
+
+/// [`leases_in`] a database of their own.
+fn leases(holder: &str) -> Leases {
+    leases_in(&crate::store::ConnectorStore::in_memory().unwrap(), holder)
+}
+
 /// The newest job and its errors.
 fn last_job(store: &Arc<dyn DatasetStore>) -> (HarvestJob, Vec<EntryError>) {
     let newest = store.jobs(None, 1).unwrap().remove(0);
@@ -95,8 +110,8 @@ fn done(result: RunResult) -> HarvestJob {
     }
 }
 
-fn ids(copy: &DatasetCopy) -> Vec<String> {
-    copy.all().into_iter().map(|d| d.id).collect()
+fn ids(copy: &StoredCatalog) -> Vec<String> {
+    copy.all().unwrap().into_iter().map(|d| d.id).collect()
 }
 
 #[test]
@@ -104,13 +119,13 @@ fn the_start_run_fills_the_catalog() {
     let store = memory();
     let source = Source::with(vec![entry("a"), entry("b")]);
     let harvester = started(&source, &store, dsp());
-    let copy = harvester.copy();
+    let copy = harvester.catalog();
     assert_eq!(ids(&copy), ["a", "b"]);
-    let served = copy.get("a").unwrap();
+    let served = copy.get("a").unwrap().unwrap();
     assert_eq!(served.distribution[0].access_service, SERVICE);
     // the upstream URL is kept for the data plane, never in the dataset
     assert_eq!(
-        copy.upstream_of("a").as_deref(),
+        copy.upstream_of("a").unwrap().as_deref(),
         Some("https://upstream.example/a")
     );
     assert!(!serde_json::to_string(&served).unwrap().contains("upstream"));
@@ -158,8 +173,9 @@ fn the_same_content_in_a_new_snapshot_is_unchanged() {
     assert_eq!(stored[0].last_job, 1, "a was not written again");
     assert_eq!(stored[1].last_job, 2);
     let title = harvester
-        .copy()
+        .catalog()
         .get("b")
+        .unwrap()
         .unwrap()
         .metadata
         .get("dct:title")
@@ -177,9 +193,9 @@ fn a_rejected_entry_keeps_the_previous_good_version() {
     assert_eq!(job.record.outcome, JobOutcome::Partial);
     assert_eq!(job.record.counts.rejected, 2);
     assert_eq!(job.record.counts.withdrawn, 0, "b is still in the source");
-    let copy = harvester.copy();
+    let copy = harvester.catalog();
     assert_eq!(ids(&copy), ["a", "b"]);
-    assert_eq!(copy.get("b").unwrap().has_policy.len(), 1);
+    assert_eq!(copy.get("b").unwrap().unwrap().has_policy.len(), 1);
     let (_, errors) = last_job(&store);
     assert_eq!(errors.len(), 2);
     assert_eq!(errors[0].position, Some(1));
@@ -196,7 +212,7 @@ fn a_bad_upstream_or_a_non_object_rejects_only_that_entry() {
     file_url["portitor:source"] = json!("file:///etc/passwd");
     let source = Source::with(vec![entry("a"), file_url, json!("text"), json!({"@id": 7})]);
     let harvester = started(&source, &store, dsp());
-    assert_eq!(ids(&harvester.copy()), ["a"]);
+    assert_eq!(ids(&harvester.catalog()), ["a"]);
     let (job, errors) = last_job(&store);
     assert_eq!(job.record.counts.rejected, 3);
     let kinds: Vec<CheckKind> = errors.iter().map(|e| e.kind).collect();
@@ -217,9 +233,9 @@ fn an_object_storage_source_is_accepted() {
     no_key["portitor:source"] = json!("s3://provider-data");
     let source = Source::with(vec![in_storage, no_key]);
     let harvester = started(&source, &store, dsp());
-    assert_eq!(ids(&harvester.copy()), ["a"]);
+    assert_eq!(ids(&harvester.catalog()), ["a"]);
     assert_eq!(
-        harvester.copy().upstream_of("a").as_deref(),
+        harvester.catalog().upstream_of("a").unwrap().as_deref(),
         Some("s3://provider-data/health/a.csv")
     );
     let (_, errors) = last_job(&store);
@@ -234,14 +250,14 @@ fn a_dataset_missing_from_the_snapshot_is_withdrawn() {
     source.set(vec![entry("a")]);
     let job = done(harvester.run(Trigger::Interval));
     assert_eq!(job.record.counts.withdrawn, 1);
-    let copy = harvester.copy();
+    let copy = harvester.catalog();
     // out of the catalog and of contract requests ...
     assert_eq!(ids(&copy), ["a"]);
-    assert_eq!(copy.get("b"), None);
+    assert_eq!(copy.get("b").unwrap(), None);
     // ... still there for transfers under agreements already made
-    assert_eq!(copy.get_for_agreement("b").unwrap().id, "b");
+    assert_eq!(copy.get_for_agreement("b").unwrap().unwrap().id, "b");
     assert_eq!(
-        copy.upstream_of("b").as_deref(),
+        copy.upstream_of("b").unwrap().as_deref(),
         Some("https://upstream.example/b")
     );
     let stored = store.datasets().unwrap();
@@ -269,7 +285,7 @@ fn a_withdrawn_dataset_that_comes_back_is_active_again() {
         (job.record.counts.added, job.record.counts.unchanged),
         (1, 1)
     );
-    assert_eq!(ids(&harvester.copy()), ["a", "b"]);
+    assert_eq!(ids(&harvester.catalog()), ["a", "b"]);
     let b = &store.datasets().unwrap()[1];
     assert_eq!(b.state, DatasetState::Active);
     assert_eq!(b.first_seen, first_seen);
@@ -287,7 +303,7 @@ fn a_failed_source_leaves_the_copy() {
     assert_eq!(job.record.snapshot_sha256, None);
     assert!(job.record.summary.contains("unreachable"), "{job:?}");
     assert_eq!(store.datasets().unwrap(), before);
-    assert_eq!(ids(&harvester.copy()), ["a"]);
+    assert_eq!(ids(&harvester.catalog()), ["a"]);
     // and the next good run is not taken for "unchanged"
     source.set(vec![entry("a")]);
     let job = done(harvester.run(Trigger::Interval));
@@ -300,7 +316,7 @@ fn a_first_start_with_a_failing_source_has_an_empty_catalog() {
     let source = Source::with(Vec::new());
     source.fail();
     let harvester = started(&source, &store, dsp());
-    assert!(harvester.copy().all().is_empty());
+    assert!(harvester.catalog().all().unwrap().is_empty());
     let (job, _) = last_job(&store);
     assert_eq!(
         (job.record.trigger, job.record.outcome),
@@ -315,8 +331,11 @@ fn of_two_entries_with_one_id_the_first_wins() {
     second["dct:title"] = json!("second");
     let source = Source::with(vec![entry("a"), second, broken("b"), entry("b")]);
     let harvester = started(&source, &store, dsp());
-    let copy = harvester.copy();
-    assert_eq!(copy.get("a").unwrap().metadata.get("dct:title"), None);
+    let copy = harvester.catalog();
+    assert_eq!(
+        copy.get("a").unwrap().unwrap().metadata.get("dct:title"),
+        None
+    );
     // the first b fails, so there is no b; the second is still a duplicate
     assert_eq!(ids(&copy), ["a"]);
     let (job, errors) = last_job(&store);
@@ -362,7 +381,7 @@ fn new_rules_check_the_stored_datasets_again_at_start() {
         refuse: &[],
     });
     let first = started(&source, &store, v1);
-    let a = first.copy().get("a").unwrap();
+    let a = first.catalog().get("a").unwrap().unwrap();
     assert_eq!(
         a.metadata.get("dct:conformsTo"),
         Some(&json!({"@id": "https://shapes.example/v1", "@type": "dct:Standard"}))
@@ -389,12 +408,16 @@ fn new_rules_check_the_stored_datasets_again_at_start() {
     assert_eq!(errors[0].kind, CheckKind::Shacl);
     assert_eq!(errors[0].position, None);
     assert_eq!(errors[0].report, Some(json!({"sh:conforms": false})));
-    let copy = second.copy();
+    let copy = second.catalog();
     assert_eq!(ids(&copy), ["a"]);
-    assert_eq!(copy.get_for_agreement("b").unwrap().id, "b");
+    assert_eq!(copy.get_for_agreement("b").unwrap().unwrap().id, "b");
     assert_eq!(store.datasets().unwrap()[1].state, DatasetState::Hidden);
     assert_eq!(
-        copy.get("a").unwrap().metadata.get("dct:conformsTo"),
+        copy.get("a")
+            .unwrap()
+            .unwrap()
+            .metadata
+            .get("dct:conformsTo"),
         Some(&json!({"@id": "https://shapes.example/v2", "@type": "dct:Standard"}))
     );
 
@@ -415,7 +438,7 @@ fn new_rules_check_the_stored_datasets_again_at_start() {
         refuse: &[],
     });
     let third = started(&source, &store, v3);
-    assert_eq!(ids(&third.copy()), ["a", "b"]);
+    assert_eq!(ids(&third.catalog()), ["a", "b"]);
     let jobs = store.jobs(None, 2).unwrap();
     assert_eq!(jobs[1].record.trigger, Trigger::Bundle);
     assert_eq!(jobs[1].record.outcome, JobOutcome::Succeeded);
@@ -460,18 +483,23 @@ fn new_rules_while_running_check_the_datasets_again() {
         refuse: &[],
     }))));
     let harvester = started(&source, &store, Arc::clone(&rules) as _);
-    assert_eq!(ids(&harvester.copy()), ["a", "b"]);
+    assert_eq!(ids(&harvester.catalog()), ["a", "b"]);
     let status_before = store.status().unwrap();
 
     // the bundle run is logged next to the harvest runs; it changes no
     // dataset and keeps the harvest status
     let id = harvester
-        .record_bundle_run(bundle_run("version v2 in use (was v1)"))
+        .record_bundle_run(&bundle_run("version v2 in use (was v1)"))
         .unwrap();
     let (logged, errors) = store.job(id).unwrap().unwrap();
     assert_eq!(logged.record.kind, JobKind::Bundle);
     assert!(errors.is_empty());
-    assert_eq!(store.status().unwrap(), status_before);
+    let after = HarvestStatus {
+        // one more run written
+        version: status_before.version + 1,
+        ..status_before
+    };
+    assert_eq!(store.status().unwrap(), after);
 
     // new rules that refuse b: the stored datasets are checked again,
     // then every entry of the unchanged source, both as `bundle` runs
@@ -483,7 +511,7 @@ fn new_rules_while_running_check_the_datasets_again() {
     assert_eq!(run.record.kind, JobKind::Datasets);
     assert_eq!(run.record.trigger, Trigger::Bundle);
     assert_eq!(run.record.counts.seen, 2, "every entry checked again");
-    assert_eq!(ids(&harvester.copy()), ["a"]);
+    assert_eq!(ids(&harvester.catalog()), ["a"]);
     let jobs = store.jobs(None, 10).unwrap();
     let triggers: Vec<_> = jobs
         .iter()
@@ -523,7 +551,7 @@ fn rules_that_change_with_an_unchanged_source_check_every_entry() {
             refuse: &[],
         }),
     );
-    assert_eq!(ids(&harvester.copy()), ["a", "b"]);
+    assert_eq!(ids(&harvester.catalog()), ["a", "b"]);
     assert_eq!(last_job(&store).0.record.counts.added, 1);
 }
 
@@ -559,7 +587,7 @@ fn a_new_portitor_version_checks_the_stored_datasets_again() {
             writes: Vec::new(),
             status: HarvestStatus {
                 rules_version: Some(older),
-                snapshot_sha256: store.status().unwrap().snapshot_sha256,
+                ..store.status().unwrap()
             },
         })
         .unwrap();
@@ -701,11 +729,13 @@ async fn the_schedule_runs_again_and_zero_means_only_at_start() {
     let store = memory();
     let source = Source::with(vec![entry("a")]);
     let harvester = Arc::new(started(&source, &store, dsp()));
-    assert!(harvester.schedule(Duration::ZERO).is_none());
+    assert!(harvester.schedule(Duration::ZERO, &leases("p-1")).is_none());
     let job_count = || store.jobs(None, 10).unwrap().len();
     assert_eq!(job_count(), 1, "the start run");
 
-    let schedule = harvester.schedule(Duration::from_secs(60)).unwrap();
+    let schedule = harvester
+        .schedule(Duration::from_secs(60), &leases("p-1"))
+        .unwrap();
     tokio::time::sleep(Duration::from_secs(59)).await;
     assert_eq!(job_count(), 1, "nothing before the first interval");
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -717,6 +747,40 @@ async fn the_schedule_runs_again_and_zero_means_only_at_start() {
     let jobs = store.jobs(None, 10).unwrap();
     assert_eq!(jobs[0].record.trigger, Trigger::Interval);
     assert_eq!(jobs[0].record.outcome, JobOutcome::Unchanged);
+}
+
+/// Two processes ("replicas") on one database, each with its schedule:
+/// one harvest per interval between them, not one each (TD-56). The
+/// replica that started second ticks 10 seconds later and finds the run
+/// of the interval done.
+#[tokio::test(start_paused = true)]
+async fn two_replicas_run_one_scheduled_harvest_per_interval() {
+    let leases_store = crate::store::ConnectorStore::in_memory().unwrap();
+    let store = memory();
+    let source = Source::with(vec![entry("a")]);
+    let one = Arc::new(started(&source, &store, dsp()));
+    let two = Arc::new(started(&source, &store, dsp()));
+    let job_count = || store.jobs(None, 10).unwrap().len();
+    assert_eq!(job_count(), 2, "the start runs");
+    let every = Duration::from_secs(60);
+    let first = one
+        .schedule(every, &leases_in(&leases_store, "p-1"))
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    let second = two
+        .schedule(every, &leases_in(&leases_store, "p-2"))
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(51)).await;
+    assert_eq!(job_count(), 3, "p-1 ran at 60 s");
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert_eq!(job_count(), 3, "p-2 skipped its turn at 70 s");
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert_eq!(job_count(), 4, "one run between 120 s and 130 s");
+    // p-1 stops: p-2 runs from the next interval on
+    first.abort();
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert_eq!(job_count(), 5, "p-2 ran at 190 s");
+    second.abort();
 }
 
 /// A source with a bug: its next snapshot panics, once, when `.1` is
@@ -757,7 +821,7 @@ fn a_run_after_one_that_panicked_is_done() {
     entries.set(vec![entry("a"), entry("b")]);
     let job = done(harvester.run(Trigger::Interval));
     assert_eq!(job.record.counts.added, 1);
-    assert_eq!(ids(&harvester.copy()), ["a", "b"]);
+    assert_eq!(ids(&harvester.catalog()), ["a", "b"]);
 }
 
 /// A scheduled run that panics (TD-41) ends only that run: the catalog
@@ -773,11 +837,13 @@ async fn the_schedule_goes_on_after_a_run_that_panicked() {
     ));
     let harvester = Arc::new(DatasetHarvester::new(source.clone(), dsp(), store.clone()));
     harvester.start().unwrap();
-    let copy = harvester.copy();
+    let copy = harvester.catalog();
     let job_count = || store.jobs(None, 10).unwrap().len();
     assert_eq!(job_count(), 1, "the start run");
 
-    let schedule = harvester.schedule(Duration::from_secs(60)).unwrap();
+    let schedule = harvester
+        .schedule(Duration::from_secs(60), &leases("p-1"))
+        .unwrap();
     entries.set(vec![entry("a"), entry("b")]);
     source.1.store(true, std::sync::atomic::Ordering::SeqCst);
     tokio::time::sleep(Duration::from_secs(61)).await;
@@ -808,9 +874,13 @@ fn both_checks_add_conforms_to_without_losing_one_already_there() {
         }),
     ));
     let harvester = started(&source, &store, check);
-    let copy = harvester.copy();
+    let copy = harvester.catalog();
     assert_eq!(
-        copy.get("a").unwrap().metadata.get("dct:conformsTo"),
+        copy.get("a")
+            .unwrap()
+            .unwrap()
+            .metadata
+            .get("dct:conformsTo"),
         Some(
             &json!([{"@id": "https://other.example/profile"}, {"@id": "https://shapes.example/v1", "@type": "dct:Standard"}])
         )
@@ -831,7 +901,7 @@ fn an_unknown_policy_term_stops_only_that_dataset() {
     let store = memory();
     let source = Source::with(vec![entry("a"), entry("b"), entry("c"), entry("d")]);
     let harvester = started(&source, &store, dsp());
-    let copy = harvester.copy();
+    let copy = harvester.catalog();
     assert_eq!(ids(&copy), ["a", "b", "c", "d"]);
 
     // b: a duty inside a permission; c: a misspelled key; d: `unit` on a
@@ -858,10 +928,10 @@ fn an_unknown_policy_term_stops_only_that_dataset() {
     // version (without the term), and the new bad one is not served
     assert_eq!(ids(&copy), ["a", "b", "c", "d"]);
     assert_eq!(
-        copy.get("a").unwrap().metadata.get("dct:title"),
+        copy.get("a").unwrap().unwrap().metadata.get("dct:title"),
         Some(&json!("A, changed"))
     );
-    let kept = serde_json::to_value(copy.get("b").unwrap()).unwrap();
+    let kept = serde_json::to_value(copy.get("b").unwrap().unwrap()).unwrap();
     assert_eq!(kept["hasPolicy"], entry("b")["hasPolicy"]);
 
     let (_, errors) = last_job(&store);
@@ -914,7 +984,7 @@ fn an_unknown_policy_term_at_the_first_start_leaves_only_that_dataset_out() {
     let store = memory();
     let source = Source::with(vec![entry("a"), duty, party, entry("d")]);
     let harvester = started(&source, &store, dsp());
-    assert_eq!(ids(&harvester.copy()), ["a", "d"]);
+    assert_eq!(ids(&harvester.catalog()), ["a", "d"]);
 
     let (job, errors) = last_job(&store);
     assert_eq!(job.record.trigger, Trigger::Start);
@@ -991,4 +1061,51 @@ fn each_form_of_an_offer_that_is_not_understood_is_an_odrl_failure() {
         "{}",
         failure.message
     );
+}
+
+/// The DSP rules, and something done by "another process" the first time
+/// an entry is checked: after the run read the stored datasets, before
+/// it writes.
+struct Meanwhile(Mutex<Option<Box<dyn FnOnce() + Send>>>);
+
+impl DatasetCheck for Meanwhile {
+    fn rules_version(&self) -> String {
+        dsp().rules_version()
+    }
+    fn check(&self, entry: &Value) -> Result<CheckedDataset, EntryFailure> {
+        let first = self.0.lock().unwrap().take();
+        if let Some(other_process) = first {
+            other_process();
+        }
+        dsp().check(entry)
+    }
+}
+
+/// Two processes harvest at once (ADR 0029): one writes its run while
+/// the other plans. The other's run, planned from a copy that is no
+/// longer the stored one, is not written; it is planned again from the
+/// stored copy, so the dataset the first one added is withdrawn, not
+/// left in the catalog.
+#[test]
+fn a_run_planned_from_an_older_copy_is_planned_again() {
+    let store = memory();
+    let first_source = Source::with(vec![entry("a")]);
+    let first = Arc::new(started(&first_source, &store, dsp()));
+    let second_source = Source::with(vec![entry("a"), entry("c")]);
+    let other = Arc::clone(&first);
+    let meanwhile = Meanwhile(Mutex::new(Some(Box::new(move || {
+        first_source.set(vec![entry("a"), entry("b")]);
+        assert!(matches!(other.run(Trigger::Interval), RunResult::Done(_)));
+    }))));
+    let second = DatasetHarvester::new(second_source, Arc::new(meanwhile), Arc::clone(&store));
+    let job = done(second.run(Trigger::Interval));
+    assert_eq!(ids(&second.catalog()), ["a", "c"]);
+    let withdrawn = store.dataset("b").unwrap().unwrap();
+    assert_eq!(withdrawn.state, DatasetState::Withdrawn);
+    assert_eq!(
+        (job.record.counts.added, job.record.counts.withdrawn),
+        (1, 1)
+    );
+    // the start, the first process's run, the second one's: no other
+    assert_eq!(store.jobs(None, 10).unwrap().len(), 3);
 }

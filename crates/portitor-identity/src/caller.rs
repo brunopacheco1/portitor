@@ -37,7 +37,9 @@ pub(crate) async fn authenticate(
     let audience = Audience {
         did: &identity.participant_id,
         leeway: LEEWAY,
-        used_token_ids: &identity.used_token_ids,
+        // the store keeps them, for every replica (TD-09); `&*` borrows
+        // the store the shared pointer points to
+        used_token_ids: &*identity.store,
     };
     let admit = |claimed: &Claims| match callers {
         Callers::Anyone => true,

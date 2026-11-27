@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "1.2.0"
+    "version": "1.3.0"
   },
   "paths": {
     "/api/check/health": {
@@ -189,7 +189,7 @@
         "tags": [
           "Credentials"
         ],
-        "summary": "Revoke an issued credential: its bit in the status list is set and\nthe list is signed again. Revocation cannot be undone; revoking again\nsigns the list again, so a call that failed with 500 after the\nrevocation was stored can simply be repeated.",
+        "summary": "Revoke an issued credential: its bit in the status list is set, and\nthe list is signed again and stored with the revocation, all at once.\nRevocation cannot be undone; revoking again changes nothing, and a\ncall that failed with 500 stored nothing and can simply be repeated.",
         "operationId": "revoke",
         "parameters": [
           {
@@ -237,7 +237,7 @@
             }
           },
           "500": {
-            "description": "The revocation is stored but the status list was not signed again; repeat the call",
+            "description": "Nothing was stored (the store or the signing of the status list failed); repeat the call",
             "content": {
               "application/problem+json": {
                 "schema": {

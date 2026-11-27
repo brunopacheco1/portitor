@@ -29,13 +29,15 @@ use portitor_connector::harvest::FixedSource;
 use portitor_connector::http_client::Sender;
 use portitor_connector::management::ApiKey;
 use portitor_connector::ports::Shared;
-use portitor_connector::store::SqliteNegotiations;
+use portitor_connector::store::ConnectorStore;
 use portitor_connector::{Config, Ports};
 use portitor_dsp::negotiation::Agreement;
 use portitor_dsp::negotiation::provider::Negotiation;
 use portitor_dsp::transfer::TransferState;
 use portitor_dsp::transfer::provider::{Agreements, FlowStep, Lease, StoreError, TransferStore};
 use portitor_runtime::BoxFuture;
+use portitor_runtime::database::{Database, DatabaseSetting};
+use portitor_runtime::leases::{LeaseStore as _, Leases};
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
@@ -143,14 +145,14 @@ struct Provider {
     revoked: Arc<AtomicBool>,
 }
 
-fn config(token_seconds: u64) -> Config {
+fn config(token_seconds: u64, allow_http: bool) -> Config {
     Config {
         participant_id: PROVIDER.into(),
         public_url: "https://provider.example".into(),
         datasets_file: None,
         harvest_interval_seconds: 0,
-        allow_http: false,
-        db_file: "unused.db".into(),
+        allow_http,
+        database: DatabaseSetting::SqliteFile("unused.db".into()),
         data_token_seconds: token_seconds,
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     }
@@ -163,7 +165,25 @@ fn provider_with(
     source: &str,
     recheck: Duration,
     token_seconds: u64,
-    store: &Arc<SqliteNegotiations>,
+    store: &Arc<ConnectorStore>,
+) -> Provider {
+    built(source, recheck, token_seconds, store, None)
+}
+
+/// One process ("replica") of the provider, holding its leases as
+/// `holder`, keeping everything in `store`, and pushing to `http://`
+/// endpoints too (`PORTITOR_ALLOW_HTTP`).
+fn replica(source: &str, store: &Arc<ConnectorStore>, holder: &str) -> Provider {
+    built(source, Duration::from_secs(60), 3_600, store, Some(holder))
+}
+
+/// [`provider_with`]; with a `holder`, as [`replica`].
+fn built(
+    source: &str,
+    recheck: Duration,
+    token_seconds: u64,
+    store: &Arc<ConnectorStore>,
+    holder: Option<&str>,
 ) -> Provider {
     let file = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tck/datasets.json");
     let mut entries: Vec<Value> = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
@@ -178,7 +198,13 @@ fn provider_with(
     ports.verifier = Arc::new(verifier);
     ports.transfers.agreements = Shared(Arc::new(OneAgreement));
     ports.harvest.source = Some(Arc::new(FixedSource::new(entries)));
-    let (app, negotiator) = portitor_connector::build(&config(token_seconds), ports).unwrap();
+    if let Some(holder) = holder {
+        let lease_store =
+            Arc::clone(store.database()) as Arc<dyn portitor_runtime::leases::LeaseStore>;
+        ports.leases = Leases::new(lease_store, holder);
+    }
+    let config = config(token_seconds, holder.is_some());
+    let (app, negotiator) = portitor_connector::build(&config, ports).unwrap();
     let management =
         portitor_connector::management::router(negotiator.clone(), ApiKey::new(KEY).unwrap());
     Provider {
@@ -191,7 +217,7 @@ fn provider_with(
 }
 
 fn provider(source: &str, recheck: Duration) -> Provider {
-    let store = Arc::new(SqliteNegotiations::in_memory().unwrap());
+    let store = Arc::new(ConnectorStore::in_memory().unwrap());
     provider_with(source, recheck, 3_600, &store)
 }
 
@@ -454,7 +480,7 @@ async fn a_suspension_cuts_a_running_download() {
 async fn a_flow_from_before_1_1_is_served_until_its_token_expires() {
     let folder = portitor_runtime::testing::TempDir::new("flow-1-0");
     let file = folder.path().join("portitor.db");
-    let store = Arc::new(SqliteNegotiations::open(&file).unwrap());
+    let store = Arc::new(ConnectorStore::open_sqlite_file(&file).unwrap());
     let source = format!("{}/file", upstream().await);
     let p = provider_with(&source, Duration::from_secs(60), 2, &store);
     let (pid, path, token) = p.started_transfer().await;
@@ -481,7 +507,7 @@ async fn a_flow_from_before_1_1_is_served_until_its_token_expires() {
 async fn a_flow_without_a_kept_membership_is_refused() {
     let folder = portitor_runtime::testing::TempDir::new("flow-no-membership");
     let file = folder.path().join("portitor.db");
-    let store = Arc::new(SqliteNegotiations::open(&file).unwrap());
+    let store = Arc::new(ConnectorStore::open_sqlite_file(&file).unwrap());
     let source = format!("{}/file", upstream().await);
     let p = provider_with(&source, Duration::from_secs(60), 3_600, &store);
     let (_, path, token) = p.started_transfer().await;
@@ -596,7 +622,7 @@ async fn a_provider_without_membership_may_still_end_our_transfer() {
     };
     ports.consumer_transfers.store.insert(&transfer).unwrap();
     let store = ports.consumer_transfers.store.clone();
-    let mut config = config(3_600);
+    let mut config = config(3_600, false);
     config.participant_id = CONSUMER.into();
     config.public_url = "https://consumer.example".into();
     let (app, _) = portitor_connector::build(&config, ports).unwrap();
@@ -647,7 +673,7 @@ fn now_seconds() -> u64 {
 /// Writes to `store`, as another process sharing the database would, that
 /// transfer `pid` is suspended by the consumer and its data plane step
 /// recorded but not run, with a lease that ends at `lease_until`.
-fn left_suspending(store: &SqliteNegotiations, pid: &str, lease_until: u64) {
+fn left_suspending(store: &ConnectorStore, pid: &str, lease_until: u64) {
     let mut transfer = store.get(pid).unwrap().unwrap();
     let expected = transfer.version;
     transfer.version += 1;
@@ -669,7 +695,7 @@ fn left_suspending(store: &SqliteNegotiations, pid: &str, lease_until: u64) {
 /// step is recorded as run.
 #[tokio::test]
 async fn a_leased_transfer_is_answered_503_and_the_sweep_takes_it_over() {
-    let store = Arc::new(SqliteNegotiations::in_memory().unwrap());
+    let store = Arc::new(ConnectorStore::in_memory().unwrap());
     let p = provider_with(
         &format!("{}/file", upstream().await),
         Duration::from_secs(60),
@@ -729,4 +755,312 @@ async fn a_leased_transfer_is_answered_503_and_the_sweep_takes_it_over() {
     let saved = store.get(&pid).unwrap().unwrap();
     assert_eq!((saved.flow_step, saved.lease), (None, None));
     assert_ne!(p.fetch(&path, &token).await.0, StatusCode::OK, "suspended");
+}
+
+/// Two stores on one new PostgreSQL database, each with its own
+/// connections, as two processes ("replicas") have them; `None` without
+/// a test server.
+fn two_replicas() -> Option<[Arc<ConnectorStore>; 2]> {
+    use portitor_runtime::testing::databases;
+    let url = databases::postgres_url()?;
+    let setting = DatabaseSetting::Postgres(Box::new(databases::fresh_postgres_settings(&url)));
+    let migrations = &portitor_connector::store::MIGRATIONS;
+    let open = || {
+        Arc::new(ConnectorStore::new(Arc::new(
+            Database::open(&setting, migrations).unwrap(),
+        )))
+    };
+    Some([open(), open()])
+}
+
+/// ADR 0029, decision 6 (TD-52): the consumer's suspension lands on
+/// another replica than the one that serves its download. That replica
+/// writes the flow's new state in the database; the download's watchdog
+/// reads it within 5 seconds and cuts the download.
+#[tokio::test]
+async fn a_suspension_on_another_replica_cuts_a_running_download() {
+    let Some([one, two]) = two_replicas() else {
+        return;
+    };
+    let source = format!("{}/drip", upstream().await);
+    let serving = replica(&source, &one, "replica-1");
+    let other = replica(&source, &two, "replica-2");
+    let (pid, path, token) = serving.started_transfer().await;
+    let (status, mut body) = serving.open(&path, &token).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.frame().await.unwrap().is_ok());
+
+    let request = message_from(CONSUMER, "TransferSuspensionMessage", &pid, "suspension");
+    assert_eq!(call(&other.app, request).await.0, StatusCode::OK);
+    other.wait_for(&pid, "SUSPENDED").await;
+    // the state is read every 5 seconds
+    assert!(is_cut_within(&mut body, Duration::from_secs(7)).await);
+    assert_eq!(
+        serving.open(&path, &token).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+/// A local endpoint that takes pushes and counts them; its URL.
+async fn counting_endpoint() -> (String, Arc<Mutex<usize>>) {
+    let pushes = Arc::new(Mutex::new(0));
+    let counted = Arc::clone(&pushes);
+    let app = Router::new().route(
+        "/in",
+        axum::routing::post(move || {
+            let counted = Arc::clone(&counted);
+            async move {
+                *counted.lock().unwrap() += 1;
+                StatusCode::NO_CONTENT
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/in", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (url, pushes)
+}
+
+/// Writes what a replica left when it stopped in the middle of a push:
+/// push transfer `pid`, `STARTED`, its flow, the consumer's membership,
+/// and the push's lease, held by that replica until `lease_until`.
+fn leave_running_push(
+    store: &ConnectorStore,
+    pid: &str,
+    source: &str,
+    endpoint: &str,
+    lease_until: u64,
+) {
+    use portitor_dataplane::{Flow, FlowStore};
+    use portitor_dps::state::DataFlowState;
+    use portitor_dsp::transfer::provider::Transfer;
+    use portitor_dsp::transfer::{DataAddress, DataAddressType, EndpointProperty};
+
+    let address = DataAddress {
+        kind: DataAddressType,
+        endpoint_type: "https://w3id.org/dspace-sig/profile/http-push".to_owned(),
+        endpoint: Some(endpoint.to_owned()),
+        endpoint_properties: vec![EndpointProperty::new("authorization", "consumer-token")],
+    };
+    let transfer = Transfer {
+        provider_pid: pid.to_owned(),
+        consumer_pid: CONSUMER_PID.to_owned(),
+        state: TransferState::Started,
+        callback_address: CALLBACK.to_owned(),
+        counter_party: CONSUMER.to_owned(),
+        agreement_id: "a1".to_owned(),
+        dataset_id: "CAT0101".to_owned(),
+        format: "HttpData-PUSH".to_owned(),
+        data_address: Some(address.clone()),
+        pending: None,
+        flow_step: None,
+        state_before_step: None,
+        lease: None,
+        version: 0,
+    };
+    TransferStore::insert(store, &transfer).unwrap();
+    let flow = Flow {
+        id: pid.to_owned(),
+        state: DataFlowState::Started,
+        dataset_id: "CAT0101".to_owned(),
+        source: Some(source.to_owned()),
+        agreement_id: "a1".to_owned(),
+        counter_party_id: CONSUMER.to_owned(),
+        token_hash: String::new(),
+        expires_at: u64::MAX,
+        push_address: Some(address),
+    };
+    assert!(FlowStore::insert(store, &flow).unwrap());
+    portitor_connector::flow_membership::MembershipStore::keep_memberships(
+        store,
+        pid,
+        &[common::membership()],
+    )
+    .unwrap();
+    let now = portitor_runtime::system::now_secs();
+    let leased = store
+        .database()
+        .claim("push", pid, "replica-gone", lease_until, now);
+    assert!(leased.unwrap());
+}
+
+/// ADR 0029 (TD-54): a replica stopped in the middle of a push. Its lease
+/// holds the push until it ends: the loop of the other replicas leaves it
+/// alone. Once it has ended, the next round of the loops sends the push
+/// again, once among all the replicas, and the transfer completes.
+#[tokio::test]
+async fn a_push_left_by_a_replica_that_stopped_is_taken_over_once() {
+    let Some([one, two]) = two_replicas() else {
+        return;
+    };
+    let source = format!("{}/file", upstream().await);
+    let (endpoint, pushes) = counting_endpoint().await;
+    let pid = "urn:uuid:push-left-over";
+    let first = replica(&source, &one, "replica-1");
+    let second = replica(&source, &two, "replica-2");
+    // left after the replicas started, so that a slow start does not use
+    // up the lease
+    let ends_at = portitor_runtime::system::now_secs() + 3;
+    leave_running_push(&one, pid, &source, &endpoint, ends_at);
+
+    // the lease still runs: nobody pushes
+    assert_eq!(first.negotiator.resume().unwrap(), 0);
+    assert_eq!(second.negotiator.resume().unwrap(), 0);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(*pushes.lock().unwrap(), 0);
+
+    // it has ended: both loops take a turn at once, one replica pushes
+    while portitor_runtime::system::now_secs() <= ends_at {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    first.negotiator.resume().unwrap();
+    second.negotiator.resume().unwrap();
+    first.wait_for(pid, "COMPLETED").await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(*pushes.lock().unwrap(), 1, "pushed once");
+    // and later rounds find nothing to do
+    first.negotiator.resume().unwrap();
+    second.negotiator.resume().unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(*pushes.lock().unwrap(), 1);
+}
+
+/// Writes what a replica left when it stopped: negotiation `pid` as
+/// provider, waiting to send its agreement. With `lease_until`, the
+/// message's lease, held by that replica until then (TD-53): kind
+/// `outbox:negotiation:provider`, id the pid and the SHA-256 of the
+/// message's URL and body (`outbox.rs`, `lease_id`).
+fn leave_pending_agreement(store: &ConnectorStore, pid: &str, lease_until: Option<u64>) {
+    use portitor_dsp::negotiation::provider::{NegotiationStore, Outgoing};
+    use portitor_dsp::negotiation::{NegotiationState, Transition};
+
+    let url = format!("{CALLBACK}/negotiations/c-{pid}/agreement");
+    let body = json!({
+        "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+        "@type": "ContractAgreementMessage", "providerPid": pid, "consumerPid": format!("c-{pid}"),
+        "callbackAddress": "https://provider.example/dsp/2025-1",
+        "agreement": {
+            "@id": format!("agreement-{pid}"), "@type": "Agreement", "target": "CAT0101",
+            "assigner": PROVIDER, "assignee": CONSUMER,
+            "timestamp": "2026-11-13T00:00:00Z", "permission": [{"action": "use"}]
+        }
+    });
+    let offer = json!({
+        "@id": "CAT0101:offer:use", "@type": "Offer", "target": "CAT0101",
+        "permission": [{"action": "use"}]
+    });
+    let negotiation = Negotiation {
+        provider_pid: pid.to_owned(),
+        consumer_pid: format!("c-{pid}"),
+        state: NegotiationState::Requested,
+        callback_address: CALLBACK.to_owned(),
+        counter_party: CONSUMER.to_owned(),
+        offer: serde_json::from_value(offer).unwrap(),
+        agreement: None,
+        pending: Some(Outgoing {
+            provider_pid: pid.to_owned(),
+            url: url.clone(),
+            body: body.clone(),
+            transition: Transition::Agree,
+            to: NegotiationState::Agreed,
+            status_url: format!("{CALLBACK}/negotiations/c-{pid}"),
+            counter_party: CONSUMER.to_owned(),
+        }),
+        version: 1,
+    };
+    NegotiationStore::insert(store, &negotiation).unwrap();
+    if let Some(until) = lease_until {
+        let digest = portitor_dcp::bundle::sha256_hex(format!("{url}\n{body}").as_bytes());
+        let id = format!("{pid} {digest}");
+        let now = portitor_runtime::system::now_secs();
+        let kind = "outbox:negotiation:provider";
+        let leased = store
+            .database()
+            .claim(kind, &id, "replica-gone", until, now);
+        assert!(leased.unwrap());
+    }
+}
+
+/// Negotiation `pid` as provider, as `store` has it now.
+fn negotiation(store: &ConnectorStore, pid: &str) -> Negotiation {
+    portitor_dsp::negotiation::provider::NegotiationStore::get(store, pid)
+        .unwrap()
+        .unwrap()
+}
+
+/// The agreements the two replicas sent, in all.
+fn agreements_sent(replicas: &[&Provider]) -> Vec<String> {
+    let mut urls = Vec::new();
+    for replica in replicas {
+        for (url, _) in replica.sender.0.lock().unwrap().iter() {
+            urls.push(url.clone());
+        }
+    }
+    urls.sort();
+    urls
+}
+
+/// ADR 0029 (TD-53): messages a replica saved but did not send before it
+/// stopped. The loops of two other replicas take each one up once; a
+/// message still leased by the replica that stopped waits until its lease
+/// ends, and is then sent once.
+#[tokio::test]
+async fn pending_messages_are_sent_once_by_two_replicas() {
+    use portitor_dsp::negotiation::NegotiationState;
+
+    let Some([one, two]) = two_replicas() else {
+        return;
+    };
+    let source = format!("{}/file", upstream().await);
+    let first = replica(&source, &one, "replica-1");
+    let second = replica(&source, &two, "replica-2");
+    // left after the replicas started, so that a slow start does not use
+    // up the lease
+    let ends_at = portitor_runtime::system::now_secs() + 3;
+    leave_pending_agreement(&one, "p-free", None);
+    leave_pending_agreement(&one, "p-leased", Some(ends_at));
+
+    // both loops take a turn at once: the free message goes out once
+    let taken = first.negotiator.resume().unwrap() + second.negotiator.resume().unwrap();
+    assert_eq!(taken, 1);
+    for _ in 0..400 {
+        if negotiation(&one, "p-free").state == NegotiationState::Agreed {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(negotiation(&one, "p-free").state, NegotiationState::Agreed);
+    let expected_free = format!("{CALLBACK}/negotiations/c-p-free/agreement");
+    assert_eq!(
+        agreements_sent(&[&first, &second]),
+        std::slice::from_ref(&expected_free)
+    );
+    assert_eq!(
+        negotiation(&one, "p-leased").state,
+        NegotiationState::Requested
+    );
+
+    // the lease of the replica that stopped ends: taken over, once
+    while portitor_runtime::system::now_secs() <= ends_at {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let taken = second.negotiator.resume().unwrap() + first.negotiator.resume().unwrap();
+    assert_eq!(taken, 1);
+    for _ in 0..400 {
+        if negotiation(&two, "p-leased").state == NegotiationState::Agreed {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let p = negotiation(&two, "p-leased");
+    assert_eq!((p.state, p.pending), (NegotiationState::Agreed, None));
+    let expected_leased = format!("{CALLBACK}/negotiations/c-p-leased/agreement");
+    assert_eq!(
+        agreements_sent(&[&first, &second]),
+        [expected_free, expected_leased]
+    );
+    assert_eq!(
+        first.negotiator.resume().unwrap() + second.negotiator.resume().unwrap(),
+        0
+    );
 }

@@ -9,6 +9,9 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use portitor_runtime::database;
+pub use portitor_runtime::database::DatabaseSetting;
+
 pub use portitor_runtime::settings::base_path;
 use portitor_runtime::settings::{self, ALLOW_HTTP_CALLBACKS, RemovedSetting, refuse_removed};
 
@@ -19,7 +22,8 @@ pub const DEFAULT_BIND: &str = "0.0.0.0:8070";
 /// says otherwise: on this machine only.
 pub const DEFAULT_MANAGEMENT_BIND: &str = "127.0.0.1:8071";
 
-/// The `SQLite` file unless `PORTITOR_DB_FILE` says otherwise.
+/// The `SQLite` file unless `PORTITOR_DB_FILE` (or
+/// `PORTITOR_DATABASE_URL`) says otherwise.
 pub const DEFAULT_DB_FILE: &str = "/data/portitor-issuer.db";
 
 /// How many credentials of one definition a holder may have that are
@@ -60,8 +64,10 @@ pub struct Config {
     pub issuer_service_url: String,
     /// Where the public server listens (`PORTITOR_BIND`).
     pub bind: String,
-    /// The `SQLite` file (`PORTITOR_DB_FILE`).
-    pub db_file: PathBuf,
+    /// The database: PostgreSQL (`PORTITOR_DATABASE_URL` and
+    /// `PORTITOR_DATABASE_PASSWORD_FILE`), or the `SQLite` file
+    /// (`PORTITOR_DB_FILE`, [`DEFAULT_DB_FILE`] when not set).
+    pub database: DatabaseSetting,
     /// The management port: always the health checks, and the management
     /// API when `PORTITOR_MANAGEMENT_API_KEY_FILE` is set.
     pub management: ManagementConfig,
@@ -141,6 +147,8 @@ impl Config {
             .unwrap_or_default();
         let allow_http = settings::switch(&var, "PORTITOR_ALLOW_HTTP")
             .map_err(|e| invalid("PORTITOR_ALLOW_HTTP", &e))?;
+        let database = database::setting(&var, DEFAULT_DB_FILE)
+            .map_err(|e| invalid("PORTITOR_DATABASE_URL", &e))?;
         Ok(Self {
             participant_id,
             key_file: PathBuf::from(required("PORTITOR_ISSUER_KEY_FILE")?),
@@ -150,9 +158,7 @@ impl Config {
             )?),
             issuer_service_url: issuer_service_url.trim_end_matches('/').to_owned(),
             bind: text("PORTITOR_BIND").unwrap_or_else(|| DEFAULT_BIND.to_owned()),
-            db_file: PathBuf::from(
-                text("PORTITOR_DB_FILE").unwrap_or_else(|| DEFAULT_DB_FILE.to_owned()),
-            ),
+            database,
             management,
             allow_http,
             max_active_per_holder,
@@ -265,6 +271,8 @@ mod tests {
         for optional in [
             "PORTITOR_BIND",
             "PORTITOR_DB_FILE",
+            "PORTITOR_DATABASE_URL",
+            "PORTITOR_DATABASE_PASSWORD_FILE",
             "PORTITOR_ISSUER_RETIRED_KEY_FILES",
             "PORTITOR_ISSUER_MAX_ACTIVE_PER_HOLDER",
             "PORTITOR_ISSUER_BUNDLE_KEY_FILE",
@@ -295,7 +303,10 @@ mod tests {
     fn defaults() {
         let config = read(MINIMAL).unwrap();
         assert_eq!(config.bind, "0.0.0.0:8070");
-        assert_eq!(config.db_file, PathBuf::from("/data/portitor-issuer.db"));
+        assert_eq!(
+            config.database,
+            DatabaseSetting::SqliteFile(PathBuf::from("/data/portitor-issuer.db"))
+        );
         assert_eq!(config.issuer_service_url, "https://issuer.example/issuer");
         assert_eq!(
             config.management,

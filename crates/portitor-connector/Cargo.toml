@@ -29,7 +29,6 @@ portitor-shacl = { path = "../portitor-shacl" }
 http-body-util.workspace = true
 hyper.workspace = true
 ring.workspace = true
-rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
@@ -37,6 +36,9 @@ tracing.workspace = true
 utoipa.workspace = true
 
 [dev-dependencies]
+# the SQLite file under the store, for the tests of old files and of a
+# panic while its lock is held (src/store.rs, src/store/poison_tests.rs)
+rusqlite.workspace = true
 # the in-memory flow store of the data plane crate
 portitor-dataplane = { path = "../portitor-dataplane", features = ["test-support"] }
 # in-memory traces for the trace context tests (ADR 0023)

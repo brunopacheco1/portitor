@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Runs the Eclipse DSP TCK (built from source at a pinned tag) against Portitor,
+# Runs the Eclipse DSP TCK (built from source at a pinned tag) against Portitor
+# on PostgreSQL,
 # the DCP TCK's credential service tests against portitor-identity, its
 # verifier tests against the connector, and its issuer tests against
 # portitor-issuer.
@@ -48,12 +49,25 @@ jobs:
     name: Changes
     uses: ./.github/workflows/changes.yml
 
+  # The one DSP TCK run, on PostgreSQL (ADR 0029, section 7): the connector
+  # keeps its state in a database of its own on the newest supported
+  # version. A test server only: trust, no TLS. The DCP TCK jobs below keep
+  # their SQLite files.
   tck:
     name: DSP TCK (metadata, catalog)
     needs: changes
     if: ${{ needs.changes.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    services:
+      postgres:
+        image: docker.io/library/postgres:19.0-alpine3.24@sha256:cac45fb483caee3668946088a1c0532db89d5285c28dbfeac889b4068296e06f
+        env:
+          POSTGRES_USER: portitor
+          POSTGRES_DB: portitor_connector
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U portitor" --health-interval 2s --health-timeout 5s --health-retries 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -112,10 +126,14 @@ jobs:
           PORTITOR_ALLOW_HTTP: "true"
           # the TCK's fixed header (tck/dsp-tck.properties); no DCP here
           PORTITOR_TCK_AUTHORIZATION: Bearer dsp-tck-only
+          # the database the service above made (POSTGRES_DB)
+          PORTITOR_DATABASE_URL: postgresql://portitor@localhost:5432/portitor_connector?sslmode=disable
         run: |
           cargo build --locked -p portitor-connector --features tck
           nohup target/debug/portitor-connector > portitor.log 2>&1 &
           for _ in $(seq 50); do curl -sf http://127.0.0.1:8080/health && break; sleep 0.2; done
+          # on PostgreSQL, not on a SQLite file
+          grep -q '"db":"postgresql://portitor@localhost:5432/portitor_connector"' portitor.log
       - name: Run TCK
         run: |
           java -jar "$RUNNER_TEMP/dsp-tck-runtime.jar" -config tck/dsp-tck.properties | tee tck.log

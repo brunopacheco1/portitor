@@ -81,7 +81,7 @@
 //! credentials with at most [`MAX_STATUS_ENTRIES`] status entries each, and
 //! the whole check must end within [`DEADLINE`].
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use portitor_dcp::credential::{Credential, Presentation};
@@ -97,6 +97,7 @@ use portitor_runtime::BoxFuture;
 use portitor_runtime::did::DidWebResolver;
 use portitor_runtime::http::{HttpError, HttpSender, bearer_token};
 use portitor_runtime::system::now_secs;
+use portitor_runtime::used_tokens::{RecordIn, UsedTokenStore};
 use serde_json::Value;
 
 use super::sts::{SecureTokenService, TokenRequest};
@@ -155,9 +156,10 @@ pub struct DcpVerifier {
     /// The Gaia-X compliance services we trust (ADR 0022).
     gaiax_compliance_issuers: Vec<String>,
     scopes: Vec<String>,
-    /// Token ids already used (DCP 4.3.3, step 6). In memory: one replica
-    /// per store (ADR 0016).
-    used_token_ids: Mutex<JtiCache>,
+    /// Token ids already used (DCP 4.3.3, step 6), in the connector's
+    /// database, so every process of the connector refuses a token used
+    /// on another one (TD-09).
+    used_token_ids: Arc<dyn UsedTokenStore>,
     /// Verified status list credentials, by URL
     /// (`PORTITOR_STATUS_LIST_CACHE_SECONDS`).
     status_lists: StatusListCache,
@@ -200,12 +202,17 @@ struct Verified {
 }
 
 impl DcpVerifier {
-    /// A verifier for `settings`, getting our own tokens from `sts`.
+    /// A verifier for `settings`, getting our own tokens from `sts`, and
+    /// recording the callers' token ids in `used_token_ids`.
     ///
     /// # Errors
     ///
     /// The HTTP client cannot be built.
-    pub fn new(settings: &AuthSettings, sts: Arc<dyn SecureTokenService>) -> Result<Self, String> {
+    pub fn new(
+        settings: &AuthSettings,
+        sts: Arc<dyn SecureTokenService>,
+        used_token_ids: Arc<dyn UsedTokenStore>,
+    ) -> Result<Self, String> {
         // how long a DID document is reused (PORTITOR_DID_CACHE_SECONDS)
         let did_cache = Duration::from_secs(settings.did_cache_seconds);
         Ok(Self {
@@ -218,7 +225,7 @@ impl DcpVerifier {
             // a Gaia-X compliance scope brings its legal person scope, as
             // on the prover's side (ADR 0022)
             scopes: with_linked_scopes(&settings.scopes),
-            used_token_ids: Mutex::new(JtiCache::default()),
+            used_token_ids,
             status_lists: StatusListCache::new(settings.status_list_cache_seconds),
             clock: Arc::new(now_secs),
             start_tries: START_TRIES,
@@ -293,7 +300,10 @@ impl DcpVerifier {
         settings: &AuthSettings,
         sts: Arc<dyn SecureTokenService>,
     ) -> Result<Self, String> {
-        let mut verifier = Self::new(settings, sts)?;
+        // it checks only our own tokens, which are never presented
+        // anywhere: a list in memory is enough
+        let unused: Arc<dyn UsedTokenStore> = Arc::new(Mutex::new(JtiCache::default()));
+        let mut verifier = Self::new(settings, sts, unused)?;
         verifier.resolver = DidWebResolver::new(settings.allow_http, Duration::ZERO)?.unobserved();
         verifier.http = verifier.http.unobserved();
         verifier.start_tries = 1;
@@ -421,19 +431,15 @@ impl DcpVerifier {
     }
 
     /// Checks the token against the caller's DID document and records its
-    /// id as used, under the lock of the used ids.
+    /// id as used, in the store.
     fn validate_and_remember(
         &self,
         token: &str,
         doc: &DidDocument,
         now: u64,
     ) -> Result<Claims, portitor_dcp::Error> {
-        // a panic while holding the lock leaves at most one more token id
-        // in the list, so the list is still safe to use
-        let mut used = self
-            .used_token_ids
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        // `&*` borrows the store the shared pointer points to
+        let mut used = RecordIn(&*self.used_token_ids);
         validate_self_issued(token, doc, &self.participant_id, now, LEEWAY, &mut used)
     }
 

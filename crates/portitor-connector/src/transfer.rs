@@ -19,6 +19,18 @@
 //! `Retry-After` ([`failed`]); our own calls in the background try again
 //! ([`outbox::retry_while_busy`]); and a sweep runs the data plane steps
 //! left over by a process that stopped ([`TransferProvider::schedule_sweep`]).
+//!
+//! From 1.3 (ADR 0029, TD-54): one push per transfer runs among all the
+//! processes that share the database. A process takes the transfer's push
+//! lease ([`PUSH_LEASE`]) before it sends, renews it while the push runs,
+//! and ends it once the end of the push is recorded. The loop of every
+//! process ([`TransferProvider::resume`]) starts the pushes of `STARTED`
+//! push transfers that nobody leases: those that a process that stopped
+//! left, once their lease has ended. A push whose lease is lost (its
+//! process stalled, or the database did not answer, until the lease
+//! ended) stops, so that it does not run beside the one that took over;
+//! in one process, a push also never starts while another push of the
+//! same transfer still runs.
 
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -36,6 +48,7 @@ use portitor_dsp::transfer::{
     TransferStartMessage, TransferState, TransferSuspensionMessage, TransferTerminationMessage,
     Transition,
 };
+use portitor_runtime::leases::HeldLease;
 use portitor_runtime::panics::spawn_supervised;
 use portitor_runtime::telemetry::metrics;
 use serde::de::DeserializeOwned;
@@ -44,7 +57,7 @@ use serde_json::Value;
 use crate::auth::{AnyVerifier, Caller, credentials_for};
 use crate::flow_membership::EndsTransfers;
 use crate::flow_membership::MembershipStore as _;
-use crate::harvest::DatasetCopy;
+use crate::harvest::StoredCatalog;
 use crate::http_client::outbound_url_allowed;
 use crate::outbox::{self, Link, Message, Outbox, retry_while_busy};
 use crate::ports::{
@@ -59,8 +72,8 @@ use portitor_dataplane::{HttpDataPlane, PushJob};
 pub struct NoDataFlows;
 
 impl DataFlows for NoDataFlows {
-    fn supports(&self, _: &str, _: &str) -> bool {
-        false
+    fn supports(&self, _: &str, _: &str) -> Result<bool, String> {
+        Ok(false)
     }
     fn start(&self, _: &Transfer) -> Result<Option<DataAddress>, String> {
         Err(NO_DATA_PLANE.to_owned())
@@ -85,12 +98,16 @@ impl DataFlows for NoDataFlows {
 
 const NO_DATA_PLANE: &str = "this connector has no data plane";
 
+/// The kind of the lease on a running push in the database; its id is
+/// the transfer's provider pid (TD-54, `portitor_runtime::leases`).
+pub(crate) const PUSH_LEASE: &str = "push";
+
 type Service = TransferService<
     AnyTransferStore,
     AnyAgreements,
     AnyDataFlows,
     AnyTransferDecider,
-    DatasetCopy,
+    StoredCatalog,
     SystemEnvironment,
 >;
 
@@ -117,7 +134,7 @@ impl TransferProvider {
     /// The provider, shared. `plane`: the built-in data plane, if any.
     pub(crate) fn new_shared(
         ports: &crate::Ports,
-        catalog: DatasetCopy,
+        catalog: StoredCatalog,
         allow_http: bool,
         plane: Option<Arc<HttpDataPlane>>,
     ) -> Arc<Self> {
@@ -153,8 +170,15 @@ impl TransferProvider {
     /// ([`until_consumer_started`]), or until the flow is cut. A push that
     /// cannot begin ends the transfer: otherwise it would stay `STARTED`
     /// with nothing sending its data.
+    ///
+    /// Nothing happens when another process, or another task of this one,
+    /// holds the transfer's push lease: that one sends (module doc).
     fn begin_push_once_started(&self, provider_pid: &str, consumer: Option<(String, String)>) {
         let (Some(plane), Some(me)) = (&self.plane, self.me.upgrade()) else {
+            return;
+        };
+        // held by another, or the store failed: the loop tries again
+        let Some(lease) = self.link.leases.claim(PUSH_LEASE, provider_pid).taken() else {
             return;
         };
         match plane.push_job(provider_pid) {
@@ -168,15 +192,17 @@ impl TransferProvider {
                             () = job.cut.cut() => {}
                         }
                     }
-                    run_push(me, plane, job).await;
+                    run_push(me, plane, job, lease).await;
                 });
             }
-            Ok(None) => {}
+            // not a push transfer that is STARTED, or its push still
+            // runs in this process: nothing to send
+            Ok(None) => lease.release(),
             Err(error) => {
                 tracing::warn!(flow = %provider_pid, %error, "push: cannot start; the transfer is terminated");
                 let pid = provider_pid.to_owned();
                 tokio::spawn(async move {
-                    me.push_finished(&pid, Some("the push could not start"))
+                    me.push_finished(&pid, Some("the push could not start"), lease)
                         .await;
                 });
             }
@@ -192,9 +218,15 @@ impl TransferProvider {
     /// end of a push is recorded nowhere else; and by the last try a lease
     /// of a process that stopped has ended, so that try takes its step
     /// over. Should it still fail, the error below is logged, the transfer
-    /// stays `STARTED`, and the push is sent again at the next restart
-    /// ([`TransferProvider::resume`]).
-    async fn push_finished(self: Arc<Self>, provider_pid: &str, failure: Option<&str>) {
+    /// stays `STARTED`, and the push `lease` is left to end on its own:
+    /// the loop then sends the push again ([`TransferProvider::resume`]).
+    /// Once the end is recorded, the lease ends.
+    async fn push_finished(
+        self: Arc<Self>,
+        provider_pid: &str,
+        failure: Option<&str>,
+        lease: HeldLease,
+    ) {
         // the failure in a `Box`, to keep the answer small while it waits
         let ended = retry_while_busy::<_, Box<Failure>>(
             |failure| failure.is_busy(),
@@ -206,10 +238,14 @@ impl TransferProvider {
         )
         .await;
         match ended {
-            Ok(Some(out)) => outbox::deliver(self, out).await,
-            Ok(None) => {}
+            Ok(Some(out)) => {
+                lease.release();
+                outbox::deliver(self, out).await;
+            }
+            Ok(None) => lease.release(),
             Err(failure) => {
                 tracing::error!(flow = %provider_pid, ?failure, "push: the end of the transfer could not be saved");
+                drop(lease);
             }
         }
     }
@@ -308,9 +344,12 @@ impl TransferProvider {
         )
     }
 
-    /// Sends every message saved as pending, for example after a restart.
-    /// Returns how many. A transfer whose data plane step cannot be taken
-    /// up now is logged (ERROR) and left out; the others go on.
+    /// Sends every message saved as pending that no process leases, and
+    /// starts the pushes that should run and that no process sends: one
+    /// round of the loop ([`crate::Negotiator::schedule_outbox`]). Returns
+    /// how many messages it took up. A transfer whose data plane step
+    /// cannot be taken up now is logged (ERROR) and left out; the others
+    /// go on.
     ///
     /// # Errors
     ///
@@ -353,7 +392,7 @@ impl TransferProvider {
     /// One sweep ([`TransferProvider::schedule_sweep`]).
     async fn sweep(self: &Arc<Self>) {
         let provider = Arc::clone(self);
-        // SQLite and the built-in data plane: blocking work, so on a
+        // the database and the built-in data plane: blocking work, so on a
         // thread for it
         let swept = tokio::task::spawn_blocking(move || {
             provider.service.run_steps_left_over().map_err(Box::new)
@@ -377,9 +416,11 @@ impl TransferProvider {
         }
     }
 
-    /// Sends again, from the start, the pushes a restart cut: transfers
-    /// that are `STARTED`, with nothing of ours on its way. A push whose
-    /// start message is still on its way begins once it is delivered.
+    /// Sends again, from the start, the pushes that nobody sends:
+    /// transfers that are `STARTED`, with nothing of ours on its way, and
+    /// whose push lease nobody holds (a restart cut it, or the process
+    /// that sent it stopped and its lease ended). A push whose start
+    /// message is still on its way begins once it is delivered.
     fn resume_pushes(&self) {
         let Some(plane) = &self.plane else {
             return;
@@ -391,7 +432,11 @@ impl TransferProvider {
                 return;
             }
         };
+        let sent_now = self.link.leases.held(PUSH_LEASE);
         for pid in started {
+            if sent_now.contains(&pid) {
+                continue;
+            }
             let ready = self
                 .service
                 .transfer(&pid)
@@ -641,24 +686,38 @@ async fn until_consumer_started(link: &Link, status_url: &str, audience: &str) {
     }
 }
 
-/// Sends `job` (a push of `provider`'s), writes the audit line, then
-/// completes or terminates the transfer. A push that suspend or terminate
-/// cut leaves the transfer as they made it; any other cut is a failure
-/// ([`portitor_dataplane::push::send`]).
-async fn run_push(provider: Arc<TransferProvider>, plane: Arc<HttpDataPlane>, mut job: PushJob) {
+/// Sends `job` (a push of `provider`'s, under its push `lease`), writes
+/// the audit line, then completes or terminates the transfer. A push that
+/// suspend or terminate cut leaves the transfer as they made it; any
+/// other cut is a failure ([`portitor_dataplane::push::send`]).
+///
+/// A push whose lease is lost stops at once (`cut` in the audit line) and
+/// leaves the transfer as it is: the process that took the lease over
+/// sends the data again and ends the transfer (module doc).
+async fn run_push(
+    provider: Arc<TransferProvider>,
+    plane: Arc<HttpDataPlane>,
+    mut job: PushJob,
+    lease: HeldLease,
+) {
     let pid = job.flow_id.clone();
     // the agreement and the consumer the flow kept from its start message
     let parties = job.parties.clone();
-    let pushed = portitor_dataplane::push::send(&plane, &mut job).await;
-    // the push is over: a later start again may send again
+    let lost = lease.lost().wait();
+    let pushed = portitor_dataplane::push::send_unless(&plane, &mut job, lost).await;
     drop(job);
     portitor_dataplane::push::audit(&pid, &parties, &pushed);
     let failure = match &pushed.sent {
         portitor_dataplane::push::Sent::Done => None,
         portitor_dataplane::push::Sent::Failed(reason) => Some(reason.as_str()),
-        portitor_dataplane::push::Sent::Cut => return,
+        portitor_dataplane::push::Sent::Cut => {
+            // the push is over: a later start again may send again. (A
+            // lost lease is not ours to end: this ends nothing then.)
+            lease.release();
+            return;
+        }
     };
-    provider.push_finished(&pid, failure).await;
+    provider.push_finished(&pid, failure, lease).await;
 }
 
 /// `POST /transfers/{providerPid}/suspension`.

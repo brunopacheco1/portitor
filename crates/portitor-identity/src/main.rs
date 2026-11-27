@@ -9,12 +9,15 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use portitor_dcp::SigningKey;
-use portitor_identity::config::{Config, DEFAULT_MANAGEMENT_BIND, ManagementConfig};
+use portitor_identity::config::{
+    Config, DEFAULT_MANAGEMENT_BIND, DatabaseSetting, ManagementConfig,
+};
 use portitor_identity::gaiax::{GaiaxCompliance, HttpGaiaxCompliance};
 use portitor_identity::issuance::HttpIssuerClient;
-use portitor_identity::store::SqliteStore;
+use portitor_identity::store::{DatabaseStore, MIGRATIONS};
 use portitor_identity::{Identity, Ports};
 use portitor_runtime::api_key::ApiKey;
+use portitor_runtime::database::{Database, SQLITE_DEPRECATED};
 use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::health;
 use portitor_runtime::management::management_port;
@@ -55,8 +58,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let key = read_key(&config)?;
     let sts_client_secret = ApiKey::read(&config.sts_client_secret_file)
         .map_err(|e| format!("PORTITOR_STS_CLIENT_SECRET_FILE: {e}"))?;
-    let store = SqliteStore::open(&config.db_file)
-        .map_err(|e| format!("cannot open {}: {e}", config.db_file.display()))?;
+    let database = Arc::new(open_database(&config)?);
+    let store = DatabaseStore::new(Arc::clone(&database));
     let compliance = match &config.gaiax {
         Some(gaiax) => {
             let adapter = HttpGaiaxCompliance::new(&gaiax.compliance_url, config.allow_http)?;
@@ -96,7 +99,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // the management API only with its key
     let checks = Arc::new(portitor_identity::health::readiness_checks(
         &identity,
-        config.db_file.clone(),
+        config.database.clone(),
+        database,
     ));
     let (management_listener, management_app) =
         management_port(&config.management, checks, |key| {
@@ -111,7 +115,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         bind = %config.bind,
         did = %identity.participant_id(),
         kid = %identity.kid(),
-        db = %config.db_file.display(),
+        db = %shown(&config),
         "portitor-identity listening"
     );
     // the public routes: anyone can call them. The size limit is inside
@@ -127,6 +131,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
     Ok(())
+}
+
+/// Opens the database and brings its schema up to date; warns once
+/// when it is a `SQLite` file (deprecated since 1.3).
+fn open_database(config: &Config) -> Result<Database, String> {
+    let database = Database::open(&config.database, &MIGRATIONS)
+        .map_err(|e| format!("cannot open the database {}: {e}", shown(config)))?;
+    if !database.is_postgres() {
+        tracing::warn!("{SQLITE_DEPRECATED}");
+    }
+    Ok(database)
+}
+
+/// The database, for the log: the `SQLite` file, or the PostgreSQL URL
+/// without its query.
+fn shown(config: &Config) -> String {
+    match &config.database {
+        DatabaseSetting::SqliteFile(path) => path.display().to_string(),
+        DatabaseSetting::Postgres(settings) => settings.shown().to_owned(),
+    }
 }
 
 /// The participant's key, from the PEM file.

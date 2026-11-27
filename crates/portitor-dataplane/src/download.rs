@@ -10,25 +10,43 @@
 //!   the flow is cut, the body ends with an error instead of more data, so
 //!   the server drops the connection and the consumer sees an incomplete
 //!   download, never a complete one.
-//! - [`watchdog`] runs next to the download and checks the consumer's
+//! - [`membership_watchdog`] runs next to the download and checks the consumer's
 //!   membership again every [`AccessGate::recheck_interval`](crate::access::AccessGate::recheck_interval). When it
 //!   no longer holds, it ends the transfer (which cuts the flow); when the
 //!   check cannot finish, it cuts the flow's downloads and keeps the
 //!   transfer. It stops with the download: the body holds it and aborts
 //!   it when dropped.
+//! - [`state_watchdog`] runs next to every download and push and reads
+//!   the flow's state from the database every [`STATE_CHECK_EVERY`]. Once
+//!   the flow is suspended or terminated, or gone, it cuts the flow's
+//!   work in this process (ADR 0029, decision 6; TD-52). A suspension or
+//!   termination handled by this process cuts at once
+//!   ([`RunningFlows::cut`]); one handled by another process that shares
+//!   the database is seen here within those 5 seconds. A suspension and
+//!   a start again on another process, both within one interval, are not
+//!   seen: the flow is `STARTED` again when it is read, and the work goes
+//!   on.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::response::Response;
 use hyper::body::{Bytes, Frame, SizeHint};
 use tokio::task::JoinHandle;
 
+use portitor_dps::state::DataFlowState;
+
 use crate::access::{Access, AccessGate};
+use crate::flows::FlowStore;
 use crate::running_flows::{CutSignal, RunningFlows};
+
+/// How often a running download or push reads its flow's state (ADR
+/// 0029, decision 6): every 5 seconds.
+pub const STATE_CHECK_EVERY: Duration = Duration::from_secs(5);
 
 /// The error type of a body: any error that can cross threads.
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -44,7 +62,7 @@ impl Drop for AbortOnDrop {
 
 /// Starts the membership checks of one download of flow `flow_id` (module
 /// doc). Keep the value as long as the download runs.
-pub(super) fn watchdog(
+pub(super) fn membership_watchdog(
     gate: Arc<dyn AccessGate>,
     running: Arc<RunningFlows>,
     flow_id: &str,
@@ -74,19 +92,60 @@ pub(super) fn watchdog(
     AbortOnDrop(tokio::spawn(checks))
 }
 
+/// Starts the reads of the state of flow `flow_id` while one download or
+/// push of it runs (module doc). Keep the value as long as it runs.
+pub(super) fn state_watchdog(
+    flows: Arc<dyn FlowStore + Send + Sync>,
+    running: Arc<RunningFlows>,
+    flow_id: &str,
+) -> AbortOnDrop {
+    let flow_id = flow_id.to_owned();
+    let checks = async move {
+        loop {
+            tokio::time::sleep(STATE_CHECK_EVERY).await;
+            let state = match flows.get(&flow_id) {
+                Ok(Some(flow)) => Some(flow.state),
+                Ok(None) => None,
+                Err(error) => {
+                    // the database may answer at the next read; a
+                    // suspension in this process still cuts at once
+                    tracing::warn!(flow = %flow_id, error = %error.0, "the state of a running data flow could not be read");
+                    continue;
+                }
+            };
+            if stops_work(state) {
+                tracing::info!(flow = %flow_id, ?state, "running download or push cut: its flow was suspended or terminated");
+                running.cut(&flow_id);
+                return;
+            }
+        }
+    };
+    AbortOnDrop(tokio::spawn(checks))
+}
+
+/// Whether a flow in `state` (`None`: the flow is gone) stops the work
+/// that runs for it: as the suspension and the termination do in the
+/// process that handles them. A completion does not, there either.
+fn stops_work(state: Option<DataFlowState>) -> bool {
+    match state {
+        Some(DataFlowState::Suspended | DataFlowState::Terminated) | None => true,
+        Some(_) => false,
+    }
+}
+
 /// `response`, whose body stops with an error once `cut` fires (module
-/// doc). `watchdog`, if any, lives as long as the body.
+/// doc). The `watchdogs` live as long as the body.
 pub(super) fn cut_when_told(
     response: Response,
     mut cut: CutSignal,
-    watchdog: Option<AbortOnDrop>,
+    watchdogs: Vec<AbortOnDrop>,
 ) -> Response {
     let (parts, body) = response.into_parts();
     let cut_body = CutBody {
         inner: body,
         cut: Box::pin(async move { cut.cut().await }),
         ended: false,
-        _watchdog: watchdog,
+        _watchdogs: watchdogs,
     };
     Response::from_parts(parts, Body::new(cut_body))
 }
@@ -98,7 +157,7 @@ struct CutBody {
     cut: Pin<Box<dyn Future<Output = ()> + Send>>,
     /// Set once the body has given its last frame or its error.
     ended: bool,
-    _watchdog: Option<AbortOnDrop>,
+    _watchdogs: Vec<AbortOnDrop>,
 }
 
 /// Why a download stopped early; only the server's log sees it.
@@ -193,7 +252,7 @@ mod tests {
     async fn a_cut_ends_the_body_with_an_error() {
         let running = RunningFlows::new();
         let cut = running.watch("f1");
-        let response = cut_when_told(endless(), cut, None);
+        let response = cut_when_told(endless(), cut, Vec::new());
         let mut body = response.into_body();
         let first = body.frame().await.unwrap().unwrap();
         assert_eq!(first.into_data().unwrap(), "first");
@@ -203,5 +262,58 @@ mod tests {
             .unwrap();
         assert!(next.unwrap().is_err(), "an error, not the end");
         assert!(body.frame().await.is_none());
+    }
+
+    /// A flow in the store, STARTED, and its running work.
+    fn started_flow() -> (Arc<crate::test_store::InMemoryFlows>, Arc<RunningFlows>) {
+        let flows = Arc::new(crate::test_store::InMemoryFlows::default());
+        let flow = crate::Flow {
+            id: "f1".to_owned(),
+            state: DataFlowState::Started,
+            dataset_id: "d1".to_owned(),
+            source: Some("https://upstream.example/d1".to_owned()),
+            agreement_id: "a1".to_owned(),
+            counter_party_id: "did:web:c.example".to_owned(),
+            token_hash: String::new(),
+            expires_at: u64::MAX,
+            push_address: None,
+        };
+        assert!(flows.insert(&flow).unwrap());
+        (flows, Arc::new(RunningFlows::new()))
+    }
+
+    /// TD-52: another process suspends the flow (it writes the state in
+    /// the shared database and cuts only its own work). The state watchdog of
+    /// the download here reads the state within 5 seconds and cuts it.
+    /// A paused clock: the reads come at once, and the test reads when.
+    #[tokio::test(start_paused = true)]
+    async fn a_suspension_written_by_another_process_cuts_within_5_seconds() {
+        let (flows, running) = started_flow();
+        let mut cut = running.watch("f1");
+        let flow_store = Arc::clone(&flows) as Arc<dyn FlowStore + Send + Sync>;
+        let _watchdog = state_watchdog(flow_store, Arc::clone(&running), "f1");
+        // still STARTED: the reads change nothing
+        tokio::time::sleep(STATE_CHECK_EVERY * 3).await;
+        assert!(!cut.is_cut());
+        let begun = tokio::time::Instant::now();
+        let changed = flows.set_state("f1", DataFlowState::Started, DataFlowState::Suspended);
+        assert!(changed.unwrap());
+        cut.cut().await;
+        assert!(begun.elapsed() <= STATE_CHECK_EVERY);
+    }
+
+    /// A completion does not cut, as in the process that handles it.
+    #[tokio::test(start_paused = true)]
+    async fn a_completion_does_not_cut() {
+        let (flows, running) = started_flow();
+        let cut = running.watch("f1");
+        let flow_store = Arc::clone(&flows) as Arc<dyn FlowStore + Send + Sync>;
+        let _watchdog = state_watchdog(flow_store, Arc::clone(&running), "f1");
+        let changed = flows.set_state("f1", DataFlowState::Started, DataFlowState::Completed);
+        assert!(changed.unwrap());
+        tokio::time::sleep(STATE_CHECK_EVERY * 3).await;
+        assert!(!cut.is_cut());
+        assert!(stops_work(None), "a flow that is gone stops");
+        assert!(stops_work(Some(DataFlowState::Terminated)));
     }
 }

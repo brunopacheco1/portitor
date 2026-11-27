@@ -4,35 +4,37 @@
 
 //! What the identity component keeps (ADR 0015, "Storage"): the
 //! participant's credentials as received, the credential requests it
-//! waits on, and the offers issuers sent. [`IdentityStore`] is the port;
-//! [`SqliteStore`] the adapter, one `SQLite` file per process.
-//!
-//! Used token ids (`jti`) are not here: they live in memory
-//! ([`portitor_dcp::JtiCache`], ADR 0016).
+//! waits on, the offers issuers sent, and the token ids its callers used
+//! (TD-09). [`IdentityStore`] is the port; [`DatabaseStore`] the adapter,
+//! on PostgreSQL (several replicas) or a `SQLite` file (one process).
 
-use std::path::Path;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 
 use portitor_dcp::credential::Profile;
 use portitor_dcp::message::CredentialObject;
-use rusqlite::{Connection, Row, params};
+use portitor_runtime::database::{
+    Database, DatabaseSetting, DbError, Executor, Migrations, Row, from_db_int, to_db_int,
+};
+use portitor_runtime::leases::LeaseStore;
+use portitor_runtime::used_tokens::UsedTokenStore;
+use portitor_runtime::values;
 
 /// A store operation failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("store: {0}")]
 pub struct StoreError(pub String);
 
-/// Lets `?` turn a `SQLite` error into a [`StoreError`] by itself, so the
+/// Lets `?` turn a database error into a [`StoreError`] by itself, so the
 /// SQL calls below need no `.map_err(...)`.
-impl From<rusqlite::Error> for StoreError {
-    fn from(e: rusqlite::Error) -> Self {
-        Self(e.to_string())
+impl From<DbError> for StoreError {
+    fn from(e: DbError) -> Self {
+        Self(e.message)
     }
 }
 
 /// The columns of a stored credential, in the order of
 /// [`credential_from`]'s reads and of the `INSERT` in
-/// [`SqliteStore::deliver`].
+/// [`insert_credential`].
 const CREDENTIAL_COLUMNS: &str = "id, issuer, types, profile, expires_at, holder_pid, jwt";
 
 /// A credential the participant holds.
@@ -175,8 +177,9 @@ pub struct StoredOffer {
     pub received_at: u64,
 }
 
-/// Port: the identity component's storage.
-pub trait IdentityStore: Send + Sync {
+/// Port: the identity component's storage. It keeps the used token ids
+/// ([`UsedTokenStore`]) and the leases ([`LeaseStore`]) too.
+pub trait IdentityStore: UsedTokenStore + LeaseStore + Send + Sync {
     /// Records a new request. Returns false if one with the same
     /// `holder_pid` exists already.
     ///
@@ -296,8 +299,9 @@ pub trait IdentityStore: Send + Sync {
         error: Option<&str>,
     ) -> Result<(), StoreError>;
 
-    /// Marks the runs still `RUNNING` as failed at `now`: a restart
-    /// stopped them. Returns how many.
+    /// Marks the runs still `RUNNING` as failed at `now`: the process that
+    /// ran them stopped. Call it only while holding the lease of the runs
+    /// (TD-56): then no other process runs one. Returns how many.
     ///
     /// # Errors
     /// The store fails.
@@ -365,8 +369,10 @@ pub struct GaiaxRun {
     pub error: Option<String>,
 }
 
-/// Schema migrations, applied in order (see `portitor_runtime::sqlite`).
-const MIGRATIONS: &[&str] = &[
+/// The `SQLite` schema migrations, applied in order (see
+/// `portitor_runtime::sqlite`). Never edit one; add a new one, and the
+/// same change to [`POSTGRES_MIGRATIONS`].
+const SQLITE_MIGRATIONS: &[&str] = &[
     // 0.5: credential requests, credentials and offers (ADR 0015)
     "CREATE TABLE credential_request (
         holder_pid TEXT PRIMARY KEY,
@@ -405,115 +411,234 @@ const MIGRATIONS: &[&str] = &[
         outcome     TEXT NOT NULL,
         error       TEXT
     )",
+    // 1.3: the token ids used by callers, until their token expires
+    // (TD-09, `portitor_runtime::used_tokens`)
+    "CREATE TABLE used_token (
+        token_id   TEXT PRIMARY KEY,
+        expires_at INTEGER NOT NULL
+    );
+    CREATE INDEX used_token_expires_at ON used_token (expires_at)",
+    // 1.3 (loops): the leases of work one process at a time does: the
+    // Gaia-X compliance run (ADR 0029, decision 6; TD-56;
+    // `portitor_runtime::leases`). `lease_holder`: the id of the process
+    // that holds it; `lease_until`: when it ends, in seconds since 1970
+    "CREATE TABLE lease (
+        kind         TEXT NOT NULL,
+        id           TEXT NOT NULL,
+        lease_holder TEXT NOT NULL,
+        lease_until  INTEGER NOT NULL,
+        PRIMARY KEY (kind, id)
+    )",
 ];
 
+/// The PostgreSQL schema migrations, since 1.3. The first one is the
+/// schema of 1.3 as a whole: the `SQLite` migrations above, with
+/// `BIGINT` for whole numbers and an identity column where `SQLite`
+/// counted the rows. Never edit one; add a new one, and the same change
+/// to [`SQLITE_MIGRATIONS`].
+const POSTGRES_MIGRATIONS: &[&str] = &[
+    // 1.3: the schema as a whole
+    "CREATE TABLE credential_request (
+        holder_pid      TEXT PRIMARY KEY,
+        issuer_did      TEXT NOT NULL,
+        status          TEXT NOT NULL,
+        credential_ids  TEXT NOT NULL DEFAULT '[]',
+        status_url      TEXT,
+        access_token_id TEXT,
+        created_at      BIGINT NOT NULL DEFAULT 0,
+        issuer_pid      TEXT,
+        send_error      TEXT
+    );
+    CREATE TABLE credential (
+        id         TEXT PRIMARY KEY,
+        issuer     TEXT NOT NULL,
+        types      TEXT NOT NULL,
+        profile    TEXT NOT NULL,
+        expires_at BIGINT,
+        holder_pid TEXT NOT NULL,
+        jwt        TEXT NOT NULL
+    );
+    CREATE TABLE credential_offer (
+        issuer        TEXT NOT NULL,
+        credential_id TEXT NOT NULL,
+        credential    TEXT NOT NULL,
+        received_at   BIGINT NOT NULL,
+        PRIMARY KEY (issuer, credential_id)
+    );
+    CREATE TABLE gaiax_run (
+        id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        started_at  BIGINT NOT NULL,
+        finished_at BIGINT,
+        outcome     TEXT NOT NULL,
+        error       TEXT
+    );
+    CREATE TABLE used_token (
+        token_id   TEXT PRIMARY KEY,
+        expires_at BIGINT NOT NULL
+    );
+    CREATE INDEX used_token_expires_at ON used_token (expires_at)",
+    // 1.3 (loops): the leases of work one process at a time does, as the
+    // SQLite migration of the same name
+    "CREATE TABLE lease (
+        kind         TEXT NOT NULL,
+        id           TEXT NOT NULL,
+        lease_holder TEXT NOT NULL,
+        lease_until  BIGINT NOT NULL,
+        PRIMARY KEY (kind, id)
+    )",
+];
+
+/// The identity component's schema, for both databases.
+pub const MIGRATIONS: Migrations = Migrations {
+    component: "portitor-identity",
+    sqlite: SQLITE_MIGRATIONS,
+    postgres: POSTGRES_MIGRATIONS,
+};
+
 /// The columns of a credential request, in the order of the `INSERT` in
-/// [`SqliteStore::add_request`]; read by name in [`request_from`].
+/// [`DatabaseStore::add_request`] and of [`request_from`]'s reads.
 const REQUEST_COLUMNS: &str = "holder_pid, issuer_did, status, credential_ids, status_url, \
      access_token_id, created_at, issuer_pid, send_error";
 
-/// Adapter: the store in a `SQLite` file.
-#[derive(Debug)]
-pub struct SqliteStore(Mutex<Connection>);
+/// Adapter: the store in the component's database (PostgreSQL, or a
+/// `SQLite` file), shared with the health check.
+#[derive(Debug, Clone)]
+pub struct DatabaseStore(Arc<Database>);
 
-impl SqliteStore {
-    /// Opens (or creates) the file and brings its schema up to date.
-    ///
-    /// # Errors
-    /// The file cannot be opened, is not a `SQLite` database, or was
-    /// written by a newer Portitor.
-    pub fn open(path: &Path) -> Result<Self, StoreError> {
-        let conn = portitor_runtime::sqlite::open(Some(path), MIGRATIONS).map_err(StoreError)?;
-        Ok(Self(Mutex::new(conn)))
+impl DatabaseStore {
+    /// The store in `db`, whose schema is [`MIGRATIONS`].
+    #[must_use]
+    pub fn new(db: Arc<Database>) -> Self {
+        Self(db)
     }
 
-    /// An in-memory store, for tests.
+    /// Opens (or creates) the database `setting` names and brings its
+    /// schema up to date.
+    ///
+    /// # Errors
+    /// The database cannot be opened, or was written by a newer Portitor.
+    pub fn open(setting: &DatabaseSetting) -> Result<Self, StoreError> {
+        Ok(Self::new(Arc::new(Database::open(setting, &MIGRATIONS)?)))
+    }
+
+    /// An in-memory `SQLite` store, for tests.
     ///
     /// # Errors
     /// `SQLite` cannot allocate the database.
     pub fn in_memory() -> Result<Self, StoreError> {
-        let conn = portitor_runtime::sqlite::open(None, MIGRATIONS).map_err(StoreError)?;
-        Ok(Self(Mutex::new(conn)))
+        Ok(Self::new(Arc::new(Database::in_memory(&MIGRATIONS)?)))
     }
 
-    fn conn(&self) -> MutexGuard<'_, Connection> {
-        // SQLite keeps the file consistent even if a holder panicked
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    /// The database, for the health check.
+    #[must_use]
+    pub fn database(&self) -> &Arc<Database> {
+        &self.0
+    }
+
+    /// The database, to run one statement on (`self.db().execute(...)`).
+    fn db(&self) -> &Database {
+        &self.0
     }
 }
 
-impl IdentityStore for SqliteStore {
+impl UsedTokenStore for DatabaseStore {
+    fn use_token_id(&self, token_id: &str, expires_at: u64, now: u64) -> Result<bool, String> {
+        self.db().use_token_id(token_id, expires_at, now)
+    }
+}
+
+impl LeaseStore for DatabaseStore {
+    fn claim(
+        &self,
+        kind: &str,
+        id: &str,
+        holder: &str,
+        until: u64,
+        now: u64,
+    ) -> Result<bool, String> {
+        self.db().claim(kind, id, holder, until, now)
+    }
+
+    fn extend(&self, kind: &str, id: &str, holder: &str, until: u64) -> Result<bool, String> {
+        self.db().extend(kind, id, holder, until)
+    }
+
+    fn release(&self, kind: &str, id: &str, holder: &str) -> Result<(), String> {
+        self.db().release(kind, id, holder)
+    }
+
+    fn held(&self, kind: &str, now: u64) -> Result<Vec<String>, String> {
+        self.db().held(kind, now)
+    }
+
+    fn forget_ended(&self, before: u64) -> Result<u64, String> {
+        self.db().forget_ended(before)
+    }
+}
+
+impl IdentityStore for DatabaseStore {
     fn add_request(&self, request: &CredentialRequest) -> Result<bool, StoreError> {
-        let credential_ids = serde_json::to_string(&request.credential_ids)
-            .map_err(|e| StoreError(e.to_string()))?;
-        let created_at = i64::try_from(request.created_at).unwrap_or(i64::MAX);
-        let added = self.conn().execute(
+        let credential_ids = to_json(&request.credential_ids)?;
+        let added = self.db().execute(
             &format!(
                 "INSERT INTO credential_request ({REQUEST_COLUMNS})
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                  ON CONFLICT (holder_pid) DO NOTHING"
             ),
-            params![
-                request.holder_pid,
-                request.issuer,
+            values![
+                &request.holder_pid,
+                &request.issuer,
                 request.status.text(),
                 credential_ids,
-                request.status_url,
-                request.access_token_id,
-                created_at,
-                request.issuer_pid,
-                request.send_error
+                request.status_url.as_deref(),
+                request.access_token_id.as_deref(),
+                to_db_int(request.created_at),
+                request.issuer_pid.as_deref(),
+                request.send_error.as_deref()
             ],
         )?;
         Ok(added == 1)
     }
 
     fn request(&self, holder_pid: &str) -> Result<Option<CredentialRequest>, StoreError> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare(&format!(
-            "SELECT {REQUEST_COLUMNS} FROM credential_request WHERE holder_pid = ?1"
-        ))?;
-        let mut rows = stmt.query([holder_pid])?;
-        match rows.next()? {
-            Some(row) => Ok(Some(request_from(row)?)),
-            None => Ok(None),
-        }
+        let row = self.db().query_one(
+            &format!("SELECT {REQUEST_COLUMNS} FROM credential_request WHERE holder_pid = $1"),
+            values![holder_pid],
+        )?;
+        row.as_ref().map(request_from).transpose()
     }
 
     fn requests(&self) -> Result<Vec<CredentialRequest>, StoreError> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare(&format!(
-            "SELECT {REQUEST_COLUMNS} FROM credential_request
+        let rows = self.db().query(
+            &format!(
+                "SELECT {REQUEST_COLUMNS} FROM credential_request
                  ORDER BY created_at DESC, holder_pid"
-        ))?;
-        let mut rows = stmt.query([])?;
-        let mut found = Vec::new();
-        while let Some(row) = rows.next()? {
-            found.push(request_from(row)?);
-        }
-        Ok(found)
+            ),
+            values![],
+        )?;
+        rows.iter().map(request_from).collect()
     }
 
     fn set_status_url(&self, holder_pid: &str, status_url: &str) -> Result<(), StoreError> {
-        self.conn().execute(
-            "UPDATE credential_request SET status_url = ?2 WHERE holder_pid = ?1",
-            params![holder_pid, status_url],
+        self.db().execute(
+            "UPDATE credential_request SET status_url = $2 WHERE holder_pid = $1",
+            values![holder_pid, status_url],
         )?;
         Ok(())
     }
 
     fn set_send_error(&self, holder_pid: &str, reason: &str) -> Result<(), StoreError> {
-        self.conn().execute(
-            "UPDATE credential_request SET send_error = ?2 WHERE holder_pid = ?1",
-            params![holder_pid, reason],
+        self.db().execute(
+            "UPDATE credential_request SET send_error = $2 WHERE holder_pid = $1",
+            values![holder_pid, reason],
         )?;
         Ok(())
     }
 
     fn withdraw_request(&self, holder_pid: &str) -> Result<bool, StoreError> {
-        let removed = self.conn().execute(
-            "DELETE FROM credential_request WHERE holder_pid = ?1 AND status = ?2",
-            params![holder_pid, RequestStatus::Requested.text()],
+        let removed = self.db().execute(
+            "DELETE FROM credential_request WHERE holder_pid = $1 AND status = $2",
+            values![holder_pid, RequestStatus::Requested.text()],
         )?;
         Ok(removed == 1)
     }
@@ -524,54 +649,49 @@ impl IdentityStore for SqliteStore {
         answer: Answer<'_>,
         credentials: &[StoredCredential],
     ) -> Result<Delivered, StoreError> {
-        let mut conn = self.conn();
-        let tx = conn.transaction()?;
-        // only an open request takes an answer, and only one: a second
-        // delivery finds it closed (the transaction is dropped, so nothing
-        // is written)
-        let closed = tx.execute(
-            "UPDATE credential_request SET status = ?2, issuer_pid = ?3, send_error = NULL
-                 WHERE holder_pid = ?1 AND status = ?4",
-            params![
-                holder_pid,
-                answer.status.text(),
-                answer.issuer_pid,
-                RequestStatus::Requested.text()
-            ],
-        )?;
-        if closed == 0 {
-            if closed_by(&tx, holder_pid, answer)? {
-                return Ok(Delivered::Repeated);
+        // an `Err` returned inside the transaction writes nothing
+        let delivered = self.db().transaction(|tx| {
+            // only an open request takes an answer, and only one: a second
+            // delivery finds it closed
+            let closed = tx.execute(
+                "UPDATE credential_request SET status = $2, issuer_pid = $3, send_error = NULL
+                     WHERE holder_pid = $1 AND status = $4",
+                values![
+                    holder_pid,
+                    answer.status.text(),
+                    answer.issuer_pid,
+                    RequestStatus::Requested.text()
+                ],
+            )?;
+            if closed == 0 {
+                if closed_by(tx, holder_pid, answer)? {
+                    return Ok(Delivered::Repeated);
+                }
+                return Err(DbError::new(format!(
+                    "credential request {holder_pid} is not open"
+                )));
             }
-            return Err(StoreError(format!(
-                "credential request {holder_pid} is not open"
-            )));
-        }
-        for credential in credentials {
-            // a credential id held from another issuer is not replaced
-            insert_credential(&tx, credential)?;
-        }
-        tx.commit()?;
-        Ok(Delivered::Stored)
+            for credential in credentials {
+                // a credential id held from another issuer is not replaced
+                insert_credential(tx, credential)?;
+            }
+            Ok(Delivered::Stored)
+        })?;
+        Ok(delivered)
     }
 
     fn credentials(&self) -> Result<Vec<StoredCredential>, StoreError> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare(&format!(
-            "SELECT {CREDENTIAL_COLUMNS} FROM credential ORDER BY id"
-        ))?;
-        let mut rows = stmt.query([])?;
-        let mut found = Vec::new();
-        while let Some(row) = rows.next()? {
-            found.push(credential_from(row)?);
-        }
-        Ok(found)
+        let rows = self.db().query(
+            &format!("SELECT {CREDENTIAL_COLUMNS} FROM credential ORDER BY id"),
+            values![],
+        )?;
+        rows.iter().map(credential_from).collect()
     }
 
     fn delete_credential(&self, id: &str) -> Result<bool, StoreError> {
         let deleted = self
-            .conn()
-            .execute("DELETE FROM credential WHERE id = ?1", [id])?;
+            .db()
+            .execute("DELETE FROM credential WHERE id = $1", values![id])?;
         Ok(deleted == 1)
     }
 
@@ -581,38 +701,39 @@ impl IdentityStore for SqliteStore {
         offered: &[CredentialObject],
         received_at: u64,
     ) -> Result<(), StoreError> {
-        let mut conn = self.conn();
-        let tx = conn.transaction()?;
-        let received_at = i64::try_from(received_at).unwrap_or(i64::MAX);
+        // the JSON first: the transaction only writes
+        let mut rows = Vec::new();
         for credential in offered {
-            let json = serde_json::to_string(credential).map_err(|e| StoreError(e.to_string()))?;
-            tx.execute(
-                "INSERT INTO credential_offer (issuer, credential_id, credential, received_at)
-                 VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT (issuer, credential_id) DO UPDATE
-                     SET credential = excluded.credential, received_at = excluded.received_at",
-                params![issuer, credential.id, json, received_at],
-            )?;
+            rows.push((&credential.id, to_json(credential)?));
         }
-        tx.commit()?;
+        self.db().transaction(|tx| {
+            for (credential_id, json) in &rows {
+                tx.execute(
+                    "INSERT INTO credential_offer (issuer, credential_id, credential, received_at)
+                     VALUES ($1, $2, $3, $4)
+                     ON CONFLICT (issuer, credential_id) DO UPDATE
+                         SET credential = excluded.credential, received_at = excluded.received_at",
+                    values![issuer, *credential_id, json, to_db_int(received_at)],
+                )?;
+            }
+            Ok(())
+        })?;
         Ok(())
     }
 
     fn offers(&self) -> Result<Vec<StoredOffer>, StoreError> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare(
+        let rows = self.db().query(
             "SELECT issuer, credential, received_at FROM credential_offer
                  ORDER BY received_at DESC, issuer, credential_id",
+            values![],
         )?;
-        let mut rows = stmt.query([])?;
         let mut found = Vec::new();
-        while let Some(row) = rows.next()? {
-            let json: String = row.get("credential")?;
-            let received_at: i64 = row.get("received_at")?;
+        for row in &rows {
+            let json: String = row.get(1)?;
             found.push(StoredOffer {
-                issuer: row.get("issuer")?,
-                credential: serde_json::from_str(&json).map_err(|e| StoreError(e.to_string()))?,
-                received_at: u64::try_from(received_at).unwrap_or_default(),
+                issuer: row.get(0)?,
+                credential: from_json(&json)?,
+                received_at: from_db_int(row.get(2)?),
             });
         }
         Ok(found)
@@ -622,35 +743,36 @@ impl IdentityStore for SqliteStore {
         &self,
         credentials: &[StoredCredential],
     ) -> Result<(), StoreError> {
-        let mut conn = self.conn();
-        let tx = conn.transaction()?;
-        tx.execute(
-            "DELETE FROM credential WHERE substr(holder_pid, 1, ?2) = ?1",
-            params![
-                GAIAX_HOLDER_PID_PREFIX,
-                i64::try_from(GAIAX_HOLDER_PID_PREFIX.len()).unwrap_or_default()
-            ],
-        )?;
-        for credential in credentials {
-            insert_credential(&tx, credential)?;
-        }
-        tx.commit()?;
+        let prefix_length = i64::try_from(GAIAX_HOLDER_PID_PREFIX.len()).unwrap_or_default();
+        self.db().transaction(|tx| {
+            tx.execute(
+                "DELETE FROM credential WHERE substr(holder_pid, 1, $2) = $1",
+                values![GAIAX_HOLDER_PID_PREFIX, prefix_length],
+            )?;
+            for credential in credentials {
+                insert_credential(tx, credential)?;
+            }
+            Ok(())
+        })?;
         Ok(())
     }
 
     fn start_gaiax_run(&self, started_at: u64) -> Result<i64, StoreError> {
-        let mut conn = self.conn();
-        let tx = conn.transaction()?;
-        tx.execute(
-            "INSERT INTO gaiax_run (started_at, outcome) VALUES (?1, ?2)",
-            params![seconds(started_at), RunOutcome::Running.text()],
-        )?;
-        let id = tx.last_insert_rowid();
-        tx.execute(
-            "DELETE FROM gaiax_run WHERE id <= ?1",
-            [id - GAIAX_RUNS_KEPT],
-        )?;
-        tx.commit()?;
+        let id = self.db().transaction(|tx| {
+            // the database gives the id (counting up); RETURNING reads it
+            let row = tx.query_one(
+                "INSERT INTO gaiax_run (started_at, outcome) VALUES ($1, $2) RETURNING id",
+                values![to_db_int(started_at), RunOutcome::Running.text()],
+            )?;
+            let id: i64 = row
+                .ok_or_else(|| DbError::new("no id for the new run"))?
+                .get(0)?;
+            tx.execute(
+                "DELETE FROM gaiax_run WHERE id <= $1",
+                values![id - GAIAX_RUNS_KEPT],
+            )?;
+            Ok(id)
+        })?;
         Ok(id)
     }
 
@@ -661,83 +783,82 @@ impl IdentityStore for SqliteStore {
         outcome: RunOutcome,
         error: Option<&str>,
     ) -> Result<(), StoreError> {
-        self.conn().execute(
-            "UPDATE gaiax_run SET finished_at = ?2, outcome = ?3, error = ?4 WHERE id = ?1",
-            params![id, seconds(finished_at), outcome.text(), error],
+        self.db().execute(
+            "UPDATE gaiax_run SET finished_at = $2, outcome = $3, error = $4 WHERE id = $1",
+            values![id, to_db_int(finished_at), outcome.text(), error],
         )?;
         Ok(())
     }
 
     fn abandon_gaiax_runs(&self, now: u64) -> Result<usize, StoreError> {
-        let changed = self.conn().execute(
-            "UPDATE gaiax_run SET finished_at = ?1, outcome = ?2,
-                 error = 'stopped by a restart' WHERE outcome = ?3",
-            params![
-                seconds(now),
+        let changed = self.db().execute(
+            "UPDATE gaiax_run SET finished_at = $1, outcome = $2,
+                 error = 'its process stopped' WHERE outcome = $3",
+            values![
+                to_db_int(now),
                 RunOutcome::Failed.text(),
                 RunOutcome::Running.text()
             ],
         )?;
-        Ok(changed)
+        Ok(usize::try_from(changed).unwrap_or(usize::MAX))
     }
 
     fn gaiax_runs(&self, limit: usize) -> Result<Vec<GaiaxRun>, StoreError> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare(
+        let rows = self.db().query(
             "SELECT id, started_at, finished_at, outcome, error FROM gaiax_run
-                 ORDER BY id DESC LIMIT ?1",
+                 ORDER BY id DESC LIMIT $1",
+            values![i64::try_from(limit).unwrap_or(i64::MAX)],
         )?;
-        let mut rows = stmt.query([i64::try_from(limit).unwrap_or(i64::MAX)])?;
         let mut found = Vec::new();
-        while let Some(row) = rows.next()? {
-            let started_at: i64 = row.get("started_at")?;
-            let finished_at: Option<i64> = row.get("finished_at")?;
-            let outcome: String = row.get("outcome")?;
+        for row in &rows {
+            let finished_at: Option<i64> = row.get(2)?;
+            let outcome: String = row.get(3)?;
             found.push(GaiaxRun {
-                id: row.get("id")?,
-                started_at: u64::try_from(started_at).unwrap_or_default(),
-                finished_at: finished_at.map(|at| u64::try_from(at).unwrap_or_default()),
+                id: row.get(0)?,
+                started_at: from_db_int(row.get(1)?),
+                finished_at: finished_at.map(from_db_int),
                 outcome: RunOutcome::from_text(&outcome)?,
-                error: row.get("error")?,
+                error: row.get(4)?,
             });
         }
         Ok(found)
     }
 }
 
-/// Seconds since 1970 as `SQLite` stores them.
-fn seconds(at: u64) -> i64 {
-    i64::try_from(at).unwrap_or(i64::MAX)
+fn to_json(value: &impl serde::Serialize) -> Result<String, StoreError> {
+    serde_json::to_string(value).map_err(|e| StoreError(e.to_string()))
+}
+
+fn from_json<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, StoreError> {
+    serde_json::from_str(text).map_err(|e| StoreError(e.to_string()))
 }
 
 /// Writes `credential`; one with the same `id` from the same issuer is
 /// replaced, one from another issuer is not (an error).
-fn insert_credential(
-    tx: &rusqlite::Transaction<'_>,
-    credential: &StoredCredential,
-) -> Result<(), StoreError> {
-    let types = serde_json::to_string(&credential.types).map_err(|e| StoreError(e.to_string()))?;
+fn insert_credential(tx: &dyn Executor, credential: &StoredCredential) -> Result<(), DbError> {
+    let types =
+        serde_json::to_string(&credential.types).map_err(|e| DbError::new(e.to_string()))?;
     let written = tx.execute(
         &format!(
             "INSERT INTO credential ({CREDENTIAL_COLUMNS})
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
              ON CONFLICT (id) DO UPDATE SET types = excluded.types,
                  profile = excluded.profile, expires_at = excluded.expires_at,
                  holder_pid = excluded.holder_pid, jwt = excluded.jwt
              WHERE credential.issuer = excluded.issuer"
         ),
-        params![
-            credential.id,
-            credential.issuer,
+        values![
+            &credential.id,
+            &credential.issuer,
             types,
             credential.profile.alias(),
             credential.expires_at,
-            credential.holder_pid,
-            credential.jwt
+            &credential.holder_pid,
+            &credential.jwt
         ],
     )?;
     if written == 0 {
-        return Err(StoreError(format!(
+        return Err(DbError::new(format!(
             "credential {} is held from another issuer",
             credential.id
         )));
@@ -747,53 +868,47 @@ fn insert_credential(
 
 /// Whether request `holder_pid` was closed by `answer` (the same
 /// `issuerPid` and status) before.
-fn closed_by(
-    tx: &rusqlite::Transaction<'_>,
-    holder_pid: &str,
-    answer: Answer<'_>,
-) -> Result<bool, StoreError> {
-    let mut stmt = tx.prepare(
+fn closed_by(tx: &dyn Executor, holder_pid: &str, answer: Answer<'_>) -> Result<bool, DbError> {
+    let found = tx.query_one(
         "SELECT 1 FROM credential_request
-             WHERE holder_pid = ?1 AND status = ?2 AND issuer_pid = ?3",
+             WHERE holder_pid = $1 AND status = $2 AND issuer_pid = $3",
+        values![holder_pid, answer.status.text(), answer.issuer_pid],
     )?;
-    let found = stmt.exists(params![holder_pid, answer.status.text(), answer.issuer_pid])?;
-    Ok(found)
+    Ok(found.is_some())
 }
 
-/// A credential request from a row with the [`REQUEST_COLUMNS`], read by
-/// column name.
-fn request_from(row: &Row<'_>) -> Result<CredentialRequest, StoreError> {
-    let status: String = row.get("status")?;
-    let credential_ids: String = row.get("credential_ids")?;
-    let created_at: i64 = row.get("created_at")?;
+/// A credential request from a row with the [`REQUEST_COLUMNS`], in
+/// their order.
+fn request_from(row: &Row) -> Result<CredentialRequest, StoreError> {
+    let status: String = row.get(2)?;
+    let credential_ids: String = row.get(3)?;
     Ok(CredentialRequest {
-        holder_pid: row.get("holder_pid")?,
-        issuer: row.get("issuer_did")?,
+        holder_pid: row.get(0)?,
+        issuer: row.get(1)?,
         status: RequestStatus::from_text(&status)?,
-        credential_ids: serde_json::from_str(&credential_ids)
-            .map_err(|e| StoreError(e.to_string()))?,
-        status_url: row.get("status_url")?,
-        access_token_id: row.get("access_token_id")?,
-        created_at: u64::try_from(created_at).unwrap_or_default(),
-        issuer_pid: row.get("issuer_pid")?,
-        send_error: row.get("send_error")?,
+        credential_ids: from_json(&credential_ids)?,
+        status_url: row.get(4)?,
+        access_token_id: row.get(5)?,
+        created_at: from_db_int(row.get(6)?),
+        issuer_pid: row.get(7)?,
+        send_error: row.get(8)?,
     })
 }
 
-/// A stored credential from a row with the [`CREDENTIAL_COLUMNS`], read
-/// by column name.
-fn credential_from(row: &Row<'_>) -> Result<StoredCredential, StoreError> {
-    let types: String = row.get("types")?;
-    let profile: String = row.get("profile")?;
+/// A stored credential from a row with the [`CREDENTIAL_COLUMNS`], in
+/// their order.
+fn credential_from(row: &Row) -> Result<StoredCredential, StoreError> {
+    let types: String = row.get(2)?;
+    let profile: String = row.get(3)?;
     Ok(StoredCredential {
-        id: row.get("id")?,
-        issuer: row.get("issuer")?,
-        types: serde_json::from_str(&types).map_err(|e| StoreError(e.to_string()))?,
+        id: row.get(0)?,
+        issuer: row.get(1)?,
+        types: from_json(&types)?,
         profile: Profile::from_alias(&profile)
             .ok_or_else(|| StoreError(format!("unknown profile {profile}")))?,
-        expires_at: row.get("expires_at")?,
-        holder_pid: row.get("holder_pid")?,
-        jwt: row.get("jwt")?,
+        expires_at: row.get(4)?,
+        holder_pid: row.get(5)?,
+        jwt: row.get(6)?,
     })
 }
 
@@ -801,6 +916,9 @@ fn credential_from(row: &Row<'_>) -> Result<StoredCredential, StoreError> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use portitor_runtime::testing::{databases, schema};
+    use rusqlite::Connection;
+    use std::path::Path;
 
     fn request(pid: &str) -> CredentialRequest {
         CredentialRequest::recorded(pid.to_owned(), "did:web:issuer.example".to_owned(), 1)
@@ -1025,15 +1143,59 @@ mod tests {
     }
 
     #[test]
-    fn in_memory() {
-        check(&SqliteStore::in_memory().unwrap());
+    fn on_every_database() {
+        for db in databases::all(&MIGRATIONS) {
+            check(&DatabaseStore::new(Arc::new(db)));
+        }
+    }
+
+    /// A caller's token id is taken once, on every database (the table
+    /// itself is tested in `portitor_runtime::used_tokens`).
+    #[test]
+    fn a_token_id_is_used_once() {
+        for db in databases::all(&MIGRATIONS) {
+            let store: &dyn IdentityStore = &DatabaseStore::new(Arc::new(db));
+            assert!(store.use_token_id("j-1", 200, 100).unwrap());
+            assert!(!store.use_token_id("j-1", 200, 100).unwrap());
+        }
+    }
+
+    /// Two processes ("replicas") on one PostgreSQL database: a token id
+    /// used on one is refused by the other (TD-09).
+    #[test]
+    fn a_token_id_used_on_one_replica_is_refused_by_the_other() {
+        let Some(url) = databases::postgres_url() else {
+            return;
+        };
+        let setting = DatabaseSetting::Postgres(Box::new(databases::fresh_postgres_settings(&url)));
+        let a = DatabaseStore::open(&setting).unwrap();
+        let b = DatabaseStore::open(&setting).unwrap();
+        assert!(a.use_token_id("j-1", 200, 100).unwrap());
+        assert!(!b.use_token_id("j-1", 200, 100).unwrap());
+    }
+
+    /// The PostgreSQL schema is the one the `SQLite` migrations end
+    /// with: tables, columns, types, NOT NULL, primary keys and unique
+    /// indexes.
+    #[test]
+    fn both_schemas_have_the_same_tables_and_columns() {
+        let Some(postgres) = databases::fresh_postgres(&MIGRATIONS) else {
+            return;
+        };
+        let sqlite = Database::in_memory(&MIGRATIONS).unwrap();
+        assert_eq!(schema::tables(&postgres), schema::tables(&sqlite));
+    }
+
+    /// The file of `path` as the database setting.
+    fn file(path: &Path) -> DatabaseSetting {
+        DatabaseSetting::SqliteFile(path.to_owned())
     }
 
     /// The schema of 0.5 (its one migration), with one open request
     /// recorded for an issuer asked out of band.
     fn database_of_0_5(path: &Path) {
         let conn = Connection::open(path).unwrap();
-        conn.execute_batch(MIGRATIONS[0]).unwrap();
+        conn.execute_batch(SQLITE_MIGRATIONS[0]).unwrap();
         conn.pragma_update(None, "user_version", 1).unwrap();
         conn.execute(
             "INSERT INTO credential_request (holder_pid, issuer_did, status)
@@ -1053,7 +1215,7 @@ mod tests {
         let path = dir.join("identity.db");
         database_of_0_5(&path);
 
-        let store = SqliteStore::open(&path).unwrap();
+        let store = DatabaseStore::open(&file(&path)).unwrap();
         // the new columns read their defaults
         let expected =
             CredentialRequest::recorded("h-old".to_owned(), "did:web:issuer.example".to_owned(), 0);
@@ -1070,9 +1232,57 @@ mod tests {
         assert_eq!(delivered, Delivered::Stored);
         drop(store);
         // and the file opens again, at the current version
-        let again = SqliteStore::open(&path).unwrap();
+        let again = DatabaseStore::open(&file(&path)).unwrap();
         assert_eq!(again.credentials().unwrap().len(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The migrations of 1.2 (the last release before PostgreSQL).
+    const MIGRATIONS_OF_1_2: usize = 3;
+
+    /// A file written by 1.2, with a sent request, a credential and a
+    /// Gaia-X run that was running when its process stopped, opens with
+    /// 1.3: the rows read back, the run is ended as abandoned, a new run
+    /// starts, and the leases and token ids of 1.3 work in it.
+    #[test]
+    fn a_file_of_1_2_opens_and_works() {
+        let dir = portitor_runtime::testing::TempDir::new("identity-file-of-1-2");
+        let path = dir.path().join("identity.db");
+        let conn =
+            portitor_runtime::sqlite::open(Some(&path), &SQLITE_MIGRATIONS[..MIGRATIONS_OF_1_2])
+                .unwrap();
+        conn.execute_batch(
+            "INSERT INTO credential_request (holder_pid, issuer_did, status, credential_ids,
+                 status_url, access_token_id, created_at, issuer_pid, send_error)
+                 VALUES ('h-1', 'did:web:issuer.example', 'ISSUED', '[\"membership\"]',
+                     'https://issuer.example/requests/i-1', 'jti-1', 5, 'i-1', NULL);
+             INSERT INTO credential (id, issuer, types, profile, expires_at, holder_pid, jwt)
+                 VALUES ('c-1', 'did:web:issuer.example',
+                     '[\"VerifiableCredential\",\"MembershipCredential\"]',
+                     'vc11-sl2021/jwt', 2000000000, 'h-1', 'a.b.c');
+             INSERT INTO gaiax_run (started_at, finished_at, outcome, error)
+                 VALUES (10, NULL, 'RUNNING', NULL);",
+        )
+        .unwrap();
+        drop(conn);
+
+        let store = DatabaseStore::open(&file(&path)).unwrap();
+        let read = store.request("h-1").unwrap().unwrap();
+        assert_eq!(read.status, RequestStatus::Issued);
+        assert_eq!(read.credential_ids, ["membership"]);
+        assert_eq!(read.issuer_pid.as_deref(), Some("i-1"));
+        assert_eq!(
+            store.credentials().unwrap(),
+            [credential("c-1", "did:web:issuer.example")]
+        );
+        assert_eq!(store.abandon_gaiax_runs(20).unwrap(), 1);
+        let next = store.start_gaiax_run(30).unwrap();
+        let runs = store.gaiax_runs(10).unwrap();
+        assert_eq!(runs[0].id, next);
+        assert_eq!(runs[1].outcome, RunOutcome::Failed);
+        assert!(store.claim("gaiax", "run", "p-1", 60, 30).unwrap());
+        assert!(!store.claim("gaiax", "run", "p-2", 60, 30).unwrap());
+        assert!(store.use_token_id("jti-2", 200, 30).unwrap());
     }
 
     #[test]
@@ -1083,8 +1293,8 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("identity.db");
-        check(&SqliteStore::open(&path).unwrap());
-        let again = SqliteStore::open(&path).unwrap();
+        check(&DatabaseStore::open(&file(&path)).unwrap());
+        let again = DatabaseStore::open(&file(&path)).unwrap();
         assert_eq!(again.offers().unwrap().len(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
     }

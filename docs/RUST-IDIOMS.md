@@ -53,9 +53,9 @@ for the server's own result, which can fail too.
 ### `?` that converts the error
 
 ```rust
-impl From<rusqlite::Error> for StoreError { /* ... */ }
+impl From<DbError> for StoreError { /* ... */ }
 
-let mut rows = stmt.query([])?;   // a rusqlite::Error becomes a StoreError
+let rows = self.db().query(sql, values![holder])?;   // a DbError becomes a StoreError
 ```
 
 `?` also changes the error's type when the function returns another
@@ -344,7 +344,7 @@ type before the second closure is read.
 A `trait` lists methods that a type promises to have, like an interface.
 Every port (ADR 0004) is a trait, for example `NegotiationStore`, and
 every adapter implements it (`impl NegotiationStore for
-SqliteNegotiations`).
+ConnectorStore`).
 
 ```rust
 pub struct ProviderService<S, D, C, E> { /* ... */ }
@@ -356,7 +356,7 @@ The service is *generic*. `S` is "some type that implements
 
 `dyn NegotiationStore` is "a value of some type that implements
 `NegotiationStore`, decided while the program runs". The connector picks
-its adapters at start (SQLite for real use, a fake in a test), so it
+its adapters at start (the database for real use, a fake in a test), so it
 keeps each one as `Shared<dyn Port + Send + Sync>`. `Shared` wraps an
 `Arc` pointer. See `ports.rs`, which explains why the wrapper exists and
 holds all the `Any...` names.
@@ -462,7 +462,7 @@ its methods (here `B64.encode(...)` and `.decode(...)`) can be called,
 but the name `Engine` is not used in the file. Rust only lets you call a
 trait's methods when the trait is in scope.
 
-`Arc::clone(store) as _` (in `Ports::use_sqlite`) makes a new pointer to
+`Arc::clone(store) as _` (in `Ports::use_database`) makes a new pointer to
 the same store. `as _` lets the compiler turn it into the `dyn` type the
 field expects.
 
@@ -479,7 +479,7 @@ A crate may implement its own trait for a type it did not write, even a
 standard one: here a plain map of dataset id to URL becomes an adapter
 of the connector's `UpstreamSources` port, which `SignalingDataFlows`
 reads to name each dataset's source in a start message, so unit tests
-need no fake type (`portitor-connector/src/harvest/copy.rs`). The reverse, someone
+need no fake type (`portitor-connector/src/harvest/catalog.rs`). The reverse, someone
 else's trait for someone else's type, is not allowed.
 
 ```rust
@@ -518,7 +518,7 @@ pub fn flows_only(&self) -> Arc<dyn FlowStore + Send + Sync> {
 
 *Trait upcasting* (Rust 1.86; Portitor needs 1.89): a `dyn ProviderFlowStore` can be used as
 a `dyn FlowStore`, one of its supertraits, with `as`. The pointer is
-copied, the store is not: both point to the same SQLite file. The data
+copied, the store is not: both point to the same database. The data
 plane gets only this view, so it cannot read the memberships
 (`flows_only` in `ports.rs`).
 
@@ -614,38 +614,40 @@ plane's gate as `Arc<dyn AccessGate>` without knowing its type
 ### A snapshot swapped as a whole: `RwLock<Arc<View>>`
 
 ```rust
-pub struct DatasetCopy(Arc<RwLock<Arc<View>>>);
+pub struct BundleCopy(Arc<RwLock<Arc<BundleRules>>>);
 
-fn view(&self) -> Arc<View> {
+pub fn current(&self) -> Arc<BundleRules> {
     Arc::clone(&self.0.read().unwrap_or_else(PoisonError::into_inner))
 }
 ```
 
 `RwLock` lets many readers in at once, or one writer. The value inside
 is itself an `Arc`, so a reader holds the lock only to copy that
-pointer, then works on its own snapshot without any lock. A harvest run
-builds a whole new `View` and swaps the pointer in one write
-(`DatasetCopy::replace` in `portitor-connector/src/harvest/copy.rs`). A
-request never sees half a run, and a slow catalog request never blocks
-the next run. The old snapshot is freed when its last reader drops it.
+pointer, then works on its own snapshot without any lock. A new bundle
+version builds whole new rules and swaps the pointer in one write
+(`BundleCopy::replace` in `portitor-connector/src/bundle_harvest.rs`). A
+message is never checked with half of a version, and a slow check
+never blocks the swap. The old rules are freed when their last reader
+drops them.
 
 ```rust
-*self.0.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(view);
+let mut in_use = self.0.write().unwrap_or_else(PoisonError::into_inner);
+*in_use = Arc::new(rules);
 ```
 
 `self.0` is the first (here the only) field of a *tuple struct*, a
-struct whose fields have no names: `DatasetCopy(Arc<...>)`. `StartError(e.0)`
+struct whose fields have no names: `BundleCopy(Arc<...>)`. `StartError(e.0)`
 and `Shared(Arc::clone(store) as _)` in the connector use the same
 form. `write()` returns a guard; `*guard = value` replaces the value the
-guard protects, and the guard is dropped (the lock freed) at the end of
-the line (`DatasetCopy::replace`).
+guard protects, and the guard is dropped (the lock freed) when it goes
+out of use; `BundleCopy::replace` drops it early, with `drop(in_use)`.
 
 ## Panics
 
 A panic is Rust's answer to a bug it finds while running (an index out
 of range, `expect` on an error). It *unwinds*: the function stops, and
 so does its caller, and so on up, and every value on the way is dropped
-(locks are freed, an open `SQLite` transaction is rolled back). Portitor
+(locks are freed, an open database transaction is rolled back). Portitor
 stops the unwinding at the edge of one piece of work
 (`portitor-runtime/src/panics.rs`):
 
@@ -666,7 +668,7 @@ std::future::poll_fn(move |context| {
 - `AssertUnwindSafe(...)` is a promise to the compiler: "data this code
   was changing may be left half changed, and that is fine here". It is
   fine because shared data sits behind locks that say how they recover
-  (the bullet on `PoisonError` above) and in `SQLite` transactions.
+  (the bullet on `PoisonError` above) and in database transactions.
 - `poll` runs an async task up to its next wait. `catch_panic` wraps
   each such step, so a task is covered from start to end.
   `std::future::poll_fn(closure)` makes a task out of a closure that is
@@ -731,46 +733,98 @@ it again. Had the step taken `out` itself, the message would be gone
 with the panic. `outbox.as_ref()` turns the `&Arc<O>` into the plain
 `&O` the step takes.
 
-## `SQLite` transactions
+## Database transactions
 
 ```rust
-let tx = conn.transaction()?;
-let Some(holder_did) = holder_if_received(&tx, issuer_pid)? else {
-    return Ok(IssueOutcome::NotReceived);
-};
-/* ... more checks, then the writes ... */
-tx.commit()?;
+let outcome = self.db().transaction(|tx| {
+    let Some(holder_did) = holder_if_received(tx, issuer_pid)? else {
+        return Ok(IssueOutcome::NotReceived);
+    };
+    /* ... more checks, then the writes ... */
+    tx.execute(
+        "INSERT INTO outbox (issuer_pid, message, attempts, next_attempt_at)
+             VALUES ($1, $2, 0, $3)",
+        values![issuer_pid, &signed.message_json, to_db_int(rules.now)],
+    )?;
+    Ok(IssueOutcome::Issued)
+})?;
 ```
 
 A transaction groups reads and writes so they happen all together or
-not at all. In `rusqlite`, a transaction that is dropped without
-`commit()` is rolled back: an early `return` or a `?` leaves the file as
-it was (`SqliteStore::issue` in `portitor-issuer/src/store.rs`).
+not at all. `Database::transaction` (`portitor-runtime/src/database.rs`)
+takes the work as a closure, `|tx| { ... }`, and gives it `tx`, the
+transaction to read and write through (a `&dyn Executor`). When the
+closure returns `Ok`, everything it wrote is kept; when it returns `Err`
+(an early `return Err(...)` or a `?`), or panics, nothing is
+(`issue` in `portitor-issuer/src/store.rs`).
 
-`query_row(...)` fails when no row is found. `.optional()?` (from
-`rusqlite::OptionalExtension`) turns "no row" into `None` and keeps
-other errors as errors: `Option<(String, String)>` is "the row, if there
-is one".
+On PostgreSQL the closure may run more than once: when two transactions
+collide, PostgreSQL cancels one of them, and `transaction` runs its
+closure again from the start. So the closure must only read and write
+through `tx`, with no other effect (no message sent, no counter in
+memory changed). This is why the work is a closure, and why it is an
+`FnMut` (a closure that can be called again) and not an `FnOnce`.
+
+The same SQL runs on PostgreSQL and on `SQLite`:
+
+- placeholders are `$1`, `$2`, ... (PostgreSQL's form); for `SQLite`
+  they are rewritten to `?1`, `?2`, ...;
+- `values![a, b, c]` turns each value into a `Value` (text, a whole
+  number, bytes or null) and makes the list the placeholders take, in
+  order: `a` is `$1`. A list that is built in pieces is a `Vec<Value>`,
+  made with `vec![Value::from(a), ...]`;
+- numbers are stored as signed 64-bit numbers: `to_db_int(seconds)` and
+  `from_db_int(stored)` convert the `u64` seconds and counts.
+
+`query_one` returns `Option<Row>`: the first row, or `None` when there
+is none. `row.get::<String>(0)` reads column 0 as text, and fails when
+the column holds something else.
 
 ```sql
-INSERT INTO transfer (/* columns */)
-SELECT ?1, ?2, /* ... */ ?10
-WHERE NOT EXISTS (
-    SELECT 1 FROM transfer WHERE counter_party = ?5 AND consumer_pid = ?2
-)
+INSERT INTO lease (kind, id, lease_holder, lease_until) VALUES ($1, $2, $3, $4)
+ON CONFLICT (kind, id) DO UPDATE
+    SET lease_holder = excluded.lease_holder, lease_until = excluded.lease_until
+    WHERE lease.lease_until <= $5
 ```
 
-An insert with a condition, in one statement. `INSERT ... SELECT` adds
-the rows that the `SELECT` gives. This `SELECT` has no table: it gives
-one row, made of the values `?1` to `?10`, or no row at all when the
-`WHERE` is false. So the row is added only if this consumer has no
-transfer with this `consumerPid` yet. `execute` returns how many rows
-were written, and `inserted == 1` tells the caller whether its row went
-in. One statement is atomic: two copies of a request that arrive
-together cannot both pass the check, which "look first, then insert"
-in two statements would allow (`insert` in
-`portitor-connector/src/store/transfers.rs`; ADR 0013, amended in
-0.12).
+A check and a write in one statement. The row is inserted; when one
+with this kind and id is there already, it is updated instead, but only
+if its lease has ended (the `WHERE`). `execute` returns how many rows
+were written, and `changed == 1` tells the caller whether it got the
+lease. One statement is atomic: two replicas that claim at once cannot
+both pass the check, which "look first, then write" in two statements
+would allow (`claim` in `portitor-runtime/src/leases.rs`).
+
+### Waiting for PostgreSQL: `block_on`
+
+The store ports are plain functions, but the PostgreSQL client
+(`tokio-postgres`) is `async`. `postgres.rs` (in
+`portitor-runtime/src/database/`) bridges the two: the connections are
+driven by a thread of their own, and a store call waits for its answer
+with `block_on(future)`, which parks the calling thread until the
+database thread wakes it. The calling thread is often one of tokio's
+workers, which waits meanwhile (TD-40). The module doc says why tokio's
+own `Handle::block_on` and `spawn_blocking` are not used.
+
+### Passing a call on to the value inside: `Pin::new(&mut self.0)`
+
+```rust
+impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for RustlsStream<S> {
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>)
+        -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_read(cx, buf)
+    }
+}
+```
+
+`RustlsStream` (`portitor-runtime/src/database/postgres_tls.rs`) wraps
+a TLS stream only to give it a type of Portitor's own, which the
+PostgreSQL client's traits can be implemented for. Each method passes
+the call on to the stream inside (`self.0`). The methods take
+`self: Pin<&mut Self>` (see "A response body written by hand" below);
+`Pin::new(&mut self.0)` pins the inner stream again for its own call.
+That is allowed because the stream is `Unpin` (it may move), which the
+`S: ... + Unpin` bound says.
 
 ## Printing for logs: `Debug`
 
@@ -1117,7 +1171,7 @@ only needs `self.get_mut()` or a pinned box (`Pin<Box<dyn Future>>`) to
 poll a future it holds.
 
 The download's membership check runs as a background task next to the
-body (`watchdog`). `AbortOnDrop` holds its `JoinHandle` and calls
+body (`membership_watchdog` in `portitor-dataplane/src/download.rs`). `AbortOnDrop` holds its `JoinHandle` and calls
 `abort()` in `Drop`, so the task ends when the body ends, however it
 ends.
 

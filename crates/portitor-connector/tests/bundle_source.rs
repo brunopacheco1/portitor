@@ -17,13 +17,16 @@ use portitor_bundle::source::{
     BundleConfig, BundleLocation, BundleSource, BundleSourceError, VersionChoice, source_for,
 };
 use portitor_bundle::store::{CacheFolder, IN_USE_FILE, KEY_FILE};
-use portitor_connector::bundle_harvest::{BundleHarvester, BundleListener, Started};
+use portitor_connector::bundle_harvest::{
+    BundleHarvester, BundleListener, SharedBundleVersion, Started,
+};
 use portitor_connector::harvest::{JobKind, JobOutcome, JobRecord, Trigger};
+use portitor_connector::store::ConnectorStore;
 use portitor_dcp::SigningKey;
 use portitor_dcp::bundle::BundleError;
 use portitor_issuer::bundle_build::{Options, build};
 use portitor_issuer::config::Config;
-use portitor_issuer::store::SqliteStore;
+use portitor_issuer::store::DatabaseStore;
 use portitor_issuer::{Issuer, Ports};
 use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::http::HttpSender;
@@ -78,7 +81,7 @@ impl Authority {
             credential_definitions_file: "unused".into(),
             issuer_service_url: format!("http://127.0.0.1:{port}/issuer"),
             bind: "unused".to_owned(),
-            db_file: "unused".into(),
+            database: portitor_runtime::database::DatabaseSetting::SqliteFile("unused".into()),
             management: portitor_issuer::config::ManagementConfig::health_only(
                 portitor_issuer::config::DEFAULT_MANAGEMENT_BIND,
             ),
@@ -88,7 +91,7 @@ impl Authority {
             bundle_dir: Some(bundles.clone()),
         };
         let ports = Ports {
-            store: Arc::new(SqliteStore::in_memory().unwrap()),
+            store: Arc::new(DatabaseStore::in_memory().unwrap()),
             directory: Arc::new(WebDirectory::new(true, 300).unwrap()),
             sender: Arc::new(HttpSender::new(true).unwrap()),
         };
@@ -185,7 +188,10 @@ fn source(settings: &BundleConfig) -> Arc<dyn BundleSource> {
 /// A connector start: the bundle harvester takes a version.
 async fn start(settings: &BundleConfig) -> Result<Started, String> {
     let store = Arc::new(CacheFolder::new(&settings.cache_dir));
-    BundleHarvester::start(settings.clone(), source(settings), store).await
+    // a new, empty database each time: the version in use comes from
+    // the cache folder, as for a database of 1.2
+    let database = Arc::new(ConnectorStore::in_memory().unwrap());
+    BundleHarvester::start(settings.clone(), source(settings), store, database).await
 }
 
 /// A listener that keeps what it hears.
@@ -193,6 +199,7 @@ async fn start(settings: &BundleConfig) -> Result<Started, String> {
 struct Heard {
     jobs: Mutex<Vec<JobRecord>>,
     rules_changed: Mutex<usize>,
+    rules_moved: Mutex<usize>,
 }
 
 impl BundleListener for Heard {
@@ -202,6 +209,10 @@ impl BundleListener for Heard {
 
     fn rules_changed(&self) {
         *self.rules_changed.lock().unwrap() += 1;
+    }
+
+    fn rules_moved(&self) {
+        *self.rules_moved.lock().unwrap() += 1;
     }
 }
 
@@ -851,5 +862,158 @@ async fn a_newer_version_with_only_unknown_roles_is_not_taken() {
         error.contains("no file has a role this version knows"),
         "{error}"
     );
+    authority.stop().await;
+}
+
+/// A process of a connector on `database`, with its own cache folder: the
+/// connector's processes share the database, each container has its own
+/// folder (TD-55).
+async fn process_on(authority: &Authority, database: &Arc<ConnectorStore>) -> Started {
+    let settings = authority.settings(&scratch());
+    let store = Arc::new(CacheFolder::new(&settings.cache_dir));
+    let shared = Arc::clone(database) as Arc<dyn SharedBundleVersion>;
+    BundleHarvester::start(settings.clone(), source(&settings), store, shared)
+        .await
+        .unwrap()
+}
+
+/// The databases two processes of one connector can share: one `SQLite`
+/// file serves one process, so its two "processes" share its connection;
+/// on PostgreSQL each opens the database on its own.
+fn shared_databases() -> Vec<(Arc<ConnectorStore>, Arc<ConnectorStore>)> {
+    use portitor_connector::store::MIGRATIONS;
+    use portitor_runtime::database::{Database, DatabaseSetting};
+    let sqlite = Arc::new(ConnectorStore::in_memory().unwrap());
+    let mut pairs = vec![(Arc::clone(&sqlite), sqlite)];
+    if let Some(url) = portitor_runtime::testing::databases::postgres_url() {
+        let settings = portitor_runtime::testing::databases::fresh_postgres_settings(&url);
+        let setting = DatabaseSetting::Postgres(Box::new(settings));
+        let open = || {
+            let database = Database::open(&setting, &MIGRATIONS).unwrap();
+            Arc::new(ConnectorStore::new(Arc::new(database)))
+        };
+        pairs.push((open(), open()));
+    }
+    pairs
+}
+
+/// TD-55: one process takes a new version; the other one moves to it
+/// (from the authority: its container has no copy), and only checks the
+/// stored datasets again, without a new harvest of the source.
+#[tokio::test]
+async fn a_version_one_process_takes_is_moved_to_by_the_other() {
+    let authority = Authority::start(true).await;
+    for (first_database, second_database) in shared_databases() {
+        let first = process_on(&authority, &first_database).await.harvester;
+        let second = process_on(&authority, &second_database).await.harvester;
+        let version = first.in_use().version;
+        assert!(!second.follow().await, "nothing new");
+
+        let newer = format!("{version}.1");
+        authority.publish(&newer, "2027-01-01T00:00:00Z");
+        authority.point_latest_at(&newer);
+        let (job, changed) = first.check(Trigger::Interval).await;
+        assert!(changed, "{}", job.summary);
+        assert_eq!(second.in_use().version, version, "not moved yet");
+        let rules = second.copy();
+
+        assert!(second.follow().await);
+        assert_eq!(second.in_use().version, newer);
+        assert_eq!(rules.current().version(), newer, "the rules in use moved");
+        assert!(!second.follow().await, "moved once");
+
+        // a process that starts now takes the connector's version
+        let third = process_on(&authority, &second_database).await;
+        assert_eq!(third.harvester.in_use().version, newer);
+    }
+    authority.stop().await;
+}
+
+/// A connector's `SQLite` file of 1.2 (its 17 migrations) has no
+/// `bundle_in_use` row: the version in use is the one the cache folder's
+/// `.in-use.json` names, kept also when latest.json names an older one,
+/// and from then on recorded in the database.
+#[tokio::test]
+async fn a_database_of_1_2_takes_the_version_in_use_from_the_cache() {
+    const MIGRATIONS_OF_1_2: usize = 17;
+    let authority = Authority::start(true).await;
+    authority.publish("2026.12.0", "2026-12-01T00:00:00Z");
+    authority.point_latest_at("2026.12.0");
+    let cache = scratch();
+    let settings = authority.settings(&cache);
+    // 1.2 took 2026.12.0, and its cache folder says so
+    let first = start(&settings).await.unwrap();
+    assert_eq!(first.harvester.in_use().version, "2026.12.0");
+    drop(first);
+    let dir = portitor_runtime::testing::TempDir::new("bundle-database-of-1-2");
+    let path = dir.path().join("connector.db");
+    let migrations = portitor_connector::store::MIGRATIONS.sqlite;
+    drop(portitor_runtime::sqlite::open(Some(&path), &migrations[..MIGRATIONS_OF_1_2]).unwrap());
+    let database = Arc::new(ConnectorStore::open_sqlite_file(&path).unwrap());
+    assert_eq!(database.bundle_in_use().unwrap(), None);
+
+    authority.point_latest_at(VERSION);
+    let store = Arc::new(CacheFolder::new(&settings.cache_dir));
+    let shared = Arc::clone(&database) as Arc<dyn SharedBundleVersion>;
+    let started = BundleHarvester::start(settings.clone(), source(&settings), store, shared)
+        .await
+        .unwrap();
+    assert_eq!(started.harvester.in_use().version, "2026.12.0");
+    let recorded = database.bundle_in_use().unwrap().unwrap();
+    assert_eq!(recorded.version, "2026.12.0");
+    authority.stop().await;
+}
+
+/// TD-55: a process that starts while latest.json names an older version
+/// (a host that moved back) keeps the connector's version, also from a
+/// container with no copy of it.
+#[tokio::test]
+async fn a_new_process_takes_the_connectors_version_not_an_older_latest() {
+    let authority = Authority::start(true).await;
+    let database = Arc::new(ConnectorStore::in_memory().unwrap());
+    authority.publish("2026.12.0", "2026-12-01T00:00:00Z");
+    authority.point_latest_at("2026.12.0");
+    let first = process_on(&authority, &database).await;
+    assert_eq!(first.harvester.in_use().version, "2026.12.0");
+    authority.point_latest_at(VERSION);
+    let second = process_on(&authority, &database).await;
+    assert_eq!(second.harvester.in_use().version, "2026.12.0");
+    assert_eq!(
+        second.job.outcome,
+        JobOutcome::Failed,
+        "{}",
+        second.job.summary
+    );
+    assert!(
+        second.job.summary.contains("keeping version 2026.12.0"),
+        "{}",
+        second.job.summary
+    );
+    authority.stop().await;
+}
+
+/// The listener of a process that moved: only the stored datasets are
+/// checked again (`rules_moved`), never a new harvest (`rules_changed`).
+#[tokio::test]
+async fn a_process_that_moved_tells_its_listener_once() {
+    let authority = Authority::start(true).await;
+    let database = Arc::new(ConnectorStore::in_memory().unwrap());
+    let first = process_on(&authority, &database).await.harvester;
+    let second = Arc::new(process_on(&authority, &database).await.harvester);
+    let heard = Arc::new(Heard::default());
+    let follow = second.follow_database(heard.clone()).unwrap();
+    authority.publish("2027.1.0", "2027-01-01T00:00:00Z");
+    authority.point_latest_at("2027.1.0");
+    let (_, changed) = first.check(Trigger::Interval).await;
+    assert!(changed);
+    // the follow loop looks every 5 seconds
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while *heard.rules_moved.lock().unwrap() == 0 {
+        assert!(std::time::Instant::now() < deadline, "not moved");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(second.in_use().version, "2027.1.0");
+    assert_eq!(*heard.rules_changed.lock().unwrap(), 0);
+    follow.abort();
     authority.stop().await;
 }
