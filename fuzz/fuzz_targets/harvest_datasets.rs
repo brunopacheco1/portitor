@@ -22,9 +22,9 @@ use portitor_connector::harvest::{
 };
 use portitor_connector::shacl::BundleRules;
 use portitor_dcp::bundle::{self, FileEntry, Manifest, MediaType, Role};
+use portitor_dsp::Dataset;
 use portitor_dsp::catalog::CatalogDatasets;
 use portitor_dsp::policy::CredentialTypes;
-use portitor_dsp::Dataset;
 
 const PUBLIC: &str = "http://publications.europa.eu/resource/authority/access-right/PUBLIC";
 
