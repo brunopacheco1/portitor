@@ -18,6 +18,13 @@
 
 use std::collections::BTreeMap;
 
+/// The base type of every credential, short (JWT) and as the expanded
+/// JSON-LD IRI. It never limits an issuer ([`IssuerTypes::allows`]).
+const BASE_TYPES: [&str; 2] = [
+    "VerifiableCredential",
+    "https://www.w3.org/2018/credentials#VerifiableCredential",
+];
+
 /// The credential types each limited issuer may issue. Read from
 /// `PORTITOR_TRUSTED_ISSUER_TYPES` with [`IssuerTypes::parse`]; the
 /// default limits no issuer.
@@ -70,6 +77,46 @@ impl IssuerTypes {
         self.limits.get(issuer).map(Vec::as_slice)
     }
 
+    /// Whether `issuer`, a trusted issuer, may issue a credential with
+    /// the types `credential_types` (its `type` list).
+    ///
+    /// The rule is Eclipse EDC's `HasValidIssuer` (default mode, read in
+    /// `core/common/lib/core-lib/src/main/java/org/eclipse/edc/iam/verifiablecredentials/rules/HasValidIssuer.java`
+    /// at EDC Connector commit `4215744`, 2026-11-27):
+    ///
+    /// - an issuer the setting does not name may issue every type;
+    /// - otherwise **every** type of the credential must be in the
+    ///   issuer's list, except the base type `VerifiableCredential`,
+    ///   which never limits. So a credential typed
+    ///   `["VerifiableCredential", "DataPermitCredential"]` needs
+    ///   `DataPermitCredential`, and one that also says
+    ///   `MembershipCredential` needs both;
+    /// - a credential with only the base type needs the base type in the
+    ///   list, and one with no type at all is never allowed.
+    #[must_use]
+    pub fn allows(&self, issuer: &str, credential_types: &[String]) -> bool {
+        let Some(limit) = self.limit_of(issuer) else {
+            return true;
+        };
+        let mut to_check: Vec<&String> = Vec::new();
+        for credential_type in credential_types {
+            if !BASE_TYPES.contains(&credential_type.as_str()) {
+                to_check.push(credential_type);
+            }
+        }
+        // only the base type: then the base type is what is checked, as
+        // in EDC
+        if to_check.is_empty() {
+            to_check = credential_types.iter().collect();
+        }
+        if to_check.is_empty() {
+            return false;
+        }
+        to_check
+            .iter()
+            .all(|credential_type| limit.contains(*credential_type))
+    }
+
     /// Whether no issuer is limited (the setting is not set).
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -105,6 +152,32 @@ mod tests {
         assert_eq!(types.limit_of("did:web:authority"), None);
         assert!(!types.is_empty());
         assert!(IssuerTypes::parse(&[], &trusted).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_limited_issuer_needs_every_type_but_the_base_type_as_in_edc() {
+        let trusted = items(&["did:web:authority", "did:web:hdab"]);
+        let types =
+            IssuerTypes::parse(&items(&["did:web:hdab=DataPermitCredential"]), &trusted).unwrap();
+        let permit = items(&["VerifiableCredential", "DataPermitCredential"]);
+        let membership = items(&["VerifiableCredential", "MembershipCredential"]);
+        let both = items(&[
+            "VerifiableCredential",
+            "DataPermitCredential",
+            "MembershipCredential",
+        ]);
+        assert!(types.allows("did:web:hdab", &permit));
+        assert!(!types.allows("did:web:hdab", &membership));
+        assert!(!types.allows("did:web:hdab", &both));
+        assert!(!types.allows("did:web:hdab", &items(&["VerifiableCredential"])));
+        assert!(!types.allows("did:web:hdab", &[]));
+        // an issuer the setting does not name keeps every type
+        assert!(types.allows("did:web:authority", &membership));
+        assert!(types.allows("did:web:authority", &both));
+        let base =
+            IssuerTypes::parse(&items(&["did:web:hdab=VerifiableCredential"]), &trusted).unwrap();
+        assert!(base.allows("did:web:hdab", &items(&["VerifiableCredential"])));
+        assert!(!base.allows("did:web:hdab", &permit));
     }
 
     #[test]

@@ -11,8 +11,8 @@
 //!   every credential check of the verifier.
 //! - [`DcpVerifier::check_membership_again`]: a `MembershipCredential`
 //!   the caller presented when it started a transfer, checked again
-//!   without the caller: its issuer is still trusted, it has not expired,
-//!   and none of its status bits is set. The data plane runs it on every
+//!   without the caller: its issuer is still trusted (for memberships,
+//!   R-48), it has not expired, and none of its status bits is set. The data plane runs it on every
 //!   `/data` request, while a download runs, and around a push
 //!   ([`CallerVerifier::check_membership`](super::CallerVerifier::check_membership)).
 //!   The signature and the holder binding are not checked again: they
@@ -25,7 +25,7 @@ use portitor_dcp::DidDocument;
 use portitor_dcp::credential::{Credential, Validity};
 use portitor_dcp::status_list::{self, Status, StatusEntry};
 
-use super::{DcpVerifier, LEEWAY, MAX_STATUS_LIST, fetch_failed};
+use super::{DcpVerifier, LEEWAY, MAX_STATUS_LIST, MEMBERSHIP, fetch_failed};
 use crate::auth::{DEFAULT_RECHECK, Membership, VerifyError};
 
 /// The shortest time between two checks of a running download: with a
@@ -69,7 +69,12 @@ impl DcpVerifier {
         membership: &Membership,
     ) -> Result<(), VerifyError> {
         let issuer = &membership.issuer;
-        if !self.trusted_issuers.contains(issuer) {
+        // still trusted, and for memberships: the settings may have
+        // changed since (PORTITOR_TRUSTED_ISSUER_TYPES, R-48)
+        let membership_types = [MEMBERSHIP.to_owned()];
+        let trusted = self.trusted_issuers.contains(issuer)
+            && self.issuer_types.allows(issuer, &membership_types);
+        if !trusted {
             return Err(VerifyError::Rejected(format!(
                 "the membership's issuer {issuer} is no longer trusted"
             )));

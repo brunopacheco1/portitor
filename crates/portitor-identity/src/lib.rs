@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::routing::{get, post};
+use portitor_dcp::trust::IssuerTypes;
 use portitor_dcp::{Jwk, SigningKey};
 use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::did_document::{key_id, read_retired_keys};
@@ -70,6 +71,9 @@ pub struct Identity {
     did_path: String,
     service_path: String,
     trusted_issuers: Vec<String>,
+    /// The types some trusted issuers are limited to
+    /// (`PORTITOR_TRUSTED_ISSUER_TYPES`, R-48).
+    issuer_types: IssuerTypes,
     type_aliases: Vec<String>,
     sts_client_id: String,
     sts_client_secret: ApiKey,
@@ -182,6 +186,7 @@ impl Identity {
             did_path,
             service_path,
             trusted_issuers: config.trusted_issuers.clone(),
+            issuer_types: config.issuer_types.clone(),
             type_aliases: config.scope_type_aliases.clone(),
             sts_client_id: config.sts_client_id.clone(),
             sts_client_secret,
@@ -259,6 +264,26 @@ impl Identity {
     /// Whether `did` is a trusted issuer (`PORTITOR_TRUSTED_ISSUERS`).
     fn trusts(&self, did: &str) -> bool {
         self.trusted_issuers.iter().any(|trusted| trusted == did)
+    }
+
+    /// Why the trusted issuer `did` may not deliver or offer a credential
+    /// with the types `credential_types`, or `None` if it may: it is
+    /// limited to other types by `PORTITOR_TRUSTED_ISSUER_TYPES` (R-48;
+    /// the rule is Eclipse EDC's, see [`IssuerTypes::allows`]).
+    fn type_refusal(&self, did: &str, credential_types: &[String]) -> Option<String> {
+        if self.issuer_types.allows(did, credential_types) {
+            return None;
+        }
+        let limit = self.issuer_types.limit_of(did).unwrap_or_default();
+        let asked = if credential_types.is_empty() {
+            "a credential without a type".to_owned()
+        } else {
+            credential_types.join(", ")
+        };
+        Some(format!(
+            "the issuer is trusted only for {} (PORTITOR_TRUSTED_ISSUER_TYPES), not for {asked}",
+            limit.join(", ")
+        ))
     }
 
     /// The scope aliases that mean "credentials of this type".

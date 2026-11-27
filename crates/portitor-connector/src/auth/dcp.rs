@@ -91,6 +91,7 @@ use portitor_dcp::gaiax::{
 };
 use portitor_dcp::message::{PresentationQueryMessage, PresentationResponseMessage};
 use portitor_dcp::scope::merge_scopes;
+use portitor_dcp::trust::IssuerTypes;
 use portitor_dcp::{Claims, DidDocument, JtiCache, unverified_claims, validate_self_issued};
 use portitor_dsp::policy::HeldCredential;
 use portitor_runtime::BoxFuture;
@@ -153,6 +154,9 @@ pub struct DcpVerifier {
     http: HttpSender,
     sts: Arc<dyn SecureTokenService>,
     trusted_issuers: Vec<String>,
+    /// The types some trusted issuers are limited to
+    /// (`PORTITOR_TRUSTED_ISSUER_TYPES`, R-48).
+    issuer_types: IssuerTypes,
     /// The Gaia-X compliance services we trust (ADR 0022).
     gaiax_compliance_issuers: Vec<String>,
     scopes: Vec<String>,
@@ -177,6 +181,7 @@ impl std::fmt::Debug for DcpVerifier {
         f.debug_struct("DcpVerifier")
             .field("participant_id", &self.participant_id)
             .field("trusted_issuers", &self.trusted_issuers)
+            .field("issuer_types", &self.issuer_types)
             .field("gaiax_compliance_issuers", &self.gaiax_compliance_issuers)
             .field("scopes", &self.scopes)
             .finish_non_exhaustive()
@@ -221,6 +226,7 @@ impl DcpVerifier {
             http: HttpSender::new(settings.allow_http)?,
             sts,
             trusted_issuers: settings.trusted_issuers.clone(),
+            issuer_types: settings.issuer_types.clone(),
             gaiax_compliance_issuers: settings.gaiax_compliance_issuers.clone(),
             // a Gaia-X compliance scope brings its legal person scope, as
             // on the prover's side (ADR 0022)
@@ -540,7 +546,19 @@ impl DcpVerifier {
     /// binding included.
     fn takes_gaiax_checks(&self, credential: &Credential) -> bool {
         let gaiax_type = is_gaiax_compliance(credential) || is_legal_person(credential);
-        gaiax_type && !self.trusted_issuers.contains(&credential.issuer)
+        gaiax_type && !self.trusts_issuer_of(credential)
+    }
+
+    /// Whether the issuer of `credential` is a trusted dataspace issuer
+    /// (`PORTITOR_TRUSTED_ISSUERS`) trusted for the credential's types
+    /// (`PORTITOR_TRUSTED_ISSUER_TYPES`, R-48; the rule is EDC's, see
+    /// [`IssuerTypes::allows`]). Only the credential's own fields are
+    /// read: nothing is fetched.
+    fn trusts_issuer_of(&self, credential: &Credential) -> bool {
+        self.trusted_issuers.contains(&credential.issuer)
+            && self
+                .issuer_types
+                .allows(&credential.issuer, &credential.types)
     }
 
     /// The credentials of one presentation that do not take the Gaia-X
@@ -562,6 +580,12 @@ impl DcpVerifier {
             // is fetched: an untrusted issuer could name any URL there
             if !self.trusted_issuers.contains(&credential.issuer) {
                 tracing::debug!(issuer = %credential.issuer, "credential from an untrusted issuer skipped");
+                continue;
+            }
+            // the same for an issuer not trusted for this credential's
+            // types (PORTITOR_TRUSTED_ISSUER_TYPES, R-48)
+            if !self.trusts_issuer_of(credential) {
+                tracing::debug!(issuer = %credential.issuer, types = ?credential.types, "credential from an issuer not trusted for its type skipped");
                 continue;
             }
             // holder binding (DCP 5.4.3) and the fetch limit

@@ -232,6 +232,35 @@ async fn an_untrusted_issuer_is_not_contacted() {
 }
 
 #[tokio::test]
+async fn an_issuer_limited_by_type_is_asked_only_for_its_types() {
+    let mut config = config();
+    let limit = vec![format!("{ISSUER}=DataProcessorCredential")];
+    config.issuer_types =
+        portitor_dcp::trust::IssuerTypes::parse(&limit, &config.trusted_issuers).unwrap();
+    let limited = World::with(&config);
+    let metadata = world().directory.json.lock().unwrap()[METADATA_URL].clone();
+    limited
+        .directory
+        .json
+        .lock()
+        .unwrap()
+        .insert(METADATA_URL.to_owned(), metadata);
+    *limited.issuer_service.location.lock().unwrap() = Some("/api/requests/i-1".to_owned());
+    let world = limited;
+    let (status, body) = ask(&world, &[MEMBERSHIP]).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let reason = body["detail"].as_str().unwrap();
+    assert!(
+        reason.contains("trusted only for DataProcessorCredential"),
+        "{reason}"
+    );
+    assert!(world.issuer_service.requests().is_empty());
+    let (status, body) = ask(&world, &["dataprocessor-vc11"]).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(world.issuer_service.requests().len(), 1);
+}
+
+#[tokio::test]
 async fn only_ids_from_the_issuer_metadata_are_asked_for() {
     let world = world();
     let (status, body) = ask(&world, &[MEMBERSHIP, "unknown"]).await;

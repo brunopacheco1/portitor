@@ -116,7 +116,7 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [R-45](#r-45) | No request limit per partner | Security | Open | 1.7 |
 | [R-46](#r-46) | The EDC Issuer Service names a request status address that is not found | Interoperability, upstream | Open | report upstream; the next EDC release |
 | [R-47](#r-47) | The EDC Issuer Service's admin API may change with the next release candidate | Interoperability | Accepted | EDC 1.0.0 |
-| [R-48](#r-48) | An issuer trusted for data permits can also issue memberships | Security | Open | 1.4 |
+| [R-48](#r-48) | An issuer trusted for data permits can also issue memberships | Security | Open | in progress, 1.4 |
 | [R-49](#r-49) | Leases in the database depend on the hosts' clocks | Operations | Mitigated | none |
 | [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | Open | 1.8 |
 | [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | Open | research; code 1.7 |
@@ -798,11 +798,14 @@ to TD-58).
   authority (ROADMAP 1.4 and 1.5). With one list, that issuer can grant
   any role, so the authority is no longer the only one who decides who
   is a member. EDC limits each trusted issuer to its `supportedtypes`.
-- **Current state: Open.** Only an issuer's operator can misuse it, and
-  each holder chooses whom it trusts.
-- **Next.** Trusted issuers by credential type (TD-03 calls it
-  additive), in ROADMAP 1.4, with the data permit (maintainer,
-  2026-11-24).
+- **Current state: Open; in progress, 1.4: built.** Only an issuer's
+  operator can misuse it, and each holder chooses whom it trusts.
+- **Next.** 1.4 adds `PORTITOR_TRUSTED_ISSUER_TYPES` ([ADR 0019,
+  Amendment in 1.4](adr/0019-credential-constraints.md#trusted-issuers-by-credential-type-r-48)):
+  the connector skips a credential from an issuer not trusted for each
+  of its types, unfetched, and the identity refuses its delivery and
+  offer. The data-permits scenario, step 5, checks it. An issuer the
+  setting does not name keeps every type ([TD-74](#td-74)).
 
 <a id="r-49"></a>
 ### R-49 Leases in the database depend on the hosts' clocks

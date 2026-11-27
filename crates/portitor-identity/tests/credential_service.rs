@@ -587,6 +587,117 @@ async fn offers_are_recorded_and_sparse_ones_completed() {
     assert_eq!(offers[0]["credentialType"], "MembershipCredential");
 }
 
+/// R-48: a configuration that trusts the issuer for data permits only,
+/// and `did:web:authority.example` for every type.
+fn issuer_limited_to_data_permits() -> portitor_identity::config::Config {
+    let mut config = config();
+    config
+        .trusted_issuers
+        .push("did:web:authority.example".to_owned());
+    let limit = vec![format!("{ISSUER}=DataPermitCredential")];
+    config.issuer_types =
+        portitor_dcp::trust::IssuerTypes::parse(&limit, &config.trusted_issuers).unwrap();
+    config
+}
+
+#[tokio::test]
+async fn an_issuer_limited_by_type_delivers_only_its_types() {
+    let world = World::with(&issuer_limited_to_data_permits());
+    let pid = world.request_credentials().await;
+    let membership = world.issuer.vc11("MembershipCredential", HOLDER);
+    let (status, body) = world
+        .deliver(&pid, &[("jwt", "MembershipCredential", &membership)])
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let reason = body["detail"].as_str().unwrap();
+    assert!(
+        reason.contains("trusted only for DataPermitCredential (PORTITOR_TRUSTED_ISSUER_TYPES)"),
+        "{reason}"
+    );
+    assert!(held_credentials(&world).await.is_empty());
+
+    // the request stays open: the issuer's data permit is stored
+    let permit = world.issuer.vc20("DataPermitCredential", HOLDER);
+    let (status, body) = world
+        .deliver(&pid, &[("vc20-bssl/jwt", "DataPermitCredential", &permit)])
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let held = held_credentials(&world).await;
+    assert_eq!(held.len(), 1, "{held:?}");
+}
+
+#[tokio::test]
+async fn an_issuer_the_setting_does_not_name_delivers_every_type() {
+    let mut config = issuer_limited_to_data_permits();
+    // now only the other issuer is limited
+    config.issuer_types = portitor_dcp::trust::IssuerTypes::parse(
+        &["did:web:authority.example=DataPermitCredential".to_owned()],
+        &config.trusted_issuers,
+    )
+    .unwrap();
+    let world = World::with(&config);
+    let pid = world.request_credentials().await;
+    let membership = world.issuer.vc11("MembershipCredential", HOLDER);
+    let (status, body) = world
+        .deliver(&pid, &[("jwt", "MembershipCredential", &membership)])
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn an_issuer_limited_by_type_offers_only_its_types() {
+    let world = World::with(&issuer_limited_to_data_permits());
+    world.directory.json.lock().unwrap().insert(
+        "https://issuer.example/api/metadata".to_owned(),
+        json!({
+            "@context": ["https://w3id.org/dspace-dcp/v1.0/dcp.jsonld"], "type": "IssuerMetadata",
+            "issuer": ISSUER,
+            "credentialsSupported": [
+                {"id": "membership", "type": "CredentialObject",
+                 "credentialType": "MembershipCredential", "profile": "vc20-bssl/jwt"},
+                {"id": "permit", "type": "CredentialObject",
+                 "credentialType": "DataPermitCredential", "profile": "vc20-bssl/jwt"}
+            ]
+        }),
+    );
+    let offer = |credentials: Value| {
+        json!({
+            "@context": ["https://w3id.org/dspace-dcp/v1.0/dcp.jsonld"],
+            "type": "CredentialOfferMessage", "issuer": ISSUER, "credentials": credentials
+        })
+    };
+    let send = |message: Value| {
+        let token = world.issuer.id_token(HOLDER, None);
+        call(&world.app, post_json("/cs/offers", Some(&token), &message))
+    };
+    let (status, body) = send(offer(json!([{"id": "membership"}]))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["detail"]
+            .as_str()
+            .unwrap()
+            .contains("PORTITOR_TRUSTED_ISSUER_TYPES"),
+        "{body}"
+    );
+    // one offered credential of another type refuses the whole offer
+    let (status, _) = send(offer(json!([{"id": "permit"}, {"id": "membership"}]))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, body) = send(offer(json!([{"id": "permit"}]))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, offers) = call(
+        &world.management,
+        Request::get("/v1/offers")
+            .header(header::AUTHORIZATION, format!("Bearer {API_KEY}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(offers.as_array().unwrap().len(), 1, "{offers}");
+    assert_eq!(offers[0]["credentialType"], "DataPermitCredential");
+}
+
 fn form(body: &str) -> Request<Body> {
     Request::post("/sts/token")
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")

@@ -1091,6 +1091,88 @@ async fn nothing_is_fetched_for_an_untrusted_issuer() {
     );
 }
 
+/// R-48: `third` is trusted, but only for data permits
+/// (`PORTITOR_TRUSTED_ISSUER_TYPES`), as EDC's `supportedtypes`.
+fn limit_third_to_data_permits(ds: &mut Dataspace) {
+    let trusted = vec![ds.issuer.did.clone(), ds.third.did.clone()];
+    let limit = vec![format!("{}=DataPermitCredential", ds.third.did)];
+    ds.verifier.trusted_issuers.clone_from(&trusted);
+    ds.verifier.issuer_types = IssuerTypes::parse(&limit, &trusted).unwrap();
+}
+
+#[tokio::test]
+async fn a_credential_from_an_issuer_not_trusted_for_its_type_is_skipped_unfetched() {
+    let mut ds = dataspace().await;
+    limit_third_to_data_permits(&mut ds);
+    let holder = ds.holder.did.as_str();
+    let mut entry = ds.status_entry("5");
+    entry["credentialStatus"]["statusListCredential"] = json!(format!("{}/status/9", ds.base));
+    let thirds_membership = Dataspace::credential(&ds.third, MEMBERSHIP, holder, &entry);
+    let trusted = Dataspace::credential(&ds.issuer, MEMBERSHIP, holder, &json!({}));
+    ds.answer(&[ds.presentation(&ds.holder, &[thirds_membership.clone(), trusted])]);
+    ds.forget_fetches();
+    let caller = ds.verify(&ds.header()).await.unwrap();
+    assert_eq!(caller.credentials.len(), 1, "only the issuer's membership");
+    assert_eq!(caller.memberships.len(), 1);
+    assert_eq!(caller.memberships[0].issuer, ds.issuer.did);
+    let fetched = ds.fetched();
+    assert!(
+        !fetched.contains(&"/third/did.json".to_owned()),
+        "{fetched:?}"
+    );
+    assert!(!fetched.contains(&"/status/9".to_owned()), "{fetched:?}");
+
+    // alone, the third party's membership makes no member
+    ds.answer(&[ds.presentation(&ds.holder, &[thirds_membership])]);
+    assert!(ds.verify(&ds.header()).await.is_err());
+}
+
+#[tokio::test]
+async fn a_limited_issuer_is_trusted_for_its_type_and_others_for_every_type() {
+    let mut ds = dataspace().await;
+    limit_third_to_data_permits(&mut ds);
+    let holder = ds.holder.did.as_str();
+    let membership = Dataspace::credential(&ds.issuer, MEMBERSHIP, holder, &json!({}));
+    let thirds_permit =
+        Dataspace::credential(&ds.third, "DataPermitCredential", holder, &json!({}));
+    // the issuer the setting does not name keeps every type
+    let issuers_permit =
+        Dataspace::credential(&ds.issuer, "DataPermitCredential", holder, &json!({}));
+    ds.answer(&[ds.presentation(&ds.holder, &[membership, thirds_permit, issuers_permit])]);
+    let caller = ds.verify(&ds.header()).await.unwrap();
+    let mut permits = 0;
+    for credential in &caller.credentials {
+        if credential.has_type("DataPermitCredential") {
+            permits += 1;
+        }
+    }
+    assert_eq!(permits, 2, "both data permits are held");
+}
+
+#[tokio::test]
+async fn a_membership_is_no_longer_trusted_once_its_issuer_is_limited() {
+    let mut ds = dataspace().await;
+    ds.answer_member(&json!({}));
+    let caller = ds.verify(&ds.header()).await.unwrap();
+    let membership = caller.memberships[0].clone();
+    assert!(
+        ds.verifier
+            .check_membership_again(&membership)
+            .await
+            .is_ok()
+    );
+    // the issuer is now trusted for data permits only
+    let trusted = vec![ds.issuer.did.clone()];
+    let limit = vec![format!("{}=DataPermitCredential", ds.issuer.did)];
+    ds.verifier.issuer_types = IssuerTypes::parse(&limit, &trusted).unwrap();
+    let error = ds
+        .verifier
+        .check_membership_again(&membership)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("no longer trusted"), "{error}");
+}
+
 #[tokio::test]
 async fn answers_are_bounded() {
     let ds = dataspace().await;

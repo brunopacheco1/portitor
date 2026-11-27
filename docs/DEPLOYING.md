@@ -803,7 +803,10 @@ Besides the [settings of every component](#settings-of-every-component):
   is where the component serves it (the example serves
   `/cs/presentations/query`, `/cs/credentials`, `/cs/offers`).
 - Only trusted issuers may deliver credentials (Storage API) or offers,
-  and nothing is sent to any other issuer.
+  and nothing is sent to any other issuer. An issuer limited by
+  `PORTITOR_TRUSTED_ISSUER_TYPES` may deliver and offer only its types;
+  a delivery or offer with another type gets `400` with the reason, and
+  the identity does not ask it for another type.
 - To switch EDC's scope alias off, set `PORTITOR_SCOPE_TYPE_ALIASES` to
   `org.eclipse.dspace.dcp.vc.type`.
 - The Gaia-X settings go together
@@ -1572,8 +1575,11 @@ PORTITOR_TRUSTED_ISSUER_TYPES=did:web:hdab.example=DataPermitCredential
   ([TD-74](RISKS_AND_TECHNICAL_DEBTS.md#td-74)): name every issuer now.
 - Each DID named must be in `PORTITOR_TRUSTED_ISSUERS`, or the
   component does not start.
+- A credential has several types. As in EDC, a limited issuer must be
+  trusted for each of them except `VerifiableCredential`: a credential
+  typed `DataPermitCredential` and `MembershipCredential` needs both.
 - On the identity, an issuer may deliver and offer only the types it is
-  limited to.
+  limited to; anything else gets `400` with the reason.
 
 ### Credential constraints
 

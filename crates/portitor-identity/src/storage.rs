@@ -14,7 +14,11 @@
 //!   ([`crate::issuance`]), never by itself.
 //!
 //! Both accept calls only from a trusted issuer (`PORTITOR_TRUSTED_ISSUERS`)
-//! with a valid self-issued ID token for this participant.
+//! with a valid self-issued ID token for this participant. An issuer
+//! limited to some credential types (`PORTITOR_TRUSTED_ISSUER_TYPES`,
+//! R-48) may deliver and offer only those: a delivery or an offer with
+//! another type is refused (`400`, with the reason), and nothing of it
+//! is stored.
 //!
 //! A delivery answers one open credential request (status `REQUESTED`) of
 //! the delivering issuer; the answer, `ISSUED` or `REJECTED`, closes it
@@ -248,6 +252,10 @@ fn check_credential(
     if credential.issuer != issuer_document.id {
         return Err("the credential is from another issuer".to_owned());
     }
+    // before its signature or status is looked at (R-48)
+    if let Some(reason) = identity.type_refusal(&credential.issuer, &credential.types) {
+        return Err(reason);
+    }
     credential
         .verify(issuer_document, now_secs(), LEEWAY)
         .map_err(|e| e.to_string())?;
@@ -283,6 +291,13 @@ pub(crate) async fn offers(
         Ok(offered) => offered,
         Err(response) => return response,
     };
+    // an issuer limited by type offers only those types (R-48)
+    for credential in &offered {
+        let types: Vec<String> = credential.credential_type.iter().cloned().collect();
+        if let Some(reason) = identity.type_refusal(&issuer, &types) {
+            return bad_request(&reason);
+        }
+    }
     match identity.store.record_offer(&issuer, &offered, now_secs()) {
         Ok(()) => {
             tracing::info!(%issuer, count = offered.len(), "credential offer recorded");

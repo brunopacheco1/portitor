@@ -6,7 +6,9 @@
 //! issuance protocol; ADR 0018, "Consequences"):
 //!
 //! 1. The issuer must be trusted (`PORTITOR_TRUSTED_ISSUERS`); otherwise
-//!    nothing is fetched or sent.
+//!    nothing is fetched or sent. An issuer limited to some credential
+//!    types (`PORTITOR_TRUSTED_ISSUER_TYPES`, R-48) is asked only for
+//!    those (checked in step 2, against the metadata's `credentialType`).
 //! 2. The issuer's DID document names its `IssuerService` (section 6.2,
 //!    endpoint discovery); its metadata (`GET /metadata`, section 6.7)
 //!    must list every credential id asked for (section 6.4: "Each IDs ...
@@ -259,9 +261,14 @@ async fn check_request(
             .metadata
             .credentials_supported
             .iter()
-            .any(|supported| &supported.id == id);
-        if !listed {
+            .find(|supported| &supported.id == id);
+        let Some(supported) = listed else {
             return Err(AskError::Refused(format!("the issuer does not offer {id}")));
+        };
+        // what it would deliver would be refused (R-48)
+        let types: Vec<String> = supported.credential_type.iter().cloned().collect();
+        if let Some(reason) = identity.type_refusal(issuer, &types) {
+            return Err(AskError::Refused(format!("{id}: {reason}")));
         }
     }
     Ok(service)
