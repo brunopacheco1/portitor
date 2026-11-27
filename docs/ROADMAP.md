@@ -424,6 +424,8 @@ Several containers serve one participant on one shared database
   Suggested by the 1.3 readability review (2026-11-26), small, to be
   confirmed: one helper for the loops that tick ([TD-70](RISKS_AND_TECHNICAL_DEBTS.md#td-70)); one
   shared database wrapper for the identity and the issuer ([TD-71](RISKS_AND_TECHNICAL_DEBTS.md#td-71)).
+  Suggested by the 1.3 benchmark (2026-11-27), to be confirmed: find and remove the writes that make
+  a negotiation step about 3.5 ms slower on SQLite ([TD-73](RISKS_AND_TECHNICAL_DEBTS.md#td-73)).
 - Exit: purpose and permit tested granted and refused; data-permits runs
   with the R-48, TD-46 and TD-20 steps changed to refusals or passes;
   the TCKs and the EDC interop test stay green.

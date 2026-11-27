@@ -171,9 +171,10 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [TD-70](#td-70) | Four loops that tick each write their own timer | Technical debt, readability | Open | 1.4 (suggested) |
 | [TD-71](#td-71) | The identity and the issuer each wrap the database the same way | Technical debt, readability | Open | 1.4 (suggested) |
 | [TD-72](#td-72) | Two error types for the database, converted both ways | Technical debt, readability | Open | 1.5 (suggested, with TD-63) |
+| [TD-73](#td-73) | A negotiation step is about 3.5 ms slower on SQLite in 1.3 | Technical debt, performance | Open | 1.4 (suggested) |
 
-Counts on 2026-11-26, on the 1.3 branch: 37 risks and 53 technical
-debts are not closed (Open 53, Mitigated 22, Accepted 15), of which 11
+Counts on 2026-11-26, on the 1.3 branch: 37 risks and 54 technical
+debts are not closed (Open 54, Mitigated 22, Accepted 15), of which 11
 (TD-08, TD-09, TD-50 to TD-58) are done on the 1.3 branch and close at
 the release; 12 risks and 19 technical debts are closed.
 
@@ -1877,6 +1878,25 @@ the release; 12 risks and 19 technical debts are closed.
   every store file, so it is done with their split in 1.5
   ([TD-63](#td-63)) and is not a large item of its own: suggested for
   1.5 (to be confirmed by the maintainer).
+
+<a id="td-73"></a>
+### TD-73 A negotiation step is about 3.5 ms slower on SQLite in 1.3
+
+- **What.** The 1.3 benchmark (`scripts/bench.sh`, reduced settings,
+  1.2.0 against the 1.3 branch on one machine, 2026-11-27) shows a new
+  negotiation at p50 14.7 ms on SQLite against 11.3 ms in 1.2 (+30 % to
+  +46 % over three rounds), and filling 2,000 negotiations 38 % slower.
+  The cause is not measured yet; the likely one is the extra writes of
+  1.3 for each message (the outbox claim and the lease rows, for several
+  replicas).
+- **Why it matters.** It is a few milliseconds for each step, on a
+  storage that is deprecated; data throughput and the TD-40 check are
+  unchanged. On PostgreSQL the same steps take about twice as long
+  again, because each write is a network round trip.
+- **Current state: Open.**
+- **Next.** Profile one negotiation on both databases and count the
+  statements and transactions per message; remove writes that are not
+  needed. Suggested for 1.4 (to be confirmed by the maintainer).
 
 ## Closed
 
