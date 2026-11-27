@@ -83,6 +83,7 @@ CI runs everything with Docker. The Podman runs are done by hand:
 | `scenarios/edc-interop/run.sh` | the same day and machine; 12 minutes, most of it the Gradle builds of EDC |
 | All six scenarios: `two-party/run.sh` (also with `S3=1`), `hdab-intermediary/run.sh`, `data-permits/run.sh`, `gaiax-compliance/run.sh`, `edc-interop/run.sh` and `two-data-spaces` (both modes) | 2026-11-25, commit `45c8ef9` (1.1.0 before the tag), with the three `:ci` images built on the Pop!\_OS machine of the first row from a copy of the `Dockerfile` without `--start-interval` (see "Known differences"); curl 8.5.0, rustc 1.100.0. Each passed; `hdab-intermediary` failed once at step 1 (Lux Biobank's connector could not reach the other services for about 50 seconds after start, likely the aardvark-dns problem below) and passed when run again |
 | All six scenarios on PostgreSQL: `two-party/run.sh` (also with `EXTRA_COMPOSE=scenarios/two-party/replicas.yaml`), `two-party/run-local.sh`, `two-party/run-replicas.sh` (`postgres:16` in Podman), `gaiax-compliance/run.sh`, `edc-interop/run.sh`, `two-data-spaces` (both modes), `hdab-intermediary/run.sh` and `data-permits/run.sh` | 2026-11-27, commit `a1e75ee` (1.3.0 before the tag), with the three images built on the Pop!\_OS machine of the first row (binaries built in `rust:1.97.0`, the host has no `musl-gcc`) and the Podman 4 copy of the `Dockerfile`; Docker Compose 5.7.2. Each passed; `gaiax-compliance` failed once at step 4 (the outsider's credential request answered 400 while the containers could not resolve each other's names, likely the aardvark-dns problem below) and passed when run again |
+| All six scenarios on PostgreSQL: `two-party/run.sh` (also with `S3=1` and with `EXTRA_COMPOSE=scenarios/two-party/replicas.yaml`), `two-party/run-local.sh`, `two-party/run-replicas.sh` (against `postgres:19`), `gaiax-compliance/run.sh`, `edc-interop/run.sh --no-build`, `two-data-spaces` (both modes), `hdab-intermediary/run.sh` and `data-permits/run.sh` | 2026-11-27, 1.4 before the tag: images built from commit `a6dcaee` on the Pop!\_OS machine of the first row as in the row above, scenario scripts at commit `11d9fef`; Docker Compose 5.7.2. Each passed. Five runs failed first at a name lookup in the first seconds after start (the aardvark-dns problem below) and passed when run again: `edc-interop` once (the issuer could not resolve the IdentityHub's DID), `two-party` twice (a credential request answered 400: the identity could not read the issuer's metadata), `gaiax-compliance` five times out of nine with these images (DID resolution, by the `tls` proxy or by the issuer; three of the five while the load was high, none of the last four runs), and once out of four with the 1.3 images run in between, and `data-permits` once (Lux Biobank's data plane could not reach its data source). Most of them while other processes kept the machine's load above 10 |
 
 **What Podman needs**
 
@@ -813,6 +814,7 @@ run time (shapes, ontology, contexts), hence the nightly run.
 | 2026-11-20 | 0.13.0, release branch commit `4c8c6d0` (pull request 72, before the tag) | v1.0.0-RC8 (Connector, IdentityHub) | gx-compliance v2.16.0 | GitHub Actions with Docker, [run 44734964661](https://github.com/brunopacheco1/portitor/actions/runs/44734964661) |
 | 2026-11-24 | 1.0.0-rc.1, `main` at commit `5e61f1e`, with step 8 (EDC Issuer Service) | v1.0.0-RC8 (Connector, IdentityHub, Issuer Service) | gx-compliance v2.16.0 | GitHub Actions with Docker, nightly [run 45397817969](https://github.com/brunopacheco1/portitor/actions/runs/45397817969) |
 | 2026-11-24 | 1.0.0-rc.1 release images, `main` at commit `461f6db` | v1.0.0-RC8 (Connector, IdentityHub, Issuer Service) | gx-compliance v2.16.0 | by hand, rootless Podman 4.9.3, Pop!\_OS 24.04 LTS on amd64 |
+| 2026-11-27 | 1.4 before the tag, images built from commit `a6dcaee` | v1.0.0-RC8 (Connector, IdentityHub, Issuer Service) | gx-compliance v2.16.0 | by hand, rootless Podman 4.9.3, Pop!\_OS 24.04 LTS on amd64 (`--no-build`, the EDC images of an earlier build); passed on the second run, the first stopped at step 3 on a name lookup (aardvark-dns, see "Docker or Podman") |
 
 The 2026-11-20 run was before step 8 (the EDC Issuer Service, 0.14)
 existed.
@@ -1596,9 +1598,10 @@ python3, uses ports 19070 to 19511, and is not run by CI. With
 gets a database of its own on that server (and `psql` is needed);
 without it, SQLite files.
 
-Last run by hand that passed: 2026-11-24, both ways, at commit
-`461f6db` (1.0.0-rc.1 code), on Pop!\_OS 24.04 LTS on amd64, over plain
-HTTP, without a reverse proxy, a bundle or Gaia-X.
+Last run by hand that passed: 2026-11-27, both ways, at commit
+`a6dcaee` (1.4 code before the tag), on Pop!\_OS 24.04 LTS on amd64,
+with each component's database on PostgreSQL 19, over plain HTTP,
+without a reverse proxy, a bundle or Gaia-X.
 
 ### Observability stack (by hand)
 
