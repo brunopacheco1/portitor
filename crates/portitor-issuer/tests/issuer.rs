@@ -1691,6 +1691,26 @@ async fn a_participants_claims_are_replaced_and_new_requests_get_them() {
     assert_eq!(list[0]["claims"], json!({"role": "consumer"}));
 }
 
+/// TD-46: `claims` must be a JSON object; anything else is refused with
+/// 400 and the registered claims stay.
+#[tokio::test]
+async fn claims_that_are_not_an_object_are_refused() {
+    let world = World::new();
+    world.register(HOLDER, json!({"role": "provider"})).await;
+    let encoded = "did%3Aweb%3Aholder.example";
+    for claims in [
+        json!(["role", "consumer"]),
+        json!("consumer"),
+        json!(1),
+        json!(null),
+    ] {
+        let (status, body) = replace_claims(&world, encoded, &claims).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{claims}: {body}");
+    }
+    let (_, list) = call(&world.management, list_participants()).await;
+    assert_eq!(list[0]["claims"], json!({"role": "provider"}));
+}
+
 #[tokio::test]
 async fn offers_go_to_registered_participants_only() {
     let world = World::new();
