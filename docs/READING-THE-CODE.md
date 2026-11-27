@@ -36,7 +36,9 @@ Read the first lines of each `lib.rs`: they say what the crate does.
    test `state_machine_matches_the_specification` next to the figure in
    the DSP specification.
 3. `portitor-dsp/src/policy.rs`. What Portitor understands of ODRL:
-   `validate`, `permissions_hold`, `same_terms`.
+   `validate`, `permissions_hold`, `same_terms`, and for a consumer
+   `consumer_may_accept`. A dataset's access policy is in
+   `policy/access.rs`.
 4. `portitor-dps/src/port.rs` and `portitor-dps/src/state.rs`. The two
    ports between control plane and data plane (`DataPlane`,
    `ControlPlane`) and the data flow states. Small.

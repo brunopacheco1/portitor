@@ -31,8 +31,27 @@ setting and file format still works, and every new setting is optional
   loopback, private and link-local addresses in URLs a partner chooses
   ([R-17](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-17),
   [DEPLOYING](docs/DEPLOYING.md#internal-addresses)).
+- Policies: the left operand `purpose` with `eq` or `isAnyOf`, a term of
+  the agreement that is not evaluated; a request with another purpose
+  is refused ([ADR 0009](docs/adr/0009-minimal-odrl-policies.md),
+  amendment in 1.4; [TD-12](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-12),
+  [DEPLOYING](docs/DEPLOYING.md#policies)).
+- Datasets file: optional `portitor:accessPolicy` per dataset, who may
+  see it in the catalog; checked on DSP catalog and dataset requests
+  with the caller's credentials, never shown
+  ([ADR 0019](docs/adr/0019-credential-constraints.md), amendment in
+  1.4; [TD-13](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-13),
+  [DEPLOYING](docs/DEPLOYING.md#datasets-file)). A database migration
+  adds the column `dataset.access_policy`.
 
 ### Changed
+
+- As consumer, the connector accepts a provider's offer (DSP `OFFERED`)
+  with credential constraints it understands, without evaluating them,
+  as Eclipse EDC; the provider checks them at the acceptance
+  ([TD-11](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-11)).
+- hdab-intermediary scenario: Lux Biobank's offer for EU processors
+  names a purpose, and a request with another purpose is refused.
 
 ### Fixed
 

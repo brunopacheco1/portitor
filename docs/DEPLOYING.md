@@ -1318,6 +1318,29 @@ the catalog serves them, without `@context`. See
   `HttpData-PUSH`, next to (or instead of) `HttpData-PULL`.
 - An offer in the datasets file has no `target`, `assigner` or
   `assignee`.
+- Since 1.4 a dataset may have `portitor:accessPolicy`: who may see it
+  in the catalog (ADR 0019, amendment in 1.4). It has only permissions,
+  read as an offer's, with `dateTime` and credential constraints. A
+  dataset whose access policy does not hold for the caller is left out
+  of the catalog, and a request for it is answered as for an unknown
+  dataset. A dataset without one is shown to every member. The access
+  policy is never shown in the catalog. A purpose, a prohibition or a
+  duty in it is not understood: the dataset is rejected (check `odrl`).
+
+  ```json
+  { "@id": "eu-reports", "@type": "Dataset",
+    "portitor:accessPolicy": {"permission": [{"action": "use", "constraint": [
+      {"leftOperand": "DataProcessorCredential.processing", "operator": "eq", "rightOperand": "eu"}
+    ]}]},
+    ... }
+  ```
+
+  The provider asks the caller's credential service for the scopes of
+  the access policies once per catalog request. The caller's token must
+  allow them: on Portitor as consumer, pass them in `additionalScopes`
+  of `POST /v1/catalog/request`. List the credential types in
+  `PORTITOR_POLICY_CREDENTIALS`, as for offers. The negotiation checks
+  the offer, not the access policy.
 
 ### Policies
 
@@ -1326,8 +1349,9 @@ Offers are minimal ODRL. The full rules are in
 [ADR 0019](adr/0019-credential-constraints.md); what you need to write
 and read offers:
 
-- A permission without constraints permits. Two kinds of constraint are
-  understood, and `and`, `andSequence`, `or` and `xone` combine them:
+- A permission without constraints permits. Three kinds of constraint
+  are understood, and `and`, `andSequence`, `or` and `xone` combine
+  them:
   - `dateTime` (when the action is exercised) with `eq`, `neq`, `lt`,
     `lteq`, `gt` or `gteq`, and a date (`2030-12-31`, the whole day) or a
     date and time with a time zone (`2030-12-31T23:59:59Z`);
@@ -1335,7 +1359,27 @@ and read offers:
     `MembershipCredential.role` or `DataProcessorCredential.level.name`),
     with `eq` or `neq` and a text, or `isAnyOf` or `isNoneOf` and a list
     of texts ([Credential constraints](#credential-constraints),
-    [Gaia-X compliance](#gaia-x-compliance)).
+    [Gaia-X compliance](#gaia-x-compliance));
+  - since 1.4, `purpose` (or `odrl:purpose`) with `eq` and one purpose,
+    or `isAnyOf` and a list of purposes. A purpose is an IRI, written as
+    a JSON string. It is a term of the agreement: the consumer's request
+    must carry the same purpose, or the negotiation is terminated (terms
+    are compared as written). The connector does not check that the
+    consumer has the purpose; to ask for proof, add a credential
+    constraint, for example on a data permit
+    ([ADR 0009](adr/0009-minimal-odrl-policies.md), amendment in 1.4).
+    Use the purposes of the Data Privacy Vocabulary's EHDS extension
+    (`https://w3id.org/dpv/legal/eu/ehds#`, a draft):
+
+    ```json
+    "permission": [{"action": "use", "constraint": [
+      {"leftOperand": "purpose", "operator": "eq",
+       "rightOperand": "https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch"}
+    ]}]
+    ```
+
+    An Eclipse EDC provider has no policy function for `odrl:purpose`
+    built in.
 - **Anything else is refused, never dropped** (fail closed, strict
   reading): for example a `duty` inside a permission, `unit` on a
   constraint or a misspelled key. In your datasets file, that dataset is
@@ -1356,11 +1400,15 @@ and read offers:
   hold now for the consumer's credentials. Otherwise it terminates the
   negotiation, saying why. It checks the agreement again, with fresh
   credentials, at each transfer request.
-- As consumer, it does not accept a provider's offer (DSP `OFFERED`)
-  that has credential constraints: it cannot check its own credentials
-  as the provider will. Requests it sends itself are not affected. It
-  verifies an agreement only if it has the terms it asked for or
-  accepted and names your participant id as `assignee`.
+- As consumer, it accepts a provider's offer (DSP `OFFERED`) when it
+  understands every constraint and its `dateTime` constraints hold. Since
+  1.4 it does not evaluate credential constraints, which are about its
+  own credentials (as Eclipse EDC): the provider checks them when it
+  gets the acceptance, and the consumer's token for the acceptance
+  allows their scopes. A credential type not in
+  `PORTITOR_POLICY_CREDENTIALS` is not understood, and the offer is
+  refused. It verifies an agreement only if it has the terms it asked
+  for or accepted and names your participant id as `assignee`.
 - Prohibitions and duties are carried into the agreement but not
   enforced.
 
@@ -2118,16 +2166,17 @@ known risk and technical debt, with its status and target release.
 
 - **Admission.** Partners are admitted by one credential type
   (`MembershipCredential`, `PORTITOR_DCP_SCOPES`); offers may add
-  credential claims (ADR 0019), compared as text only, but the catalog
-  still shows every offer to every member. Credential schemas are not
+  credential claims (ADR 0019), compared as text only. Since 1.4 a
+  dataset's access policy hides it from the members it does not hold
+  for; the offers of a dataset that is shown are shown to all. Credential schemas are not
   checked: the issuer publishes each definition's `credentialSchema` URL
   and no component fetches it.
 - **Revocation** takes up to `PORTITOR_STATUS_LIST_CACHE_SECONDS` to be
   seen ([Status list cache](#status-list-cache)); a running download up
   to 60 seconds more
   ([Revocation and running transfers](#revocation-and-running-transfers)).
-- **Policies.** Only `dateTime` and credential claims are understood,
-  any other term is refused, and prohibitions and duties are carried
+- **Policies.** Only `dateTime`, `purpose` and credential claims are
+  understood, any other term is refused, and prohibitions and duties are carried
   into agreements but not enforced ([Policies](#policies)).
 - **Negotiations** start from the consumer only; a provider cannot start
   one with an offer ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)).
