@@ -359,6 +359,57 @@ The two-process test (`scenarios/two-party/run-replicas.sh`: two
 processes of each component behind a round-robin proxy, one stopped in
 the middle) passed on the same commit.
 
+## 1.4: the catalog with access policies
+
+Release 1.4 can give each dataset an access policy, checked on every
+catalog request with the caller's credentials
+([ADR 0019](adr/0019-credential-constraints.md), amendment in 1.4;
+[TD-13](RISKS_AND_TECHNICAL_DEBTS.md#td-13)). This part measures the
+catalog only; the other parts did not change in 1.4.
+
+- **Date:** 2026-11-27.
+- **Code:** 1.3.0 is [`b41bd46`](https://github.com/brunopacheco1/portitor/commit/b41bd464b79d63b198fcd8cf3c3c05a6c4adaa1f)
+  (tag [v1.3.0](https://github.com/brunopacheco1/portitor/releases/tag/v1.3.0)),
+  measured again in the same session; 1.4 is
+  [`e8e71c5`](https://github.com/brunopacheco1/portitor/commit/e8e71c5abc4d75029fc368f89f8c42426f2aba5c)
+  on the release branch. The 1.3 numbers of the section above came
+  from another machine, so they are not compared here.
+- **Raw results:** [benchmarks/1.4](benchmarks/1.4/README.md).
+- **Machine:** the maintainer's laptop: 12th Gen Intel Core i3-1215U,
+  8 CPUs, 7.6 GB, Linux 7.2, Rust 1.100.0, release builds for
+  `x86_64-unknown-linux-gnu`, SQLite. The desktop was in use: the load
+  average was 3 to 7 (median 6), so single values move more than on
+  the machine above.
+- **Load:** `scripts/bench.sh catalog` with `BENCH_RUNS=3`, two rounds;
+  medians of the 6 runs of each version. `BENCH_ACCESS_POLICY=1` (new
+  in 1.4) gives every dataset an access policy on the caller's
+  `MembershipCredential`, which the caller meets: so every dataset is
+  shown, and no extra presentation query is needed.
+
+| Measure | 1.3.0 | 1.4 | 1.4, every dataset with an access policy |
+|---|---|---|---|
+| Catalog of 100 / 1,000 / 10,000 datasets, p50 | 17.2 / 21.2 / 36.9 ms | 16.4 / 20.9 / 38.9 ms | 17.1 / 22.6 / 48.3 ms |
+| Catalog of 10,000, p99 | 50.2 ms | 47.5 ms | 55.4 ms |
+| Catalog of 1,000 / 10,000, provider's peak memory | 25 / 104 MB | 26 / 108 MB | 36 / 203 MB |
+
+What this says:
+
+- **Without access policies, 1.4 answers as fast as 1.3.0.** Every
+  difference is within 6 %, less than the spread between the runs.
+  Memory is 4 % to 5 % higher.
+- **An access policy on every dataset costs about 1 µs per dataset**:
+  10,000 datasets take 48 ms instead of 39 ms (+24 %), 1,000 take 23 ms
+  instead of 21 ms. Each policy is read from the database and checked
+  on each request, as the catalog itself is since 1.3.
+- **It nearly doubles the provider's peak memory for a catalog of
+  10,000** (203 MB against 108 MB): the access policies of all datasets
+  are held during the request. A data space with that many datasets,
+  each with its own access policy, should give the provider the
+  memory, or keep policies on the datasets that need them.
+- Not measured: an access policy that needs a credential type beyond
+  the membership, which adds one presentation query per catalog
+  request (the cost of a query is in [Cost of DCP](#cost-of-dcp)).
+
 ## Method and how to reproduce
 
 ```sh
@@ -384,7 +435,8 @@ done
 `large`, `long`, `history`, `catalog`, `negotiation`, `td40`) and
 prints `key=value` lines, one set per run; the tables above are the
 medians of those lines. `BENCH_RUNS`, `BENCH_LARGE_GB`, `BENCH_HISTORY`
-and `BENCH_SECONDS` change the load. It needs 2 GB of free memory for
+and `BENCH_SECONDS` change the load; `BENCH_ACCESS_POLICY=1` gives every
+dataset an access policy (since 1.4). It needs 2 GB of free memory for
 the 1,000 pulls and deletes its files after each part.
 
 | Row | Method |
