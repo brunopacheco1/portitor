@@ -289,6 +289,11 @@ storage client and the audit line
 
 ![C3 Components of portitor-connector](diagrams/c3-connector-components.drawio.svg)
 
+Since 1.4 the identity has a credential status check, which reads the
+status lists of the credentials it holds from their issuers
+([TD-20](RISKS_AND_TECHNICAL_DEBTS.md#td-20)); the C2 diagram shows
+that call and the setting `PORTITOR_TRUSTED_ISSUER_TYPES`.
+
 ![C3 Components of portitor-identity](diagrams/c3-identity-components.drawio.svg)
 
 The issuer's components ([ADR 0018](adr/0018-issuer-component.md)),
