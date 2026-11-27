@@ -139,6 +139,20 @@ negotiation. Portitor does the same, per dataset:
   the access policies' credential types once per catalog request
   (ADR 0019 scopes, as for offers).
   A dataset request asks for the scopes of that dataset's access policy.
+  So a catalog request shows the caller the scopes of **every** access
+  policy, also of datasets hidden from it: a member learns which
+  credential types the access policies use (not their values, nor
+  which dataset uses which), as does its credential service, which
+  sees the query. Accepted as is in 1.4 (engineering review of 1.4,
+  2026-11-27): the types are named in the dataspace's credential
+  definitions anyway, and asking for fewer scopes would hide a dataset
+  from a caller that meets its policy. Eclipse EDC differs: on a catalog
+  request its provider verifies the token with an empty policy
+  (`ProtocolTokenValidator.verify` without a policy, used by
+  `CatalogProtocolServiceImpl.getCatalog`; both read at EDC Connector
+  commit `4215744` on 2026-11-27), so it asks only for the scopes its
+  default scope extractors give, the same for every catalog request,
+  and evaluates the access policies with the credentials that come back.
   The caller's token must allow them: Portitor as consumer adds those
   given in `additionalScopes` of its management catalog request and
   dataset request (EDC's `DatasetRequest` has no `additionalScopes`;
@@ -198,7 +212,8 @@ must be trusted for **every** type of the credential except
 - The connector skips such a credential before it fetches anything for
   it (its issuer's DID document, its status list), and logs it at
   DEBUG. A membership kept with a transfer is checked again against the
-  setting too.
+  setting too, for each of its types (one kept before 1.4 has none
+  stored: `MembershipCredential` then).
 - The identity refuses such a credential in a delivery (Storage API)
   and such a type in an offer (`400`, with the reason), and does not
   ask a limited issuer for an id of another type.

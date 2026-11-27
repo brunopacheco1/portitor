@@ -569,6 +569,34 @@ of 30 seconds ends (each process looks for them every second), or at
 the next start, so an upgrade does not leave negotiations waiting. A
 partner may receive such a message twice; that is handled.
 
+### From 1.3 to 1.4
+
+1.4 adds purpose and data permits in policies, access policies on
+datasets, and the identity's check of its credentials' status lists
+([CHANGELOG](../CHANGELOG.md)).
+
+1. **Back up first.** Migrations run at start, forward only. To go back
+   to 1.3, restore the backup.
+2. **Migrations.** The connector adds the column
+   `dataset.access_policy` and the index `negotiation_request`; the
+   identity adds the columns `credential.status_state` and
+   `credential.status_checked_at`. The issuer has none.
+3. **Stop every 1.3 replica before the first 1.4 replica starts.** A
+   1.3 connector still running would serve datasets that 1.4 hides
+   behind an access policy, without the check; a 1.3 identity does not
+   know the status columns.
+4. **Access policies** are filled at start: the stored datasets are
+   checked again with the 1.4 rules ([ADR 0020](adr/0020-dataset-harvest.md)),
+   which reads `portitor:accessPolicy` from their stored entries.
+5. **The identity reads its credentials' status lists** every 60
+   seconds by default (`PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS`;
+   [DEPLOYING](DEPLOYING.md#getting-a-credential)).
+   It now calls the issuers' DID documents and status lists: open that
+   egress from the identity. Set the setting to `0` to keep the 1.3
+   behaviour.
+6. Nothing else changes without a new setting
+   ([STABILITY](STABILITY.md)).
+
 ### From 1.2 to 1.3
 
 1.3 adds PostgreSQL and lets several containers of each component share

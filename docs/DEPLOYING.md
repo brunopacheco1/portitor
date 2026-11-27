@@ -392,7 +392,7 @@ settings are in its step.
 | `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | The same for the management port |
 | `PORTITOR_ALLOW_HTTP` | `false` | `true` allows plain `http://` for the addresses partners give. **Never in production** |
 | `PORTITOR_DID_CACHE_SECONDS` | `300` | How long a resolved DID document is reused, `0` to `3600` ([DID document cache](#did-document-cache)) |
-| `PORTITOR_BLOCK_INTERNAL_ADDRESSES` | `false` | Since 1.4. `true` refuses loopback, private and link-local addresses in URLs a partner chooses ([Internal addresses](#internal-addresses)) |
+| `PORTITOR_BLOCK_INTERNAL_ADDRESSES` | `false` | Since 1.4. `true` refuses internal addresses (loopback, private, link-local and others) in URLs a partner chooses ([Internal addresses](#internal-addresses)) |
 | `PORTITOR_INTERNAL_ADDRESSES_ALLOWED` | none | Since 1.4. Comma-separated host names, IP addresses and IP networks (`10.1.0.0/16`) allowed although internal; only with the block on |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | none (no traces or metrics) | Base URL of your OTLP/HTTP receiver ([OPERATING](OPERATING.md#traces-and-metrics), with the other `OTEL_*` variables) |
 | `RUST_LOG` | `info` | Log level; `debug` only while diagnosing |
@@ -451,11 +451,22 @@ chooses some URLs your components call: a consumer's callback address,
 a caller's DID document and credential service, status lists, a push
 endpoint, a holder's credential service. With
 `PORTITOR_BLOCK_INTERNAL_ADDRESSES=true`, a call to such a URL is
-refused when its host is a loopback, private or link-local address
-(`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
-`169.254.0.0/16`, `::1`, `fc00::/7`, `fe80::/10`), or `0.0.0.0` or
-`::`. The host name is resolved first, and the address checked is the
-one the call uses.
+refused when its host's address is internal: not globally reachable
+in IANA's special-purpose address registries
+([IPv4](https://www.iana.org/assignments/iana-ipv4-special-registry),
+[IPv6](https://www.iana.org/assignments/iana-ipv6-special-registry)),
+multicast or broadcast. That is loopback (`127.0.0.0/8`, `::1`),
+private (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`),
+link local (`169.254.0.0/16`, `fe80::/10`), shared address space
+(`100.64.0.0/10`, used by Kubernetes and carrier NAT), `0.0.0.0/8` and
+`::`, `192.0.0.0/24`, benchmarking (`198.18.0.0/15`), documentation,
+`240.0.0.0/4` with `255.255.255.255`, multicast (`224.0.0.0/4`,
+`ff00::/8`), site local (`fec0::/10`) and `64:ff9b:1::/48`. An IPv6
+address that carries an IPv4 address (mapped `::ffff:`, compatible
+`::a.b.c.d`, NAT64 `64:ff9b::/96`, 6to4 `2002::/16`, Teredo) counts as
+that IPv4 address. The host name is resolved first, also when it is a
+number such as `2130706433`, and the address checked is the one the
+call uses.
 
 - Off by default in 1.x, so a 1.3 setup starts unchanged. It will be on
   by default in 2.0 ([ROADMAP](ROADMAP.md#for-20)). A component with
@@ -470,20 +481,22 @@ one the call uses.
     and credential issuers' DID documents, callers' credential
     services, status lists, and push endpoints;
   - identity: callers' and issuers' DID documents, issuers' metadata
-    and credential request addresses;
+    and credential request addresses, and the status lists of the
+    credentials it holds;
   - issuer: holders' DID documents and credential services.
 - So a trusted issuer on your own network needs an entry too: its DID
   document is fetched like any other party's.
 - URLs you choose are never checked: your own DID document, your STS,
   your data sources (`portitor:source`), your object storage, the
-  bundle URL and the authority's DID, the Gaia-X compliance service,
+  bundle URL and the authority's DID, the Gaia-X compliance service and its DID,
   the OTLP receiver, the database, and the provider address you give
   the management API (negotiations, transfers and catalog requests as
   consumer).
 - A refused call is not sent, and counts as a partner that cannot be
   reached: the connector's outbox tries it as often as any failed send,
-  then ends the negotiation or transfer. The error names the host, the
-  address and `PORTITOR_INTERNAL_ADDRESSES_ALLOWED`.
+  then ends the negotiation or transfer. The error in your log names the
+  host, the address and `PORTITOR_INTERNAL_ADDRESSES_ALLOWED`; the
+  partner is told only that its address is not allowed.
 - Keep the egress firewall ([Security](#security)): the block is a
   second line.
 
@@ -813,7 +826,7 @@ Besides the [settings of every component](#settings-of-every-component):
 | `PORTITOR_STS_CLIENT_ID` | `PORTITOR_PARTICIPANT_ID` | The client id your connector sends |
 | `PORTITOR_TRUSTED_ISSUERS` | none (**required**) | Comma-separated issuer DIDs |
 | `PORTITOR_TRUSTED_ISSUER_TYPES` | none (every trusted issuer for every type) | Since 1.4. Comma-separated `<issuer DID>=<credential type>` items, as on the connector ([Trusted issuers by type](#trusted-issuers-by-type)) |
-| `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS` | `60` | Since 1.4. Seconds between two reads of the held credentials' status lists, `0` (never) to `86400`; a revoked or suspended credential is no longer presented |
+| `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS` | `60` | Since 1.4. Seconds between two reads of the held credentials' status lists, `0` (never) to `86400`; a revoked, suspended or uncheckable credential is no longer presented ([Revoked credentials](#getting-a-credential)) |
 | `PORTITOR_SCOPE_TYPE_ALIASES` | `org.eclipse.edc.vc.type` | Comma-separated scope aliases that mean "credentials of this type", besides DCP's `org.eclipse.dspace.dcp.vc.type` |
 | `PORTITOR_IDENTITY_RETIRED_KEY_FILES` | none | Only during a key change: the old **public** keys, comma-separated paths ([Rotating a key](OPERATING.md#rotating-a-key)) |
 | `PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE` | none | Gaia-X only: the PEM chain of the identity key, the key's certificate first |
@@ -956,17 +969,26 @@ or suspended is no longer presented (DCP v1.0.1, 5.4.2: a presentation
 a suspension is lifted. You need not delete it: other participants
 would refuse a presentation that holds it (DCP v1.0.1, 5.4.3, step 8),
 and now it is left out. `GET /v1/credentials` shows the result
-(`status`: `VALID`, `REVOKED` or `SUSPENDED`, and `statusCheckedAt`;
-null until checked).
+(`status`: `VALID`, `REVOKED`, `SUSPENDED` or `UNCHECKABLE`, and
+`statusCheckedAt`; null until checked).
 
 - A list is trusted as the connector trusts it: signed by the
   credential's issuer and valid now. The lists are fetched with the
   same HTTP client as other parties' DID documents.
-- A credential whose lists cannot be read (the issuer's server is
-  down, the answer is not a valid list) keeps its last recorded status,
-  and the log says so (`credential status cannot be read`, WARN): an
-  outage of a status list does not cut you off. A credential never
-  checked is presented.
+- A credential whose lists cannot be read for a passing reason (no
+  answer, or HTTP 408, 429 or 5xx, from the issuer's DID host or the
+  list's server) keeps its last recorded status, and the log says so
+  each round (`credential status cannot be read now`, WARN): an outage
+  of a status list does not cut you off.
+- A credential whose lists cannot be used for any other reason (HTTP
+  404, a list signed by another party or not valid now, an issuer DID
+  that cannot be resolved or that the block on internal addresses
+  refuses, more than 4 status entries) is `UNCHECKABLE` and no longer
+  presented: other participants' connectors refuse it, and the whole
+  presentation with it. The log says so once, when it changes
+  (`credential status cannot be checked`, WARN). It is presented again
+  once its lists can be read. A credential never checked is presented.
+- Each round reads every list once, also with a check every second.
 - A revocation is seen within one period. Until then, verifiers may
   refuse you, as before 1.4. With the check off (`0`), delete a revoked
   credential by hand with `DELETE /v1/credentials/{id}`.
@@ -1381,7 +1403,13 @@ the catalog serves them, without `@context`. See
   allow them: on Portitor as consumer, pass them in `additionalScopes`
   of `POST /v1/catalog/request` or `POST /v1/catalog/dataset/request`.
   List the credential types in `PORTITOR_POLICY_CREDENTIALS`, as for
-  offers.
+  offers. Those scopes are those of **every** access policy, also of
+  datasets hidden from the caller: a member learns which credential
+  types your access policies use, but not their values or which
+  dataset uses which. Eclipse EDC does not: it asks only for its
+  configured scopes on a catalog request
+  ([ADR 0019](adr/0019-credential-constraints.md#amendment-in-14-access-policies-trusted-issuers-by-type-negative-operators-accepted-2026-11-27)).
+  Do not put a secret in a credential type's name.
 
   A contract request is checked against the access policy too, as
   Eclipse EDC does: a member that knows the offer's `@id` of a dataset
@@ -1676,6 +1704,12 @@ PORTITOR_TRUSTED_ISSUER_TYPES=did:web:hdab.example=DataPermitCredential
   typed `DataPermitCredential` and `MembershipCredential` needs both.
 - On the identity, an issuer may deliver and offer only the types it is
   limited to; anything else gets `400` with the reason.
+- A type holds no `:`, `=` or space, or the component does not start.
+  So a prefixed type such as `gx:LegalPerson` cannot be listed: a
+  limited issuer is never trusted for one. On the connector, a
+  `gx:LegalPerson` from a limited issuer then takes the Gaia-X checks
+  ([Gaia-X compliance](#gaia-x-compliance)), and is skipped unless a
+  compliance credential of the same presentation names it.
 
 ### Credential constraints
 

@@ -462,7 +462,13 @@ to TD-58).
   clients for URLs the operator chooses do not apply it
   ([DEPLOYING](DEPLOYING.md#internal-addresses) has both lists). The
   identity checks `aud` and the access token before it resolves a
-  caller of its presentation API (F-06), always on.
+  caller of its presentation API (F-06), always on. Engineering review
+  of 1.4: "internal" is every address IANA's special-purpose registries
+  mark as not globally reachable, multicast and broadcast, with the
+  IPv4 inside NAT64, 6to4, Teredo and other IPv6 forms; the connector's
+  DSP check and the DCP services check `aud`, `iss` and the times
+  before they resolve a caller's DID; a refusal sent back to a partner
+  (a push's termination) names no address.
 - **Next.** The block on by default in 2.0 ([ROADMAP](ROADMAP.md#for-20)).
   The 0.13 freeze passed without it, so a block that is on by default
   would now be a behaviour change to announce. Assigned to 1.4
@@ -1170,12 +1176,14 @@ to TD-58).
   reads the status lists of the credentials it holds every
   `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS` (default 60, 0 off;
   maintainer decision D6, 2026-11-27, as EDC IdentityHub's
-  `CredentialWatchdog`), records `VALID`, `REVOKED` or `SUSPENDED` with
+  `CredentialWatchdog`), records `VALID`, `REVOKED`, `SUSPENDED` or `UNCHECKABLE` with
   the time, and leaves revoked and suspended credentials out of its
   presentations (`crates/portitor-identity/src/status_check.rs`). The
   lists are read and checked by the connector's code, moved to
   `crates/portitor-runtime/src/status_lists.rs`. A list that cannot be
-  read keeps the last status. One replica runs each round, under a
+  read now (no answer, 408, 429, 5xx) keeps the last status; one that
+  cannot be used for another reason records `UNCHECKABLE`, not
+  presented, as verifiers would refuse it (engineering review of 1.4). One replica runs each round, under a
   lease ([ADR 0029](adr/0029-several-replicas.md), note of 1.4).
   Tests: `crates/portitor-identity/tests/status_check.rs`. The
   [data-permits](../scenarios/data-permits/README.md#the-steps) step 4

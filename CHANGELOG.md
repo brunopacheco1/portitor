@@ -14,7 +14,16 @@ versions may change behaviour and configuration.
 
 Portitor 1.4: purpose and data permits in policies. Every 1.3 route,
 setting and file format still works, and every new setting is optional
-([STABILITY](docs/STABILITY.md)).
+([STABILITY](docs/STABILITY.md)). One behaviour changes without a new
+setting: the identity reads the status lists of the credentials it
+holds every 60 seconds and no longer presents a revoked one (set
+`PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS=0` to keep the 1.3
+behaviour).
+
+**Upgrading from 1.3.** Back up first: migrations run at start, forward
+only. Stop every 1.3 replica before the first 1.4 replica starts. The
+identity now calls issuers' DID documents and status lists. Details:
+[OPERATING, From 1.3 to 1.4](docs/OPERATING.md#from-13-to-14).
 
 ### Added
 
@@ -28,12 +37,15 @@ setting and file format still works, and every new setting is optional
   credentials it holds ([TD-20](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-20)).
 - Settings `PORTITOR_BLOCK_INTERNAL_ADDRESSES` (default `false`) and
   `PORTITOR_INTERNAL_ADDRESSES_ALLOWED` on all three components: refuse
-  loopback, private and link-local addresses in URLs a partner chooses
+  internal addresses (not globally reachable in IANA's special-purpose
+  registries, multicast, broadcast; an IPv6 address that carries one,
+  such as NAT64 or 6to4, too) in URLs a partner chooses
   ([R-17](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-17),
   [DEPLOYING](docs/DEPLOYING.md#internal-addresses)). The address
   checked is the one the call connects to. A refused call is not sent,
-  and counts as a partner that cannot be reached; its error names the
-  setting that allows it.
+  and counts as a partner that cannot be reached; its error in the log
+  names the setting that allows it, and the partner is told only that
+  its address is not allowed.
 - Issuer management route `PUT /v1/participants/{did}`: replaces a
   registered participant's claims without deleting the registration;
   issued credentials keep theirs, a request decided from then on gets
@@ -108,7 +120,11 @@ setting and file format still works, and every new setting is optional
 - The identity reads the status lists of the credentials it holds
   every `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS` and no longer
   presents a revoked or suspended one; a lifted suspension presents it
-  again, and a list that cannot be read keeps the last status. So a
+  again. A list that cannot be read now (no answer, 408, 429, 5xx)
+  keeps the last status; a list that cannot be used for another reason
+  (404, another signer, an issuer DID that cannot be resolved) makes
+  the credential `UNCHECKABLE`, not presented, as verifiers would refuse
+  it. Each round reads a list once, also with a check every second. So a
   revoked credential need not be deleted by hand any more. One replica
   runs each round, under the lease `job`/`credential_status_check`.
   `GET /v1/credentials` of its management API shows `status` and
@@ -118,6 +134,31 @@ setting and file format still works, and every new setting is optional
   `portitor-runtime` (`status_lists.rs`), unchanged
   ([TD-20](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-20),
   [DEPLOYING](docs/DEPLOYING.md#getting-a-credential)).
+- A partner no longer learns about our network from a termination:
+  a push to an endpoint the block on internal addresses refuses ends
+  with the reason "the consumer's endpoint is not allowed", and a
+  transfer ended because the consumer's membership no longer holds
+  with "the consumer's membership no longer holds"; the details (host,
+  address, status list) are in our log only.
+- The connector's DSP check, and the identity's and issuer's DCP
+  checks of a caller, refuse a token for another verifier, out of its
+  time, or whose `iss` is not its `sub`, before they resolve the
+  caller's DID: such a token makes them fetch nothing
+  ([SECURITY-ASSURANCE, F-06](docs/SECURITY-ASSURANCE.md)).
+- A catalog or dataset request whose second presentation query (for
+  the access policies' scopes) fails no longer drops the caller's
+  verified credentials: a refusal keeps those of the first check, and
+  a credential service that does not answer (or answers 408, 429, 5xx)
+  gets HTTP 503 with a `CatalogError`, so the partner tries again
+  rather than see a catalog with datasets missing. Negotiations and
+  transfers keep the first check's credentials too.
+- A membership kept with a transfer is checked again for each of its
+  types against `PORTITOR_TRUSTED_ISSUER_TYPES`, as at the first check,
+  not for `MembershipCredential` only; one kept before 1.4 counts as a
+  `MembershipCredential` ([R-48](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-48)).
+- The identity reads the Gaia-X compliance service's DID
+  (`PORTITOR_GAIAX_COMPLIANCE_DID`) without the block on internal
+  addresses, as every URL the operator chooses.
 - data-permits scenario, step 4: the transfer under the second permit
   works once Schuman's identity has checked, without deleting the
   revoked permit; the one under the revoked permit is still refused.
