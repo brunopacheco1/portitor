@@ -13,9 +13,7 @@ use portitor_issuer::config::{Config, DEFAULT_MANAGEMENT_BIND, DatabaseSetting, 
 use portitor_issuer::store::{DatabaseStore, MIGRATIONS};
 use portitor_issuer::{Issuer, Ports, definitions};
 use portitor_runtime::database::{Database, SQLITE_DEPRECATED};
-use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::health;
-use portitor_runtime::http::HttpSender;
 use portitor_runtime::internal_addresses::InternalAddresses;
 use portitor_runtime::management::management_port;
 use portitor_runtime::panics::spawn_supervised;
@@ -84,14 +82,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // holders choose their DID documents and credential services: both
     // with the block on internal addresses (R-17)
     internal_addresses.log_at_start();
-    let directory =
-        WebDirectory::for_partners(config.allow_http, did_cache_seconds, &internal_addresses)?;
-    let sender = HttpSender::for_partners(config.allow_http, &internal_addresses)?;
-    let ports = Ports {
-        store: Arc::new(store),
-        directory: Arc::new(directory),
-        sender: Arc::new(sender),
-    };
+    let ports = Ports::for_partners(
+        Arc::new(store),
+        config.allow_http,
+        did_cache_seconds,
+        &internal_addresses,
+    )?;
     let credential_key = key.public_jwk();
     let mut issuer = Issuer::new(&config, key, definitions, ports)?;
     for retired in issuer.retired_keys() {

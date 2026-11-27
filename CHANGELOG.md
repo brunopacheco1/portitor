@@ -91,6 +91,11 @@ setting and file format still works, and every new setting is optional
   wrapper, `ComponentStore` in `portitor-runtime`, with the used token
   ids and leases written once; no change of behaviour
   ([TD-71](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-71)).
+- Code: the connector, the identity and the issuer build their clients to
+  other parties in a library function (`ports_for_partners`,
+  `Ports::for_partners`) that `main.rs` calls, so tests check the
+  block on internal addresses as the binaries set it; no change of
+  behaviour ([R-17](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-17)).
 
 ### Fixed
 

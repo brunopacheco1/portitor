@@ -124,6 +124,39 @@ pub struct Ports {
     pub status_lists: Arc<dyn StatusListSource>,
 }
 
+impl Ports {
+    /// The identity's ports on `store`, as the binary sets them: other
+    /// parties choose their DID documents and the addresses in them, so
+    /// the directory (DID documents, issuers' metadata), the client of
+    /// the issuers and the status lists (the same sender as the DID
+    /// documents, TD-20) apply `internal_addresses` (R-17). `compliance`,
+    /// the operator's choice, is passed as built.
+    ///
+    /// # Errors
+    /// An HTTP client cannot be built.
+    pub fn for_partners(
+        store: Arc<dyn IdentityStore>,
+        compliance: Option<Arc<dyn GaiaxCompliance>>,
+        allow_http: bool,
+        did_cache_seconds: u64,
+        internal_addresses: &portitor_runtime::internal_addresses::InternalAddresses,
+    ) -> Result<Self, String> {
+        let directory = Arc::new(portitor_runtime::directory::WebDirectory::for_partners(
+            allow_http,
+            did_cache_seconds,
+            internal_addresses,
+        )?);
+        let issuers = issuance::HttpIssuerClient::for_partners(allow_http, internal_addresses)?;
+        Ok(Self {
+            store,
+            directory: Arc::clone(&directory) as _,
+            issuers: Arc::new(issuers),
+            compliance,
+            status_lists: directory,
+        })
+    }
+}
+
 impl Identity {
     /// Builds the component from its settings, its key and the STS client
     /// secret. Reads the retired public keys, and the certificate chain
