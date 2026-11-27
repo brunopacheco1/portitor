@@ -735,6 +735,9 @@ fn a_contract_request_is_checked_against_the_access_policy() {
             Decision::Offer,
         )])),
     );
+    // another consumer pid: a repeat of the first request would get the
+    // negotiation already started (TD-60)
+    msg.consumer_pid = "c2".to_owned();
     let (ack_offered, _) = p
         .request(None, msg.clone(), "c", &member_with_role("provider"))
         .unwrap();
@@ -748,7 +751,9 @@ fn a_contract_request_is_checked_against_the_access_policy() {
 
     // a dataset without an access policy: unchanged
     let p = service(&store, AgreeToCatalogOffers);
-    let (_, out) = p.request(None, request(None), "c", &none()).unwrap();
+    let mut plain = request(None);
+    plain.consumer_pid = "c3".to_owned();
+    let (_, out) = p.request(None, plain, "c", &none()).unwrap();
     assert_eq!(out.unwrap().transition, Transition::Agree);
 }
 
