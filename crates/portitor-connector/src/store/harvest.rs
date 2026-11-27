@@ -525,11 +525,14 @@ mod tests {
         let policy = json!({"permission": [{"action": "use", "constraint": [
             {"leftOperand": "MembershipCredential.role", "operator": "eq", "rightOperand": "lab"},
             {"leftOperand": "dateTime", "operator": "lt", "rightOperand": "2030-01-01"}]}]});
-        let mut a = entry("a");
-        a[crate::harvest::ACCESS_POLICY_KEY] = policy.clone();
-        let mut b = entry("b");
-        b[crate::harvest::ACCESS_POLICY_KEY] = policy.clone();
-        let harvester = harvester(&store, vec![a, b, entry("c")]);
+        let mut first_with_policy = entry("a");
+        first_with_policy[crate::harvest::ACCESS_POLICY_KEY] = policy.clone();
+        let mut second_with_policy = entry("b");
+        second_with_policy[crate::harvest::ACCESS_POLICY_KEY] = policy.clone();
+        let harvester = harvester(
+            &store,
+            vec![first_with_policy, second_with_policy, entry("c")],
+        );
         let expected: AccessPolicy = serde_json::from_value(policy).unwrap();
 
         let stored = store.dataset("a").unwrap().unwrap();
@@ -605,9 +608,9 @@ mod tests {
                 {"leftOperand": "MembershipCredential.role", "operator": "eq", "rightOperand": role}]}]})
         };
         let with_policy = |role: &str| {
-            let mut a = entry("a");
-            a[crate::harvest::ACCESS_POLICY_KEY] = policy(role);
-            a
+            let mut dataset_a = entry("a");
+            dataset_a[crate::harvest::ACCESS_POLICY_KEY] = policy(role);
+            dataset_a
         };
         let source = Arc::new(Switch::default());
         *source.0.lock().unwrap() = vec![with_policy("lab")];
