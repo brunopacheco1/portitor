@@ -943,6 +943,9 @@ impl Party {
 struct Served {
     documents: BTreeMap<String, Value>,
     wallet: Vec<String>,
+    /// Credentials presented only when the access token in the query's
+    /// token grants their scope: (scope, JWT).
+    scoped_wallet: Vec<(String, String)>,
     status_list: String,
 }
 
@@ -992,8 +995,24 @@ impl LocalDataspace {
                 "/cs/presentations/query",
                 // the consumer's Credential Service: one presentation of
                 // everything in the wallet, for the provider
-                axum::routing::post(move || {
-                    let jwts = wallet.lock().unwrap().wallet.clone();
+                // everything in the wallet, for the provider, and what the
+                // scoped wallet holds for the scopes the token grants: the
+                // provider's token is the consumer's access token here
+                // (`ProviderSts`), which names them (`ConsumerSts`)
+                axum::routing::post(move |headers: axum::http::HeaderMap| {
+                    let granted = headers
+                        .get("authorization")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .to_owned();
+                    let served = wallet.lock().unwrap();
+                    let mut jwts = served.wallet.clone();
+                    for (scope, jwt) in &served.scoped_wallet {
+                        if granted.split(' ').any(|word| word == scope) {
+                            jwts.push(jwt.clone());
+                        }
+                    }
+                    drop(served);
                     let presenter = Arc::clone(&presenter);
                     async move {
                         let now = now_secs();
@@ -1042,15 +1061,21 @@ impl LocalDataspace {
     /// A membership credential for the consumer at status position
     /// `index`.
     fn membership(&self, index: u64) -> String {
+        self.credential(MEMBERSHIP, &json!({"memberOf": "dataspace"}), index)
+    }
+
+    /// A credential of type `kind` with `claims` for the consumer, at
+    /// status position `index`.
+    fn credential(&self, kind: &str, claims: &Value, index: u64) -> String {
         let url = format!("{}/status/1", self.base);
         let now = now_secs();
         let id = new_uuid();
         let credential = NewCredential {
             id: &id,
-            credential_type: MEMBERSHIP,
+            credential_type: kind,
             profile: Profile::Vc11,
             holder: &self.consumer.did,
-            claims: &json!({"memberOf": "dataspace"}),
+            claims,
             status: StatusSlot {
                 list_url: &url,
                 index,
@@ -1065,18 +1090,32 @@ impl LocalDataspace {
     fn hold(&self, credentials: Vec<String>) {
         self.served.lock().unwrap().wallet = credentials;
     }
+
+    /// The consumer's Credential Service presents `credential` too, when
+    /// the token grants `scope`.
+    fn hold_for_scope(&self, scope: &str, credential: String) {
+        let mut served = self.served.lock().unwrap();
+        served.scoped_wallet.push((scope.to_owned(), credential));
+    }
 }
 
 /// The consumer's STS: a self-issued ID token for the audience, with an
-/// access token (the fake Credential Service does not check it).
+/// access token that names the scopes it grants beyond the configured
+/// ones, `access-token <scope> ...` (the local Credential Service reads
+/// them and checks nothing else).
 struct ConsumerSts(Arc<Party>);
 
 impl Prover for ConsumerSts {
     fn authorization<'a>(
         &'a self,
         audience: &'a str,
-        _: &'a [String],
+        scopes: &'a [String],
     ) -> BoxFuture<'a, Result<String, String>> {
+        let mut access_token = "access-token".to_owned();
+        for scope in scopes {
+            access_token.push(' ');
+            access_token.push_str(scope);
+        }
         let now = now_secs();
         let claims = Claims {
             iss: self.0.did.clone(),
@@ -1086,20 +1125,23 @@ impl Prover for ConsumerSts {
             exp: now + 300,
             iat: now,
             nbf: None,
-            token: Some("access-token".to_owned()),
+            token: Some(access_token),
         };
         let token = self.0.key.sign(&self.0.kid, &claims).unwrap();
         Box::pin(async move { Ok(format!("Bearer {token}")) })
     }
 }
 
-/// The provider's own STS, for its presentation queries: the fake
-/// Credential Service does not check the token.
+/// The provider's own STS, for its presentation queries: its token is
+/// the consumer's access token as it came, so the local Credential
+/// Service sees the scopes it grants (a real token carries it in its
+/// `token` claim).
 struct ProviderSts;
 
 impl SecureTokenService for ProviderSts {
-    fn token<'a>(&'a self, _: TokenRequest<'a>) -> BoxFuture<'a, Result<String, String>> {
-        Box::pin(async { Ok("provider-token".to_owned()) })
+    fn token<'a>(&'a self, request: TokenRequest<'a>) -> BoxFuture<'a, Result<String, String>> {
+        let token = request.access_token.unwrap_or("provider-token").to_owned();
+        Box::pin(async move { Ok(token) })
     }
 }
 
@@ -1107,6 +1149,22 @@ impl SecureTokenService for ProviderSts {
 /// offering dataset `open` to every member, and a consumer whose
 /// identity is the local one. Returns the consumer's handle.
 fn verified_connectors(network: &Arc<Network>, dataspace: &LocalDataspace) -> Negotiator {
+    let open = json!({
+        "@id": "open",
+        "@type": "Dataset",
+        "hasPolicy": [{"@id": "open:use", "@type": "Offer", "permission": [{"action": "use"}]}],
+        "distribution": [{"@type": "Distribution", "format": "HttpData-PULL"}],
+        "portitor:source": "http://127.0.0.1:9/open.csv"
+    });
+    verified_connectors_offering(network, dataspace, vec![open])
+}
+
+/// [`verified_connectors`], with the provider offering `datasets`.
+fn verified_connectors_offering(
+    network: &Arc<Network>,
+    dataspace: &LocalDataspace,
+    datasets: Vec<Value>,
+) -> Negotiator {
     let settings = AuthSettings {
         participant_id: PROVIDER_DID.to_owned(),
         sts_url: String::new(),
@@ -1134,13 +1192,7 @@ fn verified_connectors(network: &Arc<Network>, dataspace: &LocalDataspace) -> Ne
         first_delay: Duration::from_millis(1),
     };
     let provider = config(PROVIDER_DID, PROVIDER);
-    provider_ports.harvest.source = Some(Arc::new(FixedSource::new(vec![json!({
-        "@id": "open",
-        "@type": "Dataset",
-        "hasPolicy": [{"@id": "open:use", "@type": "Offer", "permission": [{"action": "use"}]}],
-        "distribution": [{"@type": "Distribution", "format": "HttpData-PULL"}],
-        "portitor:source": "http://127.0.0.1:9/open.csv"
-    })])));
+    provider_ports.harvest.source = Some(Arc::new(FixedSource::new(datasets)));
     let (provider_app, _) = portitor_connector::build(&provider, provider_ports).unwrap();
 
     let mut consumer_ports = common::ports(Arc::clone(network) as Arc<dyn Sender>);
@@ -1211,4 +1263,171 @@ async fn a_revoked_membership_stops_a_new_negotiation() {
     // identity (`DELETE /v1/credentials/{id}`): agreed again
     dataspace.hold(vec![second]);
     assert_eq!(negotiate_open(&consumer).await, NegotiationState::Finalized);
+}
+
+// ---------------------------------------------------------------------
+// Access policies (TD-13): what the caller's token grants.
+
+/// Dataset `reports`, offered to every member (no constraint), with an
+/// access policy for EU data processors.
+fn reports_with_an_access_policy() -> Value {
+    let mut restricted = reports();
+    restricted["hasPolicy"] = json!([{"@id": "reports:use", "@type": "Offer",
+        "permission": [{"action": "use"}]}]);
+    restricted["portitor:accessPolicy"] = json!({"permission": [{"action": "use",
+        "constraint": [{"leftOperand": "DataProcessorCredential.processing",
+            "operator": "eq", "rightOperand": "eu"}]}]});
+    restricted["portitor:source"] = json!("http://127.0.0.1:9/reports.csv");
+    restricted
+}
+
+/// The `@id`s of the datasets of a catalog answer.
+fn dataset_ids(catalog: &[u8]) -> Vec<String> {
+    let catalog: Value = serde_json::from_slice(catalog).unwrap();
+    let mut ids = Vec::new();
+    for dataset in catalog["dataset"].as_array().cloned().unwrap_or_default() {
+        ids.push(dataset["@id"].as_str().unwrap().to_owned());
+    }
+    ids
+}
+
+/// The caller holds a credential that meets the access policy, but its
+/// token does not grant the scope to read it: its Credential Service
+/// does not present it, and the dataset stays hidden.
+#[tokio::test]
+async fn a_token_without_the_access_policy_scope_does_not_see_the_dataset() {
+    let network = Arc::new(Network::default());
+    let fakes = Fakes::default();
+    fakes.wallets.lock().unwrap().insert(
+        CONSUMER_DID.to_owned(),
+        vec![
+            credential(MEMBERSHIP, &json!({})),
+            credential(PROCESSOR, &json!({"processing": "eu"})),
+        ],
+    );
+    let mut provider_ports = fake_ports(&network, PROVIDER_DID, &fakes);
+    provider_ports.harvest.source = Some(Arc::new(FixedSource::new(vec![
+        reports_with_an_access_policy(),
+    ])));
+    let (provider_app, _) =
+        portitor_connector::build(&config(PROVIDER_DID, PROVIDER), provider_ports).unwrap();
+    network.join(PROVIDER, provider_app);
+
+    let request = json!({
+        "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+        "@type": "CatalogRequestMessage"
+    });
+    let membership_only = format!("Bearer {CONSUMER_DID}|{MEMBERSHIP_SCOPE}");
+    let catalog = network
+        .post_authorized(
+            &format!("{PROVIDER}{DSP}/catalog/request"),
+            &request,
+            &membership_only,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        dataset_ids(catalog.to_string().as_bytes()),
+        Vec::<String>::new()
+    );
+    // the provider asked for the scope; the token did not grant it
+    let asked = fakes.queries.lock().unwrap().clone();
+    assert_eq!(
+        asked,
+        vec![vec![
+            MEMBERSHIP_SCOPE.to_owned(),
+            PROCESSOR_SCOPE.to_owned()
+        ]]
+    );
+    let dataset = network
+        .get_authorized(
+            &format!("{PROVIDER}{DSP}/catalog/datasets/reports"),
+            &membership_only,
+        )
+        .await;
+    assert!(dataset.is_err(), "{dataset:?}");
+}
+
+/// The documented limit (DEPLOYING, access policies; ADR 0019): Portitor
+/// as consumer grants, in a negotiation's token, only the scopes of the
+/// offer's constraints. A consumer that sees the dataset (its catalog
+/// request granted the access policy's scope in `additionalScopes`)
+/// still cannot negotiate an offer that does not name that credential
+/// type: the provider answers as for an unknown offer.
+#[tokio::test]
+async fn a_portitor_consumer_cannot_meet_an_access_policy_its_offer_does_not_name() {
+    let network = Arc::new(Network::default());
+    let fakes = Fakes::default();
+    fakes.wallets.lock().unwrap().insert(
+        CONSUMER_DID.to_owned(),
+        vec![
+            credential(MEMBERSHIP, &json!({})),
+            credential(PROCESSOR, &json!({"processing": "eu"})),
+        ],
+    );
+    let mut provider_ports = fake_ports(&network, PROVIDER_DID, &fakes);
+    provider_ports.harvest.source = Some(Arc::new(FixedSource::new(vec![
+        reports_with_an_access_policy(),
+    ])));
+    let (provider_app, _) =
+        portitor_connector::build(&config(PROVIDER_DID, PROVIDER), provider_ports).unwrap();
+    network.join(PROVIDER, provider_app);
+    let consumer_ports = fake_ports(&network, CONSUMER_DID, &fakes);
+    let (consumer_app, consumer) =
+        portitor_connector::build(&config(CONSUMER_DID, CONSUMER), consumer_ports).unwrap();
+    network.join(CONSUMER, consumer_app);
+
+    let answer = consumer
+        .read_catalog(
+            &format!("{PROVIDER}{DSP}"),
+            PROVIDER_DID,
+            &[PROCESSOR_SCOPE.to_owned()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(dataset_ids(&answer.body), vec!["reports".to_owned()]);
+    let catalog: Value = serde_json::from_slice(&answer.body).unwrap();
+    let mut offer: portitor_dsp::Offer =
+        serde_json::from_value(catalog["dataset"][0]["hasPolicy"][0].clone()).unwrap();
+    offer.target = Some("reports".to_owned());
+
+    let ended = negotiate(&consumer, offer).await;
+    assert_eq!(ended.state, NegotiationState::Terminated);
+    assert!(ended.agreement.is_none());
+    // the request's token granted no extra scope
+    let grants = fakes.grants.lock().unwrap().clone();
+    assert_eq!(grants.last(), Some(&Vec::new()), "{grants:?}");
+}
+
+/// The management catalog request's `additionalScopes`, on the real DCP
+/// path: the consumer's STS grants them in its token, the provider's DCP
+/// verifier asks the consumer's Credential Service for the access
+/// policy's scope, and the service presents the credential only when
+/// the token grants it.
+#[tokio::test]
+async fn a_catalog_request_with_additional_scopes_shows_the_dataset_on_the_dcp_path() {
+    let dataspace = LocalDataspace::start().await;
+    let network = Arc::new(Network::default());
+    let consumer =
+        verified_connectors_offering(&network, &dataspace, vec![reports_with_an_access_policy()]);
+    dataspace.hold(vec![dataspace.membership(5)]);
+    let processor = dataspace.credential(PROCESSOR, &json!({"processing": "eu"}), 6);
+    dataspace.hold_for_scope(PROCESSOR_SCOPE, processor);
+    let provider_address = format!("{PROVIDER}{DSP}");
+
+    let without = consumer
+        .read_catalog(&provider_address, PROVIDER_DID, &[])
+        .await
+        .unwrap();
+    assert_eq!(dataset_ids(&without.body), Vec::<String>::new());
+
+    let with = consumer
+        .read_catalog(
+            &provider_address,
+            PROVIDER_DID,
+            &[PROCESSOR_SCOPE.to_owned()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(dataset_ids(&with.body), vec!["reports".to_owned()]);
 }

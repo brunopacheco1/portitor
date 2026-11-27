@@ -568,6 +568,94 @@ mod tests {
         );
     }
 
+    /// A datasets source the test changes between runs.
+    #[derive(Default)]
+    struct Switch(std::sync::Mutex<Vec<serde_json::Value>>);
+
+    impl crate::harvest::DatasetSource for Switch {
+        fn name(&self) -> String {
+            "switch".to_owned()
+        }
+
+        fn snapshot(&self) -> Result<crate::harvest::Snapshot, crate::harvest::SourceError> {
+            let entries = self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            Ok(crate::harvest::Snapshot {
+                sha256: serde_json::to_string(&entries).unwrap(),
+                entries,
+            })
+        }
+    }
+
+    /// TD-13: a dataset whose access policy changes in the source gets the
+    /// new one on the next harvest; one whose access policy is removed
+    /// has none after it, and the catalog's list follows.
+    #[test]
+    fn a_changed_or_removed_access_policy_is_written_on_the_next_harvest() {
+        on_every_database(a_changed_or_removed_access_policy_is_written_on_the_next_harvest_on);
+    }
+
+    fn a_changed_or_removed_access_policy_is_written_on_the_next_harvest_on(
+        store: &ConnectorStore,
+    ) {
+        let store = Arc::new(store.clone());
+        let policy = |role: &str| {
+            json!({"permission": [{"action": "use", "constraint": [
+                {"leftOperand": "MembershipCredential.role", "operator": "eq", "rightOperand": role}]}]})
+        };
+        let with_policy = |role: &str| {
+            let mut a = entry("a");
+            a[crate::harvest::ACCESS_POLICY_KEY] = policy(role);
+            a
+        };
+        let source = Arc::new(Switch::default());
+        *source.0.lock().unwrap() = vec![with_policy("lab")];
+        let check = DspCheck::new("https://p.example/dsp/2025-1", &CredentialTypes::default());
+        let harvester = DatasetHarvester::new(
+            Arc::clone(&source) as _,
+            Arc::new(check),
+            Arc::clone(&store) as _,
+        );
+        harvester.start().unwrap();
+        let lab: AccessPolicy = serde_json::from_value(policy("lab")).unwrap();
+        assert_eq!(
+            store.dataset("a").unwrap().unwrap().access_policy,
+            Some(lab)
+        );
+
+        // changed
+        *source.0.lock().unwrap() = vec![with_policy("hospital")];
+        assert!(matches!(
+            harvester.run(Trigger::Interval),
+            RunResult::Done(_)
+        ));
+        let hospital: AccessPolicy = serde_json::from_value(policy("hospital")).unwrap();
+        let stored = store.dataset("a").unwrap().unwrap();
+        assert_eq!(stored.access_policy, Some(hospital.clone()));
+        assert_eq!(
+            stored.entry.get(crate::harvest::ACCESS_POLICY_KEY),
+            Some(&policy("hospital"))
+        );
+        assert_eq!(store.access_policies().unwrap(), vec![hospital]);
+
+        // removed
+        *source.0.lock().unwrap() = vec![entry("a")];
+        assert!(matches!(
+            harvester.run(Trigger::Interval),
+            RunResult::Done(_)
+        ));
+        let stored = store.dataset("a").unwrap().unwrap();
+        assert_eq!(stored.access_policy, None);
+        assert_eq!(stored.entry.get(crate::harvest::ACCESS_POLICY_KEY), None);
+        assert_eq!(store.access_policies().unwrap(), Vec::new());
+        let listed = store.catalog().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].access_policy.is_none());
+    }
+
     /// Makes every write of an entry error fail, as a full disk would:
     /// a trigger, written in each database's own SQL.
     fn make_entry_errors_fail(store: &ConnectorStore) {
