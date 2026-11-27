@@ -82,7 +82,7 @@ impl TransferConsumer {
                 callback_address,
             ),
             held: transfer_ports.held,
-            link: Link::new(ports),
+            link: Link::to_providers(ports),
             allow_http,
             push,
         }

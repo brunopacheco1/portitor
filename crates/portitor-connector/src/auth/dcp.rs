@@ -96,6 +96,7 @@ use portitor_dsp::policy::HeldCredential;
 use portitor_runtime::BoxFuture;
 use portitor_runtime::did::DidWebResolver;
 use portitor_runtime::http::{HttpError, HttpSender, bearer_token};
+use portitor_runtime::internal_addresses::InternalAddresses;
 use portitor_runtime::system::now_secs;
 use portitor_runtime::used_tokens::{RecordIn, UsedTokenStore};
 use serde_json::Value;
@@ -149,7 +150,11 @@ const START_WAIT: Duration = Duration::from_secs(2);
 /// The DCP verifier.
 pub struct DcpVerifier {
     participant_id: String,
+    /// Other parties' DID documents: callers and credential issuers, with
+    /// the block on internal addresses (R-17).
     resolver: DidWebResolver,
+    /// Our own DID document, which the operator chose: without the block.
+    own_resolver: DidWebResolver,
     http: HttpSender,
     sts: Arc<dyn SecureTokenService>,
     trusted_issuers: Vec<String>,
@@ -203,7 +208,9 @@ struct Verified {
 
 impl DcpVerifier {
     /// A verifier for `settings`, getting our own tokens from `sts`, and
-    /// recording the callers' token ids in `used_token_ids`.
+    /// recording the callers' token ids in `used_token_ids`, without the
+    /// block on internal addresses (tests; the binary uses
+    /// [`DcpVerifier::for_partners`]).
     ///
     /// # Errors
     ///
@@ -213,12 +220,31 @@ impl DcpVerifier {
         sts: Arc<dyn SecureTokenService>,
         used_token_ids: Arc<dyn UsedTokenStore>,
     ) -> Result<Self, String> {
+        Self::for_partners(settings, sts, used_token_ids, &InternalAddresses::default())
+    }
+
+    /// Like [`DcpVerifier::new`], with the block on internal addresses
+    /// (R-17): callers choose their DID documents, credential services and
+    /// status lists, and issuers theirs, so each is fetched only from an
+    /// address that `internal_addresses` allows.
+    ///
+    /// # Errors
+    ///
+    /// The HTTP client cannot be built.
+    pub fn for_partners(
+        settings: &AuthSettings,
+        sts: Arc<dyn SecureTokenService>,
+        used_token_ids: Arc<dyn UsedTokenStore>,
+        internal_addresses: &InternalAddresses,
+    ) -> Result<Self, String> {
         // how long a DID document is reused (PORTITOR_DID_CACHE_SECONDS)
         let did_cache = Duration::from_secs(settings.did_cache_seconds);
+        let allow_http = settings.allow_http;
         Ok(Self {
             participant_id: settings.participant_id.clone(),
-            resolver: DidWebResolver::new(settings.allow_http, did_cache)?,
-            http: HttpSender::new(settings.allow_http)?,
+            resolver: DidWebResolver::for_partners(allow_http, did_cache, internal_addresses)?,
+            own_resolver: DidWebResolver::new(allow_http, did_cache)?,
+            http: HttpSender::for_partners(allow_http, internal_addresses)?,
             sts,
             trusted_issuers: settings.trusted_issuers.clone(),
             gaiax_compliance_issuers: settings.gaiax_compliance_issuers.clone(),
@@ -304,7 +330,8 @@ impl DcpVerifier {
         // anywhere: a list in memory is enough
         let unused: Arc<dyn UsedTokenStore> = Arc::new(Mutex::new(JtiCache::default()));
         let mut verifier = Self::new(settings, sts, unused)?;
-        verifier.resolver = DidWebResolver::new(settings.allow_http, Duration::ZERO)?.unobserved();
+        verifier.own_resolver =
+            DidWebResolver::new(settings.allow_http, Duration::ZERO)?.unobserved();
         verifier.http = verifier.http.unobserved();
         verifier.start_tries = 1;
         Ok(verifier)
@@ -318,7 +345,7 @@ impl DcpVerifier {
     async fn resolve_own_document(&self) -> Result<Arc<DidDocument>, String> {
         let mut last = String::new();
         for attempt in 1..=self.start_tries.max(1) {
-            match self.resolver.resolve(&self.participant_id).await {
+            match self.own_resolver.resolve(&self.participant_id).await {
                 Ok(doc) => return Ok(doc),
                 Err(e) => last = e.reason,
             }

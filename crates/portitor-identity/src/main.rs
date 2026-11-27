@@ -20,6 +20,7 @@ use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::database::{Database, SQLITE_DEPRECATED};
 use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::health;
+use portitor_runtime::internal_addresses::InternalAddresses;
 use portitor_runtime::management::management_port;
 use portitor_runtime::panics::spawn_supervised;
 use portitor_runtime::request_size::RequestLimits;
@@ -50,6 +51,8 @@ async fn serve_identity() -> ExitCode {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    // first, so a wrong value stops the start before anything else
+    let internal_addresses = InternalAddresses::from_env()?;
     let config = Config::from_env()?;
     let limits = RequestLimits::from_env()?;
     if config.allow_http {
@@ -69,10 +72,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     // how long another party's DID document is reused (R-41)
     let did_cache_seconds = portitor_runtime::did::cache_seconds_from_env()?;
+    // callers and issuers choose their DID documents and the addresses
+    // in them: with the block on internal addresses (R-17). The Gaia-X
+    // compliance service above is the operator's choice: without it
+    internal_addresses.log_at_start();
+    let directory =
+        WebDirectory::for_partners(config.allow_http, did_cache_seconds, &internal_addresses)?;
+    let issuers = HttpIssuerClient::for_partners(config.allow_http, &internal_addresses)?;
     let ports = Ports {
         store: Arc::new(store),
-        directory: Arc::new(WebDirectory::new(config.allow_http, did_cache_seconds)?),
-        issuers: Arc::new(HttpIssuerClient::new(config.allow_http)?),
+        directory: Arc::new(directory),
+        issuers: Arc::new(issuers),
         compliance,
     };
     let identity = Arc::new(Identity::new(&config, key, sts_client_secret, ports)?);

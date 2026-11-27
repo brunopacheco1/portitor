@@ -30,6 +30,7 @@ use portitor_dsp::transfer::provider::{
 };
 use portitor_dsp::transfer::{DataAddress, TransferState};
 
+use portitor_runtime::internal_addresses::InternalAddresses;
 use portitor_runtime::leases::{LeaseStore, Leases};
 
 use crate::auth::{CallerVerifier, Membership, NoTokens, Prover, RefuseAll};
@@ -65,8 +66,20 @@ pub struct Ports {
     pub store: AnyStore,
     /// The provider's decisions.
     pub decider: AnyDecider,
-    /// Sends messages to consumers.
+    /// Sends messages to consumers, at the callback address each consumer
+    /// chose: the binary gives it the block on internal addresses
+    /// (`HttpSender::for_partners`, R-17).
     pub sender: Arc<dyn Sender>,
+    /// Sends messages and catalog requests to providers, at the address
+    /// our operator gave in the management API: the block on internal
+    /// addresses does not apply (R-17). [`Ports::new`] uses `sender` for
+    /// both; the binary sets its own.
+    pub provider_sender: Arc<dyn Sender>,
+    /// The block on internal addresses (`PORTITOR_BLOCK_INTERNAL_ADDRESSES`,
+    /// R-17), for the clients the connector builds itself: the data
+    /// plane's push to a consumer's endpoint. [`Ports::new`] leaves it
+    /// off; the binary sets it from the settings.
+    pub internal_addresses: InternalAddresses,
     /// Who sent a DSP request (ADR 0016). [`Ports::new`] starts with
     /// [`RefuseAll`]: no caller is let in until a verifier is set.
     pub verifier: Arc<dyn CallerVerifier>,
@@ -145,7 +158,9 @@ impl Ports {
             flow_store: Some(Shared(Arc::clone(store) as _)),
             push_receipts: Shared(Arc::clone(store) as _),
             decider: default_decider(),
+            provider_sender: Arc::clone(&sender),
             sender,
+            internal_addresses: InternalAddresses::default(),
             verifier: Arc::new(RefuseAll),
             prover: Arc::new(NoTokens),
             guard: Arc::new(AllowAll),

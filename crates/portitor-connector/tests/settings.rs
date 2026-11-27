@@ -22,8 +22,8 @@ use portitor_runtime::database::DatabaseSetting;
 use portitor_runtime::internal_addresses::InternalAddresses;
 use portitor_runtime::request_size::RequestLimits;
 use portitor_runtime::testing::settings_rule::{
-    Case, Read, SWITCH_TRUTH_TABLE, check_binary_refuses_to_start, check_removed, check_rule,
-    switch_truth_table,
+    Case, Read, SWITCH_TRUTH_TABLE, check_binary_refuses_to_start, check_binary_refuses_value,
+    check_removed, check_rule, switch_truth_table,
 };
 use portitor_runtime::testing::{Lookup, TempDir, frozen};
 
@@ -208,6 +208,8 @@ fn database_cases(secrets: &TempDir, bundle_from: BundleFrom) -> Vec<Case> {
 /// Everything the connector reads from `var` at start, in the order of
 /// `main`, as one text; or why it does not start.
 fn read(var: &Lookup) -> Read {
+    // first, as in `main`
+    let internal_addresses = InternalAddresses::from_vars(var)?;
     let config = Config::from_vars(var).map_err(|error| error.to_string())?;
     let auth = AuthSettings::from_vars(&config.participant_id, config.allow_http, var)?;
     // the `Debug` text of the settings leaves the secret out
@@ -223,7 +225,6 @@ fn read(var: &Lookup) -> Read {
     let management = ManagementConfig::from_vars(DEFAULT_MANAGEMENT_BIND, var);
     let limits = RequestLimits::from_vars(var)?;
     let storage = object_storage::Settings::from_vars(var)?;
-    let internal_addresses = InternalAddresses::from_vars(var)?;
     // the `Debug` text leaves the keys out
     let keys = storage.as_ref().map(|s| {
         (
@@ -314,5 +315,20 @@ fn the_binary_does_not_start_without_settings_or_with_a_removed_name() {
         check_binary_refuses_to_start(binary, "PORTITOR_PARTICIPANT_ID", REMOVED_SETTINGS);
     if let Err(failures) = checked {
         panic!("{failures}");
+    }
+}
+
+/// R-17: the binary reads the block on internal addresses first thing at
+/// start, and a wrong value stops it.
+#[test]
+fn the_binary_reads_the_block_on_internal_addresses() {
+    let binary = env!("CARGO_BIN_EXE_portitor-connector");
+    for (name, wrong) in [
+        ("PORTITOR_BLOCK_INTERNAL_ADDRESSES", "yes"),
+        ("PORTITOR_INTERNAL_ADDRESSES_ALLOWED", "10.0.0.0/33"),
+    ] {
+        if let Err(failure) = check_binary_refuses_value(binary, name, wrong) {
+            panic!("{failure}");
+        }
     }
 }

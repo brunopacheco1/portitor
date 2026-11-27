@@ -61,6 +61,7 @@ use portitor_dsp::transfer::consumer::{ConsumerTransfer, ConsumerTransferDecisio
 use portitor_dsp::transfer::provider::Failure as TransferFailure;
 use portitor_dsp::{Binding, CatalogError, ProtocolVersion, VERSION, VersionResponse};
 use portitor_runtime::database::{self, DatabaseSetting};
+use portitor_runtime::internal_addresses::InternalAddresses;
 use portitor_runtime::request_size::small_message;
 use portitor_runtime::settings::{self, RemovedSetting};
 use serde::Serialize;
@@ -105,10 +106,19 @@ pub use ports::Ports;
 /// its measures do not name the hosts (ADR 0023, section 4;
 /// `tests/trace_context.rs`). Plain `http://` only with `allow_http`.
 ///
+/// For the provider's messages to consumers ([`Ports::sender`]), whose
+/// callback addresses the consumers chose, pass the settings' block on
+/// internal addresses (R-17); for the consumer's messages to providers
+/// ([`Ports::provider_sender`]), whose address our operator gave, pass
+/// [`InternalAddresses::default`] (off).
+///
 /// # Errors
 /// The HTTP client cannot be built.
-pub fn dsp_sender(allow_http: bool) -> Result<HttpSender, String> {
-    HttpSender::new(allow_http)
+pub fn dsp_sender(
+    allow_http: bool,
+    internal_addresses: &InternalAddresses,
+) -> Result<HttpSender, String> {
+    HttpSender::for_partners(allow_http, internal_addresses)
 }
 
 /// Path prefix of the DSP 2025-1 endpoints.

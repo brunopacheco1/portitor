@@ -80,9 +80,20 @@ pub(crate) struct Link {
 }
 
 impl Link {
+    /// The link of the provider's processes: messages go to the callback
+    /// address each consumer chose (`ports.sender`).
     pub(crate) fn new(ports: &Ports) -> Self {
         Self {
             sender: Arc::clone(&ports.sender),
+            ..Self::to_providers(ports)
+        }
+    }
+
+    /// The link of the consumer's processes: messages go to the provider
+    /// address our operator gave (`ports.provider_sender`, R-17).
+    pub(crate) fn to_providers(ports: &Ports) -> Self {
+        Self {
+            sender: Arc::clone(&ports.provider_sender),
             prover: Arc::clone(&ports.prover),
             guard: Arc::clone(&ports.guard),
             retry: ports.retry,

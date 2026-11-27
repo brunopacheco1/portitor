@@ -64,7 +64,7 @@ impl Consumer {
                 callback_address,
                 participant_id,
             ),
-            link: Link::new(ports),
+            link: Link::to_providers(ports),
             allow_http,
         }
     }

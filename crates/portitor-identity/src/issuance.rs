@@ -36,6 +36,7 @@ use portitor_dcp::holder::{AccessToken, TokenFrame};
 use portitor_dcp::message::{CredentialRequestMessage, CredentialStatus, IssuerMetadata};
 use portitor_runtime::BoxFuture;
 use portitor_runtime::http::{HttpError, HttpSender, Sender as _};
+use portitor_runtime::internal_addresses::InternalAddresses;
 use portitor_runtime::system::{new_uuid, now_secs};
 
 use crate::store::{CredentialRequest, GAIAX_HOLDER_PID_PREFIX, StoreError};
@@ -116,13 +117,28 @@ pub struct HttpIssuerClient {
 }
 
 impl HttpIssuerClient {
-    /// With `allow_http`, plain-HTTP URLs are used (tests only).
+    /// With `allow_http`, plain-HTTP URLs are used (tests only). Without
+    /// the block on internal addresses (tests; the binary uses
+    /// [`HttpIssuerClient::for_partners`]).
     ///
     /// # Errors
     /// The HTTP client cannot be built.
     pub fn new(allow_http: bool) -> Result<Self, String> {
+        Self::for_partners(allow_http, &InternalAddresses::default())
+    }
+
+    /// Like [`HttpIssuerClient::new`], with the block on internal
+    /// addresses (R-17): the issuer's service address comes from the
+    /// issuer's own DID document and metadata.
+    ///
+    /// # Errors
+    /// The HTTP client cannot be built.
+    pub fn for_partners(
+        allow_http: bool,
+        internal_addresses: &InternalAddresses,
+    ) -> Result<Self, String> {
         Ok(Self {
-            http: HttpSender::new(allow_http)?,
+            http: HttpSender::for_partners(allow_http, internal_addresses)?,
         })
     }
 }

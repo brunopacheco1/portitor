@@ -334,6 +334,32 @@ pub fn check_binary_refuses_to_start(
     }
 }
 
+/// Checks the real binary at the path `binary` reads `name` at start: with
+/// only `name` set, to the wrong `value`, it stops and names `name`. So
+/// the setting is read before any required one is missing.
+///
+/// # Errors
+/// The binary cannot be run, it started, or it did not name `name`.
+pub fn check_binary_refuses_value(binary: &str, name: &str, value: &str) -> Result<(), String> {
+    let output = std::process::Command::new(binary)
+        // nothing of the test machine's own settings
+        .env_clear()
+        .env(name, value)
+        .output()
+        .map_err(|error| format!("cannot run {binary}: {error}"))?;
+    let mut written = String::from_utf8_lossy(&output.stdout).into_owned();
+    written.push_str(&String::from_utf8_lossy(&output.stderr));
+    if output.status.success() {
+        return Err(format!("{binary} ended without a failure: {written}"));
+    }
+    if !written.contains(name) {
+        return Err(format!(
+            "with {name}={value}, {name} is not named: {written}"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
