@@ -428,3 +428,57 @@ fn configured_types_keep_their_scopes() {
         Some(DEFAULT_MEMBERSHIP_SCOPE)
     );
 }
+
+/// TD-11: what a consumer can tell about a provider's offer. A credential
+/// constraint is unknown to it, so only what it can evaluate decides.
+#[test]
+fn a_consumer_accepts_what_it_understands_and_cannot_rule_out() {
+    let processor = constraint(&format!("{PROCESSOR}.processing"), "eq", json!("eu"));
+    let past = constraint("dateTime", "lt", json!("2026-01-01"));
+    let future = constraint("dateTime", "lt", json!("2030-01-01"));
+    let purpose = constraint("purpose", "eq", json!("https://example.com/purpose"));
+    let accepted = [
+        json!([]),
+        json!([processor]),
+        json!([processor, future, purpose]),
+        json!([{"or": [processor, past]}]),
+        json!([{"or": [past, future]}]),
+        json!([{"xone": [processor, past]}]),
+        json!([{"and": [processor, future]}]),
+    ];
+    for constraints in accepted {
+        assert_eq!(
+            consumer_may_accept(&offer(constraints.clone()), NOW, &types()),
+            Ok(()),
+            "{constraints}"
+        );
+    }
+    let not_satisfied = [
+        json!([processor, past]),
+        json!([{"and": [processor, past]}]),
+        json!([{"or": [past, past]}]),
+        json!([{"xone": [future, future, processor]}]),
+    ];
+    for constraints in not_satisfied {
+        let got = consumer_may_accept(&offer(constraints.clone()), NOW, &types());
+        assert!(
+            matches!(got, Err(PolicyError::NotSatisfied(_))),
+            "{constraints}: {got:?}"
+        );
+    }
+    // not understood: a type the consumer does not know, another operand
+    for constraints in [
+        json!([processor]),
+        json!([constraint("spatial", "eq", json!("LU"))]),
+    ] {
+        let got = consumer_may_accept(
+            &offer(constraints.clone()),
+            NOW,
+            &CredentialTypes::default(),
+        );
+        assert!(
+            matches!(got, Err(PolicyError::Unsupported(_))),
+            "{constraints}: {got:?}"
+        );
+    }
+}

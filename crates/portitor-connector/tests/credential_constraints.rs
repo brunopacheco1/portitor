@@ -477,12 +477,13 @@ fn recording_provider(received: &Arc<Mutex<Vec<(String, Value)>>>) -> axum::Rout
 }
 
 #[tokio::test]
-async fn an_offer_from_the_provider_is_accepted_only_without_credential_constraints() {
+async fn an_offer_from_the_provider_with_credential_constraints_is_accepted() {
     // DSP 2025-1: the consumer requests, the provider answers with an
-    // offer (OFFERED), the consumer accepts (ACCEPTED). The consumer
-    // cannot check its own credentials as the provider will, so it never
-    // accepts an offer with a credential constraint (ADR 0019): its
-    // acceptances grant no scope for one.
+    // offer (OFFERED), the consumer accepts (ACCEPTED). The consumer does
+    // not evaluate a credential constraint about itself, as Eclipse EDC:
+    // the provider checks it when it receives the acceptance, and the
+    // acceptance's token grants the scope it needs (TD-11). An offer on a
+    // credential type the consumer does not know is not understood.
     let network = Arc::new(Network::default());
     let fakes = Fakes::default();
     let membership = credential(MEMBERSHIP, &json!({}));
@@ -512,8 +513,20 @@ async fn an_offer_from_the_provider_is_accepted_only_without_credential_constrai
             "operator": "eq", "rightOperand": "eu"}]}]
     }))
     .unwrap();
+    let unknown: portitor_dsp::Offer = serde_json::from_value(json!({
+        "@id": "reports:other", "@type": "Offer", "target": "reports",
+        "permission": [{"action": "use", "constraint": [{
+            "leftOperand": "UnknownCredential.processing",
+            "operator": "eq", "rightOperand": "eu"}]}]
+    }))
+    .unwrap();
     let provider_header = format!("Bearer {PROVIDER_DID}|{MEMBERSHIP_SCOPE}");
-    for (offer, accepted) in [(open, true), (constrained, false)] {
+    let cases = [
+        (open, true, Vec::new()),
+        (constrained, true, vec![PROCESSOR_SCOPE.to_owned()]),
+        (unknown, false, Vec::new()),
+    ];
+    for (offer, accepted, scopes) in cases {
         let n = consumer
             .start(&format!("{PROVIDER}{DSP}"), PROVIDER_DID, offer.clone())
             .unwrap();
@@ -526,12 +539,7 @@ async fn an_offer_from_the_provider_is_accepted_only_without_credential_constrai
         .unwrap();
         // the request granted the scopes the offer needs
         let request_grant = fakes.grants.lock().unwrap().last().cloned().unwrap();
-        let expected: Vec<String> = if accepted {
-            Vec::new()
-        } else {
-            vec![PROCESSOR_SCOPE.to_owned()]
-        };
-        assert_eq!(request_grant, expected);
+        assert_eq!(request_grant, scopes);
 
         // the provider offers the same terms
         let message = json!({
@@ -564,9 +572,9 @@ async fn an_offer_from_the_provider_is_accepted_only_without_credential_constrai
         .unwrap();
         if accepted {
             assert_eq!(sent.1["eventType"], "ACCEPTED");
-            // the acceptance's token grants no extra scope
+            // the acceptance's token grants the scopes the offer needs
             let grant = fakes.grants.lock().unwrap().last().cloned().unwrap();
-            assert_eq!(grant, Vec::<String>::new());
+            assert_eq!(grant, scopes);
         } else {
             assert_eq!(
                 consumer.get(&cpid).unwrap().state,

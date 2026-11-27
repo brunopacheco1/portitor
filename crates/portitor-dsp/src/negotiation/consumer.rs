@@ -220,6 +220,9 @@ pub struct ConsumerService<S, D, E> {
     env: E,
     callback_address: String,
     participant_id: String,
+    /// The credential types this consumer understands, to read the
+    /// credential constraints of a provider's offer (ADR 0019).
+    credential_types: crate::policy::CredentialTypes,
 }
 
 impl<S: ConsumerStore, D: ConsumerDecider, E: Environment> ConsumerService<S, D, E> {
@@ -238,7 +241,17 @@ impl<S: ConsumerStore, D: ConsumerDecider, E: Environment> ConsumerService<S, D,
             env,
             callback_address,
             participant_id,
+            credential_types: crate::policy::CredentialTypes::default(),
         }
+    }
+
+    /// The credential types this consumer understands (ADR 0019). An
+    /// offer from the provider with a credential constraint on another
+    /// type is not understood and not accepted. None by default.
+    #[must_use]
+    pub fn with_credential_types(mut self, types: crate::policy::CredentialTypes) -> Self {
+        self.credential_types = types;
+        self
     }
 
     /// Starts a negotiation for `offer` (which names its dataset in
@@ -577,17 +590,17 @@ impl<S: ConsumerStore, D: ConsumerDecider, E: Environment> ConsumerService<S, D,
             ConsumerDecision::Terminate => {
                 Self::termination(negotiation, "terminated by the consumer")
             }
-            // accept only an offer whose constraints hold now, verify only
-            // an agreement with the terms we asked for or accepted (ADR 0009).
-            // The consumer does not know which of its own credentials the
-            // provider will see, so a credential constraint (ADR 0019) never
-            // holds here: it fails closed, and such an offer is not accepted.
+            // accept only an offer that is understood and whose constraints
+            // hold now, as far as the consumer can tell; verify only an
+            // agreement with the terms we asked for or accepted (ADR 0009).
+            // A credential constraint is about our own credentials: the
+            // provider checks it when we accept, and our token for the
+            // acceptance allows its scope (TD-11).
             ConsumerDecision::Accept => {
-                let no_credentials = crate::policy::CallerCredentials::default();
-                match crate::policy::permissions_hold(
+                match crate::policy::consumer_may_accept(
                     &negotiation.offer,
                     &self.env.now(),
-                    &no_credentials,
+                    &self.credential_types,
                 ) {
                     Ok(()) => Self::accept(negotiation),
                     Err(e) => Self::termination(negotiation, &e.to_string()),
