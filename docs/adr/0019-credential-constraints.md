@@ -103,3 +103,61 @@ commit 17bb5b8, `k8s/provider/application/controlplane-config.yaml`):
 - Prohibitions and duties are still not enforced (ADR 0009).
 - Offers that use credential constraints are now accepted at start;
   offers with any other left operand still stop the connector.
+
+## Amendment in 1.4: access policies, trusted issuers by type, negative operators (accepted 2026-11-27)
+
+Decided by the maintainer on 2026-11-27 (1.4 plan, D4 and D7), for
+[TD-13](../RISKS_AND_TECHNICAL_DEBTS.md#td-13),
+[R-48](../RISKS_AND_TECHNICAL_DEBTS.md#r-48) and
+[R-43](../RISKS_AND_TECHNICAL_DEBTS.md#r-43).
+
+### Access policy per dataset (TD-13)
+
+Eclipse EDC builds its catalog from the contract definitions whose
+**access policy** holds for the caller
+(`ContractDefinitionResolverImpl`, read at EDC Connector commit
+`4215744` on 2026-11-27); the contract policy is checked at
+negotiation. Portitor does the same, per dataset:
+
+- A dataset in the datasets file may have `portitor:accessPolicy`, an
+  object with `permission` rules read as an offer's (strictly, ADR
+  0009): `{"permission": [{"action": "use", "constraint": [...]}]}`.
+  It uses the constraints offers use: `dateTime` and credential
+  constraints. A `purpose` constraint, a prohibition or a duty in an
+  access policy is not understood, and the dataset is rejected (check
+  `odrl`), as a bad offer is.
+- The access policy is checked on DSP catalog requests and dataset
+  requests. A dataset whose access policy does not hold for the caller
+  is left out of the catalog, and a dataset request for it gets the
+  same answer as an unknown dataset. Like offers, a policy that is not
+  understood never holds.
+- A dataset without an access policy is shown to every member, as
+  before 1.4.
+- Like `portitor:source`, the access policy is never shown in the
+  catalog.
+- The verifier asks the caller's credential service for the scopes of
+  the access policies' credential types once per catalog request
+  (ADR 0019 scopes, as for offers).
+
+### Trusted issuers by credential type (R-48)
+
+"Trusted issuers stay one list for all types" (Configuration, above)
+changes. The new, optional setting `PORTITOR_TRUSTED_ISSUER_TYPES`
+limits an issuer of `PORTITOR_TRUSTED_ISSUERS` to a list of credential
+types (`<issuer DID>=<type>` items), on the connector and the identity,
+as EDC's `edc.iam.trustedissuer.<alias>.supportedtypes`. A credential
+from an issuer that is not trusted for its type is skipped, as one from
+an untrusted issuer. An issuer the setting does not name keeps every
+type (EDC's `"*"`), so a 1.3 deployment behaves the same. The safer
+default waits for 2.0 ([TD-74](../RISKS_AND_TECHNICAL_DEBTS.md#td-74)).
+
+### Negative operators are not deny lists (R-43)
+
+A constraint holds if **at least one** valid credential of the type has
+the claim and the comparison is true (Decision above). So `neq` and
+`isNoneOf` say "the caller holds a credential of this type whose claim
+is not this value", not "no credential of the caller has this value". A
+holder with two credentials of the type, one with the excluded value
+and one without, meets the constraint, and the holder chooses what it
+presents. Do not use `neq` or `isNoneOf` to keep someone out; refuse
+them at the issuer (revoke the credential) or limit the issuer by type.

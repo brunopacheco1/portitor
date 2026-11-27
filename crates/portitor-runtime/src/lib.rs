@@ -22,6 +22,7 @@ pub mod did_document;
 pub mod directory;
 pub mod health;
 pub mod http;
+pub mod internal_addresses;
 pub mod leases;
 pub mod management;
 pub mod panics;

@@ -6,7 +6,8 @@
 //! (`id_token.rs`), did:web and DID documents (`did.rs`), JWS
 //! verification (`jws.rs`) and keys (`keys.rs`), credentials and
 //! presentations ([`credential`]), the DCP messages ([`message`]),
-//! scopes ([`scope`]), status list checks ([`status_list`]), and what a
+//! scopes ([`scope`]), status list checks ([`status_list`]), the credential
+//! types a trusted issuer may issue ([`trust`]), and what a
 //! holder ([`holder`]) and an issuer ([`issuance`]) sign.
 //!
 //! Only `ES256` and `PS256` are accepted. Any other `alg`, including
@@ -30,6 +31,7 @@ mod keys;
 pub mod message;
 pub mod scope;
 pub mod status_list;
+pub mod trust;
 pub mod x509;
 
 pub use bundle::sha256_hex;

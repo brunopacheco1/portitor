@@ -260,6 +260,8 @@ pub fn config() -> Config {
         sts_client_id: HOLDER.to_owned(),
         sts_client_secret_file: "unused".into(),
         trusted_issuers: vec![ISSUER.to_owned()],
+        issuer_types: portitor_dcp::trust::IssuerTypes::default(),
+        credential_status_check_seconds: 0,
         scope_type_aliases: vec!["org.eclipse.edc.vc.type".to_owned()],
         allow_http: false,
         certificate_chain_file: None,

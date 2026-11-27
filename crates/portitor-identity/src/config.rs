@@ -8,6 +8,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use portitor_dcp::trust::IssuerTypes;
 use portitor_runtime::database;
 pub use portitor_runtime::database::DatabaseSetting;
 
@@ -29,6 +30,15 @@ pub const DEFAULT_MANAGEMENT_BIND: &str = "127.0.0.1:8091";
 /// The `SQLite` file unless `PORTITOR_DB_FILE` (or
 /// `PORTITOR_DATABASE_URL`) says otherwise.
 pub const DEFAULT_DB_FILE: &str = "/data/portitor-identity.db";
+
+/// How often the status lists of held credentials are read unless
+/// `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS` says otherwise: every
+/// minute, as the credential watchdog of Eclipse EDC `IdentityHub`
+/// (`edc.iam.credential.status.check.period`).
+pub const DEFAULT_STATUS_CHECK_SECONDS: u64 = 60;
+
+/// The longest `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS`: one day.
+pub const MAX_STATUS_CHECK_SECONDS: u64 = 86_400;
 
 /// The settings the identity no longer has. When one of them is set, the
 /// identity refuses to start and names what to set instead.
@@ -71,6 +81,14 @@ pub struct Config {
     /// Issuer DIDs whose credentials the Storage API accepts
     /// (`PORTITOR_TRUSTED_ISSUERS`).
     pub trusted_issuers: Vec<String>,
+    /// The credential types some trusted issuers are limited to
+    /// (`PORTITOR_TRUSTED_ISSUER_TYPES`, since 1.4; R-48). An issuer not
+    /// named keeps every type.
+    pub issuer_types: IssuerTypes,
+    /// How often the held credentials' status lists are read, in seconds
+    /// (`PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS`, since 1.4, default
+    /// [`DEFAULT_STATUS_CHECK_SECONDS`]; 0: never; TD-20).
+    pub credential_status_check_seconds: u64,
     /// Extra scope aliases for "credentials of this type"
     /// (`PORTITOR_SCOPE_TYPE_ALIASES`).
     pub scope_type_aliases: Vec<String>,
@@ -155,6 +173,18 @@ impl Config {
             portitor_dcp::did_web_url(issuer)
                 .map_err(|e| invalid("PORTITOR_TRUSTED_ISSUERS", &format!("{issuer}: {e}")))?;
         }
+        let issuer_types = IssuerTypes::parse(
+            &list("PORTITOR_TRUSTED_ISSUER_TYPES")?.unwrap_or_default(),
+            &trusted_issuers,
+        )
+        .map_err(|e| invalid("PORTITOR_TRUSTED_ISSUER_TYPES", &e))?;
+        let credential_status_check_seconds = settings::bounded_number(
+            "PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS",
+            text("PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS").as_deref(),
+            0..=MAX_STATUS_CHECK_SECONDS,
+            DEFAULT_STATUS_CHECK_SECONDS,
+        )
+        .map_err(|e| invalid("PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS", &e))?;
         let management = ManagementConfig::from_vars(DEFAULT_MANAGEMENT_BIND, &var);
         let key_file = PathBuf::from(required("PORTITOR_IDENTITY_KEY_FILE")?);
         let retired_key_files =
@@ -183,6 +213,8 @@ impl Config {
             sts_client_id,
             sts_client_secret_file,
             trusted_issuers,
+            issuer_types,
+            credential_status_check_seconds,
             scope_type_aliases,
             allow_http,
             certificate_chain_file,
@@ -365,6 +397,8 @@ mod tests {
             "PORTITOR_ALLOW_HTTP",
             "PORTITOR_MANAGEMENT_BIND",
             "PORTITOR_MANAGEMENT_API_KEY_FILE",
+            "PORTITOR_TRUSTED_ISSUER_TYPES",
+            "PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS",
         ] {
             vars.push((optional, " "));
         }
@@ -382,6 +416,44 @@ mod tests {
         let config = read(&vars).unwrap();
         assert_eq!(config.bind, "127.0.0.1:9");
         assert_eq!(config.key_file, PathBuf::from("/run/key.pem"));
+    }
+
+    /// The two settings of 1.4: trusted issuers limited by type (R-48)
+    /// and the status check of held credentials (TD-20).
+    #[test]
+    fn issuer_types_and_the_status_check_are_read_and_checked() {
+        let config = read(MINIMAL).unwrap();
+        assert!(config.issuer_types.is_empty());
+        assert_eq!(
+            config.credential_status_check_seconds,
+            DEFAULT_STATUS_CHECK_SECONDS
+        );
+        let mut vars = MINIMAL.to_vec();
+        vars.push((
+            "PORTITOR_TRUSTED_ISSUER_TYPES",
+            "did:web:other.example=DataPermitCredential",
+        ));
+        vars.push(("PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS", "0"));
+        let config = read(&vars).unwrap();
+        assert_eq!(
+            config
+                .issuer_types
+                .limit_of("did:web:other.example")
+                .unwrap(),
+            ["DataPermitCredential"]
+        );
+        assert_eq!(config.issuer_types.limit_of("did:web:issuer.example"), None);
+        assert_eq!(config.credential_status_check_seconds, 0);
+        for (name, value) in [
+            ("PORTITOR_TRUSTED_ISSUER_TYPES", "did:web:unknown.example=X"),
+            ("PORTITOR_TRUSTED_ISSUER_TYPES", "did:web:other.example"),
+            ("PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS", "86401"),
+            ("PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS", "-1"),
+        ] {
+            let mut vars = MINIMAL.to_vec();
+            vars.push((name, value));
+            assert_eq!(read(&vars).unwrap_err().name, name, "{value}");
+        }
     }
 
     #[test]

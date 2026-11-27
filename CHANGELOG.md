@@ -12,6 +12,32 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+Portitor 1.4: purpose and data permits in policies. Every 1.3 route,
+setting and file format still works, and every new setting is optional
+([STABILITY](docs/STABILITY.md)).
+
+### Added
+
+- Setting `PORTITOR_TRUSTED_ISSUER_TYPES` on the connector and the
+  identity: limits a trusted issuer to a list of credential types, as
+  EDC's `supportedtypes`; an issuer not named keeps every type
+  ([R-48](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-48),
+  [DEPLOYING](docs/DEPLOYING.md#trusted-issuers-by-type)).
+- Setting `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS` on the identity
+  (default 60, 0 off): how often it reads the status lists of the
+  credentials it holds ([TD-20](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-20)).
+- Settings `PORTITOR_BLOCK_INTERNAL_ADDRESSES` (default `false`) and
+  `PORTITOR_INTERNAL_ADDRESSES_ALLOWED` on all three components: refuse
+  loopback, private and link-local addresses in URLs a partner chooses
+  ([R-17](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-17),
+  [DEPLOYING](docs/DEPLOYING.md#internal-addresses)).
+
+### Changed
+
+### Fixed
+
+### Documentation
+
 ## [1.3.0] - 2026-11-27
 
 Portitor 1.3: several containers of each image (connector,

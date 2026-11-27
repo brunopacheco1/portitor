@@ -19,6 +19,7 @@ use portitor_connector::management::{DEFAULT_MANAGEMENT_BIND, ManagementConfig};
 use portitor_connector::{Config, REMOVED_SETTINGS};
 use portitor_dataplane::object_storage;
 use portitor_runtime::database::DatabaseSetting;
+use portitor_runtime::internal_addresses::InternalAddresses;
 use portitor_runtime::request_size::RequestLimits;
 use portitor_runtime::testing::settings_rule::{
     Case, Read, SWITCH_TRUTH_TABLE, check_binary_refuses_to_start, check_removed, check_rule,
@@ -152,8 +153,27 @@ fn table(secrets: &TempDir, bundle_from: BundleFrom) -> Vec<Case> {
         Case::optional("PORTITOR_PUSH_BUCKET", "pushed", "other"),
     ]
     .into_iter()
+    .chain(settings_of_1_4())
     .chain(database_cases(secrets, bundle_from))
     .collect()
+}
+
+/// The settings added in 1.4: trusted issuers by type (R-48) and the
+/// block on internal addresses (R-17).
+fn settings_of_1_4() -> Vec<Case> {
+    vec![
+        Case::optional(
+            "PORTITOR_TRUSTED_ISSUER_TYPES",
+            "did:web:issuer.example=DataPermitCredential",
+            "did:web:issuer.example=OtherCredential",
+        ),
+        Case::optional("PORTITOR_BLOCK_INTERNAL_ADDRESSES", "true", "false"),
+        Case::optional(
+            "PORTITOR_INTERNAL_ADDRESSES_ALLOWED",
+            "provider",
+            "10.1.0.0/16",
+        ),
+    ]
 }
 
 /// The database lines of a table: a `SQLite` file in the URL table,
@@ -203,6 +223,7 @@ fn read(var: &Lookup) -> Read {
     let management = ManagementConfig::from_vars(DEFAULT_MANAGEMENT_BIND, var);
     let limits = RequestLimits::from_vars(var)?;
     let storage = object_storage::Settings::from_vars(var)?;
+    let internal_addresses = InternalAddresses::from_vars(var)?;
     // the `Debug` text leaves the keys out
     let keys = storage.as_ref().map(|s| {
         (
@@ -212,7 +233,7 @@ fn read(var: &Lookup) -> Read {
         )
     });
     Ok(format!(
-        "{config:?}\n{database_password:?}\n{auth:?}\n{secret:?}\n{bundle:?}\n{management:?}\n{limits:?}\n{storage:?}\n{keys:?}"
+        "{config:?}\n{database_password:?}\n{auth:?}\n{secret:?}\n{bundle:?}\n{management:?}\n{limits:?}\n{storage:?}\n{keys:?}\n{internal_addresses:?}"
     ))
 }
 

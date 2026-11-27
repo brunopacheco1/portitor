@@ -14,6 +14,7 @@
 #![allow(clippy::unwrap_used, missing_docs)]
 
 use portitor_identity::config::{Config, REMOVED_SETTINGS};
+use portitor_runtime::internal_addresses::InternalAddresses;
 use portitor_runtime::request_size::RequestLimits;
 use portitor_runtime::testing::settings_rule::{
     Case, Read, SWITCH_TRUTH_TABLE, check_binary_refuses_to_start, check_removed, check_rule,
@@ -46,6 +47,18 @@ const POSTGRES_SETTINGS: [&str; 2] = ["PORTITOR_DATABASE_URL", "PORTITOR_DATABAS
 /// (so with Gaia-X onboarding configured).
 fn table() -> Vec<Case> {
     vec![
+        Case::optional("PORTITOR_BLOCK_INTERNAL_ADDRESSES", "true", "false"),
+        Case::optional(
+            "PORTITOR_INTERNAL_ADDRESSES_ALLOWED",
+            "provider",
+            "10.1.0.0/16",
+        ),
+        Case::optional(
+            "PORTITOR_TRUSTED_ISSUER_TYPES",
+            "did:web:issuer.example=DataPermitCredential",
+            "did:web:issuer.example=OtherCredential",
+        ),
+        Case::optional("PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS", "0", "120"),
         Case::optional("PORTITOR_BIND", "0.0.0.0:9000", "0.0.0.0:9003"),
         Case::required(
             "PORTITOR_PARTICIPANT_ID",
@@ -118,7 +131,8 @@ fn table() -> Vec<Case> {
 fn read(var: &Lookup) -> Read {
     let config = Config::from_vars(var).map_err(|error| error.to_string())?;
     let limits = RequestLimits::from_vars(var)?;
-    Ok(format!("{config:?}\n{limits:?}"))
+    let internal_addresses = InternalAddresses::from_vars(var)?;
+    Ok(format!("{config:?}\n{limits:?}\n{internal_addresses:?}"))
 }
 
 #[test]

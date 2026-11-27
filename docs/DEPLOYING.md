@@ -392,6 +392,8 @@ settings are in its step.
 | `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | The same for the management port |
 | `PORTITOR_ALLOW_HTTP` | `false` | `true` allows plain `http://` for the addresses partners give. **Never in production** |
 | `PORTITOR_DID_CACHE_SECONDS` | `300` | How long a resolved DID document is reused, `0` to `3600` ([DID document cache](#did-document-cache)) |
+| `PORTITOR_BLOCK_INTERNAL_ADDRESSES` | `false` | Since 1.4. `true` refuses loopback, private and link-local addresses in URLs a partner chooses ([Internal addresses](#internal-addresses)) |
+| `PORTITOR_INTERNAL_ADDRESSES_ALLOWED` | none | Since 1.4. Comma-separated host names, IP addresses and IP networks (`10.1.0.0/16`) allowed although internal; only with the block on |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | none (no traces or metrics) | Base URL of your OTLP/HTTP receiver ([OPERATING](OPERATING.md#traces-and-metrics), with the other `OTEL_*` variables) |
 | `RUST_LOG` | `info` | Log level; `debug` only while diagnosing |
 | `SSL_CERT_DIR`, `SSL_CERT_FILE` | the image's CA bundle | Only to trust a private CA ([Private CAs](#private-cas)) |
@@ -441,6 +443,30 @@ your components.
   kept. A restart empties the cache.
 - A partner that must drop a leaked key at once should tell you; then
   restart your components, or set a low value.
+
+### Internal addresses
+
+Since 1.4 ([R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17)). A partner
+chooses some URLs your components call: a consumer's callback address,
+a caller's DID document and credential service, status lists, a push
+endpoint, a holder's credential service. With
+`PORTITOR_BLOCK_INTERNAL_ADDRESSES=true`, a call to such a URL is
+refused when its host is a loopback, private or link-local address
+(`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
+`169.254.0.0/16`, `::1`, `fc00::/7`, `fe80::/10`), or `0.0.0.0` or
+`::`. The host name is resolved first, and the address checked is the
+one the call uses.
+
+- Off by default in 1.x, so a 1.3 setup starts unchanged. It will be on
+  by default in 2.0 ([ROADMAP](ROADMAP.md#for-20)).
+- Partners on your own network (a Compose demo, a test) go into
+  `PORTITOR_INTERNAL_ADDRESSES_ALLOWED`: host names as written in the
+  URL, IP addresses, or networks such as `10.1.0.0/16`.
+- URLs you choose are never checked: your STS, your data sources
+  (`portitor:source`), your object storage, the bundle URL and the
+  database.
+- Keep the egress firewall ([Security](#security)): the block is a
+  second line.
 
 ## Step 1: issuer (dataspace authority only)
 
@@ -764,6 +790,8 @@ Besides the [settings of every component](#settings-of-every-component):
 | `PORTITOR_STS_CLIENT_SECRET_FILE` | none (**required**) | The STS secret, at least 32 characters; the connector mounts the same file |
 | `PORTITOR_STS_CLIENT_ID` | `PORTITOR_PARTICIPANT_ID` | The client id your connector sends |
 | `PORTITOR_TRUSTED_ISSUERS` | none (**required**) | Comma-separated issuer DIDs |
+| `PORTITOR_TRUSTED_ISSUER_TYPES` | none (every trusted issuer for every type) | Since 1.4. Comma-separated `<issuer DID>=<credential type>` items, as on the connector ([Trusted issuers by type](#trusted-issuers-by-type)) |
+| `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS` | `60` | Since 1.4. Seconds between two reads of the held credentials' status lists, `0` (never) to `86400`; a revoked or suspended credential is no longer presented |
 | `PORTITOR_SCOPE_TYPE_ALIASES` | `org.eclipse.edc.vc.type` | Comma-separated scope aliases that mean "credentials of this type", besides DCP's `org.eclipse.dspace.dcp.vc.type` |
 | `PORTITOR_IDENTITY_RETIRED_KEY_FILES` | none | Only during a key change: the old **public** keys, comma-separated paths ([Rotating a key](OPERATING.md#rotating-a-key)) |
 | `PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE` | none | Gaia-X only: the PEM chain of the identity key, the key's certificate first |
@@ -1128,6 +1156,7 @@ Besides the [settings of every component](#settings-of-every-component):
 | `PORTITOR_STS_CLIENT_SECRET_FILE` | none (**required**) | The STS secret, the same file as the identity's |
 | `PORTITOR_STS_CLIENT_ID` | `PORTITOR_PARTICIPANT_ID` | Client id at the STS |
 | `PORTITOR_TRUSTED_ISSUERS` | none (**required**) | Comma-separated DIDs trusted to issue credentials, usually the dataspace's `portitor-issuer` |
+| `PORTITOR_TRUSTED_ISSUER_TYPES` | none (every trusted issuer for every type) | Since 1.4. Comma-separated `<issuer DID>=<credential type>` items that limit an issuer to those types ([Trusted issuers by type](#trusted-issuers-by-type)) |
 | `PORTITOR_DCP_SCOPES` | `org.eclipse.dspace.dcp.vc.type:MembershipCredential` | Comma-separated scopes asked from callers' credential services, and granted to the counter-party in our tokens |
 | `PORTITOR_POLICY_CREDENTIALS` | none (`MembershipCredential` only) | Credential types that offers may constrain ([Credential constraints](#credential-constraints)) |
 | `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` | none (no Gaia-X compliance credential accepted) | `did:web` DIDs of the Gaia-X compliance services you trust ([Gaia-X compliance](#gaia-x-compliance)) |
@@ -1518,6 +1547,33 @@ so the shapes do not see it. DSP 2025-1 and DCAT-AP do not agree on everything:
 - DSP's examples have no `dcat:accessURL` on a `Distribution` and no
   `dct:title` on a `DataService`; DCAT-AP requires both. Give each
   distribution a `dcat:accessURL`.
+
+### Trusted issuers by type
+
+Since 1.4 ([R-48](RISKS_AND_TECHNICAL_DEBTS.md#r-48)).
+`PORTITOR_TRUSTED_ISSUERS` names the issuers you trust.
+`PORTITOR_TRUSTED_ISSUER_TYPES` limits some of them to the credential
+types they may issue, as Eclipse EDC does with
+`edc.iam.trustedissuer.<alias>.supportedtypes`. Set the same value on
+your connector and your identity.
+
+```sh
+PORTITOR_TRUSTED_ISSUERS=did:web:authority.example,did:web:hdab.example
+PORTITOR_TRUSTED_ISSUER_TYPES=did:web:hdab.example=DataPermitCredential
+```
+
+- Here the authority issues every type, and the HDAB only data permits:
+  a `MembershipCredential` from the HDAB is skipped as if its issuer
+  were not trusted.
+- An issuer trusted for two types is named twice:
+  `did:web:hdab.example=DataPermitCredential,did:web:hdab.example=ResearcherCredential`.
+- An issuer the setting does not name keeps every type, as before 1.4.
+  This default changes in 2.0
+  ([TD-74](RISKS_AND_TECHNICAL_DEBTS.md#td-74)): name every issuer now.
+- Each DID named must be in `PORTITOR_TRUSTED_ISSUERS`, or the
+  component does not start.
+- On the identity, an issuer may deliver and offer only the types it is
+  limited to.
 
 ### Credential constraints
 

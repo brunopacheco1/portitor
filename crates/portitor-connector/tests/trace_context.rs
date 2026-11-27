@@ -48,6 +48,7 @@ fn settings(base: &str) -> AuthSettings {
         sts_client_id: "test-only-client".to_owned(),
         sts_client_secret: "test-only-secret".to_owned(),
         trusted_issuers: vec!["did:web:issuer.example".to_owned()],
+        issuer_types: portitor_dcp::trust::IssuerTypes::default(),
         gaiax_compliance_issuers: Vec::new(),
         scopes: Vec::new(),
         allow_http: true,

@@ -48,6 +48,7 @@ use axum::response::{IntoResponse, Response};
 use portitor_dcp::gaiax::{COMPLIANCE_SCOPE_TYPE, LEGAL_PERSON_SCOPE_TYPE};
 use portitor_dcp::scope::{Scope, VC_ID, merge_scopes};
 use portitor_dcp::status_list::StatusEntry;
+pub use portitor_dcp::trust::IssuerTypes;
 use portitor_dsp::CatalogError;
 use portitor_dsp::negotiation::ContractNegotiationError;
 use portitor_dsp::policy::{CallerCredentials, CredentialTypes, HeldCredential, MEMBERSHIP};
@@ -748,6 +749,10 @@ pub struct AuthSettings {
     /// DIDs trusted to issue `MembershipCredential`
     /// (`PORTITOR_TRUSTED_ISSUERS`, comma-separated).
     pub trusted_issuers: Vec<String>,
+    /// The credential types some trusted issuers are limited to
+    /// (`PORTITOR_TRUSTED_ISSUER_TYPES`, since 1.4; R-48). An issuer not
+    /// named keeps every type.
+    pub issuer_types: IssuerTypes,
     /// DIDs of the Gaia-X compliance services trusted to issue
     /// `gx:ParticipantComplianceCredential`
     /// (`PORTITOR_GAIAX_COMPLIANCE_ISSUERS`, comma-separated; ADR 0022).
@@ -779,6 +784,7 @@ impl std::fmt::Debug for AuthSettings {
             .field("sts_allow_http", &self.sts_allow_http)
             .field("sts_client_id", &self.sts_client_id)
             .field("trusted_issuers", &self.trusted_issuers)
+            .field("issuer_types", &self.issuer_types)
             .field("gaiax_compliance_issuers", &self.gaiax_compliance_issuers)
             .field("scopes", &self.scopes)
             .field("allow_http", &self.allow_http)
@@ -846,6 +852,11 @@ impl AuthSettings {
         let Some(trusted_issuers) = list("PORTITOR_TRUSTED_ISSUERS")? else {
             return Err("PORTITOR_TRUSTED_ISSUERS is required: the DIDs trusted to issue MembershipCredential".to_owned());
         };
+        let issuer_types = IssuerTypes::parse(
+            &list("PORTITOR_TRUSTED_ISSUER_TYPES")?.unwrap_or_default(),
+            &trusted_issuers,
+        )
+        .map_err(|e| format!("PORTITOR_TRUSTED_ISSUER_TYPES: {e}"))?;
         let gaiax_compliance_issuers =
             list("PORTITOR_GAIAX_COMPLIANCE_ISSUERS")?.unwrap_or_default();
         for did in &gaiax_compliance_issuers {
@@ -872,6 +883,7 @@ impl AuthSettings {
                 .unwrap_or_else(|| participant_id.to_owned()),
             sts_client_secret,
             trusted_issuers,
+            issuer_types,
             gaiax_compliance_issuers,
             scopes,
             allow_http,
@@ -934,6 +946,39 @@ mod tests {
     use super::*;
     use portitor_runtime::testing::vars;
 
+    /// `PORTITOR_TRUSTED_ISSUER_TYPES` limits a trusted issuer to some
+    /// credential types (R-48); an issuer not named keeps every type.
+    #[test]
+    fn reads_the_trusted_issuer_types() {
+        let dir = std::env::temp_dir().join(format!("portitor-auth-types-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let secret = dir.join("secret");
+        std::fs::write(&secret, "s3cret\n").unwrap();
+        let secret = secret.to_string_lossy().into_owned();
+        let me = "did:web:me.example";
+        let limited = AuthSettings::from_vars(
+            me,
+            false,
+            vars(&[
+                ("PORTITOR_STS_URL", "https://me.example/sts/token"),
+                ("PORTITOR_STS_CLIENT_SECRET_FILE", &secret),
+                ("PORTITOR_TRUSTED_ISSUERS", "did:web:a,did:web:b"),
+                (
+                    "PORTITOR_TRUSTED_ISSUER_TYPES",
+                    "did:web:b=DataPermitCredential",
+                ),
+            ]),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            limited.issuer_types.limit_of("did:web:b").unwrap(),
+            ["DataPermitCredential"]
+        );
+        assert_eq!(limited.issuer_types.limit_of("did:web:a"), None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn reads_the_settings() {
         let dir = std::env::temp_dir().join(format!("portitor-auth-{}", std::process::id()));
@@ -962,6 +1007,7 @@ mod tests {
         assert_eq!(s.sts_client_id, me);
         assert_eq!(s.sts_client_secret, "s3cret");
         assert_eq!(s.trusted_issuers, ["did:web:a", "did:web:b"]);
+        assert!(s.issuer_types.is_empty());
         assert_eq!(s.scopes, [DEFAULT_SCOPE]);
         assert!(s.gaiax_compliance_issuers.is_empty());
         assert!(!format!("{s:?}").contains("s3cret"));
@@ -1002,6 +1048,16 @@ mod tests {
                 ("PORTITOR_STS_CLIENT_SECRET_FILE", &secret),
                 ("PORTITOR_TRUSTED_ISSUERS", "did:web:a"),
                 ("PORTITOR_DCP_SCOPES", " , "),
+            ],
+            // a limit on an issuer that is not trusted (R-48)
+            vec![
+                ("PORTITOR_STS_URL", "u"),
+                ("PORTITOR_STS_CLIENT_SECRET_FILE", &secret),
+                ("PORTITOR_TRUSTED_ISSUERS", "did:web:a"),
+                (
+                    "PORTITOR_TRUSTED_ISSUER_TYPES",
+                    "did:web:b=DataPermitCredential",
+                ),
             ],
         ] {
             assert!(

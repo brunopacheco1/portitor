@@ -339,6 +339,34 @@ As built in 1.1 (2026-11-24):
   transfer's stored counter-party; another DID gets the same 404 as
   before. It applies on both sides.
 
+### Amended in 1.4: internal addresses and the order of checks (accepted 2026-11-27)
+
+Decided by the maintainer on 2026-11-27 (1.4 plan, D8), for
+[R-17](../RISKS_AND_TECHNICAL_DEBTS.md#r-17) (threat model findings F-01
+and F-06 in [SECURITY-ASSURANCE](../SECURITY-ASSURANCE.md)). This
+replaces "The SSRF block ... (roadmap, later)" in Security above.
+
+- **Internal addresses (F-01).** A new switch,
+  `PORTITOR_BLOCK_INTERNAL_ADDRESSES`, refuses partner-chosen URLs whose
+  host resolves to a loopback, private or link-local address (or
+  `0.0.0.0`, `::`), on all three components. The address checked is the
+  one the call connects to, so a DNS answer cannot change between the
+  check and the call. `PORTITOR_INTERNAL_ADDRESSES_ALLOWED` lists the
+  exceptions (host names, addresses, networks). Partner-chosen URLs are:
+  the DID documents and credential services of callers and holders,
+  status lists, a consumer's callback address and a push endpoint. URLs
+  the operator sets are not checked. **Off by default in 1.x**: every
+  demo and Compose setup calls partners on private addresses, and
+  STABILITY asks that a change of behaviour after the freeze be
+  announced. On by default in 2.0.
+- **The token before the DID (F-06).** The identity's presentation API
+  checks what it can without a fetch first: the caller's access token
+  (issued by our STS, for this holder, not expired) and the ID token's
+  `aud`. Only then does it resolve the caller's DID to check the ID
+  token's signature. A caller without a valid access token no longer
+  makes the identity fetch a URL of its choice. Always on: nothing
+  changes for a valid caller.
+
 ## Consequences
 
 - Running a connector now needs an identity component (or a compatible

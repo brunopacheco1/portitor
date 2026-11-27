@@ -249,3 +249,55 @@ time at transfer and by the policy monitor. It is another term than
 `odrl:dateTime`: Portitor does not read it, and an EDC without an own
 function for `dateTime` does not evaluate Portitor's. What EDC does with
 a constraint it has no function for was not checked here.
+
+## Amendment in 1.4: the `purpose` left operand (accepted 2026-11-27)
+
+Decided by the maintainer on 2026-11-27 (1.4 plan, D2 and D3), for
+[TD-12](../RISKS_AND_TECHNICAL_DEBTS.md#td-12) and
+[R-40](../RISKS_AND_TECHNICAL_DEBTS.md#r-40).
+
+**Context.** ODRL 2.2 defines the left operand `purpose` ("A defined
+purpose for exercising the action of the Rule"), but not who proves a
+purpose or how. The EHDS names the purposes of secondary use
+(Article 53) without identifiers. Catena-X uses its own left operand
+`cx-policy:UsagePurpose` as a term of the agreement: its function in
+tractusx-edc (`UsagePurposeConstraintFunction`, read at commit
+`705412f` on 2026-11-27) checks only the operator (`isAnyOf`) and
+always passes. The Data Privacy Vocabulary's EHDS extension names
+purposes as IRIs (`https://w3id.org/dpv/legal/eu/ehds#`, prefix
+`eu-ehds`, version 2.3, a draft Community Group report of 2026-02-25),
+and does not map them to the points of Article 53.
+
+**Decision.**
+
+- `purpose` (short, `odrl:purpose` or the full ODRL IRI) is understood
+  with the operators `eq` (one purpose) and `isAnyOf` (a list). A
+  purpose is any IRI, written as a JSON string. Purposes are compared
+  exactly, as written; there is no hierarchy.
+- A `purpose` constraint is a **term of the agreement**, as Catena-X
+  does. Its evaluation always holds; only its form is checked (the
+  operator and the right operand). Any other operator, or a right
+  operand that is not a string (`eq`) or a list of strings
+  (`isAnyOf`), is not understood and fails closed.
+- The consumer's contract request must carry the same purpose as the
+  offer. Portitor already compares terms as written (Decision above),
+  so a request with a different purpose is refused.
+- **Proof of the purpose** comes from a credential constraint on the
+  data permit ([ADR 0019](0019-credential-constraints.md)), for
+  example `DataPermitCredential.purpose eq <IRI>`. Portitor does not
+  link `purpose` to a credential claim on its own: no specification or
+  EDC code does that.
+- The docs and the demo use DPV's EHDS purposes, for example
+  `https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch`.
+  Portitor does not ship a list. R-40 stays open: the mapping to
+  Article 53 is still missing.
+
+**Consequences.**
+
+- Offers with a `purpose` constraint can be published; the stored
+  datasets are checked again at start after the upgrade (ADR 0020).
+- An EDC partner needs a policy function for `odrl:purpose` to
+  evaluate Portitor's offers; EDC has none built in (to check with the
+  EDC interop test).
+- If DPV renames its draft IRIs, the docs and the demo change; Portitor
+  accepts any IRI.
