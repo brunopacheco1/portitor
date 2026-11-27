@@ -138,6 +138,14 @@ negotiation. Portitor does the same, per dataset:
 - The verifier asks the caller's credential service for the scopes of
   the access policies' credential types once per catalog request
   (ADR 0019 scopes, as for offers).
+  A dataset request asks for the scopes of that dataset's access policy.
+  The caller's token must allow them: Portitor as consumer adds those
+  given in `additionalScopes` of its management catalog request.
+- Details found when building it (2026-11-27): an access policy must
+  have at least one permission, and has no other field (no `@id` or
+  `@type`). It is stored with the dataset, in its own column, and kept
+  in the stored entry too, so a check with new rules reads it again. A
+  negotiation checks the offer only, not the access policy.
 
 ### Trusted issuers by credential type (R-48)
 

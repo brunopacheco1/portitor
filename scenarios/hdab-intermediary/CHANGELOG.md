@@ -9,6 +9,17 @@ SPDX-License-Identifier: Apache-2.0
 How the scenario changed, newest first. Each entry names the Portitor
 version it ran on.
 
+## 2026-11-27, for 1.4.0 (not run yet)
+
+- Lux Biobank's offer for EU processors names a purpose (1.4,
+  [ADR 0009](../../docs/adr/0009-minimal-odrl-policies.md), amendment in
+  1.4): `https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch`.
+  The lab's agreement carries it. A new check in step 1: the lab asks
+  with another purpose (`eu-ehds:ImproveHealthcareEducation`) and Lux
+  Biobank terminates the negotiation, as the terms differ from the
+  catalog's. Needs 1.4 images: an older Lux Biobank rejects the offer at
+  harvest.
+
 ## 2026-11-26, for 1.3.0
 
 - The Portitor components keep their state in PostgreSQL (1.3,

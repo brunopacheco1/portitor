@@ -672,9 +672,11 @@ to TD-58).
   names purposes with `dpv:hasPurpose`.
 - **Why it matters.** A `purpose` constraint is useful only if both
   sides name purposes the same way.
-- **Current state: Open.**
-- **Next.** ROADMAP 1.4: purposes as Data Privacy Vocabulary (DPV)
-  IRIs; check how they map to Article 53.
+- **Current state: Open (1.4 in progress).** Built in 1.4: offers may
+  state a `purpose` as any IRI; the docs and the hdab-intermediary demo
+  use the DPV EHDS extension's draft IRIs
+  (`https://w3id.org/dpv/legal/eu/ehds#`). Portitor ships no list.
+- **Next.** Check how the DPV purposes map to Article 53.
 
 <a id="r-41"></a>
 ### R-41 A key removed from a DID document is still trusted for up to 5 minutes
@@ -1012,12 +1014,16 @@ to TD-58).
   1.1 by the maintainer, ADR 0027, section 7).
 - **Why it matters.** The domain supports these steps, but operators
   cannot use them.
-- **Current state: Open.** Done in 1.1: the consumer suspends a transfer
-  and starts it again from the management API
+- **Current state: in progress, 1.4.** Done in 1.1: the consumer
+  suspends a transfer and starts it again from the management API
   (`POST /v1/transfers/{consumerPid}/suspension` and `/start`,
-  [ADR 0014](adr/0014-transfers-as-consumer.md), amended in 1.1).
-- **Next.** ROADMAP 1.4 (offers with credential constraints). Suspend
-  as provider: no release named.
+  [ADR 0014](adr/0014-transfers-as-consumer.md), amended in 1.1). Built
+  in 1.4: the consumer accepts an offer with credential constraints it
+  understands, without evaluating them, as Eclipse EDC
+  (`portitor_dsp::policy::consumer_may_accept`); its `dateTime`
+  constraints are still evaluated, and its acceptance's token allows the
+  scopes the provider needs.
+- **Next.** Suspend as provider: no release named.
 
 <a id="td-12"></a>
 ### TD-12 ODRL: few constraints, prohibitions and duties not enforced
@@ -1030,9 +1036,13 @@ to TD-58).
   [ADR 0019](adr/0019-credential-constraints.md)).
 - **Why it matters.** Offers with `purpose`, `spatial` and similar
   cannot be published; usage control stops at the agreement.
-- **Current state: Open.** Fail closed: nothing not understood is
-  granted.
-- **Next.** ROADMAP 1.4: `purpose`; others when needed.
+- **Current state: in progress, 1.4.** Fail closed: nothing not
+  understood is granted. Built in 1.4: `purpose` with `eq` or `isAnyOf`,
+  a term of the agreement that always holds; a request with another
+  purpose is refused as other terms
+  ([ADR 0009](adr/0009-minimal-odrl-policies.md), amendment in 1.4).
+  Prohibitions and duties are still not enforced.
+- **Next.** Other left operands when needed.
 
 <a id="td-13"></a>
 ### TD-13 The catalog shows every offer to every member
@@ -1041,8 +1051,15 @@ to TD-58).
   transfer, not when the catalog is built; EDC's "access policy" is
   later work ([ADR 0019](adr/0019-credential-constraints.md)).
 - **Why it matters.** Members see offers they cannot meet.
-- **Current state: Open.**
-- **Next.** ROADMAP 1.4.
+- **Current state: in progress, 1.4.** Built: `portitor:accessPolicy`
+  per dataset in the datasets file, stored with the dataset
+  (`dataset.access_policy`), checked on DSP catalog and dataset requests
+  with the caller's credentials (one presentation query per request);
+  a dataset it does not hold for is left out, or answered as unknown
+  ([ADR 0019](adr/0019-credential-constraints.md), amendment in 1.4).
+  The offers of a shown dataset are still shown to all; a negotiation
+  checks the offer, not the access policy.
+- **Next.** Close at the 1.4 release.
 
 <a id="td-14"></a>
 ### TD-14 Credential schemas, presentation definitions and issuance policies are not supported

@@ -278,7 +278,9 @@ and does not map them to the points of Article 53.
   does. Its evaluation always holds; only its form is checked (the
   operator and the right operand). Any other operator, or a right
   operand that is not a string (`eq`) or a list of strings
-  (`isAnyOf`), is not understood and fails closed.
+  (`isAnyOf`), is not understood and fails closed. A purpose is not
+  checked to be an IRI; an empty string or list is not understood
+  (detail found when building it, 2026-11-27).
 - The consumer's contract request must carry the same purpose as the
   offer. Portitor already compares terms as written (Decision above),
   so a request with a different purpose is refused.

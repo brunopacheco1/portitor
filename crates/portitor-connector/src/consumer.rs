@@ -63,7 +63,8 @@ impl Consumer {
                 SystemEnvironment,
                 callback_address,
                 participant_id,
-            ),
+            )
+            .with_credential_types(ports.credential_types.clone()),
             link: Link::new(ports),
             allow_http,
         }

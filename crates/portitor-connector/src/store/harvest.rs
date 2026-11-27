@@ -5,7 +5,8 @@
 //! The harvest's read copy, jobs and entry errors, in the same database
 //! (ADR 0020). A run's changes are written in one transaction.
 
-use portitor_dsp::Dataset;
+use portitor_dsp::catalog::ListedDataset;
+use portitor_dsp::policy::AccessPolicy;
 use portitor_runtime::database::{DbError, Executor, Row, Value};
 use portitor_runtime::values;
 
@@ -32,8 +33,10 @@ fn named<T>(what: &str, text: &str, from_name: fn(&str) -> Option<T>) -> Result<
     from_name(text).ok_or_else(|| StoreError(format!("stored {what} {text:?}")))
 }
 
+/// The columns of `dataset`; the job's id (`last_job`) is last, as the
+/// last placeholder of a write ([`with_job_id`]).
 const DATASET_COLUMNS: &str = "id, entry, content, upstream, content_sha256, state, \
-     conforms_to, first_seen, last_changed, last_job";
+     conforms_to, first_seen, last_changed, access_policy, last_job";
 
 fn dataset_from_row(row: &Row) -> Result<StoredDataset, StoreError> {
     Ok(StoredDataset {
@@ -50,8 +53,17 @@ fn dataset_from_row(row: &Row) -> Result<StoredDataset, StoreError> {
         conforms_to: col(row, 6)?,
         first_seen: uint(col(row, 7)?)?,
         last_changed: uint(col(row, 8)?)?,
-        last_job: uint(col(row, 9)?)?,
+        access_policy: access_policy_from(col(row, 9)?)?,
+        last_job: uint(col(row, 10)?)?,
     })
+}
+
+/// A stored access policy back; `None` when the column is NULL.
+fn access_policy_from(text: Option<String>) -> Result<Option<AccessPolicy>, StoreError> {
+    match text {
+        Some(text) => Ok(Some(parsed("access policy", &text)?)),
+        None => Ok(None),
+    }
 }
 
 /// The columns of `harvest_job` but its `id`, which the database gives
@@ -139,9 +151,10 @@ fn job_values(job: &JobRecord) -> Result<Vec<Value>, StoreError> {
     ])
 }
 
-/// The values of a dataset's row, `$1` to `$9`, in the order of
-/// [`DATASET_COLUMNS`]; the job's id (its `last_job`) is added as `$10`.
+/// The values of a dataset's row, `$1` to `$10`, in the order of
+/// [`DATASET_COLUMNS`]; the job's id (its `last_job`) is added as `$11`.
 fn dataset_values(dataset: &StoredDataset) -> Result<Vec<Value>, StoreError> {
+    let access_policy = dataset.access_policy.as_ref().map(json).transpose()?;
     Ok(vec![
         Value::from(&dataset.id),
         Value::from(json(&dataset.entry)?),
@@ -152,6 +165,7 @@ fn dataset_values(dataset: &StoredDataset) -> Result<Vec<Value>, StoreError> {
         Value::from(dataset.conforms_to.as_deref()),
         Value::from(int(dataset.first_seen)?),
         Value::from(int(dataset.last_changed)?),
+        Value::from(access_policy.as_deref()),
     ])
 }
 
@@ -274,25 +288,30 @@ fn write_dataset(tx: &dyn Executor, values: &[Value]) -> Result<(), DbError> {
     let updated = tx.execute(
         "UPDATE dataset
          SET entry = $2, content = $3, upstream = $4, content_sha256 = $5, state = $6,
-             conforms_to = $7, first_seen = $8, last_changed = $9, last_job = $10
+             conforms_to = $7, first_seen = $8, last_changed = $9, access_policy = $10,
+             last_job = $11
          WHERE id = $1",
         values,
     )?;
     if updated == 0 {
         let sql = format!(
             "INSERT INTO dataset ({DATASET_COLUMNS})
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"
         );
         tx.execute(&sql, values)?;
     }
     Ok(())
 }
 
-/// The catalog's form of a dataset, from its `content` column.
-fn content_from_row(row: &Row) -> Result<(String, Dataset), StoreError> {
+/// The catalog's form of a dataset, from its `id`, `content` and
+/// `access_policy` columns.
+fn listed_from_row(row: &Row) -> Result<(String, ListedDataset), StoreError> {
     let id: String = col(row, 0)?;
-    let content = parsed("dataset", &col::<String>(row, 1)?)?;
-    Ok((id, content))
+    let listed = ListedDataset {
+        dataset: parsed("dataset", &col::<String>(row, 1)?)?,
+        access_policy: access_policy_from(col(row, 2)?)?,
+    };
+    Ok((id, listed))
 }
 
 impl DatasetStore for ConnectorStore {
@@ -305,17 +324,36 @@ impl DatasetStore for ConnectorStore {
         Ok(datasets)
     }
 
-    fn catalog(&self) -> Result<Vec<Dataset>, StoreError> {
+    fn catalog(&self) -> Result<Vec<ListedDataset>, StoreError> {
         // read on every catalog request (ADR 0029, D4): only the columns
-        // the catalog shows
+        // the catalog needs
         let mut active = self.query(
-            "SELECT id, content FROM dataset WHERE state = $1",
+            "SELECT id, content, access_policy FROM dataset WHERE state = $1",
             values![DatasetState::Active.name()],
-            content_from_row,
+            listed_from_row,
         )?;
         // the order of the bytes of the ids, as for `datasets`
         active.sort_by(|a, b| a.0.cmp(&b.0));
-        Ok(active.into_iter().map(|(_, content)| content).collect())
+        Ok(active.into_iter().map(|(_, listed)| listed).collect())
+    }
+
+    fn access_policies(&self) -> Result<Vec<AccessPolicy>, StoreError> {
+        // read on every catalog request: the policies only, each once
+        let texts = self.query(
+            "SELECT DISTINCT access_policy FROM dataset
+             WHERE state = $1 AND access_policy IS NOT NULL",
+            values![DatasetState::Active.name()],
+            |row| col::<String>(row, 0),
+        )?;
+        let mut policies: Vec<AccessPolicy> = Vec::new();
+        for text in texts {
+            let policy: AccessPolicy = parsed("access policy", &text)?;
+            // the same policy may be written in two ways (key order)
+            if !policies.contains(&policy) {
+                policies.push(policy);
+            }
+        }
+        Ok(policies)
     }
 
     fn dataset(&self, id: &str) -> Result<Option<StoredDataset>, StoreError> {
@@ -473,6 +511,60 @@ mod tests {
         assert_eq!(
             store.jobs(None, 10).unwrap()[0].record.outcome,
             JobOutcome::Failed
+        );
+    }
+
+    /// The access policy is stored with its dataset, read back, and
+    /// listed once for the catalog (ADR 0019, amendment in 1.4); a
+    /// dataset without one has none.
+    #[test]
+    fn the_access_policy_round_trips() {
+        on_every_database(the_access_policy_round_trips_on);
+    }
+
+    fn the_access_policy_round_trips_on(store: &ConnectorStore) {
+        let store = Arc::new(store.clone());
+        let policy = json!({"permission": [{"action": "use", "constraint": [
+            {"leftOperand": "MembershipCredential.role", "operator": "eq", "rightOperand": "lab"},
+            {"leftOperand": "dateTime", "operator": "lt", "rightOperand": "2030-01-01"}]}]});
+        let mut a = entry("a");
+        a[crate::harvest::ACCESS_POLICY_KEY] = policy.clone();
+        let mut b = entry("b");
+        b[crate::harvest::ACCESS_POLICY_KEY] = policy.clone();
+        let harvester = harvester(&store, vec![a, b, entry("c")]);
+        let expected: AccessPolicy = serde_json::from_value(policy).unwrap();
+
+        let stored = store.dataset("a").unwrap().unwrap();
+        assert_eq!(stored.access_policy.as_ref(), Some(&expected));
+        // kept in the entry, for a check with new rules; not in the content
+        assert!(
+            stored
+                .entry
+                .get(crate::harvest::ACCESS_POLICY_KEY)
+                .is_some()
+        );
+        assert!(!json(&stored.content).unwrap().contains("accessPolicy"));
+        assert_eq!(store.dataset("c").unwrap().unwrap().access_policy, None);
+
+        let listed = store.catalog().unwrap();
+        let policies: Vec<_> = listed.iter().map(|l| l.access_policy.is_some()).collect();
+        assert_eq!(policies, vec![true, true, false]);
+        assert_eq!(store.access_policies().unwrap(), vec![expected.clone()]);
+
+        // a check with new rules (another credential type) reads it again
+        // from the stored entry, at start
+        let mut types = CredentialTypes::default();
+        types.add("DataPermitCredential", "scope:permit");
+        let restarted = DatasetHarvester::new(
+            Arc::new(crate::harvest::FileSource::new("/nonexistent.json")),
+            Arc::new(DspCheck::new("https://p.example/dsp/2025-1", &types)),
+            Arc::clone(&store) as _,
+        );
+        restarted.start().unwrap();
+        drop(harvester);
+        assert_eq!(
+            store.dataset("b").unwrap().unwrap().access_policy,
+            Some(expected)
         );
     }
 

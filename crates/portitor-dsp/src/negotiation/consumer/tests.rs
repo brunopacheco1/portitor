@@ -591,6 +591,50 @@ fn checks_offers_and_agreements() {
     assert!(why.contains("differ"), "{why}");
 }
 
+/// TD-11: the consumer accepts a provider's offer with a credential
+/// constraint it understands (the provider checks it); it refuses one on a
+/// credential type it does not know, and one whose date has passed even
+/// with a credential constraint next to it.
+#[test]
+fn accepts_offers_with_credential_constraints_it_understands() {
+    let store = Store::default();
+    let mut types = crate::policy::CredentialTypes::default();
+    types.add("DataProcessorCredential", "scope:processor");
+    let svc = ConsumerService::new(
+        &store,
+        AcceptAndVerify,
+        Env::default(),
+        CB.to_owned(),
+        ME.to_owned(),
+    )
+    .with_credential_types(types);
+    let processor = json!({"leftOperand": "DataProcessorCredential.processing",
+                           "operator": "eq", "rightOperand": "eu"});
+    let unknown = json!({"leftOperand": "OtherCredential.x",
+                         "operator": "eq", "rightOperand": "eu"});
+    let expired = json!({"leftOperand": "dateTime", "operator": "lt",
+                         "rightOperand": "2026-01-01"});
+    let cases = [
+        (json!([processor]), Transition::Accept),
+        (json!([{"or": [processor, expired]}]), Transition::Accept),
+        (json!([unknown]), Transition::Terminate),
+        (json!([processor, expired]), Transition::Terminate),
+        (
+            json!([{"and": [processor, expired]}]),
+            Transition::Terminate,
+        ),
+    ];
+    for (constraints, expected) in cases {
+        let (n, req) = svc.start(PROVIDER, "did:web:p", offer()).unwrap();
+        let cpid = n.consumer_pid;
+        svc.delivered(&req, Some(&ack("p1", &cpid))).unwrap();
+        let mut msg = offer_msg("p1", &cpid);
+        msg.offer.permission[0].constraint = serde_json::from_value(constraints.clone()).unwrap();
+        let (_, next) = svc.offer(&cpid, &msg).unwrap();
+        assert_eq!(next.unwrap().transition, expected, "{constraints}");
+    }
+}
+
 /// DSP 2025-1, "Contract Agreement Message": "An Agreement MUST contain a
 /// `timestamp` property defined as an XSD `DateTime` type."
 #[test]

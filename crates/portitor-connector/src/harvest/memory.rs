@@ -9,7 +9,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use portitor_dsp::Dataset;
+use portitor_dsp::catalog::ListedDataset;
+use portitor_dsp::policy::AccessPolicy;
 
 use super::{
     Commit, DatasetState, DatasetStore, HarvestJob, HarvestStatus, JobWithErrors, KEPT_JOBS,
@@ -39,15 +40,33 @@ impl DatasetStore for InMemoryDatasetStore {
         Ok(self.kept().datasets.values().cloned().collect())
     }
 
-    fn catalog(&self) -> Result<Vec<Dataset>, StoreError> {
+    fn catalog(&self) -> Result<Vec<ListedDataset>, StoreError> {
         // the map is in id order
         let mut active = Vec::new();
         for dataset in self.kept().datasets.values() {
             if dataset.state == DatasetState::Active {
-                active.push(dataset.content.clone());
+                active.push(ListedDataset {
+                    dataset: dataset.content.clone(),
+                    access_policy: dataset.access_policy.clone(),
+                });
             }
         }
         Ok(active)
+    }
+
+    fn access_policies(&self) -> Result<Vec<AccessPolicy>, StoreError> {
+        let mut policies: Vec<AccessPolicy> = Vec::new();
+        for dataset in self.kept().datasets.values() {
+            if dataset.state != DatasetState::Active {
+                continue;
+            }
+            if let Some(policy) = &dataset.access_policy
+                && !policies.contains(policy)
+            {
+                policies.push(policy.clone());
+            }
+        }
+        Ok(policies)
     }
 
     fn dataset(&self, id: &str) -> Result<Option<StoredDataset>, StoreError> {

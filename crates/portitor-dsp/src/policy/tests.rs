@@ -297,3 +297,70 @@ fn the_date_time_examples_of_the_odrl_specification_hold_as_it_says() {
         Err(PolicyError::Unsupported(_))
     ));
 }
+
+const RESEARCH: &str = "https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch";
+const EDUCATION: &str = "https://example.com/purposes/teaching";
+
+#[test]
+fn a_purpose_is_a_term_that_always_holds() {
+    let understood = [
+        json!({"leftOperand": "purpose", "operator": "eq", "rightOperand": RESEARCH}),
+        json!({"leftOperand": "odrl:purpose", "operator": "odrl:eq", "rightOperand": RESEARCH}),
+        json!({"leftOperand": "http://www.w3.org/ns/odrl/2/purpose",
+               "operator": "http://www.w3.org/ns/odrl/2/isAnyOf",
+               "rightOperand": [RESEARCH, EDUCATION]}),
+        // with a date: both must hold
+        json!({"and": [{"leftOperand": "purpose", "operator": "eq", "rightOperand": RESEARCH},
+                       date_time("lt", json!("2030-01-01"))]}),
+    ];
+    for c in understood {
+        assert_eq!(holds(c.clone()), Ok(()), "{c}");
+        assert_eq!(
+            validate(&offer(json!([c])), &CredentialTypes::default()),
+            Ok(())
+        );
+    }
+    // a purpose does not save a date that has passed
+    let late = json!({"and": [{"leftOperand": "purpose", "operator": "eq", "rightOperand": RESEARCH},
+                              date_time("lt", json!("2020-01-01"))]});
+    assert!(matches!(holds(late), Err(PolicyError::NotSatisfied(_))));
+    // a purpose needs no credential, so no scope
+    let c = json!({"leftOperand": "purpose", "operator": "eq", "rightOperand": RESEARCH});
+    assert!(credential_scopes(&offer(json!([c])), &CredentialTypes::default()).is_empty());
+}
+
+#[test]
+fn a_purpose_in_another_form_fails_closed() {
+    let purpose = |op: &str, right: serde_json::Value| json!({"leftOperand": "purpose", "operator": op, "rightOperand": right});
+    let unsupported = [
+        purpose("neq", json!(RESEARCH)),
+        purpose("isNoneOf", json!([RESEARCH])),
+        purpose("isA", json!(RESEARCH)),
+        purpose("lt", json!(RESEARCH)),
+        purpose("eq", json!([RESEARCH])),
+        purpose("eq", json!({"@id": RESEARCH})),
+        purpose("eq", json!("")),
+        purpose("eq", json!(1)),
+        purpose("isAnyOf", json!(RESEARCH)),
+        purpose("isAnyOf", json!([])),
+        purpose("isAnyOf", json!([RESEARCH, 1])),
+        json!({"leftOperand": "ex:purpose", "operator": "eq", "rightOperand": RESEARCH}),
+    ];
+    for c in unsupported {
+        let got = holds(c.clone());
+        assert!(
+            matches!(got, Err(PolicyError::Unsupported(_))),
+            "{c}: {got:?}"
+        );
+        assert!(validate(&offer(json!([c])), &CredentialTypes::default()).is_err());
+    }
+}
+
+#[test]
+fn a_different_purpose_is_different_terms() {
+    let with =
+        |p: &str| offer(json!([{"leftOperand": "purpose", "operator": "eq", "rightOperand": p}]));
+    assert!(same_terms(&with(RESEARCH), &with(RESEARCH)));
+    assert!(!same_terms(&with(RESEARCH), &with(EDUCATION)));
+    assert!(!same_terms(&with(RESEARCH), &offer(json!([]))));
+}
