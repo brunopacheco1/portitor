@@ -234,3 +234,11 @@ release, before 2.0.
 - **Dropping SQLite in 1.3.** It would break the
   [STABILITY](../STABILITY.md) promise for `PORTITOR_DB_FILE`, and
   every 1.x deployment that uses it. Deprecated now, removed in 2.0.
+
+## Note added in 1.4 (2026-11-27): no copy tool
+
+The maintainer dropped the copy tool of decision 8 (S5) on 2026-11-27:
+no deployment needs one yet, so no data has to be copied. A component
+moved to PostgreSQL starts with an empty database
+([OPERATING](../OPERATING.md#from-sqlite-to-postgresql)). SQLite is
+still removed in 2.0 ([TD-59](../RISKS_AND_TECHNICAL_DEBTS.md#td-59)).
