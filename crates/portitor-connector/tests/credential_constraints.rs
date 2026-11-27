@@ -13,6 +13,9 @@
 //! consumer grants, and the provider asks for, the scopes the offer
 //! needs.
 //!
+//! Also: the access policy of a dataset in the catalog (TD-13), and a
+//! `purpose` constraint as a term of the agreement (TD-12).
+//!
 //! The last tests give the provider the real DCP verifier, against a
 //! consumer identity and an issuer served on a local port: a credential
 //! revoked in the issuer's status list stops a new negotiation.
@@ -562,6 +565,73 @@ async fn a_bad_access_policy_rejects_the_dataset() {
     assert!(
         errors[0].message.contains("portitor:accessPolicy"),
         "{errors:?}"
+    );
+}
+
+/// ADR 0009, amendment in 1.4 (TD-12): a `purpose` constraint is a term
+/// of the agreement. A request with the offer's purpose gets an
+/// agreement; one with another purpose has other terms, and the provider
+/// terminates it.
+#[tokio::test]
+async fn a_request_with_another_purpose_is_refused() {
+    const RESEARCH: &str = "https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch";
+    let network = Arc::new(Network::default());
+    let fakes = Fakes::default();
+    let membership = credential(MEMBERSHIP, &json!({}));
+    for did in [CONSUMER_DID, PROVIDER_DID] {
+        fakes
+            .wallets
+            .lock()
+            .unwrap()
+            .insert(did.to_owned(), vec![membership.clone()]);
+    }
+    let study = json!({
+        "@id": "study", "@type": "Dataset",
+        "hasPolicy": [{"@id": "study:research", "@type": "Offer", "permission": [{
+            "action": "use",
+            "constraint": [{"leftOperand": "purpose", "operator": "eq", "rightOperand": RESEARCH}]
+        }]}],
+        "distribution": [{"@type": "Distribution", "format": "HttpData-PULL"}],
+        "portitor:source": "http://127.0.0.1:9/study.csv"
+    });
+    let mut provider_ports = fake_ports(&network, PROVIDER_DID, &fakes);
+    provider_ports.harvest.source = Some(Arc::new(FixedSource::new(vec![study])));
+    let (provider_app, provider) =
+        portitor_connector::build(&config(PROVIDER_DID, PROVIDER), provider_ports).unwrap();
+    assert_eq!(provider.catalog_size().unwrap(), 1);
+    let (consumer_app, consumer) = portitor_connector::build(
+        &config(CONSUMER_DID, CONSUMER),
+        fake_ports(&network, CONSUMER_DID, &fakes),
+    )
+    .unwrap();
+    network.join(PROVIDER, provider_app);
+    network.join(CONSUMER, consumer_app);
+
+    let url = format!("{PROVIDER}{DSP}/catalog/datasets/study");
+    let header = format!("Bearer {CONSUMER_DID}|{MEMBERSHIP_SCOPE}");
+    let dataset = network.get_authorized(&url, &header).await.unwrap();
+    let mut offer: portitor_dsp::Offer =
+        serde_json::from_value(dataset["hasPolicy"][0].clone()).unwrap();
+    offer.target = Some("study".to_owned());
+
+    // another purpose: other terms than the catalog's
+    let mut marketing = offer.clone();
+    marketing.permission[0].constraint = vec![
+        serde_json::from_value(json!({"leftOperand": "purpose", "operator": "eq",
+            "rightOperand": "https://example.com/purposes/marketing"}))
+        .unwrap(),
+    ];
+    let refused = negotiate(&consumer, marketing).await;
+    assert_eq!(refused.state, NegotiationState::Terminated);
+    assert!(refused.agreement.is_none());
+
+    // the offer's purpose: an agreement that carries it
+    let agreed = negotiate(&consumer, offer).await;
+    assert_eq!(agreed.state, NegotiationState::Finalized);
+    let agreement = serde_json::to_value(agreed.agreement.unwrap()).unwrap();
+    assert_eq!(
+        agreement["permission"][0]["constraint"][0]["rightOperand"],
+        RESEARCH
     );
 }
 

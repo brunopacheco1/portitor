@@ -356,6 +356,25 @@ mod tests {
         let failed = dsp().check(&spatial).unwrap_err();
         assert_eq!(failed.kind, CheckKind::Odrl);
         assert!(failed.message.contains("spatial"), "{}", failed.message);
+
+        // a purpose (ADR 0009, amendment in 1.4): `eq` with a text, or
+        // `isAnyOf` with texts; any other form is not understood
+        let research = "https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch";
+        let mut purpose = entry();
+        purpose["hasPolicy"][0]["permission"][0]["constraint"] =
+            json!([{"leftOperand": "purpose", "operator": "eq", "rightOperand": research}]);
+        assert!(dsp().check(&purpose).is_ok());
+        for (operator, right) in [
+            ("neq", json!(research)),
+            ("eq", json!([research])),
+            ("isAnyOf", json!(research)),
+        ] {
+            purpose["hasPolicy"][0]["permission"][0]["constraint"] =
+                json!([{"leftOperand": "purpose", "operator": operator, "rightOperand": right}]);
+            let failed = dsp().check(&purpose).unwrap_err();
+            assert_eq!(failed.kind, CheckKind::Odrl, "{operator}");
+            assert!(failed.message.contains("purpose"), "{}", failed.message);
+        }
     }
 
     #[test]
