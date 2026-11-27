@@ -379,7 +379,8 @@ async fn a_revoked_consumer_is_refused_on_its_next_request_and_its_transfer_ends
     let termination = p.termination_sent().await;
     assert_eq!(termination["@type"], "TransferTerminationMessage");
     let reason = termination["reason"][0].as_str().unwrap();
-    assert!(reason.contains("membership no longer holds"), "{reason}");
+    // a fixed reason: the check's own text stays in our log
+    assert_eq!(reason, "the consumer's membership no longer holds");
     p.wait_for(&pid, "TERMINATED").await;
     assert_eq!(p.fetch(&path, &token).await.0, StatusCode::UNAUTHORIZED);
 }

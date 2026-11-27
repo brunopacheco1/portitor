@@ -1347,8 +1347,23 @@ mod tests {
             // the `Sender` port has the same text
             let text = blocking.post(refused_url, &body).await.unwrap_err();
             assert!(text.contains(ALLOWED_SETTING), "{text}");
+            // and the reads are refused as the posts are
+            let read = blocking.get_text(refused_url, "text/plain", 10).await;
+            assert!(matches!(read, Err(HttpError::NotSent(_))), "{read:?}");
+            let read = blocking.get_json(refused_url).await;
+            assert!(matches!(read, Err(HttpError::NotSent(_))), "{read:?}");
         }
-
+        // 127.0.0.1 written as one number or in hexadecimal: not an IP
+        // address to the URL parser, so the system resolver reads it (as
+        // `inet_aton` does), and the address it gives is checked
+        for numeric in ["2130706433", "0x7f.1"] {
+            let numeric_url = url.replace("127.0.0.1", numeric);
+            let error = blocking.get_json(&numeric_url).await.unwrap_err();
+            let HttpError::NotSent(reason) = &error else {
+                panic!("{numeric_url}: {error:?}");
+            };
+            assert!(reason.contains("127.0.0.1"), "{reason}");
+        }
         let allowed = [
             rule(&[
                 (BLOCK_SETTING, "true"),

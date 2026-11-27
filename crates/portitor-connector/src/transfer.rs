@@ -790,6 +790,10 @@ pub(crate) fn log_termination_without_membership(caller: &Caller, process: &str)
     }
 }
 
+/// The reason of the termination sent when a consumer's membership no
+/// longer holds (ADR 0027, section 7.2). Fixed: the detail is in our log.
+pub(crate) const MEMBERSHIP_ENDED: &str = "the consumer's membership no longer holds";
+
 /// Ends transfers for the data plane's membership gate
 /// ([`crate::flow_membership::MembershipGate`]) as the provider's own
 /// termination. It holds a weak pointer, because the provider holds the
@@ -802,7 +806,11 @@ impl EndsTransfers for EndsThroughProvider {
         let Some(provider) = self.0.upgrade() else {
             return;
         };
-        let why = format!("the consumer's membership no longer holds: {reason}");
+        // the termination goes to the consumer: a fixed reason. The
+        // check's own text may name a status list or an address inside
+        // our network; the gate has logged it (`MembershipGate::end_transfer`)
+        let _ = reason;
+        let why = MEMBERSHIP_ENDED.to_owned();
         match provider.terminate_own(provider_pid, &why) {
             Ok(_) => {}
             // another call is changing the transfer (TD-48): tried again
