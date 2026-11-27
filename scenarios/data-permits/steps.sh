@@ -26,7 +26,9 @@
 #    role health-data-access-body, but Schuman's identity and Lux
 #    Biobank trust it for DataPermitCredential only
 #    (PORTITOR_TRUSTED_ISSUER_TYPES). Schuman's identity does not ask for
-#    it, and Lux Biobank's offer for access bodies refuses Schuman.
+#    it, so Lux Biobank's offer for access bodies refuses Schuman. That Lux
+#    Biobank's connector would skip such a membership too is covered by
+#    unit tests, not here.
 #
 # The permit's claims (permitId, purpose) are placeholders: no data permit
 # format is published yet (EHDS Art. 68(10) lists what a permit states;
@@ -168,6 +170,17 @@ pull_genotypes "$AGREEMENT_2"
 step "4. A transfer under P-2026-001 is refused: Schuman no longer presents that permit"
 TRANSFER=$(transfer schuman "$AGREEMENT_1")
 expect "a transfer under P-2026-001" "$TRANSFER" TERMINATED
+# why: Lux Biobank answers the transfer request with 400 (the agreement's
+# constraints are not met) and logs no reason; Schuman's connector logs the
+# 400 for its request. Lux Biobank never saw the revoked permit: a presented
+# credential that fails its checks is logged as "credential refused"
+TRANSFER_PID=$(jq -r '.consumerPid' <<<"$TRANSFER")
+"${COMPOSE[@]}" logs --no-color schuman | grep -F "$TRANSFER_PID" | grep -q 'HTTP 400' ||
+  fail "Schuman's connector did not log Lux Biobank's 400 for the transfer request $TRANSFER_PID"
+if "${COMPOSE[@]}" logs --no-color biobank | grep -q 'credential refused'; then
+  fail "Lux Biobank refused a credential Schuman presented: Schuman's identity still presents the revoked permit"
+fi
+echo "refused at the request (HTTP 400): the agreement needs permit P-2026-001, which Schuman no longer presents"
 
 # --- 5 ------------------------------------------------------------------------
 
@@ -185,6 +198,9 @@ echo "refused: $(jq -r '.detail' <<<"$ANSWER")"
 step "5. Lux Biobank's offer for access bodies refuses Schuman"
 VIEW=$(negotiate schuman "$BIOBANK" "$BIOBANK_ID" "$GENOTYPES" "$(offer "$CATALOG" "$GENOTYPES" genotypes:offer:access-body)")
 expect "Schuman's request for the offer for access bodies" "$VIEW" TERMINATED
-echo "refused: Lux Biobank trusts the HDAB's issuer for data permits only"
+# Schuman holds no such membership, so this does not show Lux Biobank's own
+# PORTITOR_TRUSTED_ISSUER_TYPES: that its connector would skip one is
+# covered by unit tests
+echo "refused: Schuman's identity refused the HDAB's MembershipCredential, so Schuman has no access-body role to show"
 
 step "Done: two permits gave two agreements under one registration; a revoked permit stopped only its own transfers, with no deletion by hand; an issuer trusted for permits could not make Schuman an access body"

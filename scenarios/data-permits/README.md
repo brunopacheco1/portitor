@@ -95,7 +95,7 @@ Out, on purpose:
 | `portitor-issuer` (the HDAB's) | Issues the permits from configuration alone; replaces a participant's claims for a second permit (`PUT /v1/participants/{did}`, since 1.4); revokes a permit. |
 | `portitor-issuer` (Digital Lux Trust) | Issues the memberships and serves the HealthDCAT-AP bundle. |
 | `portitor-identity` (Schuman) | Trusts both issuers, the HDAB's for data permits only; stores both permits, presents every credential of the type asked for, reads their status lists and leaves the revoked permit out (`PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS`, since 1.4), and does not ask the HDAB's issuer for a membership. |
-| `portitor-connector` as provider (Lux Biobank) | Trusts both issuers (`PORTITOR_TRUSTED_ISSUERS`), the HDAB's for data permits only (`PORTITOR_TRUSTED_ISSUER_TYPES`), reads `DataPermitCredential` claims in its offers (`PORTITOR_POLICY_CREDENTIALS`), checks them at negotiation and at each transfer, refuses a presentation with a revoked credential. |
+| `portitor-connector` as provider (Lux Biobank) | Trusts both issuers (`PORTITOR_TRUSTED_ISSUERS`), the HDAB's for data permits only (`PORTITOR_TRUSTED_ISSUER_TYPES`), reads `DataPermitCredential` claims in its offers (`PORTITOR_POLICY_CREDENTIALS`), checks them at negotiation and at each transfer: a transfer under the revoked permit is refused, as Schuman no longer presents it. That it would skip a membership from the HDAB's issuer is covered by unit tests, not by a step. |
 | `portitor-connector` as consumer (Schuman) | Asks for the `DataPermitCredential` scope the offer needs, negotiates and transfers. |
 | The built-in data plane (HTTP pull) | Schuman's app fetches the genotypes, checked against the original. |
 | Status lists | Schuman's identity reads the HDAB issuer's list and records the permit as revoked; Lux Biobank's connector reads the same list at each check. |
@@ -103,8 +103,17 @@ Out, on purpose:
 
 ## Run it
 
+**It needs 1.4 images.** Lux Biobank's offers name a purpose, which a
+connector before 1.4 does not understand: it rejects the dataset at
+harvest. Steps 3 to 5 also need what 1.4 added (`PUT
+/v1/participants/{did}`, the identity's status check,
+`PORTITOR_TRUSTED_ISSUER_TYPES`). `compose.yaml` names the 1.3.0
+release images by default until 1.4 is released, so give images built
+from source ([docs/TESTING.md, "Building the images locally"](../../docs/TESTING.md#building-the-images-locally);
+with Podman, `podman build --format docker`):
+
 ```sh
-scenarios/data-permits/run.sh
+scenarios/data-permits/run.sh portitor-connector:ci portitor-identity:ci portitor-issuer:ci
 ```
 
 It needs Docker or Podman with Docker Compose, bash 4.4 or later, curl,
@@ -145,16 +154,20 @@ those of hdab-intermediary, so run one at a time.
    leaves the revoked permit out of its presentations, so a transfer
    under P-2026-002 works without deleting anything by hand, and a
    transfer under P-2026-001 is refused: Schuman no longer presents that
-   permit. Before 1.4, the revoked permit made Lux Biobank refuse every
+   permit. The script checks why as far as the logs tell: Lux Biobank
+   answered the transfer request with 400 (Schuman's connector logs
+   it; Lux Biobank logs no reason), and Lux Biobank never refused a
+   presented credential (no `credential refused` in its log). Before 1.4, the revoked permit made Lux Biobank refuse every
    presentation of Schuman's permits until Schuman deleted it.
 5. **Trust by type.** The HDAB's issuer would give Schuman a
    `MembershipCredential` with the role `health-data-access-body`: its
    configuration holds one on purpose. Schuman's identity trusts that
    issuer for data permits only, so it refuses to ask for the
-   membership, with the reason. Lux Biobank's offer for access bodies
-   refuses Schuman. Had Schuman held such a membership, Lux Biobank's
-   connector would skip it too, unfetched: it trusts the HDAB's issuer
-   for data permits only.
+   membership, with the reason. Without it, Lux Biobank's offer for
+   access bodies refuses Schuman. This step does not show Lux Biobank's
+   own `PORTITOR_TRUSTED_ISSUER_TYPES`: had Schuman held such a
+   membership, its connector would skip it too, unfetched, which unit
+   tests cover.
 
 ## Findings
 

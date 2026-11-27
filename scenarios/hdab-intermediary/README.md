@@ -139,7 +139,7 @@ Out, on purpose:
 **It needs 1.4 images.** Lux Biobank's offer for EU processors names
 a purpose, which a connector before 1.4 does not understand: it rejects
 the dataset at harvest. Step 1 is also a push transfer, and step 6 needs
-the TD-47 fix; both are new in 1.1. `compose.yaml` names the 1.2.0
+the TD-47 fix; both are new in 1.1. `compose.yaml` names the 1.3.0
 release images by default, and `run.sh` stops at once with a 1.0
 connector image. To try images built from source ([docs/TESTING.md, "Building the images locally"](../../docs/TESTING.md#building-the-images-locally);
 with Podman, `podman build --format docker`):

@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0
 How the scenario changed, newest first. Each entry names the Portitor
 version it ran on.
 
-## 2026-11-27, for 1.4.0 (not run yet)
+## 2026-11-27, for 1.4.0
 
 - Lux Biobank's offer for EU processors names a purpose (1.4,
   [ADR 0009](../../docs/adr/0009-minimal-odrl-policies.md), amendment in
@@ -19,6 +19,12 @@ version it ran on.
   Biobank terminates the negotiation, as the terms differ from the
   catalog's. Needs 1.4 images: an older Lux Biobank rejects the offer at
   harvest.
+- Step 1 checks that the lab's agreement names that purpose (`eq`), not
+  only prints it. Step 5's title no longer says data permits come in
+  1.2: they exist since 1.4 (data-permits scenario), this scenario does
+  not ask for one.
+- Ran on 2026-11-27 with images built from commit `a6dcaee` (1.4 before
+  the tag), rootless Podman 4.9.3, Pop!\_OS 24.04: every step passed.
 
 ## 2026-11-26, for 1.3.0
 

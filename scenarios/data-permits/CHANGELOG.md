@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0
 How the scenario changed, newest first. Each entry names the Portitor
 version it ran on.
 
-## 2026-11-27, for 1.4.0 (not run yet)
+## 2026-11-27, for 1.4.0
 
 - Step 3 replaces Schuman's claims at the HDAB's issuer with
   `PUT /v1/participants/{did}` (1.4,
@@ -19,8 +19,11 @@ version it ran on.
   [R-48](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#r-48)): Lux Biobank's
   connector and Schuman's identity set `PORTITOR_TRUSTED_ISSUER_TYPES`
   to trust the HDAB's issuer for `DataPermitCredential` only. Schuman's
-  identity refuses to ask it for a `MembershipCredential`, and Lux
-  Biobank's offer for access bodies ends `TERMINATED`.
+  identity refuses to ask it for a `MembershipCredential`, so Lux
+  Biobank's offer for access bodies ends `TERMINATED`. The step does not
+  show Lux Biobank's own `PORTITOR_TRUSTED_ISSUER_TYPES` (Schuman holds
+  no such membership to skip); unit tests cover it, and the README says
+  so.
 - The permits' purpose is the DPV EHDS IRI
   `https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch`
   instead of `scientific-research`, and the two permit offers add an
@@ -30,11 +33,15 @@ version it ran on.
   `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS=2` on `schuman-identity`).
   The script waits until the identity shows the revoked permit as
   `REVOKED`; the transfer under P-2026-002 then works without deleting
-  the permit by hand, and the one under P-2026-001 is refused. The check
-  of Lux Biobank's log for the reason is dropped: once the identity has
-  checked, Lux Biobank no longer sees the revoked permit. The step
-  diagram says so.
-- Not run yet: it needs images built from the 1.4 code.
+  the permit by hand, and the one under P-2026-001 is refused. Lux
+  Biobank logs no reason for that refusal, so the script checks what the
+  logs show: Schuman's connector logs Lux Biobank's 400 for the transfer
+  request, and Lux Biobank's log has no `credential refused` (it never
+  saw the revoked permit). The step diagram says so.
+- The README says it needs 1.4 images; `compose.yaml` keeps the 1.3.0
+  release images as defaults until 1.4 is released.
+- Ran on 2026-11-27 with images built from commit `a6dcaee` (1.4 before
+  the tag), rootless Podman 4.9.3, Pop!\_OS 24.04: every step passed.
 
 ## 2026-11-26, for 1.3.0
 
