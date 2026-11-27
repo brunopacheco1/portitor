@@ -23,7 +23,7 @@ version it ran on.
   only prints it. Step 5's title no longer says data permits come in
   1.2: they exist since 1.4 (data-permits scenario), this scenario does
   not ask for one.
-- Ran on 2026-11-27 with images built from commit `a6dcaee` (1.4 before
+- Ran on 2026-11-27 with images built from commit `0ff97b5` (1.4 before
   the tag), rootless Podman 4.9.3, Pop!\_OS 24.04: every step passed.
 
 ## 2026-11-26, for 1.3.0
