@@ -328,10 +328,20 @@ impl NegotiationStore for AnyStore {
     fn get(&self, provider_pid: &str) -> Result<Option<Negotiation>, StoreError> {
         self.0.get(provider_pid)
     }
-    fn insert(&self, negotiation: &Negotiation) -> Result<(), StoreError> {
-        self.0.insert(negotiation)?;
-        saved_as_provider(negotiation, None);
-        Ok(())
+    fn requested(
+        &self,
+        counter_party: &str,
+        consumer_pid: &str,
+    ) -> Result<Option<Negotiation>, StoreError> {
+        self.0.requested(counter_party, consumer_pid)
+    }
+    fn insert(&self, negotiation: &Negotiation) -> Result<bool, StoreError> {
+        let inserted = self.0.insert(negotiation)?;
+        // a repeated first request adds nothing: no state change
+        if inserted {
+            saved_as_provider(negotiation, None);
+        }
+        Ok(inserted)
     }
     fn replace_if(&self, negotiation: &Negotiation, expected: u64) -> Result<bool, StoreError> {
         // read first: see the comment above `impl NegotiationStore`

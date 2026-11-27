@@ -511,7 +511,7 @@ impl Outbox for TransferProvider {
     }
 
     fn reached(out: &Outgoing, state: Value) -> bool {
-        reached_state(state, out.to)
+        sent_message_reached(state, out.to, &out.body)
     }
 
     fn delivered(&self, out: &Outgoing, _: Option<&Value>) -> Result<Option<Outgoing>, Failure> {
@@ -534,6 +534,16 @@ impl Outbox for TransferProvider {
 /// is `to`.
 pub(crate) fn reached_state(state: Value, to: TransferState) -> bool {
     serde_json::from_value::<TransferProcess>(state).is_ok_and(|transfer| transfer.state == to)
+}
+
+/// Whether `state`, a counter-party's answer to a transfer state query,
+/// is `to`, for the transfer our message `sent` belongs to
+/// ([`outbox::same_process`]): the check of [`Outbox::reached`].
+pub(crate) fn sent_message_reached(state: Value, to: TransferState, sent: &Value) -> bool {
+    serde_json::from_value::<TransferProcess>(state).is_ok_and(|transfer| {
+        transfer.state == to
+            && outbox::same_process(sent, &transfer.provider_pid, &transfer.consumer_pid)
+    })
 }
 
 pub(crate) fn bad_request(e: TransferError) -> Response {

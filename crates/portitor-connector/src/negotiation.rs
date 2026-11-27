@@ -123,8 +123,14 @@ impl Outbox for Provider {
     }
 
     fn reached(out: &Outgoing, state: Value) -> bool {
-        serde_json::from_value::<ContractNegotiation>(state)
-            .is_ok_and(|negotiation| negotiation.state == out.to)
+        serde_json::from_value::<ContractNegotiation>(state).is_ok_and(|negotiation| {
+            negotiation.state == out.to
+                && outbox::same_process(
+                    &out.body,
+                    &negotiation.provider_pid,
+                    &negotiation.consumer_pid,
+                )
+        })
     }
 
     fn delivered(&self, out: &Outgoing, _: Option<&Value>) -> Result<Option<Outgoing>, Failure> {
@@ -367,6 +373,40 @@ mod tests {
         }
     }
 
+    /// TD-61: the consumer's state counts as proof that our message
+    /// arrived only when it is about the negotiation the message belongs
+    /// to: the same state and the same two process ids.
+    #[test]
+    fn a_state_of_another_negotiation_is_no_proof_of_delivery() {
+        let mut agreement = finalization_event();
+        agreement.transition = Transition::Agree;
+        agreement.to = NegotiationState::Agreed;
+        agreement.body = serde_json::json!({
+            "@type": "ContractAgreementMessage", "providerPid": "p", "consumerPid": "c"
+        });
+        let answer = |provider_pid: &str, consumer_pid: &str, state: &str| {
+            serde_json::json!({
+                "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+                "@type": "ContractNegotiation",
+                "providerPid": provider_pid, "consumerPid": consumer_pid, "state": state
+            })
+        };
+        assert!(Provider::reached(&agreement, answer("p", "c", "AGREED")));
+        assert!(!Provider::reached(
+            &agreement,
+            answer("p", "c", "REQUESTED")
+        ));
+        // the consumer's other negotiation is AGREED, not this one
+        assert!(!Provider::reached(
+            &agreement,
+            answer("p-other", "c", "AGREED")
+        ));
+        assert!(!Provider::reached(
+            &agreement,
+            answer("p", "c-other", "AGREED")
+        ));
+    }
+
     /// The provider as the connector builds it, on the negotiation store
     /// `store`. It never sends in these tests.
     fn provider_on(store: AnyStore) -> Provider {
@@ -427,7 +467,10 @@ mod tests {
         fn get(&self, _: &str) -> Result<Option<Negotiation>, StoreError> {
             Err(StoreError("disk I/O error".to_owned()))
         }
-        fn insert(&self, _: &Negotiation) -> Result<(), StoreError> {
+        fn requested(&self, _: &str, _: &str) -> Result<Option<Negotiation>, StoreError> {
+            Err(StoreError("disk I/O error".to_owned()))
+        }
+        fn insert(&self, _: &Negotiation) -> Result<bool, StoreError> {
             Err(StoreError("disk I/O error".to_owned()))
         }
         fn replace_if(&self, _: &Negotiation, _: u64) -> Result<bool, StoreError> {

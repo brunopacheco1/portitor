@@ -23,11 +23,22 @@ impl NegotiationStore for &Store {
     fn get(&self, pid: &str) -> Result<Option<Negotiation>, StoreError> {
         Ok(self.0.borrow().get(pid).cloned())
     }
-    fn insert(&self, n: &Negotiation) -> Result<(), StoreError> {
+    fn requested(&self, party: &str, cpid: &str) -> Result<Option<Negotiation>, StoreError> {
+        Ok(self
+            .0
+            .borrow()
+            .values()
+            .find(|n| n.counter_party == party && n.consumer_pid == cpid)
+            .cloned())
+    }
+    fn insert(&self, n: &Negotiation) -> Result<bool, StoreError> {
+        if self.requested(&n.counter_party, &n.consumer_pid)?.is_some() {
+            return Ok(false);
+        }
         self.0
             .borrow_mut()
             .insert(n.provider_pid.clone(), n.clone());
-        Ok(())
+        Ok(true)
     }
     fn replace_if(&self, n: &Negotiation, expected: u64) -> Result<bool, StoreError> {
         if self.1.get() {
@@ -426,12 +437,13 @@ fn refuses_bad_requests() {
 fn concurrent_change_and_store_failure() {
     let store = Store::default();
     let p = service(&store, AgreeToCatalogOffers);
-    let (ack, out) = p.request(None, request(None), "c", &none()).unwrap();
+    // a consumer of its own: one consumer pid starts one negotiation
+    let (ack, out) = p.request(None, request(None), "c0", &none()).unwrap();
     let pid = ack.provider_pid.clone();
     let out = out.unwrap();
     // the consumer terminates while the agreement is on its way; the
     // late acknowledgement of the agreement then changes nothing
-    p.terminate(&pid, &termination(&pid), "c").unwrap();
+    p.terminate(&pid, &termination(&pid), "c0").unwrap();
     assert_eq!(p.delivered(&out).unwrap(), None);
     let n = store.0.borrow()[&pid].clone();
     assert_eq!(n.state, NegotiationState::Terminated);
@@ -559,6 +571,7 @@ fn agrees_only_to_catalog_terms_that_hold_now() {
         ))
         .unwrap(),
     ];
+    expired.consumer_pid = "c-expired".to_owned();
     let (_, out) = p.request(None, expired, "c", &none()).unwrap();
     let out = out.unwrap();
     assert_eq!(out.transition, Transition::Terminate);
@@ -568,6 +581,7 @@ fn agrees_only_to_catalog_terms_that_hold_now() {
     // the catalog offer's id, with its constraint left out
     let mut altered = request(None);
     altered.offer.target = Some("d2".to_owned());
+    altered.consumer_pid = "c-altered".to_owned();
     let (_, out) = p.request(None, altered, "c", &none()).unwrap();
     let out = out.unwrap();
     assert_eq!(out.transition, Transition::Terminate);
@@ -617,8 +631,14 @@ fn agrees_only_when_the_callers_credentials_meet_the_offer() {
         .unwrap();
     assert_eq!(out.unwrap().transition, Transition::Agree);
 
-    for credentials in [member_with_role("consumer"), none()] {
-        let (_, out) = p.request(None, msg.clone(), "c", &credentials).unwrap();
+    // one consumer pid starts one negotiation: each one its own
+    for (cpid, credentials) in [
+        ("c-consumer", member_with_role("consumer")),
+        ("c-none", none()),
+    ] {
+        let mut msg = msg.clone();
+        msg.consumer_pid = cpid.to_owned();
+        let (_, out) = p.request(None, msg, "c", &credentials).unwrap();
         let out = out.unwrap();
         assert_eq!(out.transition, Transition::Terminate);
         let why = out.body["reason"][0].as_str().unwrap();
@@ -638,16 +658,18 @@ fn agrees_only_when_the_callers_credentials_meet_the_offer() {
         ("provider", Transition::Agree),
         ("consumer", Transition::Terminate),
     ] {
-        let (ack, out) = p.request(None, msg.clone(), "c", &none()).unwrap();
+        // a consumer for each role: one consumer pid starts one negotiation
+        let caller = format!("c-{role}");
+        let (ack, out) = p.request(None, msg.clone(), &caller, &none()).unwrap();
         let pid = ack.provider_pid;
         p.delivered(&out.unwrap()).unwrap();
-        assert_eq!(p.offer_under_negotiation(&pid, "c").unwrap(), msg.offer);
+        assert_eq!(p.offer_under_negotiation(&pid, &caller).unwrap(), msg.offer);
         assert!(p.offer_under_negotiation(&pid, "other").is_err());
         let (_, out) = p
             .event(
                 &pid,
                 &event(&pid, NegotiationEvent::Accepted),
-                "c",
+                &caller,
                 &member_with_role(role),
             )
             .unwrap();
@@ -887,4 +909,130 @@ fn a_catalog_that_cannot_be_read_is_a_store_failure() {
         .unwrap_err();
     assert!(matches!(failure, Failure::Store(_)), "{failure:?}");
     assert!(store.0.borrow().is_empty(), "nothing was stored");
+}
+
+/// TD-60: a first request that the consumer's outbox sends again (our
+/// answer was lost) gets the negotiation it already started, as it is
+/// now, and starts nothing.
+#[test]
+fn a_repeated_first_request_gets_the_same_negotiation_and_starts_nothing() {
+    let store = Store::default();
+    let p = service(&store, AgreeToCatalogOffers);
+    let (first, out) = p
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap();
+    let agreement = out.unwrap();
+
+    // again while our agreement is on its way: the same negotiation, and
+    // no second agreement
+    let (again, out) = p
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap();
+    assert_eq!(again, first);
+    assert_eq!(out, None);
+
+    // again once the agreement arrived: the answer shows the state now
+    p.delivered(&agreement).unwrap();
+    let (again, out) = p
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap();
+    assert_eq!(again.provider_pid, first.provider_pid);
+    assert_eq!(again.state, NegotiationState::Agreed);
+    assert_eq!(out, None);
+    assert_eq!(store.0.borrow().len(), 1, "one negotiation");
+}
+
+#[test]
+fn a_repeated_first_request_with_other_terms_is_refused() {
+    let store = Store::default();
+    let p = service(&store, Script(BTreeMap::new()));
+    let (first, _) = p
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap();
+
+    let mut other_callback = request(None);
+    other_callback.callback_address = Some("https://elsewhere.example/cb/".to_owned());
+    let mut other_offer = request(None);
+    other_offer.offer.permission[0].action = "read".to_owned();
+    let mut no_callback = request(None);
+    no_callback.callback_address = None;
+    for msg in [other_callback, other_offer, no_callback] {
+        let failure = p
+            .request(None, msg, "did:web:consumer", &none())
+            .unwrap_err();
+        assert!(matches!(failure, Failure::BadRequest(_)), "{failure:?}");
+        assert!(reason(&failure).contains("already used"), "{failure:?}");
+        // the refusal does not name the existing negotiation
+        assert!(
+            !reason(&failure).contains(&first.provider_pid),
+            "{failure:?}"
+        );
+    }
+    assert_eq!(store.0.borrow().len(), 1);
+}
+
+/// Another consumer may use the same `consumerPid`: it gets a negotiation
+/// of its own, and learns nothing of the first one.
+#[test]
+fn the_same_consumer_pid_of_another_consumer_starts_its_own_negotiation() {
+    let store = Store::default();
+    let p = service(&store, Script(BTreeMap::new()));
+    let (first, _) = p
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap();
+    let (other, _) = p
+        .request(None, request(None), "did:web:other", &none())
+        .unwrap();
+    assert_ne!(other.provider_pid, first.provider_pid);
+    assert_eq!(store.0.borrow().len(), 2);
+}
+
+/// A store in which a copy of the request is saved between the lookup and
+/// the insert, as when two copies arrive together (in two replicas).
+struct Racing<'a>(&'a Store, Cell<bool>);
+
+impl NegotiationStore for &Racing<'_> {
+    fn get(&self, pid: &str) -> Result<Option<Negotiation>, StoreError> {
+        (&self.0).get(pid)
+    }
+    fn requested(&self, party: &str, cpid: &str) -> Result<Option<Negotiation>, StoreError> {
+        // the first lookup comes before the other copy is saved
+        if self.1.replace(true) {
+            (&self.0).requested(party, cpid)
+        } else {
+            Ok(None)
+        }
+    }
+    fn insert(&self, n: &Negotiation) -> Result<bool, StoreError> {
+        (&self.0).insert(n)
+    }
+    fn replace_if(&self, n: &Negotiation, expected: u64) -> Result<bool, StoreError> {
+        (&self.0).replace_if(n, expected)
+    }
+    fn pending(&self) -> Result<Vec<Negotiation>, StoreError> {
+        (&self.0).pending()
+    }
+}
+
+#[test]
+fn two_copies_of_a_first_request_at_once_give_one_negotiation() {
+    let store = Store::default();
+    let (first, _) = service(&store, AgreeToCatalogOffers)
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap();
+
+    let racing = Racing(&store, Cell::new(false));
+    let late = ProviderService::new(
+        &racing,
+        AgreeToCatalogOffers,
+        Catalog,
+        Env(Cell::new(1)),
+        "did:web:provider".to_owned(),
+    );
+    let (again, out) = late
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap();
+    assert_eq!(again.provider_pid, first.provider_pid);
+    assert_eq!(out, None, "the late copy sends no agreement");
+    assert_eq!(store.0.borrow().len(), 1);
 }

@@ -561,6 +561,8 @@ mod tests {
 
         let mut verified = without_agreement.clone();
         verified.provider_pid = "urn:uuid:n1".to_owned();
+        // one consumer pid starts one negotiation (TD-60)
+        verified.consumer_pid = "urn:uuid:c-verified".to_owned();
         verified.state = NegotiationState::Verified;
         verified.agreement = Some(
             serde_json::from_value(json!({

@@ -44,7 +44,9 @@ use crate::ports::{
 };
 use crate::receiving::PushAddresses;
 use crate::system::SystemEnvironment;
-use crate::transfer::{bad_request, failed, log_termination_without_membership, reached_state};
+use crate::transfer::{
+    bad_request, failed, log_termination_without_membership, sent_message_reached,
+};
 
 type Service = ConsumerTransferService<
     AnyConsumerTransferStore,
@@ -293,7 +295,7 @@ impl Outbox for TransferConsumer {
     }
 
     fn reached(out: &Outgoing, state: Value) -> bool {
-        reached_state(state, out.to)
+        sent_message_reached(state, out.to, &out.body)
     }
 
     /// A transfer request makes the provider evaluate the agreement again

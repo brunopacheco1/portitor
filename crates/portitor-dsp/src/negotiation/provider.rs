@@ -116,12 +116,31 @@ pub trait NegotiationStore {
     /// The store cannot be read.
     fn get(&self, provider_pid: &str) -> Result<Option<Negotiation>, StoreError>;
 
-    /// Adds a new negotiation.
+    /// The negotiation that the consumer `counter_party` started with its
+    /// process id `consumer_pid`, if there is one: how a repeated first
+    /// `ContractRequestMessage` is recognised (TD-60). Another consumer's
+    /// negotiation with the same `consumerPid` is never returned. If a
+    /// store written before 1.4 holds several, the oldest.
     ///
     /// # Errors
     ///
-    /// The store cannot be written, or the id is taken.
-    fn insert(&self, negotiation: &Negotiation) -> Result<(), StoreError>;
+    /// The store cannot be read.
+    fn requested(
+        &self,
+        counter_party: &str,
+        consumer_pid: &str,
+    ) -> Result<Option<Negotiation>, StoreError>;
+
+    /// Adds a new negotiation, unless its consumer (`counter_party`)
+    /// already has one with the same `consumer_pid`: then nothing is
+    /// written and the answer is `false`. Both happen in one step, so two
+    /// copies of one request that arrive together, in one process or in
+    /// two that share the database, cannot both be added.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be written, or the provider's id is taken.
+    fn insert(&self, negotiation: &Negotiation) -> Result<bool, StoreError>;
 
     /// Replaces a negotiation only if its stored `version` is still
     /// `expected`, atomically. Returns `false` when another write came
@@ -305,14 +324,28 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
         })
     }
 
+    /// A first request (no `providerPid`): starts a new negotiation.
+    ///
+    /// A first request that the same caller sends again with the same
+    /// `consumerPid` starts nothing: the answer is the negotiation it
+    /// already has, as it is now (TD-60). This happens when our answer to
+    /// the first one was lost and the consumer's outbox sent it again.
+    /// DSP 2025-1 has no such rule for contract requests (it has one for
+    /// transfer requests); Eclipse EDC does the same
+    /// (`findRequestedBy`: consumer pid and counter-party). The lookup
+    /// comes before the checks: the first copy passed them, and a repeat
+    /// must carry the same terms ([`answer_again`]).
     fn start(
         &self,
         msg: ContractRequestMessage,
         caller: &str,
         credentials: &CallerCredentials,
     ) -> Handled {
-        let consumer_pid = msg.consumer_pid;
-        let Some(callback_address) = msg.callback_address.filter(|c| !c.is_empty()) else {
+        if let Some(existing) = self.requested_before(caller, &msg.consumer_pid)? {
+            return answer_again(&existing, &msg);
+        }
+        let consumer_pid = msg.consumer_pid.clone();
+        let Some(callback_address) = msg.callback_address.clone().filter(|c| !c.is_empty()) else {
             return Err(bad("", &consumer_pid, "callbackAddress is required"));
         };
         self.check_offer(&msg.offer, "", &consumer_pid, caller)?;
@@ -324,14 +357,39 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
             state,
             callback_address,
             counter_party: caller.to_owned(),
-            offer: msg.offer,
+            offer: msg.offer.clone(),
             agreement: None,
             pending: None,
             version: 0,
         };
         negotiation.pending = self.next(&negotiation, credentials)?;
-        self.store.insert(&negotiation).map_err(Failure::Store)?;
+        let inserted = self.store.insert(&negotiation).map_err(Failure::Store)?;
+        if !inserted {
+            // a copy of this request was saved while this one was being
+            // checked: answer with the negotiation that was saved
+            return match self.requested_before(caller, &negotiation.consumer_pid)? {
+                Some(existing) => answer_again(&existing, &msg),
+                None => Err(bad(
+                    "",
+                    &negotiation.consumer_pid,
+                    "the request was sent twice; retry",
+                )),
+            };
+        }
         Ok((ack(&negotiation), negotiation.pending))
+    }
+
+    /// The negotiation `caller` already started with `consumer_pid`, if
+    /// any. Only the caller's own negotiations are searched, so another
+    /// participant that uses the same `consumerPid` finds nothing.
+    fn requested_before(
+        &self,
+        caller: &str,
+        consumer_pid: &str,
+    ) -> Result<Option<Negotiation>, Failure> {
+        self.store
+            .requested(caller, consumer_pid)
+            .map_err(Failure::Store)
     }
 
     /// `POST /negotiations/:providerPid/events` (`ACCEPTED` only).
@@ -687,6 +745,30 @@ impl<S: NegotiationStore, D, C, E> Records for ProviderService<S, D, C, E> {
         let reason = "the negotiation keeps changing concurrently; retry";
         bad(lookup.pid, lookup.named_pid, reason)
     }
+}
+
+/// The answer to a first `ContractRequestMessage` that the consumer of
+/// `existing` sent again with the same `consumerPid` (TD-60): the
+/// negotiation as it is now, and nothing new to send. A message of ours
+/// still pending is sent by the outbox, as for any negotiation.
+///
+/// A repeat is the first request again only if it names the same offer
+/// and callback address. Otherwise it is refused (HTTP 400), as for
+/// transfers (ADR 0013, amended in 0.12): the consumer would take the
+/// answer for a negotiation it did not ask for. A counter-offer of ours
+/// replaces the offer kept, so a repeat that comes after one is refused
+/// too.
+fn answer_again(existing: &Negotiation, msg: &ContractRequestMessage) -> Handled {
+    let same_request = existing.offer == msg.offer
+        && msg.callback_address.as_deref() == Some(existing.callback_address.as_str());
+    if !same_request {
+        return Err(bad(
+            "",
+            &msg.consumer_pid,
+            "consumerPid is already used by another contract request of this consumer",
+        ));
+    }
+    Ok((ack(existing), None))
 }
 
 fn ack(negotiation: &Negotiation) -> ContractNegotiation {

@@ -210,8 +210,14 @@ impl Outbox for Consumer {
     }
 
     fn reached(out: &Outgoing, state: Value) -> bool {
-        serde_json::from_value::<ContractNegotiation>(state)
-            .is_ok_and(|negotiation| negotiation.state == out.to)
+        serde_json::from_value::<ContractNegotiation>(state).is_ok_and(|negotiation| {
+            negotiation.state == out.to
+                && outbox::same_process(
+                    &out.body,
+                    &negotiation.provider_pid,
+                    &negotiation.consumer_pid,
+                )
+        })
     }
 
     fn delivered(
