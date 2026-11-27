@@ -27,7 +27,7 @@
 //! negotiation does.
 
 use crate::catalog::{CatalogDatasets, Requester};
-use crate::policy::{CallerCredentials, CredentialTypes, credential_scopes};
+use crate::policy::{CallerCredentials, CredentialTypes, add_once, credential_scopes};
 use crate::process::{self, Lookup, Message, Record, Records, Refused, Write};
 pub use crate::process::{Environment, StoreError};
 use crate::{Context, Offer};
@@ -308,9 +308,7 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
             .map_err(Failure::Store)?;
         if let Some(policy) = listed.and_then(|listed| listed.access_policy) {
             for scope in credential_scopes(&policy, types) {
-                if !scopes.contains(&scope) {
-                    scopes.push(scope);
-                }
+                add_once(&mut scopes, scope);
             }
         }
         Ok(scopes)

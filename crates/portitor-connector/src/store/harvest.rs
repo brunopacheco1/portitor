@@ -6,7 +6,7 @@
 //! (ADR 0020). A run's changes are written in one transaction.
 
 use portitor_dsp::catalog::ListedDataset;
-use portitor_dsp::policy::AccessPolicy;
+use portitor_dsp::policy::{AccessPolicy, add_once};
 use portitor_runtime::database::{DbError, Executor, Row, Value};
 use portitor_runtime::values;
 
@@ -349,9 +349,7 @@ impl DatasetStore for ConnectorStore {
         for text in texts {
             let policy: AccessPolicy = parsed("access policy", &text)?;
             // the same policy may be written in two ways (key order)
-            if !policies.contains(&policy) {
-                policies.push(policy);
-            }
+            add_once(&mut policies, policy);
         }
         Ok(policies)
     }

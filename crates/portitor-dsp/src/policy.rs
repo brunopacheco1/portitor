@@ -271,6 +271,15 @@ fn collect_scopes(constraint: &Constraint, types: &CredentialTypes, scopes: &mut
     }
 }
 
+/// Adds `item` to `list` unless an equal one is there already: a list of
+/// distinct items in the order they were first added (scopes, access
+/// policies). Each call reads the whole list, so it is for short lists.
+pub fn add_once<T: PartialEq>(list: &mut Vec<T>, item: T) {
+    if !list.contains(&item) {
+        list.push(item);
+    }
+}
+
 /// The terms of a policy (an offer or an agreement): what [`same_terms`]
 /// compares.
 #[derive(Debug, Clone, Copy)]

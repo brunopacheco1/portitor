@@ -381,3 +381,12 @@ fn the_order_of_an_is_any_of_list_makes_different_terms() {
     ));
     assert!(!same_terms(&research_first, &education_first));
 }
+
+#[test]
+fn add_once_keeps_the_first_of_equal_items_in_order() {
+    let mut scopes = vec!["a".to_owned()];
+    for scope in ["b", "a", "c", "b"] {
+        add_once(&mut scopes, scope.to_owned());
+    }
+    assert_eq!(scopes, ["a", "b", "c"]);
+}

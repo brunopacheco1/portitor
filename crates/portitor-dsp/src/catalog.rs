@@ -6,7 +6,8 @@
 //! [`CatalogDatasets`] port.
 
 use crate::policy::{
-    AccessPolicy, CallerCredentials, CredentialTypes, access_policy_holds, credential_scopes,
+    AccessPolicy, CallerCredentials, CredentialTypes, access_policy_holds, add_once,
+    credential_scopes,
 };
 pub use crate::process::StoreError;
 use crate::{
@@ -359,9 +360,7 @@ impl<S: CatalogDatasets> CatalogService<S> {
         let mut scopes: Vec<String> = Vec::new();
         for policy in self.store.access_policies()? {
             for scope in credential_scopes(&policy, types) {
-                if !scopes.contains(&scope) {
-                    scopes.push(scope);
-                }
+                add_once(&mut scopes, scope);
             }
         }
         Ok(scopes)
