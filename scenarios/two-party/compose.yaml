@@ -59,7 +59,7 @@ name: portitor-demo
 
 # shared by both participants
 x-identity: &identity
-  image: ${PORTITOR_IDENTITY_IMAGE:-ghcr.io/brunopacheco1/portitor-identity:1.3.0}
+  image: ${PORTITOR_IDENTITY_IMAGE:-ghcr.io/brunopacheco1/portitor-identity:1.4.0}
   depends_on:
     database:
       condition: service_healthy
@@ -71,7 +71,7 @@ x-identity: &identity
     timeout: 5s
     retries: 30
 x-connector: &connector
-  image: ${PORTITOR_IMAGE:-ghcr.io/brunopacheco1/portitor-connector:1.3.0}
+  image: ${PORTITOR_IMAGE:-ghcr.io/brunopacheco1/portitor-connector:1.4.0}
 
 services:
   # One PostgreSQL server for every component, each with its own database
@@ -119,7 +119,7 @@ services:
   # (credential requests, status lists) and its management API, where
   # scenarios/two-party/run.sh registers the participants.
   issuer:
-    image: ${PORTITOR_ISSUER_IMAGE:-ghcr.io/brunopacheco1/portitor-issuer:1.3.0}
+    image: ${PORTITOR_ISSUER_IMAGE:-ghcr.io/brunopacheco1/portitor-issuer:1.4.0}
     environment:
       PORTITOR_PARTICIPANT_ID: did:web:issuer%3A8070
       PORTITOR_DATABASE_URL: postgresql://issuer@database:5432/issuer?sslmode=verify-full&sslrootcert=/run/secrets/database-ca

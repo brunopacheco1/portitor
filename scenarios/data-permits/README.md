@@ -107,9 +107,8 @@ Out, on purpose:
 connector before 1.4 does not understand: it rejects the dataset at
 harvest. Steps 3 to 5 also need what 1.4 added (`PUT
 /v1/participants/{did}`, the identity's status check,
-`PORTITOR_TRUSTED_ISSUER_TYPES`). `compose.yaml` names the 1.3.0
-release images by default until 1.4 is released, so give images built
-from source ([docs/TESTING.md, "Building the images locally"](../../docs/TESTING.md#building-the-images-locally);
+`PORTITOR_TRUSTED_ISSUER_TYPES`). `compose.yaml` names the 1.4.0
+release images by default. To try images built from source ([docs/TESTING.md, "Building the images locally"](../../docs/TESTING.md#building-the-images-locally);
 with Podman, `podman build --format docker`):
 
 ```sh
