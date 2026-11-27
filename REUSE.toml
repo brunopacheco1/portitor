@@ -8,6 +8,9 @@ version = 1
 [[annotations]]
 path = [
     "Cargo.lock",
+    # raw benchmark output (key=value lines) and a patch: no comment syntax
+    "docs/benchmarks/**/*.txt",
+    "docs/benchmarks/**/*.patch",
     "fuzz/Cargo.lock",
     "NOTICE",
     # test-only key material (binary DER, and PEM); never a real secret

@@ -1882,7 +1882,7 @@ the release; 12 risks and 19 technical debts are closed.
 <a id="td-73"></a>
 ### TD-73 A negotiation step is about 3.5 ms slower on SQLite in 1.3
 
-- **What.** The 1.3 benchmark (`scripts/bench.sh`, reduced settings,
+- **What.** The 1.3 benchmark ([BENCHMARKS](BENCHMARKS.md#13-compared-with-12-on-sqlite-and-on-postgresql),
   1.2.0 against the 1.3 branch on one machine, 2026-11-27) shows a new
   negotiation at p50 14.7 ms on SQLite against 11.3 ms in 1.2 (+30 % to
   +46 % over three rounds), and filling 2,000 negotiations 38 % slower.

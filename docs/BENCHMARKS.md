@@ -7,7 +7,9 @@ SPDX-License-Identifier: Apache-2.0
 # Benchmarks
 
 What Portitor does under the load a dataspace puts on it, measured
-for release 0.12. Architecture principle 4 asks for these numbers every
+for release 0.12; later releases are compared with the one before
+(1.2 in [Data plane](#data-plane), 1.3 in
+[1.3 compared with 1.2](#13-compared-with-12-on-sqlite-and-on-postgresql)). Architecture principle 4 asks for these numbers every
 release; until 0.11 they were in
 [ADR 0002](adr/0002-technology-stack.md), section 7.
 
@@ -277,6 +279,85 @@ at any rate we could produce. The negotiations themselves took p50
 second: the lock and the disk limit negotiations, not pulls. (One run
 of the pulls alone had a p99 of 39 ms; the 43 ms wait for small writes
 described above is the likely cause.)
+
+## 1.3 compared with 1.2, on SQLite and on PostgreSQL
+
+Release 1.3 keeps every state in the database, so several processes can
+share it ([ADR 0029](adr/0029-several-replicas.md)). This part measures
+what that costs.
+
+- **Date:** 2026-11-27.
+- **Where the 1.2 numbers come from:** measured again in the same
+  session on the same machine, not taken from earlier sections (those
+  ran with larger loads). The code is
+  [`aaee8dd`](https://github.com/brunopacheco1/portitor/commit/aaee8dd7a0618527a3cba05b24c701dade344173),
+  which is the code of tag
+  [v1.2.0](https://github.com/brunopacheco1/portitor/releases/tag/v1.2.0)
+  plus a docs-only close-out. 1.3 is
+  [`25bcb82`](https://github.com/brunopacheco1/portitor/commit/25bcb82f00b2fd99fb0b796f246b01c996a8b614)
+  on the release branch, built from a fixed copy of the tree. Both ran
+  the same `scripts/bench.sh`.
+- **Raw results:** every `key=value` line, the PostgreSQL changes to the
+  script and the script that takes the medians are in
+  [benchmarks/1.3](benchmarks/1.3/README.md).
+- **Machine:** the same kind as above (4 virtual CPUs, Intel Xeon
+  2.10 GHz, 15 GB, Linux 6.18, Rust 1.97.0). Nothing else ran during
+  the final round; the load was logged every 10 s to check that.
+- **Load:** `scripts/bench.sh` with every part, but smaller than the
+  sections above: `BENCH_LARGE_GB=2`, `BENCH_HISTORY=2000`,
+  `BENCH_SECONDS=15`, `BENCH_RUNS=3`. Medians of 3 runs. The history,
+  catalog and negotiation parts were run a second time on both versions
+  to check the changes of more than 10 %.
+- **PostgreSQL:** PostgreSQL 16 on the same machine, over local TCP
+  without TLS. Each component (issuer, two identities, two connectors)
+  had a new database of its own for each part. `bench.sh` has no
+  database setting yet, so an adapted copy of it was used.
+
+| Measure | 1.2 | 1.3 on SQLite | 1.3 on PostgreSQL |
+|---|---|---|---|
+| 100 pulls of 64 MiB at once, MB/s | 4,234 | 5,006 (+18 %) | 4,260 (+1 %) |
+| 1,000 pulls of 8 MiB at once, MB/s | 1,638 | 1,930 (+18 %) | 1,556 (−5 %) |
+| 1,000 pulls, first byte p99 | 1,388 ms | 1,444 ms | 1,506 ms |
+| One pull of 2 GiB, MB/s | 2,358 | 2,287 (−3 %) | 2,093 (−11 %) |
+| Long pull (20 s, token of 5 s) | not cut, then 401 | the same | the same |
+| New negotiation p50, with 2,000 stored | 11.3 ms | **14.7 ms (+31 %)** | 29.3 ms |
+| Transfer start p50, with 2,000 stored | 7.8 ms | 8.0 ms | 19.1 ms |
+| Data token check p99 | 0.11 ms | 0.09 ms | 0.58 ms |
+| Storing 2,000 negotiations, 16 at a time | 10.9 s | **15.0 s (+38 %)** | 33.6 s |
+| Provider's database after that | 6.3 MB | 7.0 MB | 19.6 MB |
+| Catalog of 100 / 1,000 / 10,000 datasets, p50 | 1.7 / 2.7 / 14.2 ms | **3.1 / 5.2 / 35.6 ms** | 5.2 / 8.6 / 47.8 ms |
+| Catalog of 10,000, provider's peak memory | 159 MB | 98 MB (−38 %) | 110 MB |
+| Negotiation at one per second, p50 | 12.9 ms | **18.8 ms (+46 %)** | 34.5 ms |
+| TD-40: 100 pulls alone / with as many negotiations as possible, MB/s | 80.6 / 79.7 | 80.6 / 79.2 | 80.3 / 77.1 |
+
+What this says:
+
+- **The data plane did not get slower.** Throughput on SQLite is the
+  same or higher; the TD-40 rule still holds on both databases.
+- **The catalog is about twice as slow on SQLite, and uses less
+  memory.** 1.3 reads the catalog from the database on each request
+  instead of keeping a copy in the process (the maintainer's choice for
+  1.3, 2026-11-26), so every replica answers the same. It costs about
+  2 µs per dataset; 10,000 datasets take 36 ms instead of 14 ms. The
+  second round gave the same (+83 %, +95 %, +144 %).
+- **A negotiation step is about 3.5 ms slower on SQLite.** The second
+  round gave +30 % to +34 % (+12 % at one per second). The cause is not
+  measured yet; the likely one is the extra writes for each message
+  (the outbox claim and the lease rows). It is
+  [TD-73](RISKS_AND_TECHNICAL_DEBTS.md#td-73), suggested for 1.4.
+- **On PostgreSQL every database step is a round trip over the
+  network**, so control-plane steps (negotiation, transfer start,
+  catalog) take about 2 to 2.6 times as long as on SQLite, and the data
+  token check goes from 0.1 to 0.6 ms because each pull reads its
+  transfer from the database. Data throughput stays within 11 % of 1.2.
+  The stored history takes about 3 times the space. With TLS or a
+  database on another machine the round trips cost more.
+- The provider's memory in the history part is about 3 MB higher (every
+  round showed it); small.
+
+The two-process test (`scenarios/two-party/run-replicas.sh`: two
+processes of each component behind a round-robin proxy, one stopped in
+the middle) passed on the same commit.
 
 ## Method and how to reproduce
 
