@@ -341,10 +341,11 @@ What this says:
   2 µs per dataset; 10,000 datasets take 36 ms instead of 14 ms. The
   second round gave the same (+83 %, +95 %, +144 %).
 - **A negotiation step is about 3.5 ms slower on SQLite.** The second
-  round gave +30 % to +34 % (+12 % at one per second). The cause is not
-  measured yet; the likely one is the extra writes for each message
-  (the outbox claim and the lease rows). It is
-  [TD-73](RISKS_AND_TECHNICAL_DEBTS.md#td-73), suggested for 1.4.
+  round gave +30 % to +34 % (+12 % at one per second). 1.4 counted
+  the statements: a provider step went from 2 commits to up to 6 (the
+  lease rows of each message and the used token ids), and none can be
+  removed without losing safety with several replicas. It is
+  [TD-73](RISKS_AND_TECHNICAL_DEBTS.md#td-73), moved to 1.12 with TD-40.
 - **On PostgreSQL every database step is a round trip over the
   network**, so control-plane steps (negotiation, transfer start,
   catalog) take about 2 to 2.6 times as long as on SQLite, and the data
