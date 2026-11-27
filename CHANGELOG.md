@@ -222,7 +222,7 @@ identity now calls issuers' DID documents and status lists. Details:
   ([spike](docs/spikes/1.4-destination-matches-permit.md)).
 - RISKS_AND_TECHNICAL_DEBTS: R-48, TD-13, TD-20, TD-46, TD-47 (fixed in
   1.1), TD-60, TD-61, TD-70 and TD-71 closed; R-17, TD-11 and TD-12
-  narrowed; new R-50, TD-74 to TD-77. ROADMAP, TESTING (the 1.4 runs of
+  narrowed; new R-50, TD-74 to TD-78. ROADMAP, TESTING (the 1.4 runs of
   the scenarios and the EDC interop test), STABILITY, ARCHITECTURE,
   SECURITY-ASSURANCE (F-01, F-06, F-08), the C2 and C3 diagrams, the
   website.

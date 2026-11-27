@@ -472,7 +472,12 @@ Scope set by the maintainer on 2026-11-27. What shipped:
   test. Some runs failed first at a name lookup in the first seconds
   and passed when run again (the aardvark-dns problem;
   [TESTING](TESTING.md#docker-or-podman) has each run).
-  <!-- benchmark: filled in by the integrator -->
+  Benchmark ([BENCHMARKS](BENCHMARKS.md#14-the-catalog-with-access-policies)):
+  without access policies the catalog answers as fast as 1.3.0 (within
+  6 %); an access policy on every dataset costs about 1 µs per dataset
+  (10,000 datasets: 48 ms instead of 39 ms) and nearly doubles the
+  provider's peak memory for 10,000 datasets
+  ([TD-78](RISKS_AND_TECHNICAL_DEBTS.md#td-78)).
 
 ### 1.5 Data user and HDAB: the HDAB and Schuman Clinical Research
 
@@ -514,6 +519,8 @@ Scope set by the maintainer on 2026-11-27. What shipped:
   partner's refusal logged as one, with its reason
   ([TD-76](RISKS_AND_TECHNICAL_DEBTS.md#td-76)); 502, not 400, when an
   issuer cannot be read ([TD-77](RISKS_AND_TECHNICAL_DEBTS.md#td-77));
+  less memory for a catalog with access policies
+  ([TD-78](RISKS_AND_TECHNICAL_DEBTS.md#td-78));
   the DPV purposes mapped to Article 53
   ([R-40](RISKS_AND_TECHNICAL_DEBTS.md#r-40)).
 - Exit: the four answers written in the docs.

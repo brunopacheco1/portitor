@@ -158,9 +158,10 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [TD-75](#td-75) | A client constructor called `new` does not apply the block on internal addresses | Technical debt, readability, security | Open | 1.5 (suggested, with TD-63) |
 | [TD-76](#td-76) | A refused DSP message is logged as "counter-party not reachable" and its reason is lost; a refused transfer request is not logged by the provider | Technical debt, operations | Open | 1.5 (suggested) |
 | [TD-77](#td-77) | The identity answers 400 when an issuer's metadata cannot be read | Technical debt | Open | 1.5 (suggested) |
+| [TD-78](#td-78) | The catalog holds every dataset's access policy during a request | Technical debt, performance | Open | 1.5 (suggested) |
 
-Counts on 2026-11-27, at the 1.4.0 release: 37 risks and 39 technical
-debts are not closed (Open 36, Mitigated 22, Accepted 18); 13 risks and
+Counts on 2026-11-27, at the 1.4.0 release: 37 risks and 40 technical
+debts are not closed (Open 37, Mitigated 22, Accepted 18); 13 risks and
 38 technical debts are closed (9 of them at 1.4: R-48, TD-13, TD-20,
 TD-46, TD-60, TD-61, TD-70 and TD-71, and TD-47, fixed in 1.1).
 
@@ -1623,6 +1624,22 @@ TD-46, TD-60, TD-61, TD-70 and TD-71, and TD-47, fixed in 1.1).
   change of a status code on a frozen route: check
   [STABILITY](STABILITY.md) first. Suggested for 1.5 (to be confirmed
   by the maintainer).
+
+<a id="td-78"></a>
+### TD-78 The catalog holds every dataset's access policy during a request
+
+- **What.** On a catalog request the connector holds the access policy
+  of every dataset in memory while it builds the answer. The 1.4
+  benchmark measured the provider's peak memory at 203 MB against
+  108 MB for 10,000 datasets, each with an access policy
+  ([BENCHMARKS](BENCHMARKS.md#14-the-catalog-with-access-policies)).
+- **Why it matters.** Memory grows with the number of datasets that
+  have an access policy, for each catalog request at once.
+- **Current state: Open.** Without access policies the catalog uses
+  what it used in 1.3.0.
+- **Next.** Check the policies one by one while the catalog is read
+  (streaming), or share identical policies. Suggested for 1.5 (to be
+  confirmed by the maintainer).
 
 ## Closed
 
