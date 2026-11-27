@@ -42,3 +42,11 @@ license_choices:
             getrandom 0.3 (through rand 0.9, which oxrdf uses) depends on r-efi only on UEFI
             targets, so it is never built into the images; if it were, we take Apache-2.0,
             the licence Portitor itself uses.
+    - package_id: "Crate::r-efi:6.0.0"
+      license_choices:
+        - given: "MIT OR Apache-2.0 OR LGPL-2.1-or-later"
+          choice: "Apache-2.0"
+          comment: >-
+            getrandom 0.4 (through rand 0.10, which postgres-protocol uses) depends on r-efi
+            only on UEFI targets, so it is never built into the images; if it were, we take
+            Apache-2.0, the licence Portitor itself uses.

@@ -99,6 +99,12 @@ def make_handler(name, backends, stream):
 
         def proxy(self):
             body = read_body(self)
+            if not self.path.startswith("/") or self.path.startswith("//"):
+                # only origin-form targets (RFC 9112, 3.2.1): the backend is
+                # always one of ours, never a host named in the request
+                error = json.dumps({"error": "only a path is accepted"}).encode()
+                self.answer(400, [("content-type", "application/json")], error, "-")
+                return
             if name in DOWN and self.path.startswith(DOWN[name]):
                 error = json.dumps({"error": f"{name} is down for the test"}).encode()
                 self.answer(503, [("content-type", "application/json")], error, "-")

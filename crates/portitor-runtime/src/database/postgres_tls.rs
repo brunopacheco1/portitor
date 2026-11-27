@@ -28,15 +28,15 @@ use rustls::pki_types::{CertificateDer, ServerName};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_postgres::tls::{ChannelBinding, MakeTlsConnect, TlsConnect, TlsStream};
 
-/// The TLS settings for PostgreSQL: the CAs of `root_cert` (a PEM file)
-/// and no others, or the system's CA certificates when `root_cert` is
+/// The TLS settings for PostgreSQL: the CAs of `ca_file` (a PEM file)
+/// and no others, or the system's CA certificates when `ca_file` is
 /// missing or `system`.
 ///
 /// # Errors
-/// `root_cert` cannot be read or holds no certificate, or there is no CA
+/// `ca_file` cannot be read or holds no certificate, or there is no CA
 /// certificate at all.
-pub(super) fn client_config(root_cert: Option<&str>) -> Result<Arc<rustls::ClientConfig>, String> {
-    let roots = match root_cert {
+pub(super) fn client_config(ca_file: Option<&str>) -> Result<Arc<rustls::ClientConfig>, String> {
+    let roots = match ca_file {
         None | Some("system") => system_roots(),
         Some(path) => roots_of_file(path)?,
     };

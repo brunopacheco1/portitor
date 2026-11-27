@@ -181,9 +181,7 @@ impl Settings {
             None
         } else {
             config.ssl_mode(tokio_postgres::config::SslMode::Require);
-            Some(super::postgres_tls::client_config(
-                own.root_cert.as_deref(),
-            )?)
+            Some(super::postgres_tls::client_config(own.ca_file.as_deref())?)
         };
         Ok(Self {
             config,
@@ -288,7 +286,7 @@ fn has_parameter(url: &str, name: &str) -> bool {
 struct OwnOptions {
     disable: bool,
     /// A PEM file, or `system`.
-    root_cert: Option<String>,
+    ca_file: Option<String>,
     tcp_user_timeout: Option<Duration>,
 }
 
@@ -300,7 +298,7 @@ fn split_own_options(url: &str) -> Result<(String, OwnOptions), String> {
     }
     let mut options = OwnOptions {
         disable: false,
-        root_cert: None,
+        ca_file: None,
         tcp_user_timeout: None,
     };
     let Some((base, query)) = url.split_once('?') else {
@@ -320,7 +318,7 @@ fn split_own_options(url: &str) -> Result<(String, OwnOptions), String> {
                     ));
                 }
             },
-            "sslrootcert" => options.root_cert = Some(percent_decoded(value)?),
+            "sslrootcert" => options.ca_file = Some(percent_decoded(value)?),
             "tcp_user_timeout" => {
                 let millis: u64 = value.parse().map_err(|_| {
                     format!("PORTITOR_DATABASE_URL: tcp_user_timeout={value} is not milliseconds")

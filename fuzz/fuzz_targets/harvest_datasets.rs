@@ -81,7 +81,7 @@ static FILE: LazyLock<PathBuf> = LazyLock::new(|| {
 /// Checks the catalog after a run: offers, distributions, unique ids.
 fn check_catalog(harvester: &DatasetHarvester) {
     let mut ids = BTreeSet::new();
-    for dataset in harvester.copy().all() {
+    for dataset in harvester.catalog().all().expect("catalog") {
         assert!(
             !dataset.has_policy.is_empty(),
             "{} has no offer",
@@ -129,8 +129,8 @@ fuzz_target!(|data: &[u8]| {
     harvester.start().expect("start");
     check_last_job(&store);
     check_catalog(&harvester);
-    let first = harvester.copy().all();
+    let first = harvester.catalog().all().expect("catalog");
     // the same file again: nothing changes
     let _ = harvester.run(Trigger::Interval);
-    assert_eq!(harvester.copy().all(), first);
+    assert_eq!(harvester.catalog().all().expect("catalog"), first);
 });
