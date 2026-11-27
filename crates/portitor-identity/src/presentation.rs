@@ -191,7 +191,7 @@ fn visible<'a>(
     let mut shown = Vec::new();
     for credential in credentials {
         let expired = credential.expires_at.is_some_and(|until| until <= now);
-        let withdrawn = match credential.status {
+        let withdrawn = match credential.last_status_check {
             Some(checked) => !checked.state.is_presented(),
             None => false,
         };
@@ -275,7 +275,7 @@ mod tests {
             expires_at,
             holder_pid: "h-1".to_owned(),
             jwt: "a.b.c".to_owned(),
-            status: None,
+            last_status_check: None,
         }
     }
 
@@ -308,7 +308,7 @@ mod tests {
     fn revoked_and_suspended_credentials_are_not_shown() {
         use crate::store::{CheckedStatus, HeldStatus};
         let checked = |id: &str, state: HeldStatus| StoredCredential {
-            status: Some(CheckedStatus {
+            last_status_check: Some(CheckedStatus {
                 state,
                 checked_at: 900,
             }),

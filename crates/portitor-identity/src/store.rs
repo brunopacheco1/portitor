@@ -59,7 +59,7 @@ pub struct StoredCredential {
     /// TD-20); none until one found an answer. Written only by
     /// [`IdentityStore::record_credential_status`]; ignored when a
     /// credential is stored.
-    pub status: Option<CheckedStatus>,
+    pub last_status_check: Option<CheckedStatus>,
 }
 
 /// What the status lists of a held credential say (TD-20). A credential
@@ -961,7 +961,7 @@ fn credential_from(row: &Row) -> Result<StoredCredential, StoreError> {
     let state: Option<String> = row.get(7)?;
     let checked_at: Option<i64> = row.get(8)?;
     // both are written together; none before the first check
-    let status = match (state, checked_at) {
+    let last_status_check = match (state, checked_at) {
         (Some(state), Some(checked_at)) => Some(CheckedStatus {
             state: HeldStatus::from_text(&state)?,
             checked_at: from_db_int(checked_at),
@@ -977,7 +977,7 @@ fn credential_from(row: &Row) -> Result<StoredCredential, StoreError> {
         expires_at: row.get(4)?,
         holder_pid: row.get(5)?,
         jwt: row.get(6)?,
-        status,
+        last_status_check,
     })
 }
 
@@ -1009,7 +1009,7 @@ mod tests {
             expires_at: Some(2_000_000_000),
             holder_pid: "h-1".to_owned(),
             jwt: "a.b.c".to_owned(),
-            status: None,
+            last_status_check: None,
         }
     }
 
@@ -1239,7 +1239,7 @@ mod tests {
                     &[credential("c-1", issuer)],
                 )
                 .unwrap();
-            assert_eq!(store.credentials().unwrap()[0].status, None);
+            assert_eq!(store.credentials().unwrap()[0].last_status_check, None);
 
             let revoked = CheckedStatus {
                 state: HeldStatus::Revoked,
@@ -1250,7 +1250,10 @@ mod tests {
                     .record_credential_status("c-1", "a.b.c", revoked)
                     .unwrap()
             );
-            assert_eq!(store.credentials().unwrap()[0].status, Some(revoked));
+            assert_eq!(
+                store.credentials().unwrap()[0].last_status_check,
+                Some(revoked)
+            );
             // another JWT (the credential was replaced meanwhile): not
             // recorded; an unknown id neither
             let valid = CheckedStatus {
@@ -1267,7 +1270,10 @@ mod tests {
                     .record_credential_status("c-9", "a.b.c", valid)
                     .unwrap()
             );
-            assert_eq!(store.credentials().unwrap()[0].status, Some(revoked));
+            assert_eq!(
+                store.credentials().unwrap()[0].last_status_check,
+                Some(revoked)
+            );
 
             // stored again with the same JWT: the status stays
             store.add_request(&request("h-2")).unwrap();
@@ -1278,7 +1284,10 @@ mod tests {
                     &[credential("c-1", issuer)],
                 )
                 .unwrap();
-            assert_eq!(store.credentials().unwrap()[0].status, Some(revoked));
+            assert_eq!(
+                store.credentials().unwrap()[0].last_status_check,
+                Some(revoked)
+            );
             // replaced by another JWT: not checked yet
             let reissued = StoredCredential {
                 jwt: "d.e.f".to_owned(),
@@ -1288,7 +1297,7 @@ mod tests {
             store
                 .deliver("h-3", answer("i-3", RequestStatus::Issued), &[reissued])
                 .unwrap();
-            assert_eq!(store.credentials().unwrap()[0].status, None);
+            assert_eq!(store.credentials().unwrap()[0].last_status_check, None);
         }
     }
 
@@ -1428,7 +1437,7 @@ mod tests {
         let store = DatabaseStore::open(&setting).unwrap();
         let held = store.credentials().unwrap();
         assert_eq!(held, [credential("c-1", "did:web:issuer.example")]);
-        assert_eq!(held[0].status, None);
+        assert_eq!(held[0].last_status_check, None);
         let revoked = CheckedStatus {
             state: HeldStatus::Revoked,
             checked_at: 100,
@@ -1438,7 +1447,10 @@ mod tests {
                 .record_credential_status("c-1", "a.b.c", revoked)
                 .unwrap()
         );
-        assert_eq!(store.credentials().unwrap()[0].status, Some(revoked));
+        assert_eq!(
+            store.credentials().unwrap()[0].last_status_check,
+            Some(revoked)
+        );
     }
 
     /// A file written by 1.2, with a sent request, a credential and a

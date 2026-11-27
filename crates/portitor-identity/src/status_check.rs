@@ -261,7 +261,7 @@ fn record(
     why_uncheckable: Option<&str>,
     now: u64,
 ) {
-    let before = credential.status.map(|checked| checked.state);
+    let before = credential.last_status_check.map(|checked| checked.state);
     let checked = CheckedStatus {
         state,
         checked_at: now,

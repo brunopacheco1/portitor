@@ -158,7 +158,7 @@ async fn store_delivery(identity: &Identity, delivery: Delivery<'_>) -> Result<S
                 expires_at: credential.validity.until,
                 holder_pid: request.holder_pid.clone(),
                 jwt: container.payload.clone(),
-                status: None,
+                last_status_check: None,
             });
         }
     }
