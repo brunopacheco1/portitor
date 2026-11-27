@@ -90,9 +90,13 @@ dataspace participants over HTTPS.
   serves one process, and a second process on the same file refuses to
   start. Several replicas need PostgreSQL, from 1.3
   ([ADR 0029](adr/0029-several-replicas.md)).
-- Offers hidden by credentials: the catalog shows every offer to every
-  caller with a trusted membership credential (DCP, ADR 0016); credential
-  constraints (ADR 0019) are checked at negotiation and transfer only.
+- Offers hidden by credentials: credential constraints (ADR 0019) are
+  checked at negotiation and transfer. Since 1.4 a dataset with an
+  access policy is hidden from callers it does not hold for (ADR 0019,
+  amendment in 1.4), but the offers of a shown dataset are shown to
+  every member, and a catalog request asks every caller for the scopes
+  of all access policies
+  ([R-50](RISKS_AND_TECHNICAL_DEBTS.md#r-50)).
 - Protection against server-side request forgery through the
   consumer-chosen `callbackAddress` beyond the `https://`-only rule:
   internal addresses are not blocked yet.
@@ -198,7 +202,7 @@ document, issuer service, status lists and bundles.
 | R | The compliance service denies what it answered | Its answer is a signed credential, checked and stored with the run (`portitor-identity/src/gaiax.rs`, table `gaiax_run`) |
 | I | The hosts we fetch from learn whom we talk to | By design of `did:web` (each verifier fetches the caller's document); not countered. The compliance service gets the participant's Gaia-X credentials, by design (ADR 0021) |
 | D | A DID host or the compliance service is slow or down | 10 s and 64 KiB per fetch; documents cached `PORTITOR_DID_CACHE_SECONDS` (5 minutes by default), at most 1,000 (`portitor-runtime/src/did.rs`); a compliance run repeats at two thirds of the credential's validity and keeps the credential it has (ADR 0021; the keeping not checked in code) |
-| E | The caller chooses the URL we fetch (its DID, its credential service) to reach an internal service | `https://` only, no redirects, time and size limits; from 1.4, internal addresses refused when `PORTITOR_BLOCK_INTERNAL_ADDRESSES=true`, off by default in 1.x: **F-01** |
+| E | The caller chooses the URL we fetch (its DID, its credential service; an issuer's status lists, read by the connector and, since 1.4, by the identity's status check) to reach an internal service | `https://` only, no redirects, time and size limits; from 1.4, internal addresses refused when `PORTITOR_BLOCK_INTERNAL_ADDRESSES=true`, off by default in 1.x: **F-01** |
 
 #### 3. The data plane
 
@@ -256,7 +260,8 @@ chain" above was checked: `cargo vet --locked` runs in
 `.github/workflows/dependencies.yml`, with 185 exemptions in
 `supply-chain/config.toml` and 57 crate versions covered by imported
 audits (2026-11-26; [R-04](RISKS_AND_TECHNICAL_DEBTS.md#r-04)). 1.3
-added the 32 crate versions of `tokio-postgres`, all exempted.
+added the 32 crate versions of `tokio-postgres`, all exempted; 1.4
+added none (185 exemptions, counted on 2026-11-27).
 
 #### Findings
 

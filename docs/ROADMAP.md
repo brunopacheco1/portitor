@@ -40,6 +40,7 @@ and debts each release raised or closed are in
 | 1.1 | 2026-11-25 | v1.1.0 | Push transfers by the Data Plane Signaling HTTP profile into the consumer's object storage; `s3://` dataset sources; the provider can always end access (provider routes, membership checked on every request, running downloads cut); suspend and start as consumer; audit line per transfer; ADR 0027 | [1.1.0](../CHANGELOG.md#110---2026-11-25) |
 | 1.2 | 2026-11-26 | v1.2.0 | The built-in data plane in its own crate, `portitor-dataplane`, behind ports (no route, setting or image change); the source travels in the DPS start message's `metadata` and stays with the flow; the data plane is told once, after the transfer's write (TD-48); ADR 0028 step 1 | [1.2.0](../CHANGELOG.md#120---2026-11-26) |
 | 1.3 | 2026-11-27 | v1.3.0 | Several replicas of each image on one PostgreSQL database (PostgreSQL 16 to 19); coordination through the database with leases and compare-and-swap writes, no lock in one process; SQLite deprecated (removed in 2.0); TD-08, TD-09, TD-50 to TD-58 closed; ADR 0029 | [1.3.0](../CHANGELOG.md#130---2026-11-27) |
+| 1.4 | 2026-11-27 | v1.4.0 | Purpose in policies (ADR 0009); access policies per dataset and trusted issuers by credential type (ADR 0019); the identity stops presenting revoked credentials; the issuer replaces a participant's claims; the block on internal addresses, off by default (ADR 0016); TD-13, TD-20, TD-46, TD-60, TD-61, TD-70, TD-71 and R-48 closed | [1.4.0](../CHANGELOG.md#140---2026-11-27) |
 
 Older documents cite sections of this file that the table replaced, for
 example "ROADMAP 0.11, Decisions on the 0.11 plan". Their full text is in
@@ -388,52 +389,49 @@ Several containers serve one participant on one shared database
   container name lookups failed in the first, the aardvark-dns problem
   in TESTING). Benchmark: [BENCHMARKS](BENCHMARKS.md#13-compared-with-12-on-sqlite-and-on-postgresql).
 
-### 1.4 Purpose and data permit in policies
+### 1.4 Purpose and data permit in policies (released 2026-11-27 as v1.4.0)
 
-In progress on the release branch. Scope set by the maintainer on
-2026-11-27: the items below. Two items first planned here are not in
-1.4: the Helm chart moved to
-[1.14](#114-operations-hardening-added-2026-11-26), and the SQLite to
-PostgreSQL copy tool was dropped ("Moved out" below).
+Scope set by the maintainer on 2026-11-27. What shipped:
 
 - An ODRL `purpose` constraint (a left operand of the ODRL 2.2
   vocabulary), with purposes named by Data Privacy Vocabulary (DPV)
-  IRIs, the vocabulary HealthDCAT-AP uses for `dpv:hasPurpose`. Checked
-  at negotiation and transfer, fail closed
-  ([TD-12](RISKS_AND_TECHNICAL_DEBTS.md#td-12)). No ICUdata4EU or LNDS
-  list of purposes exists to reuse (maintainer, 2026-11-15;
-  [R-40](RISKS_AND_TECHNICAL_DEBTS.md#r-40)).
+  IRIs, the vocabulary HealthDCAT-AP uses for `dpv:hasPurpose`. It is a
+  term of the agreement: a request with another purpose is refused
+  ([ADR 0009](adr/0009-minimal-odrl-policies.md), amendment in 1.4;
+  [TD-12](RISKS_AND_TECHNICAL_DEBTS.md#td-12)). No ICUdata4EU or LNDS
+  list of purposes exists to reuse
+  ([R-40](RISKS_AND_TECHNICAL_DEBTS.md#r-40)).
 - A data permit as a verifiable credential that policies can require.
-  The data-permits scenario already runs one on 1.0, as a credential
-  type in the HDAB issuer's configuration, with placeholder claims. What
-  it found is fixed here, because the permit brings a second issuer and
-  several permits per data user (maintainer, 2026-11-24):
-  - trusted issuers by credential type
-    ([R-48](RISKS_AND_TECHNICAL_DEBTS.md#r-48));
-  - claims per credential at the issuer, not per participant
-    ([TD-46](RISKS_AND_TECHNICAL_DEBTS.md#td-46));
-  - the identity reads status lists and stops presenting a revoked
-    credential, so one revoked permit no longer blocks the others
-    ([TD-20](RISKS_AND_TECHNICAL_DEBTS.md#td-20), moved from 1.6).
-- As consumer, accept a provider's offer with credential constraints
-  ([TD-11](RISKS_AND_TECHNICAL_DEBTS.md#td-11)); the catalog hides offers
-  the caller cannot meet ([TD-13](RISKS_AND_TECHNICAL_DEBTS.md#td-13)).
-- Demo step 2: the lab's agreement with Lux Biobank needs a matching
-  purpose; a wrong purpose is refused.
-- A second health scenario, the HDAB as permit authority (maintainer,
-  2026-11-23): the HDAB only issues the data permit; Lux Biobank checks
-  it at negotiation and sends the data where the permit says. It needs
-  a check that the transfer's destination matches a claim in the
-  permit. In 1.4 this is research only, no code (maintainer,
-  2026-11-27): [what the specifications say](spikes/1.4-destination-matches-permit.md).
-  The scenario follows in 1.5 or later.
-- Debts and risks in this release:
-  - server-side request forgery: block internal addresses
-    ([R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17)); on by default in 2.0
-    ([below](#for-20));
+  The data-permits scenario ran one since 1.0; what it found is fixed:
+  - trusted issuers by credential type, `PORTITOR_TRUSTED_ISSUER_TYPES`
+    ([R-48](RISKS_AND_TECHNICAL_DEBTS.md#r-48); the safer default waits
+    for 2.0, [TD-74](RISKS_AND_TECHNICAL_DEBTS.md#td-74));
+  - the issuer replaces a participant's claims with
+    `PUT /v1/participants/{did}`
+    ([TD-46](RISKS_AND_TECHNICAL_DEBTS.md#td-46)); claims per credential
+    request are not built;
+  - the identity reads the status lists of its credentials and stops
+    presenting a revoked one, so one revoked permit no longer blocks the
+    others ([TD-20](RISKS_AND_TECHNICAL_DEBTS.md#td-20)).
+- As consumer, the connector accepts a provider's offer with credential
+  constraints ([TD-11](RISKS_AND_TECHNICAL_DEBTS.md#td-11), consumer
+  part); a dataset's access policy hides it from callers who do not
+  meet it ([TD-13](RISKS_AND_TECHNICAL_DEBTS.md#td-13),
+  [ADR 0019](adr/0019-credential-constraints.md), amendment in 1.4).
+  A catalog request asks every caller for the scopes of all access
+  policies, accepted for now
+  ([R-50](RISKS_AND_TECHNICAL_DEBTS.md#r-50)).
+- Demo step 2: the lab's agreement with Lux Biobank names a purpose; a
+  wrong purpose is refused (hdab-intermediary scenario).
+- Debts and risks:
+  - server-side request forgery: the block on internal addresses,
+    off by default in 1.x, on by default in 2.0
+    ([R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17), [below](#for-20));
+    a caller's token is checked before its DID is resolved (F-06);
   - negative credential constraints, documented, no code change
-    ([R-43](RISKS_AND_TECHNICAL_DEBTS.md#r-43));
-  - the written OpenSSF Baseline level 1 self-assessment
+    ([R-43](RISKS_AND_TECHNICAL_DEBTS.md#r-43), accepted);
+  - the OpenSSF Baseline level 1 self-assessment checked again; two
+    GitHub settings are left to the maintainer
     ([R-05](RISKS_AND_TECHNICAL_DEBTS.md#r-05));
   - a repeated first contract request and the outbox's delivery check
     ([TD-60](RISKS_AND_TECHNICAL_DEBTS.md#td-60),
@@ -441,21 +439,45 @@ PostgreSQL copy tool was dropped ("Moved out" below).
   - from the 1.3 readability review: one helper for the loops that tick
     ([TD-70](RISKS_AND_TECHNICAL_DEBTS.md#td-70)) and one shared
     database wrapper for the identity and the issuer
-    ([TD-71](RISKS_AND_TECHNICAL_DEBTS.md#td-71));
-  - from the 1.3 benchmark: at most one day of profiling for the slower
-    negotiation step on SQLite; with no clear cause, it moves to 1.12
-    with TD-40 ([TD-73](RISKS_AND_TECHNICAL_DEBTS.md#td-73)).
-- Moved out (maintainer, 2026-11-27): the Helm chart to 1.14
-  ([TD-39](RISKS_AND_TECHNICAL_DEBTS.md#td-39)); the copy tool dropped,
-  as no deployment needs one yet; SQLite is still removed in 2.0
-  ([TD-59](RISKS_AND_TECHNICAL_DEBTS.md#td-59)). A transfer left
-  REQUESTED when its provider is revoked was fixed in 1.1 and is closed
-  ([TD-47](RISKS_AND_TECHNICAL_DEBTS.md#td-47)).
-- Exit: purpose and permit tested granted and refused; data-permits runs
-  with the R-48, TD-46 and TD-20 steps changed to refusals or passes;
-  the TCKs and the EDC interop test stay green.
+    ([TD-71](RISKS_AND_TECHNICAL_DEBTS.md#td-71)).
+- Moved out or dropped (maintainer, 2026-11-27):
+  - the Helm chart moved to
+    [1.14](#114-operations-hardening-added-2026-11-26)
+    ([TD-39](RISKS_AND_TECHNICAL_DEBTS.md#td-39));
+  - the SQLite to PostgreSQL copy tool was dropped, as no deployment
+    needs one yet; SQLite is still removed in 2.0
+    ([TD-59](RISKS_AND_TECHNICAL_DEBTS.md#td-59));
+  - the slower negotiation step on SQLite of 1.3: its cause was
+    counted (the new commits of 1.3, not a bug) and it moved to 1.12
+    with TD-40 ([TD-73](RISKS_AND_TECHNICAL_DEBTS.md#td-73));
+  - the second health scenario, the HDAB as permit authority, needs a
+    check that the transfer's destination matches the permit. 1.4 did
+    the research only: [what the specifications say](spikes/1.4-destination-matches-permit.md).
+    The scenario follows in 1.5 or later.
+  - A transfer left REQUESTED when its provider is revoked was fixed in
+    1.1 and is closed ([TD-47](RISKS_AND_TECHNICAL_DEBTS.md#td-47)).
+- Exit, and how it was met: purpose and permit tested granted and
+  refused (unit and integration tests; the hdab-intermediary and
+  data-permits scenarios). data-permits runs with step 3 using `PUT`,
+  step 4 passing without a deletion and step 5 a refusal. The TCKs
+  stayed green: DSP 65 of 65, DCP identity 54, verifier 22, issuer 41
+  and 41 with the bundle key ([TESTING](TESTING.md#dsp-conformance-tck)).
+  The EDC interop test on v1.0.0-RC8 passed.
 - Main risk: DPV purposes may not map one to one to the purposes of the
-  EHDS (Article 53).
+  EHDS (Article 53). Still open ([R-40](RISKS_AND_TECHNICAL_DEBTS.md#r-40)).
+- Tried before the tag: every scenario passed on the maintainer's Linux
+  laptop on 2026-11-27 (Podman 4.9.3, images built from commit
+  `a6dcaee`, scenario scripts at `11d9fef`), among them the two-party demo with S3, with two
+  connectors behind nginx, and `run-replicas.sh`, and the EDC interop
+  test. Some runs failed first at a name lookup in the first seconds
+  and passed when run again (the aardvark-dns problem;
+  [TESTING](TESTING.md#docker-or-podman) has each run).
+  Benchmark ([BENCHMARKS](BENCHMARKS.md#14-the-catalog-with-access-policies)):
+  without access policies the catalog answers as fast as 1.3.0 (within
+  6 %); an access policy on every dataset costs about 1 µs per dataset
+  (10,000 datasets: 48 ms instead of 39 ms) and nearly doubles the
+  provider's peak memory for 10,000 datasets
+  ([TD-78](RISKS_AND_TECHNICAL_DEBTS.md#td-78)).
 
 ### 1.5 Data user and HDAB: the HDAB and Schuman Clinical Research
 
@@ -490,6 +512,17 @@ PostgreSQL copy tool was dropped ("Moved out" below).
   lines split ([TD-63](RISKS_AND_TECHNICAL_DEBTS.md#td-63)). Suggested by the 1.3 readability
   review (2026-11-26), to be confirmed: one error type for the database
   and the stores, done with the split of the store files ([TD-72](RISKS_AND_TECHNICAL_DEBTS.md#td-72)).
+  Suggested by the 1.4 reviews and scenario runs (2026-11-27), to be
+  confirmed: the client constructors renamed
+  ([TD-75](RISKS_AND_TECHNICAL_DEBTS.md#td-75)); fewer scopes asked on
+  a catalog request ([R-50](RISKS_AND_TECHNICAL_DEBTS.md#r-50)); a
+  partner's refusal logged as one, with its reason
+  ([TD-76](RISKS_AND_TECHNICAL_DEBTS.md#td-76)); 502, not 400, when an
+  issuer cannot be read ([TD-77](RISKS_AND_TECHNICAL_DEBTS.md#td-77));
+  less memory for a catalog with access policies
+  ([TD-78](RISKS_AND_TECHNICAL_DEBTS.md#td-78));
+  the DPV purposes mapped to Article 53
+  ([R-40](RISKS_AND_TECHNICAL_DEBTS.md#r-40)).
 - Exit: the four answers written in the docs.
 - Main risk: our design for dependent agreements may not match what EDC
   or Simpl-Open do later.
@@ -544,7 +577,7 @@ in 1.5 ([TD-63](RISKS_AND_TECHNICAL_DEBTS.md#td-63)), simpler types in
 ([TD-39](RISKS_AND_TECHNICAL_DEBTS.md#td-39); moved from 1.4 by the
 maintainer, 2026-11-27). The 1.3 readability review (2026-11-26) adds
 small items, suggested next to them and to be confirmed: a loop helper
-and a shared database wrapper in 1.4 ([TD-70](RISKS_AND_TECHNICAL_DEBTS.md#td-70),
+and a shared database wrapper, done in 1.4 ([TD-70](RISKS_AND_TECHNICAL_DEBTS.md#td-70),
 [TD-71](RISKS_AND_TECHNICAL_DEBTS.md#td-71)), one database error type in 1.5 with the file
 split ([TD-72](RISKS_AND_TECHNICAL_DEBTS.md#td-72)), and more long files and functions for that
 split ([TD-63](RISKS_AND_TECHNICAL_DEBTS.md#td-63)).
@@ -596,7 +629,7 @@ rejects. It runs beside the releases.
 | Consent | 1.7 |
 | How schemas are published ([TD-01](RISKS_AND_TECHNICAL_DEBTS.md#td-01)) | with TD-03 |
 | A dataspace's policy rules as SHACL shapes in the bundle (maintainer, 2026-11-18; [TD-32](RISKS_AND_TECHNICAL_DEBTS.md#td-32)) | 1.4 |
-| Spike: the contract negotiation state machine written out in DSP terms, every state and every transition, and a check that the stored data matches it (maintainer, 2026-11-21) | Done 2026-11-25 ([spike](spikes/1.x-negotiation-state-machine.md)): states and stored data match DSP; gaps G1 to G6 and their next steps are in the spike; G1 and G2 in 1.4 ([TD-60](RISKS_AND_TECHNICAL_DEBTS.md#td-60), [TD-61](RISKS_AND_TECHNICAL_DEBTS.md#td-61)), G5 and G6 in 1.5 ([TD-62](RISKS_AND_TECHNICAL_DEBTS.md#td-62)), G3 accepted ([TD-49](RISKS_AND_TECHNICAL_DEBTS.md#td-49)) |
+| Spike: the contract negotiation state machine written out in DSP terms, every state and every transition, and a check that the stored data matches it (maintainer, 2026-11-21) | Done 2026-11-25 ([spike](spikes/1.x-negotiation-state-machine.md)): states and stored data match DSP; gaps G1 to G6 and their next steps are in the spike; G1 and G2 done in 1.4 ([TD-60](RISKS_AND_TECHNICAL_DEBTS.md#td-60), [TD-61](RISKS_AND_TECHNICAL_DEBTS.md#td-61)), G5 and G6 in 1.5 ([TD-62](RISKS_AND_TECHNICAL_DEBTS.md#td-62)), G3 accepted ([TD-49](RISKS_AND_TECHNICAL_DEBTS.md#td-49)) |
 
 ### The health dataspace demo
 

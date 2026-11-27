@@ -51,7 +51,11 @@ judged against it.
 7. **Secure by default.** Deny by default, least privilege, no secrets in
    config files or images, an allow-list of signature algorithms (`ES256`,
    `PS256`), non-root and read-only containers. *Check:* OpenSSF Baseline
-   level 1 and Scorecard in CI.
+   level 1 and Scorecard in CI. One exception in 1.x: the block on
+   internal addresses in URLs a partner chooses is off by default, since
+   turning it on after the 0.13 freeze would change behaviour; it is on
+   by default in 2.0 ([ADR 0016](adr/0016-dsp-caller-authentication.md),
+   amended in 1.4; [R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17)).
 8. **Stateless processes, state in a database.** Any instance serves any
    request: from 1.3 the instances of an image share one PostgreSQL
    database ([ADR 0029](adr/0029-several-replicas.md); [Storage](#storage)).
@@ -285,6 +289,11 @@ storage client and the audit line
 
 ![C3 Components of portitor-connector](diagrams/c3-connector-components.drawio.svg)
 
+Since 1.4 the identity has a credential status check, which reads the
+status lists of the credentials it holds from their issuers
+([TD-20](RISKS_AND_TECHNICAL_DEBTS.md#td-20)); the C2 diagram shows
+that call and the setting `PORTITOR_TRUSTED_ISSUER_TYPES`.
+
 ![C3 Components of portitor-identity](diagrams/c3-identity-components.drawio.svg)
 
 The issuer's components ([ADR 0018](adr/0018-issuer-component.md)),
@@ -428,7 +437,7 @@ dependency and not a Portitor image, or, deprecated, in a SQLite file
 | # | Component (image) | Role | Mandatory? | Protocols |
 |---|---|---|---|---|
 | 1 | Database: one PostgreSQL database per image (external, not built by Portitor), shared by its replicas; or one SQLite file per image, one process, deprecated since 1.3 | State of negotiations, transfers, credentials | Mandatory | none |
-| 2 | `portitor-identity` | Holds the participant's DID, keys and credentials; asks issuers for credentials; answers presentation queries. Optionally it publishes the X.509 chain of its key and gets its Gaia-X compliance credential from a Gaia-X compliance service ([ADR 0021](adr/0021-gaia-x-onboarding.md)) | Mandatory for each participant, unless an external DCP wallet is used. Simpl-Open does not use DCP between participants; how Portitor would join a Simpl-Open data space is in [ADR 0017](adr/0017-simpl-open.md) | DCP (credential service) |
+| 2 | `portitor-identity` | Holds the participant's DID, keys and credentials; asks issuers for credentials; answers presentation queries; since 1.4 reads the status lists of the credentials it holds and leaves revoked ones out. Optionally it publishes the X.509 chain of its key and gets its Gaia-X compliance credential from a Gaia-X compliance service ([ADR 0021](adr/0021-gaia-x-onboarding.md)) | Mandatory for each participant, unless an external DCP wallet is used. Simpl-Open does not use DCP between participants; how Portitor would join a Simpl-Open data space is in [ADR 0017](adr/0017-simpl-open.md) | DCP (credential service) |
 | 3 | `portitor-connector` | Control plane: catalog (datasets harvested into a read copy), contract negotiation, transfer; verifies DCP presentations, including Gaia-X compliance credentials ([ADR 0022](adr/0022-gaia-x-compliance-in-policies.md)); checks datasets and DSP messages against the authority's SHACL shapes. The data plane is its own crate, `portitor-dataplane`, linked into the connector ([below](#data-plane-inside-the-connector-or-separate)) | Mandatory | DSP, DCP (verifier) |
 | 4 | `portitor-issuer` ([ADR 0018](adr/0018-issuer-component.md)) | Issues and revokes credentials (for example membership) to the participants the authority registered; publishes their status lists. It also serves the signed schema and vocabulary bundle, which `portitor-issuer bundle build` signs offline ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)) | Optional: one per dataspace, run by the dataspace authority, never on a participant's host | DCP (issuance) |
 
@@ -483,7 +492,10 @@ database ([Storage](#storage)): PostgreSQL, or a SQLite file
    portitor-identity  --> portitor-dcp, portitor-runtime
    portitor-issuer    --> portitor-dcp, portitor-runtime
    portitor-runtime   --> portitor-dcp, portitor-time
-                                                (adapters: HTTP client,
+                                                (adapters: HTTP client
+                                                 with the check of
+                                                 internal addresses,
+                                                 status lists,
                                                  did:web resolver, API key,
                                                  logging, shutdown, traces
                                                  and metrics (OpenTelemetry),
@@ -505,13 +517,26 @@ does not say:
   is in `certificate.rs`, served at
   `/.well-known/x509CertificateChain.pem` and named by `x5u` in the DID
   document; the Gaia-X onboarding is in `gaiax.rs`, behind the port
-  `GaiaxCompliance` (ADR 0021; see [Gaia-X](#gaia-x)).
+  `GaiaxCompliance` (ADR 0021; see [Gaia-X](#gaia-x)). Since 1.4 its
+  status check (`status_check.rs`) reads the status lists of the
+  credentials it holds every `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS`
+  and records what they say; the presentation API leaves out every
+  credential that is not `VALID` or never checked
+  ([TD-20](RISKS_AND_TECHNICAL_DEBTS.md#td-20)).
 - `portitor-issuer` serves built bundles at
   `GET /bundles/{version}/{path}` and lists the bundle key in its DID
   document.
 - `portitor-runtime`: library of adapters the binaries share, so they are
   not copied. Among them the database layer
-  (`database.rs`, `database/`; [Storage](#storage)).
+  (`database.rs`, `database/`; [Storage](#storage)) and the wrapper
+  the identity's and the issuer's stores share (`component_store.rs`);
+  since 1.4 the reading and cache of status lists (`status_lists.rs`,
+  used by the connector's verifier and the identity's status check) and
+  the check of internal addresses in the HTTP client
+  (`internal_addresses.rs`, `http/connect.rs`): a client for URLs a
+  partner chooses resolves the host itself and connects only to an
+  address the rule allows
+  ([ADR 0016](adr/0016-dsp-caller-authentication.md), amended in 1.4).
 - `portitor-dataplane` (1.2): the built-in data plane, linked into the
   connector: HTTP pull, the push sender, object storage, running-flow
   cuts and the audit line. The connector talks to it through the Data
@@ -548,7 +573,9 @@ adapters in `auth/dcp.rs` and `auth/sts.rs`:
 - `CallerVerifier`, run by a middleware on every DSP route (provider
   endpoints and consumer callbacks; not `/.well-known/dspace-version`,
   `/health` or the data plane). The DCP adapter reads the
-  `Authorization: Bearer` ID token, resolves the caller's `did:web` DID
+  `Authorization: Bearer` ID token, checks what needs no fetch (`aud` =
+  our DID, `iss` = `sub`, the times; `portitor_dcp::check_before_resolving`,
+  since 1.4, F-06), resolves the caller's `did:web` DID
   (a DID document is reused for `PORTITOR_DID_CACHE_SECONDS`, in every
   component),
   validates the token (`portitor_dcp::validate_self_issued`: key with
@@ -560,7 +587,10 @@ adapters in `auth/dcp.rs` and `auth/sts.rs`:
   status list credential (signed by the credential's issuer, fail closed;
   a verified list is reused for `PORTITOR_STATUS_LIST_CACHE_SECONDS`),
   and requires a `MembershipCredential` from a trusted issuer about the
-  caller (each credential signed with a key of its issuer's own DID,
+  caller (since 1.4 `PORTITOR_TRUSTED_ISSUER_TYPES` may limit an issuer
+  to some credential types; a credential from an issuer not trusted for
+  its types is skipped before anything is fetched for it; each
+  credential signed with a key of its issuer's own DID,
   DCP v1.0.1, 5.4.3, step 4). One credential that fails its checks makes its presentation
   invalid and refuses the caller (DCP v1.0.1, 5.4.3, step 8). The verified DID and credentials go to the handler as `Caller`;
   a refusal is a DSP error with no detail: HTTP 404 on the negotiation
@@ -569,7 +599,11 @@ adapters in `auth/dcp.rs` and `auth/sts.rs`:
   derives their scopes (`portitor_dsp::policy::credential_scopes`) and
   asks the verifier again (`CallerVerifier::credentials`): a second query,
   with the access token the caller sent; the domain evaluates the policy
-  with the result.
+  with the result. Since 1.4 a dataset's access policy is checked the
+  same way on catalog, dataset and contract requests: its scopes are
+  asked for in that second query, and a dataset it does not hold for is
+  hidden from the caller ([ADR 0019](adr/0019-credential-constraints.md),
+  amendment in 1.4).
 - `Prover`, used by the outbox before each outgoing DSP request: a fresh
   token from our STS with `aud` = the counter-party's DID (stored with the
   negotiation or transfer when it started, never taken from an incoming
@@ -627,7 +661,8 @@ is in `portitor-runtime` (`src/database.rs` and `src/database/`;
   compare-and-update writes, rows written once
   (`INSERT ... ON CONFLICT DO NOTHING`, for used token ids), and leases
   of 30 seconds on work that runs (outbox messages, pushes, uploads,
-  scheduled jobs, deliveries, a transfer's data plane step). The
+  scheduled jobs such as the identity's status check, deliveries, a
+  transfer's data plane step). The
   catalog and each dataset are read from the database on each request.
   Each running download or push reads its flow's state every
   5 seconds, and each connector process reads the bundle version in

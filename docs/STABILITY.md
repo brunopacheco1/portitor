@@ -39,10 +39,14 @@ must not parse them or rely on their length or alphabet; a 1.x release
 may accept or issue other forms, for example a JWT
 ([ADR 0025](adr/0025-users-and-roles.md), freeze point 1).
 
-A 1.x release may refuse internal network addresses on URLs that a
-partner chooses, by default, with a setting to allow them (security
+Since 1.4 the three components can refuse internal network addresses
+on URLs that a partner chooses (`PORTITOR_BLOCK_INTERNAL_ADDRESSES`,
+with `PORTITOR_INTERNAL_ADDRESSES_ALLOWED` for the exceptions; security
 finding F-01 in [SECURITY-ASSURANCE](SECURITY-ASSURANCE.md),
-[R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17)). 1.0 does not refuse them.
+[R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17)). The block is off by default
+in 1.x, so a 1.0 configuration behaves the same; 2.0 turns it on by
+default ([ADR 0016](adr/0016-dsp-caller-authentication.md), amended in
+1.4).
 
 Each service needs its own host name (or its own port): the connector
 serves `/dsp/2025-1`, `/data`, `/push` (since 1.1) and
@@ -350,7 +354,9 @@ copies a SQLite file into PostgreSQL (maintainer, 2026-11-27;
 [OPERATING](OPERATING.md#from-sqlite-to-postgresql)).
 
 Migrations run at start and **forward only**. An older release refuses a
-database that a newer one migrated. To go back, restore the backup taken
+database that a newer one migrated. What each release adds is in
+[OPERATING](OPERATING.md#upgrade-and-rollback), for example
+[From 1.3 to 1.4](OPERATING.md#from-13-to-14). To go back, restore the backup taken
 before the upgrade; what was written since is lost. The maintainer
 confirmed this for 1.x at the freeze (2026-11-20,
 [TD-22](RISKS_AND_TECHNICAL_DEBTS.md#td-22);
