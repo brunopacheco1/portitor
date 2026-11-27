@@ -74,7 +74,7 @@ pub struct Ports {
     /// our operator gave in the management API: the block on internal
     /// addresses does not apply (R-17). [`Ports::new`] uses `sender` for
     /// both; the binary sets its own.
-    pub provider_sender: Arc<dyn Sender>,
+    pub sender_to_providers: Arc<dyn Sender>,
     /// The block on internal addresses (`PORTITOR_BLOCK_INTERNAL_ADDRESSES`,
     /// R-17), for the clients the connector builds itself: the data
     /// plane's push to a consumer's endpoint. [`Ports::new`] leaves it
@@ -158,7 +158,7 @@ impl Ports {
             flow_store: Some(Shared(Arc::clone(store) as _)),
             push_receipts: Shared(Arc::clone(store) as _),
             decider: default_decider(),
-            provider_sender: Arc::clone(&sender),
+            sender_to_providers: Arc::clone(&sender),
             sender,
             internal_addresses: InternalAddresses::default(),
             verifier: Arc::new(RefuseAll),
@@ -343,12 +343,12 @@ impl NegotiationStore for AnyStore {
     fn get(&self, provider_pid: &str) -> Result<Option<Negotiation>, StoreError> {
         self.0.get(provider_pid)
     }
-    fn requested(
+    fn negotiation_requested_by(
         &self,
         counter_party: &str,
         consumer_pid: &str,
     ) -> Result<Option<Negotiation>, StoreError> {
-        self.0.requested(counter_party, consumer_pid)
+        self.0.negotiation_requested_by(counter_party, consumer_pid)
     }
     fn insert(&self, negotiation: &Negotiation) -> Result<bool, StoreError> {
         let inserted = self.0.insert(negotiation)?;

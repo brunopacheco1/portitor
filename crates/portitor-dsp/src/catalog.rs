@@ -6,7 +6,8 @@
 //! [`CatalogDatasets`] port.
 
 use crate::policy::{
-    AccessPolicy, CallerCredentials, CredentialTypes, access_policy_holds, credential_scopes,
+    AccessPolicy, CallerCredentials, CredentialTypes, access_policy_holds, add_once,
+    credential_scopes,
 };
 pub use crate::process::StoreError;
 use crate::{
@@ -18,73 +19,35 @@ use crate::{
 /// where they are kept (the connector's database, ADR 0029, D4), so every
 /// call can fail.
 pub trait CatalogDatasets {
-    /// All datasets visible to the requester.
-    ///
-    /// # Errors
-    /// The datasets cannot be read.
-    fn all(&self) -> Result<Vec<Dataset>, StoreError>;
-    /// One dataset by id, if it is in the catalog.
-    ///
-    /// # Errors
-    /// The datasets cannot be read.
-    fn get(&self, id: &str) -> Result<Option<Dataset>, StoreError>;
     /// One dataset by id, for a transfer under an agreement already made.
     /// It may be a dataset that has left the catalog since (the provider
     /// withdrew or hid it): the agreement is a contract, so its transfers
     /// keep working. Use it only for transfers; catalog, dataset and
-    /// contract requests use [`CatalogDatasets::get`]. The default is `get`,
-    /// for stores whose datasets never leave the catalog.
+    /// contract requests use [`CatalogDatasets::get_with_access_policy`].
     ///
     /// # Errors
     /// The datasets cannot be read.
-    fn get_for_agreement(&self, id: &str) -> Result<Option<Dataset>, StoreError> {
-        self.get(id)
-    }
+    fn get_for_agreement(&self, id: &str) -> Result<Option<Dataset>, StoreError>;
     /// Every dataset in the catalog with its access policy, if it has one
-    /// (ADR 0019, amendment in 1.4). The default: [`CatalogDatasets::all`],
-    /// without access policies, for stores that have none.
+    /// (ADR 0019, amendment in 1.4).
+    ///
+    /// No default: an adapter that forgot the access policies would show
+    /// every dataset to every caller.
     ///
     /// # Errors
     /// The datasets cannot be read.
-    fn all_with_access_policies(&self) -> Result<Vec<ListedDataset>, StoreError> {
-        let mut listed = Vec::new();
-        for dataset in self.all()? {
-            listed.push(ListedDataset {
-                dataset,
-                access_policy: None,
-            });
-        }
-        Ok(listed)
-    }
-    /// One dataset in the catalog with its access policy. The default:
-    /// [`CatalogDatasets::get`], without an access policy.
+    fn all_with_access_policies(&self) -> Result<Vec<ListedDataset>, StoreError>;
+    /// One dataset in the catalog, if it is there, with its access policy.
     ///
     /// # Errors
     /// The datasets cannot be read.
-    fn get_with_access_policy(&self, id: &str) -> Result<Option<ListedDataset>, StoreError> {
-        Ok(self.get(id)?.map(|dataset| ListedDataset {
-            dataset,
-            access_policy: None,
-        }))
-    }
+    fn get_with_access_policy(&self, id: &str) -> Result<Option<ListedDataset>, StoreError>;
     /// The access policies of the datasets in the catalog, each once: what
-    /// a catalog request needs to know which credentials to ask for. The
-    /// default reads them from [`CatalogDatasets::all_with_access_policies`];
-    /// a store may read only them.
+    /// a catalog request needs to know which credentials to ask for.
     ///
     /// # Errors
     /// The datasets cannot be read.
-    fn access_policies(&self) -> Result<Vec<AccessPolicy>, StoreError> {
-        let mut policies: Vec<AccessPolicy> = Vec::new();
-        for listed in self.all_with_access_policies()? {
-            if let Some(policy) = listed.access_policy
-                && !policies.contains(&policy)
-            {
-                policies.push(policy);
-            }
-        }
-        Ok(policies)
-    }
+    fn access_policies(&self) -> Result<Vec<AccessPolicy>, StoreError>;
 }
 
 /// A dataset of the catalog with its access policy (ADR 0019, amendment
@@ -397,9 +360,7 @@ impl<S: CatalogDatasets> CatalogService<S> {
         let mut scopes: Vec<String> = Vec::new();
         for policy in self.store.access_policies()? {
             for scope in credential_scopes(&policy, types) {
-                if !scopes.contains(&scope) {
-                    scopes.push(scope);
-                }
+                add_once(&mut scopes, scope);
             }
         }
         Ok(scopes)
@@ -447,10 +408,10 @@ impl<S: CatalogDatasets> CatalogService<S> {
             Ok(listed) => listed,
             Err(e) => return Outcome::StoreFailed(e),
         };
-        let mut dataset = Vec::new();
+        let mut shown = Vec::new();
         for entry in listed {
             if requester.may_see(entry.access_policy.as_ref()) {
-                dataset.push(entry.dataset);
+                shown.push(entry.dataset);
             }
         }
         Outcome::Ok(Catalog {
@@ -459,7 +420,7 @@ impl<S: CatalogDatasets> CatalogService<S> {
             kind: CatalogType,
             participant_id: self.participant_id.clone(),
             service: vec![self.service.clone()],
-            dataset,
+            dataset: shown,
         })
     }
 
@@ -469,11 +430,13 @@ impl<S: CatalogDatasets> CatalogService<S> {
     pub fn dataset(&self, id: &str, requester: &Requester<'_>) -> Outcome<Dataset> {
         match self.store.get_with_access_policy(id) {
             Ok(Some(listed)) if requester.may_see(listed.access_policy.as_ref()) => {
-                let mut d = listed.dataset;
-                d.context = Some(Context::default());
-                Outcome::Ok(d)
+                let mut dataset = listed.dataset;
+                dataset.context = Some(Context::default());
+                Outcome::Ok(dataset)
             }
-            Ok(_) => Outcome::NotFound(CatalogError::new("404", "dataset not found")),
+            // unknown, or hidden by its access policy: the same answer
+            // (ADR 0019, 1.4)
+            Ok(Some(_) | None) => Outcome::NotFound(CatalogError::new("404", "dataset not found")),
             Err(e) => Outcome::StoreFailed(e),
         }
     }
@@ -658,10 +621,16 @@ mod tests {
     struct Unreadable;
 
     impl CatalogDatasets for Unreadable {
-        fn all(&self) -> Result<Vec<Dataset>, StoreError> {
+        fn get_for_agreement(&self, _: &str) -> Result<Option<Dataset>, StoreError> {
             Err(StoreError("database down".to_owned()))
         }
-        fn get(&self, _: &str) -> Result<Option<Dataset>, StoreError> {
+        fn all_with_access_policies(&self) -> Result<Vec<ListedDataset>, StoreError> {
+            Err(StoreError("database down".to_owned()))
+        }
+        fn get_with_access_policy(&self, _: &str) -> Result<Option<ListedDataset>, StoreError> {
+            Err(StoreError("database down".to_owned()))
+        }
+        fn access_policies(&self) -> Result<Vec<AccessPolicy>, StoreError> {
             Err(StoreError("database down".to_owned()))
         }
     }
@@ -720,17 +689,23 @@ mod tests {
     }
 
     impl CatalogDatasets for WithAccessPolicies {
-        fn all(&self) -> Result<Vec<Dataset>, StoreError> {
-            Ok(Self::listed().into_iter().map(|l| l.dataset).collect())
-        }
-        fn get(&self, id: &str) -> Result<Option<Dataset>, StoreError> {
-            Ok(self.all()?.into_iter().find(|d| d.id == id))
+        fn get_for_agreement(&self, id: &str) -> Result<Option<Dataset>, StoreError> {
+            Ok(self.get_with_access_policy(id)?.map(|l| l.dataset))
         }
         fn all_with_access_policies(&self) -> Result<Vec<ListedDataset>, StoreError> {
             Ok(Self::listed())
         }
         fn get_with_access_policy(&self, id: &str) -> Result<Option<ListedDataset>, StoreError> {
             Ok(Self::listed().into_iter().find(|l| l.dataset.id == id))
+        }
+        fn access_policies(&self) -> Result<Vec<AccessPolicy>, StoreError> {
+            let mut policies = Vec::new();
+            for listed in Self::listed() {
+                if let Some(policy) = listed.access_policy {
+                    policies.push(policy);
+                }
+            }
+            Ok(policies)
         }
     }
 

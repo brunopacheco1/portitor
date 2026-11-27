@@ -82,7 +82,7 @@ pub(crate) struct Link {
 impl Link {
     /// The link of the provider's processes: messages go to the callback
     /// address each consumer chose (`ports.sender`).
-    pub(crate) fn new(ports: &Ports) -> Self {
+    pub(crate) fn to_consumers(ports: &Ports) -> Self {
         Self {
             sender: Arc::clone(&ports.sender),
             ..Self::to_providers(ports)
@@ -90,10 +90,10 @@ impl Link {
     }
 
     /// The link of the consumer's processes: messages go to the provider
-    /// address our operator gave (`ports.provider_sender`, R-17).
+    /// address our operator gave (`ports.sender_to_providers`, R-17).
     pub(crate) fn to_providers(ports: &Ports) -> Self {
         Self {
-            sender: Arc::clone(&ports.provider_sender),
+            sender: Arc::clone(&ports.sender_to_providers),
             prover: Arc::clone(&ports.prover),
             guard: Arc::clone(&ports.guard),
             retry: ports.retry,
@@ -862,7 +862,7 @@ mod tests {
             attempts: 1,
             first_delay: std::time::Duration::from_millis(1),
         };
-        let link = Link::new(&ports);
+        let link = Link::to_consumers(&ports);
         let body = serde_json::json!({"@type": "ContractRequestMessage"});
         let msg = Message::new(
             "urn:uuid:1",
@@ -985,7 +985,7 @@ mod tests {
             attempts: 3,
             first_delay: std::time::Duration::from_millis(1),
         };
-        let link = Link::new(&ports);
+        let link = Link::to_consumers(&ports);
         let body = serde_json::json!({"@type": "ContractAgreementMessage"});
         let msg = Message::new(
             "urn:uuid:1",
@@ -1123,7 +1123,7 @@ mod tests {
             attempts: 1,
             first_delay: Duration::from_millis(1),
         };
-        Link::new(&ports)
+        Link::to_consumers(&ports)
     }
 
     impl Undeliverable {
@@ -1326,7 +1326,7 @@ mod tests {
         let mut outbox = Undeliverable::new(false);
         let mut ports = Ports::in_memory(Arc::new(Accepts));
         ports.prover = Arc::new(FixedToken);
-        outbox.link = Link::new(&ports);
+        outbox.link = Link::to_consumers(&ports);
         let event = serde_json::json!({"@type": "ContractNegotiationEventMessage"});
         assert!(matches!(send_and_record(&outbox, &event).await, Step::Done));
         assert_eq!(*outbox.calls.lock().unwrap(), ["delivered"]);
@@ -1349,7 +1349,7 @@ mod tests {
         let mut ports = Ports::in_memory(Arc::new(Accepts));
         ports.prover = Arc::new(FixedToken);
         let outbox = Arc::new(PanicsWhenRecording {
-            link: Link::new(&ports),
+            link: Link::to_consumers(&ports),
             panics: 2,
             recordings: std::sync::atomic::AtomicUsize::new(0),
         });

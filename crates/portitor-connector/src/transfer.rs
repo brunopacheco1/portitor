@@ -149,7 +149,7 @@ impl TransferProvider {
                 catalog,
                 SystemEnvironment,
             ),
-            link: Link::new(ports),
+            link: Link::to_consumers(ports),
             verifier: Arc::clone(&ports.verifier),
             flow_store: ports.flow_store.clone(),
             allow_http,
@@ -802,16 +802,15 @@ pub(crate) const MEMBERSHIP_ENDED: &str = "the consumer's membership no longer h
 pub(crate) struct EndsThroughProvider(pub(crate) Weak<TransferProvider>);
 
 impl EndsTransfers for EndsThroughProvider {
-    fn end_transfer(&self, provider_pid: &str, reason: &str) {
+    // the termination goes to the consumer: a fixed reason, not
+    // `_reason`. The check's own text may name a status list or an
+    // address inside our network; the gate has logged it
+    // (`MembershipGate::end_transfer`)
+    fn end_transfer(&self, provider_pid: &str, _reason: &str) {
         let Some(provider) = self.0.upgrade() else {
             return;
         };
-        // the termination goes to the consumer: a fixed reason. The
-        // check's own text may name a status list or an address inside
-        // our network; the gate has logged it (`MembershipGate::end_transfer`)
-        let _ = reason;
-        let why = MEMBERSHIP_ENDED.to_owned();
-        match provider.terminate_own(provider_pid, &why) {
+        match provider.terminate_own(provider_pid, MEMBERSHIP_ENDED) {
             Ok(_) => {}
             // another call is changing the transfer (TD-48): tried again
             // in the background; access is refused meanwhile by the gate
@@ -823,7 +822,7 @@ impl EndsTransfers for EndsThroughProvider {
                 runtime.spawn(async move {
                     let ended = retry_while_busy::<_, Box<Failure>>(
                         |failure| failure.is_busy(),
-                        || provider.terminate_own(&pid, &why),
+                        || provider.terminate_own(&pid, MEMBERSHIP_ENDED),
                     )
                     .await;
                     if let Err(failure) = ended {

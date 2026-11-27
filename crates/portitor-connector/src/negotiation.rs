@@ -50,7 +50,7 @@ impl Provider {
         allow_http: bool,
     ) -> Self {
         Self {
-            link: Link::new(&ports),
+            link: Link::to_consumers(&ports),
             verifier: Arc::clone(&ports.verifier),
             service: ProviderService::new(
                 ports.store,
@@ -484,7 +484,11 @@ mod tests {
         fn get(&self, _: &str) -> Result<Option<Negotiation>, StoreError> {
             Err(StoreError("disk I/O error".to_owned()))
         }
-        fn requested(&self, _: &str, _: &str) -> Result<Option<Negotiation>, StoreError> {
+        fn negotiation_requested_by(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<Negotiation>, StoreError> {
             Err(StoreError("disk I/O error".to_owned()))
         }
         fn insert(&self, _: &Negotiation) -> Result<bool, StoreError> {
@@ -549,7 +553,13 @@ mod tests {
         let reached = |state: Value| {
             serde_json::from_value::<ContractNegotiation>(state).is_ok_and(|n| n.state == to)
         };
-        outbox::arrived(&Link::new(&ports), url, "did:web:c.example", reached).await
+        outbox::arrived(
+            &Link::to_consumers(&ports),
+            url,
+            "did:web:c.example",
+            reached,
+        )
+        .await
     }
 
     /// Whether `sender` reads state `to` at `url`.

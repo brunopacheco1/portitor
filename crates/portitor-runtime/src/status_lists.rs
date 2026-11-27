@@ -101,8 +101,8 @@ impl StatusListReader {
     }
 
     /// The status list credential at `url` for a credential of
-    /// `issuer_did`, signed by the same issuer (`issuer` is its DID
-    /// document) and valid at `now` within `leeway` seconds: from the
+    /// `issuer_did`, signed by the same issuer (`issuer_document` is its
+    /// DID document) and valid at `now` within `leeway` seconds: from the
     /// cache, or fetched from `source`, checked, and then kept in the
     /// cache.
     ///
@@ -112,7 +112,7 @@ impl StatusListReader {
         &self,
         source: &dyn StatusListSource,
         issuer_did: &str,
-        issuer: &DidDocument,
+        issuer_document: &DidDocument,
         url: &str,
         now: u64,
         leeway: u64,
@@ -147,7 +147,7 @@ impl StatusListReader {
             return Err(another_issuer());
         }
         list_credential
-            .verify(issuer, now, leeway)
+            .verify(issuer_document, now, leeway)
             .map_err(|e| rejected(&e))?;
         // only now, fetched and verified, may it be kept
         let list_credential = Arc::new(list_credential);

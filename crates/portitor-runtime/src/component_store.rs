@@ -96,7 +96,9 @@ impl<S: ComponentSchema> ComponentStore<S> {
         &self.database
     }
 
-    /// The database, to run one statement on (`self.db().execute(...)`).
+    /// The same database as [`database`](Self::database), borrowed
+    /// without its `Arc`: the short form for one statement
+    /// (`self.db().execute(...)`).
     #[must_use]
     pub fn db(&self) -> &Database {
         &self.database

@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use portitor_dsp::catalog::ListedDataset;
-use portitor_dsp::policy::AccessPolicy;
+use portitor_dsp::policy::{AccessPolicy, add_once};
 
 use super::{
     Commit, DatasetState, DatasetStore, HarvestJob, HarvestStatus, JobWithErrors, KEPT_JOBS,
@@ -60,10 +60,8 @@ impl DatasetStore for InMemoryDatasetStore {
             if dataset.state != DatasetState::Active {
                 continue;
             }
-            if let Some(policy) = &dataset.access_policy
-                && !policies.contains(policy)
-            {
-                policies.push(policy.clone());
+            if let Some(policy) = &dataset.access_policy {
+                add_once(&mut policies, policy.clone());
             }
         }
         Ok(policies)

@@ -108,6 +108,17 @@ identity now calls issuers' DID documents and status lists. Details:
   `Ports::for_partners`) that `main.rs` calls, so tests check the
   block on internal addresses as the binaries set it; no change of
   behaviour ([R-17](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-17)).
+- Code: the 1.4 readability review (2026-11-27), no change of
+  behaviour of the binaries: plainer
+  names (`sender_to_providers`, `Link::to_consumers`,
+  `negotiation_requested_by`, `last_status_check`,
+  `authenticate_trusted_issuer`, `resolve_did_document`), an enum for
+  the consumer's view of a constraint, one `add_once` helper, a plainer
+  refusal text for internal addresses, and three more patterns in
+  `docs/RUST-IDIOMS.md`. The catalog port `CatalogDatasets` no longer
+  has default bodies that answered "no access policy": an adapter must
+  write them, so one that forgets cannot show every dataset to every
+  caller. New debt [TD-75](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-75).
 
 ### Fixed
 

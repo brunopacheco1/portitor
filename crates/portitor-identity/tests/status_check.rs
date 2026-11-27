@@ -159,7 +159,7 @@ fn sorted(jwts: &[&String]) -> Vec<String> {
 fn recorded(world: &World, jwt: &str) -> Option<HeldStatus> {
     let credentials = world.identity.store().credentials().unwrap();
     let held = credentials.iter().find(|held| held.jwt == jwt).unwrap();
-    held.status.map(|checked| checked.state)
+    held.last_status_check.map(|checked| checked.state)
 }
 
 /// Lets the lease of the last round end, as a period later: the lease
@@ -228,7 +228,7 @@ async fn a_revoked_credential_is_no_longer_presented() {
     assert!(
         checked
             .iter()
-            .all(|held| held.status.unwrap().checked_at >= now_secs() - 5),
+            .all(|held| held.last_status_check.unwrap().checked_at >= now_secs() - 5),
         "the time of the check is recorded"
     );
 }

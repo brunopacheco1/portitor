@@ -75,9 +75,11 @@ impl StoredCatalog {
     }
 }
 
-impl CatalogDatasets for StoredCatalog {
+/// Short forms for the tests, without the access policies.
+#[cfg(test)]
+impl StoredCatalog {
     /// Active datasets only, in id order.
-    fn all(&self) -> Result<Vec<Dataset>, StoreError> {
+    pub(crate) fn all(&self) -> Result<Vec<Dataset>, StoreError> {
         let mut datasets = Vec::new();
         for listed in self.0.catalog()? {
             datasets.push(listed.dataset);
@@ -86,12 +88,14 @@ impl CatalogDatasets for StoredCatalog {
     }
 
     /// Active datasets only.
-    fn get(&self, id: &str) -> Result<Option<Dataset>, StoreError> {
+    pub(crate) fn get(&self, id: &str) -> Result<Option<Dataset>, StoreError> {
         Ok(self
             .get_with_access_policy(id)?
             .map(|listed| listed.dataset))
     }
+}
 
+impl CatalogDatasets for StoredCatalog {
     /// Active, withdrawn or hidden: an agreement already made keeps its
     /// transfers (ADR 0020).
     fn get_for_agreement(&self, id: &str) -> Result<Option<Dataset>, StoreError> {

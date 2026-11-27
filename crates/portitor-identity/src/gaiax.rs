@@ -760,7 +760,7 @@ fn stored(credential: &Credential, name: &str) -> StoredCredential {
         expires_at: credential.validity.until,
         holder_pid: format!("{GAIAX_HOLDER_PID_PREFIX}{name}"),
         jwt: credential.jwt().to_owned(),
-        status: None,
+        last_status_check: None,
     }
 }
 

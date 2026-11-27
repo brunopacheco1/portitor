@@ -205,10 +205,10 @@ impl From<StoredCredential> for CredentialView {
                 .expires_at
                 .map(|secs| xsd_date_time(u64::try_from(secs).unwrap_or_default())),
             status: credential
-                .status
+                .last_status_check
                 .map(|checked| checked.state.text().to_owned()),
             status_checked_at: credential
-                .status
+                .last_status_check
                 .map(|checked| xsd_date_time(checked.checked_at)),
         }
     }

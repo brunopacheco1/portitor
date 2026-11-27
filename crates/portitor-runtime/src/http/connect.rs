@@ -40,7 +40,10 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 type Later<T> = Pin<Box<dyn Future<Output = Result<T, BoxError>> + Send>>;
 
 /// Why a call was not made: its host is internal, and the rule refuses
-/// it. The text names the setting that would allow it.
+/// it. The text names the setting that would allow it. It is for our
+/// own operator (the log, the management API), never for a partner: it
+/// names an address inside our network. The data plane's push, for
+/// example, tells the consumer only that its endpoint is not allowed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InternalAddressRefused {
     /// The host, as written in the URL.
@@ -53,9 +56,11 @@ impl std::fmt::Display for InternalAddressRefused {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} is the internal address {}, refused for an address a partner chose ({BLOCK_SETTING}); \
-             add it to {ALLOWED_SETTING} to allow it",
-            self.host, self.address
+            "{host} leads to the internal address {address}, refused because a partner chose \
+             this URL and {BLOCK_SETTING} is true; to allow it, add {host} or {address} to \
+             {ALLOWED_SETTING}",
+            host = self.host,
+            address = self.address
         )
     }
 }

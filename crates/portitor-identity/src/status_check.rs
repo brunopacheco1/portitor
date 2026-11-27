@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! The credential status check (TD-20, from 1.4; maintainer decision D6,
-//! 2026-11-27): every `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS` (default
+//! The credential status check (TD-20, from 1.4; decided by the
+//! maintainer on 2026-11-27, see TD-20): every `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS` (default
 //! 60, 0 off), the identity reads the status lists of the credentials it
 //! holds and records what they say, so that the presentation API leaves
 //! out a revoked or suspended credential ([`crate::presentation`]).
@@ -212,7 +212,7 @@ async fn round(identity: &Identity, check: &StatusCheck, now: u64) -> RoundCount
         let (state, why_uncheckable) =
             match status_of(identity.directory.as_ref(), check, &reader, credential, now).await {
                 Ok(state) => (state, None),
-                Err(NotRead::NotNow(reason)) => {
+                Err(NotRead::Unavailable(reason)) => {
                     tracing::warn!(
                         credential = %credential.id,
                         issuer = %credential.issuer,
@@ -222,7 +222,7 @@ async fn round(identity: &Identity, check: &StatusCheck, now: u64) -> RoundCount
                     counts.unreadable += 1;
                     continue;
                 }
-                Err(NotRead::Refused(reason)) => (HeldStatus::Uncheckable, Some(reason)),
+                Err(NotRead::Rejected(reason)) => (HeldStatus::Uncheckable, Some(reason)),
             };
         record(
             identity.store.as_ref(),
@@ -261,7 +261,7 @@ fn record(
     why_uncheckable: Option<&str>,
     now: u64,
 ) {
-    let before = credential.status.map(|checked| checked.state);
+    let before = credential.last_status_check.map(|checked| checked.state);
     let checked = CheckedStatus {
         state,
         checked_at: now,
@@ -300,9 +300,9 @@ fn record(
 /// Why [`status_of`] found no answer.
 enum NotRead {
     /// No answer, or 408, 429 or 5xx: trying later may help.
-    NotNow(String),
+    Unavailable(String),
     /// Anything else: a verifier would refuse the credential too.
-    Refused(String),
+    Rejected(String),
 }
 
 /// What the status lists of `credential` say at `now`.
@@ -318,19 +318,19 @@ async fn status_of(
     now: u64,
 ) -> Result<HeldStatus, NotRead> {
     let parsed = Credential::parse(&credential.jwt)
-        .map_err(|e| NotRead::Refused(format!("credential: {e}")))?;
+        .map_err(|e| NotRead::Rejected(format!("credential: {e}")))?;
     if parsed.status.is_empty() {
         return Ok(HeldStatus::Valid);
     }
     if parsed.status.len() > MAX_STATUS_ENTRIES {
-        return Err(NotRead::Refused(format!(
+        return Err(NotRead::Rejected(format!(
             "the credential has more than {MAX_STATUS_ENTRIES} status entries"
         )));
     }
-    let issuer = match directory.did_document_or_error(&parsed.issuer).await {
-        Ok(issuer) => issuer,
-        Err(error) if error.is_temporary() => return Err(NotRead::NotNow(error.reason)),
-        Err(error) => return Err(NotRead::Refused(error.reason)),
+    let issuer_document = match directory.resolve_did_document(&parsed.issuer).await {
+        Ok(document) => document,
+        Err(error) if error.is_temporary() => return Err(NotRead::Unavailable(error.reason)),
+        Err(error) => return Err(NotRead::Rejected(error.reason)),
     };
     let mut state = HeldStatus::Valid;
     for entry in &parsed.status {
@@ -339,17 +339,17 @@ async fn status_of(
             .list_credential(
                 check.source.as_ref(),
                 &parsed.issuer,
-                &issuer,
+                &issuer_document,
                 url,
                 now,
                 LEEWAY,
             )
             .await
             .map_err(|error| match error {
-                StatusListError::Unavailable(reason) => NotRead::NotNow(reason),
-                StatusListError::Rejected(reason) => NotRead::Refused(reason),
+                StatusListError::Unavailable(reason) => NotRead::Unavailable(reason),
+                StatusListError::Rejected(reason) => NotRead::Rejected(reason),
             })?;
-        match entry_status(&read.credential, entry).map_err(NotRead::Refused)? {
+        match entry_status(&read.credential, entry).map_err(NotRead::Rejected)? {
             Status::Clear => {}
             Status::Set if entry.status_purpose == REVOCATION => return Ok(HeldStatus::Revoked),
             Status::Set => state = HeldStatus::Suspended,

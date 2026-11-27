@@ -31,7 +31,7 @@ pub trait Directory: Send + Sync {
     /// Like [`Directory::did_document`], and the error says whether
     /// trying again later may help ([`ResolveError::is_temporary`]). By
     /// default every failure is final; [`WebDirectory`] tells them apart.
-    fn did_document_or_error<'a>(
+    fn resolve_did_document<'a>(
         &'a self,
         did: &'a str,
     ) -> BoxFuture<'a, Result<Arc<DidDocument>, ResolveError>> {
@@ -97,7 +97,7 @@ impl Directory for WebDirectory {
         })
     }
 
-    fn did_document_or_error<'a>(
+    fn resolve_did_document<'a>(
         &'a self,
         did: &'a str,
     ) -> BoxFuture<'a, Result<Arc<DidDocument>, ResolveError>> {

@@ -161,6 +161,7 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [TD-72](#td-72) | Two error types for the database, converted both ways | Technical debt, readability | Open | 1.5 (suggested, with TD-63) |
 | [TD-73](#td-73) | A negotiation step is about 3.5 ms slower on SQLite in 1.3 | Technical debt, performance | Open | 1.12 (with TD-40; cause found in 1.4) |
 | [TD-74](#td-74) | An issuer not limited by type is trusted for every credential type | Technical debt, security | Accepted | 2.0 |
+| [TD-75](#td-75) | A client constructor called `new` does not apply the block on internal addresses | Technical debt, readability, security | Open | 1.5 (suggested, with TD-63) |
 
 Counts on 2026-11-27, at the 1.3.0 release: 37 risks and 43 technical
 debts are not closed (Open 43, Mitigated 22, Accepted 15); 12 risks and
@@ -1175,7 +1176,7 @@ to TD-58).
 - **Current state: Open; in progress, 1.4: built.** The identity
   reads the status lists of the credentials it holds every
   `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS` (default 60, 0 off;
-  maintainer decision D6, 2026-11-27, as EDC IdentityHub's
+  decided by the maintainer on 2026-11-27, as EDC IdentityHub's
   `CredentialWatchdog`), records `VALID`, `REVOKED`, `SUSPENDED` or `UNCHECKABLE` with
   the time, and leaves revoked and suspended credentials out of its
   presentations (`crates/portitor-identity/src/status_check.rs`). The
@@ -1452,7 +1453,7 @@ to TD-58).
   callback address gets 400. The lookup and the insert are one
   transaction (`SERIALIZABLE` on PostgreSQL), so two replicas that get
   the same repeat at once make one negotiation. Not a UNIQUE index: a
-  1.3 database may already hold repeats. `NegotiationStore::requested`
+  1.3 database may already hold repeats. `NegotiationStore::negotiation_requested_by`
   and `insert` in `portitor-dsp/src/negotiation/provider.rs`.
 - **Next.** The same lookup, with an index on
   `(counter_party, consumer_pid)`, as for transfers since 0.12
@@ -1503,7 +1504,15 @@ to TD-58).
   (`crates/portitor-connector/src/bundle_harvest.rs`, about 90 lines)
   and `Pool::migrate`
   (`crates/portitor-runtime/src/database/postgres.rs`, one block of
-  about 60 lines).
+  about 60 lines). The 1.4 readability review (2026-11-27) measured
+  again, tests not counted: the connector's `lib.rs` about 1,220
+  lines, `auth/dcp.rs` about 1,050, the issuer's `store.rs` about
+  1,250, `dcp/bundle.rs` about 1,150, `dsp/transfer/provider.rs` about
+  1,130 and `database/postgres.rs` 1,000; the connector's `auth.rs`,
+  `management.rs` and `store.rs`, and the identity's `store.rs`, are
+  just under 1,000. In the split, the catalog handlers of `lib.rs`
+  (`catalog_request`, `dataset`, `caller_credentials`) could move to a
+  catalog module of the connector.
 - **Why it matters.** Long files and functions are hard to read for the
   maintainer ([R-01](#r-01)).
 - **Current state: Open.**
@@ -1698,8 +1707,8 @@ to TD-58).
   each insert.
 - **Next.** ROADMAP 1.12, with [TD-40](#td-40) (asynchronous store
   ports): choose one of the ways above and measure again with
-  `scripts/bench.sh` (maintainer decision D1, 2026-11-27: not fixed in
-  1.4).
+  `scripts/bench.sh` (decided by the maintainer on 2026-11-27: not
+  fixed in 1.4).
 
 <a id="td-74"></a>
 ### TD-74 An issuer not limited by type is trusted for every credential type
@@ -1716,6 +1725,26 @@ to TD-58).
 - **Current state: Accepted.** The default cannot change in 1.x: a 1.3
   deployment must start and behave unchanged ([STABILITY](STABILITY.md)).
 - **Next.** Change the default in 2.0 ([ROADMAP, For 2.0](ROADMAP.md#for-20)).
+
+<a id="td-75"></a>
+### TD-75 A client constructor called `new` does not apply the block on internal addresses
+
+- **What.** The outbound clients have two constructors: `new`, for
+  URLs the operator chose, without the block on internal addresses,
+  and `for_partners`, with it ([R-17](#r-17)): `HttpSender`
+  (`portitor-runtime/src/http.rs`), `DidWebResolver` (`did.rs`),
+  `WebDirectory` (`directory.rs`), `HttpIssuerClient`
+  (`portitor-identity/src/issuance.rs`) and `DcpVerifier`
+  (`portitor-connector/src/auth/dcp.rs`). Found by the 1.4 readability
+  review (2026-11-27).
+- **Why it matters.** `new` reads as the usual way to build a value. A
+  future client for URLs a partner chooses, built with `::new`, gets no
+  block, and nothing in the name warns the reader ([R-01](#r-01)).
+- **Current state: Open.** Every partner client of 1.4 is built with
+  `for_partners`.
+- **Next.** Rename to `for_operator_urls` and `for_partner_urls`, with
+  one private build function each. No change of behaviour. Suggested
+  for 1.5, with [TD-63](#td-63).
 
 ## Closed
 

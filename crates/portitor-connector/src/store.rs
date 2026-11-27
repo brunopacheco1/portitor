@@ -713,7 +713,7 @@ impl NegotiationStore for ConnectorStore {
         self.query_first(&sql, values![provider_pid], negotiation_from_row)
     }
 
-    fn requested(
+    fn negotiation_requested_by(
         &self,
         counter_party: &str,
         consumer_pid: &str,
@@ -1521,9 +1521,7 @@ mod tests {
         );
         // the one stored first answers a repeated request, and no third
         // row is added
-        let found = TransferStore::requested(&store, "did:web:c", "urn:uuid:c")
-            .unwrap()
-            .unwrap();
+        let found = store.requested("did:web:c", "urn:uuid:c").unwrap().unwrap();
         assert_eq!(found.provider_pid, "urn:uuid:z-first");
         let mut third = found.clone();
         third.provider_pid = "urn:uuid:third".to_owned();
@@ -1567,7 +1565,8 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
-        let found = NegotiationStore::requested(&store, "did:web:c", "urn:uuid:c")
+        let found = store
+            .negotiation_requested_by("did:web:c", "urn:uuid:c")
             .unwrap()
             .unwrap();
         assert_eq!(found.provider_pid, "urn:uuid:z-first");
@@ -1659,7 +1658,8 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
-        let found = NegotiationStore::requested(&store, "did:web:c", "urn:uuid:c")
+        let found = store
+            .negotiation_requested_by("did:web:c", "urn:uuid:c")
             .unwrap()
             .unwrap();
         assert!(
@@ -1684,7 +1684,7 @@ mod tests {
 
     fn a_first_contract_request_is_found_and_added_once_on(store: &ConnectorStore) {
         let first = sample("urn:uuid:p1", NegotiationState::Requested);
-        let found = |party: &str| NegotiationStore::requested(store, party, "urn:uuid:c").unwrap();
+        let found = |party: &str| store.negotiation_requested_by(party, "urn:uuid:c").unwrap();
         assert_eq!(found("did:web:c.example"), None);
         assert!(NegotiationStore::insert(store, &first).unwrap());
         assert_eq!(found("did:web:c.example"), Some(first.clone()));
@@ -1705,22 +1705,44 @@ mod tests {
     /// A catalog with dataset `d`, offered with the offer of [`sample`].
     struct OneDataset;
 
-    impl portitor_dsp::catalog::CatalogDatasets for OneDataset {
-        fn all(&self) -> Result<Vec<portitor_dsp::Dataset>, StoreError> {
-            Ok(self.get("d")?.into_iter().collect())
-        }
-        fn get(&self, id: &str) -> Result<Option<portitor_dsp::Dataset>, StoreError> {
+    impl OneDataset {
+        /// Dataset `d`, if `id` names it.
+        fn dataset(id: &str) -> Option<portitor_dsp::catalog::ListedDataset> {
             if id != "d" {
-                return Ok(None);
+                return None;
             }
-            Ok(Some(portitor_dsp::Dataset {
+            let dataset = portitor_dsp::Dataset {
                 context: None,
                 id: "d".to_owned(),
                 kind: portitor_dsp::DatasetType,
                 has_policy: vec![sample("x", NegotiationState::Requested).offer],
                 distribution: vec![],
                 metadata: portitor_dsp::Metadata::default(),
-            }))
+            };
+            Some(portitor_dsp::catalog::ListedDataset {
+                dataset,
+                access_policy: None,
+            })
+        }
+    }
+
+    impl portitor_dsp::catalog::CatalogDatasets for OneDataset {
+        fn get_for_agreement(&self, id: &str) -> Result<Option<portitor_dsp::Dataset>, StoreError> {
+            Ok(Self::dataset(id).map(|listed| listed.dataset))
+        }
+        fn all_with_access_policies(
+            &self,
+        ) -> Result<Vec<portitor_dsp::catalog::ListedDataset>, StoreError> {
+            Ok(Self::dataset("d").into_iter().collect())
+        }
+        fn get_with_access_policy(
+            &self,
+            id: &str,
+        ) -> Result<Option<portitor_dsp::catalog::ListedDataset>, StoreError> {
+            Ok(Self::dataset(id))
+        }
+        fn access_policies(&self) -> Result<Vec<portitor_dsp::policy::AccessPolicy>, StoreError> {
+            Ok(Vec::new())
         }
     }
 

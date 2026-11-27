@@ -48,7 +48,7 @@ use portitor_dcp::message::{
 use portitor_runtime::api_key::{internal_error, problem};
 use portitor_runtime::system::{new_uuid, now_secs};
 
-use crate::caller::{Callers, authenticate, refused};
+use crate::caller::{authenticate_trusted_issuer, refused};
 use crate::issuance::issuer_metadata;
 use crate::store::{Answer, CredentialRequest, Delivered, RequestStatus, StoredCredential};
 use crate::{Identity, LEEWAY};
@@ -59,11 +59,10 @@ pub(crate) async fn credentials(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let (issuer, access_token) =
-        match authenticate(&identity, &headers, Callers::TrustedIssuers).await {
-            Ok(claims) => (claims.sub, claims.token),
-            Err(response) => return response,
-        };
+    let (issuer, access_token) = match authenticate_trusted_issuer(&identity, &headers).await {
+        Ok(claims) => (claims.sub, claims.token),
+        Err(response) => return response,
+    };
     let message: CredentialMessage = match serde_json::from_slice(&body) {
         Ok(message) => message,
         Err(e) => return bad_request(&e.to_string()),
@@ -159,7 +158,7 @@ async fn store_delivery(identity: &Identity, delivery: Delivery<'_>) -> Result<S
                 expires_at: credential.validity.until,
                 holder_pid: request.holder_pid.clone(),
                 jwt: container.payload.clone(),
-                status: None,
+                last_status_check: None,
             });
         }
     }
@@ -273,7 +272,7 @@ pub(crate) async fn offers(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let issuer = match authenticate(&identity, &headers, Callers::TrustedIssuers).await {
+    let issuer = match authenticate_trusted_issuer(&identity, &headers).await {
         Ok(claims) => claims.sub,
         Err(response) => return response,
     };

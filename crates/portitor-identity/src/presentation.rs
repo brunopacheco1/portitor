@@ -54,13 +54,9 @@ pub(crate) async fn query(
 ) -> Response {
     let now = now_secs();
     // the access token is checked on the claims before the DID is
-    // resolved (F-06); `admit` keeps it for the answer
-    let mut access = None;
+    // resolved (F-06): `admit` only says yes or no
     let admit = |claimed: &Claims| match access_before_resolving(&identity, claimed, now) {
-        Ok(checked) => {
-            access = Some(checked);
-            true
-        }
+        Ok(_) => true,
         Err(reason) => {
             tracing::info!(
                 reason,
@@ -73,9 +69,14 @@ pub(crate) async fn query(
         Ok(claims) => claims,
         Err(response) => return response,
     };
-    let Some(access) = access else {
-        // not reached: `authenticate_if` goes on only once `admit` said yes
-        return refused("no access token");
+    // the same check again, now on the verified claims, gives the access
+    // token for the answer (one more signature check, nothing fetched)
+    let access = match access_before_resolving(&identity, &caller, now) {
+        Ok(access) => access,
+        Err(reason) => {
+            tracing::info!(reason, "presentation query refused");
+            return refused("no access token");
+        }
     };
     let message: PresentationQueryMessage = match serde_json::from_slice(&body) {
         Ok(message) => message,
@@ -109,9 +110,9 @@ pub(crate) async fn query(
 /// The access token in the ID token whose claims are `claimed`, checked
 /// with what needs no fetch: the ID token is for this holder (`aud`), and
 /// its `token` claim is an access token our STS signed for the caller
-/// (`sub`), not expired. `claimed` is not verified yet: the caller's DID
-/// is resolved and the ID token's signature checked afterwards, and the
-/// access token is bound to the `sub` that check confirms.
+/// (`sub`), not expired. It is called twice: first on claims not verified
+/// yet, before the caller's DID is resolved, and again on the verified
+/// claims, which binds the access token to the `sub` that check confirms.
 fn access_before_resolving(
     identity: &Identity,
     claimed: &Claims,
@@ -190,7 +191,7 @@ fn visible<'a>(
     let mut shown = Vec::new();
     for credential in credentials {
         let expired = credential.expires_at.is_some_and(|until| until <= now);
-        let withdrawn = match credential.status {
+        let withdrawn = match credential.last_status_check {
             Some(checked) => !checked.state.is_presented(),
             None => false,
         };
@@ -274,7 +275,7 @@ mod tests {
             expires_at,
             holder_pid: "h-1".to_owned(),
             jwt: "a.b.c".to_owned(),
-            status: None,
+            last_status_check: None,
         }
     }
 
@@ -307,7 +308,7 @@ mod tests {
     fn revoked_and_suspended_credentials_are_not_shown() {
         use crate::store::{CheckedStatus, HeldStatus};
         let checked = |id: &str, state: HeldStatus| StoredCredential {
-            status: Some(CheckedStatus {
+            last_status_check: Some(CheckedStatus {
                 state,
                 checked_at: 900,
             }),

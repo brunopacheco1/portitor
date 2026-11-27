@@ -27,7 +27,7 @@
 //! negotiation does.
 
 use crate::catalog::{CatalogDatasets, Requester};
-use crate::policy::{CallerCredentials, CredentialTypes, credential_scopes};
+use crate::policy::{CallerCredentials, CredentialTypes, add_once, credential_scopes};
 use crate::process::{self, Lookup, Message, Record, Records, Refused, Write};
 pub use crate::process::{Environment, StoreError};
 use crate::{Context, Offer};
@@ -125,7 +125,7 @@ pub trait NegotiationStore {
     /// # Errors
     ///
     /// The store cannot be read.
-    fn requested(
+    fn negotiation_requested_by(
         &self,
         counter_party: &str,
         consumer_pid: &str,
@@ -308,9 +308,7 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
             .map_err(Failure::Store)?;
         if let Some(policy) = listed.and_then(|listed| listed.access_policy) {
             for scope in credential_scopes(&policy, types) {
-                if !scopes.contains(&scope) {
-                    scopes.push(scope);
-                }
+                add_once(&mut scopes, scope);
             }
         }
         Ok(scopes)
@@ -374,7 +372,7 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
         caller: &str,
         credentials: &CallerCredentials,
     ) -> Handled {
-        if let Some(existing) = self.requested_before(caller, &msg.consumer_pid)? {
+        if let Some(existing) = self.negotiation_requested_by(caller, &msg.consumer_pid)? {
             return answer_again(&existing, &msg.offer, msg.callback_address.as_deref());
         }
         let consumer_pid = msg.consumer_pid;
@@ -400,7 +398,7 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
         if !inserted {
             // a copy of this request was saved while this one was being
             // checked: answer with the negotiation that was saved
-            return match self.requested_before(caller, &negotiation.consumer_pid)? {
+            return match self.negotiation_requested_by(caller, &negotiation.consumer_pid)? {
                 Some(existing) => answer_again(
                     &existing,
                     &negotiation.offer,
@@ -419,13 +417,13 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
     /// The negotiation `caller` already started with `consumer_pid`, if
     /// any. Only the caller's own negotiations are searched, so another
     /// participant that uses the same `consumerPid` finds nothing.
-    fn requested_before(
+    fn negotiation_requested_by(
         &self,
         caller: &str,
         consumer_pid: &str,
     ) -> Result<Option<Negotiation>, Failure> {
         self.store
-            .requested(caller, consumer_pid)
+            .negotiation_requested_by(caller, consumer_pid)
             .map_err(Failure::Store)
     }
 
@@ -697,8 +695,9 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
     ) -> Result<Result<(), String>, Failure> {
         let dataset = self
             .catalog
-            .get(negotiation.dataset_id())
-            .map_err(Failure::Store)?;
+            .get_with_access_policy(negotiation.dataset_id())
+            .map_err(Failure::Store)?
+            .map(|listed| listed.dataset);
         let listed = dataset.and_then(|d| {
             d.has_policy
                 .into_iter()
