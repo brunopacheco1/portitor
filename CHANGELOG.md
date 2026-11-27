@@ -68,6 +68,10 @@ setting and file format still works, and every new setting is optional
   background round on a timer; the connector's outbox loop, transfer
   step sweep, dataset harvest and bundle check use it, with no change
   of behaviour ([TD-70](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-70)).
+- Code: the identity's and the issuer's `DatabaseStore` share one
+  wrapper, `ComponentStore` in `portitor-runtime`, with the used token
+  ids and leases written once; no change of behaviour
+  ([TD-71](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-71)).
 
 ### Fixed
 

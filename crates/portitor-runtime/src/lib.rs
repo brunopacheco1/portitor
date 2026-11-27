@@ -16,6 +16,7 @@ use std::pin::Pin;
 
 pub mod api_key;
 pub mod caller;
+pub mod component_store;
 pub mod database;
 pub mod did;
 pub mod did_document;

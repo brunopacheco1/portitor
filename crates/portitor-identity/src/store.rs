@@ -8,13 +8,10 @@
 //! (TD-09). [`IdentityStore`] is the port; [`DatabaseStore`] the adapter,
 //! on PostgreSQL (several replicas) or a `SQLite` file (one process).
 
-use std::sync::Arc;
-
 use portitor_dcp::credential::Profile;
 use portitor_dcp::message::CredentialObject;
-use portitor_runtime::database::{
-    Database, DatabaseSetting, DbError, Executor, Migrations, Row, from_db_int, to_db_int,
-};
+use portitor_runtime::component_store::{ComponentSchema, ComponentStore, WithLeaseTable};
+use portitor_runtime::database::{DbError, Executor, Migrations, Row, from_db_int, to_db_int};
 use portitor_runtime::leases::LeaseStore;
 use portitor_runtime::used_tokens::UsedTokenStore;
 use portitor_runtime::values;
@@ -500,81 +497,25 @@ pub const MIGRATIONS: Migrations = Migrations {
 const REQUEST_COLUMNS: &str = "holder_pid, issuer_did, status, credential_ids, status_url, \
      access_token_id, created_at, issuer_pid, send_error";
 
-/// Adapter: the store in the component's database (PostgreSQL, or a
-/// `SQLite` file), shared with the health check.
-#[derive(Debug, Clone)]
-pub struct DatabaseStore(Arc<Database>);
+/// Names the identity component's schema ([`MIGRATIONS`]) for the shared
+/// [`ComponentStore`].
+#[derive(Debug, Clone, Copy)]
+pub struct IdentitySchema;
 
-impl DatabaseStore {
-    /// The store in `db`, whose schema is [`MIGRATIONS`].
-    #[must_use]
-    pub fn new(db: Arc<Database>) -> Self {
-        Self(db)
-    }
-
-    /// Opens (or creates) the database `setting` names and brings its
-    /// schema up to date.
-    ///
-    /// # Errors
-    /// The database cannot be opened, or was written by a newer Portitor.
-    pub fn open(setting: &DatabaseSetting) -> Result<Self, StoreError> {
-        Ok(Self::new(Arc::new(Database::open(setting, &MIGRATIONS)?)))
-    }
-
-    /// An in-memory `SQLite` store, for tests.
-    ///
-    /// # Errors
-    /// `SQLite` cannot allocate the database.
-    pub fn in_memory() -> Result<Self, StoreError> {
-        Ok(Self::new(Arc::new(Database::in_memory(&MIGRATIONS)?)))
-    }
-
-    /// The database, for the health check.
-    #[must_use]
-    pub fn database(&self) -> &Arc<Database> {
-        &self.0
-    }
-
-    /// The database, to run one statement on (`self.db().execute(...)`).
-    fn db(&self) -> &Database {
-        &self.0
-    }
+impl ComponentSchema for IdentitySchema {
+    const MIGRATIONS: &'static Migrations = &MIGRATIONS;
 }
 
-impl UsedTokenStore for DatabaseStore {
-    fn use_token_id(&self, token_id: &str, expires_at: u64, now: u64) -> Result<bool, String> {
-        self.db().use_token_id(token_id, expires_at, now)
-    }
-}
+/// The identity's schema has the `lease` table (1.3), so its store is a
+/// `LeaseStore`.
+impl WithLeaseTable for IdentitySchema {}
 
-impl LeaseStore for DatabaseStore {
-    fn claim(
-        &self,
-        kind: &str,
-        id: &str,
-        holder: &str,
-        until: u64,
-        now: u64,
-    ) -> Result<bool, String> {
-        self.db().claim(kind, id, holder, until, now)
-    }
-
-    fn extend(&self, kind: &str, id: &str, holder: &str, until: u64) -> Result<bool, String> {
-        self.db().extend(kind, id, holder, until)
-    }
-
-    fn release(&self, kind: &str, id: &str, holder: &str) -> Result<(), String> {
-        self.db().release(kind, id, holder)
-    }
-
-    fn held(&self, kind: &str, now: u64) -> Result<Vec<String>, String> {
-        self.db().held(kind, now)
-    }
-
-    fn forget_ended(&self, before: u64) -> Result<u64, String> {
-        self.db().forget_ended(before)
-    }
-}
+/// Adapter: the store in the identity component's database (PostgreSQL, or
+/// a `SQLite` file), shared with the health check. `new`, `open`,
+/// `in_memory`, `database`, `db` and the used token ids and leases are
+/// written once, in `portitor-runtime` ([`ComponentStore`], TD-71); the
+/// [`IdentityStore`] methods are below.
+pub type DatabaseStore = ComponentStore<IdentitySchema>;
 
 impl IdentityStore for DatabaseStore {
     fn add_request(&self, request: &CredentialRequest) -> Result<bool, StoreError> {
@@ -915,6 +856,10 @@ fn credential_from(row: &Row) -> Result<StoredCredential, StoreError> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use std::sync::Arc;
+
+    use portitor_runtime::database::{Database, DatabaseSetting};
+
     use super::*;
     use portitor_runtime::testing::{databases, schema};
     use rusqlite::Connection;

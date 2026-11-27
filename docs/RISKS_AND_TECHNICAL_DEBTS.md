@@ -157,7 +157,7 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [TD-68](#td-68) | No dataspace-wide registry or federated catalogue | Technical debt | Open | 1.8, only if needed |
 | [TD-69](#td-69) | No Simpl-Open features beyond the protocols (mutual TLS, consent, API gateway) | Technical debt | Open | consent code: 1.7; ADR: 1.9 |
 | [TD-70](#td-70) | Four loops that tick each write their own timer | Technical debt, readability | Open | in progress, 1.4: built |
-| [TD-71](#td-71) | The identity and the issuer each wrap the database the same way | Technical debt, readability | Open | 1.4 (suggested) |
+| [TD-71](#td-71) | The identity and the issuer each wrap the database the same way | Technical debt, readability | Open | in progress, 1.4: built |
 | [TD-72](#td-72) | Two error types for the database, converted both ways | Technical debt, readability | Open | 1.5 (suggested, with TD-63) |
 | [TD-73](#td-73) | A negotiation step is about 3.5 ms slower on SQLite in 1.3 | Technical debt, performance | Open | 1.4 (one day of profiling; else 1.12) |
 | [TD-74](#td-74) | An issuer not limited by type is trusted for every credential type | Technical debt, security | Accepted | 2.0 |
@@ -1572,7 +1572,14 @@ to TD-58).
   the call on (1.3 readability review, 2026-11-26).
 - **Why it matters.** Two copies to keep alike, in two files that are
   long already ([TD-63](#td-63), [R-01](#r-01)).
-- **Current state: Open.**
+- **Current state: Open; in progress, 1.4: built.** `ComponentStore`
+  in `crates/portitor-runtime/src/component_store.rs` holds the
+  database and implements `UsedTokenStore` and `LeaseStore` once; each
+  component's `DatabaseStore` is now a name for
+  `ComponentStore<IdentitySchema>` or `ComponentStore<IssuerSchema>`
+  (the migrations), with its own port implemented on it. `LeaseStore`
+  only for a schema marked `WithLeaseTable` (the identity's; the issuer
+  has no `lease` table).
 - **Next.** One shared piece in `portitor-runtime` (the wrapper, or the
   two pass-through impls), used by both stores; no change of
   behaviour. Small: suggested for 1.4 (to be confirmed by the

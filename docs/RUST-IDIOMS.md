@@ -564,6 +564,51 @@ different names on purpose: if they had the same name, a call on the
 type would pick the type's own method first, and a reader could take
 the trait method for one that calls itself.
 
+### A type that names what it does not hold: `PhantomData`
+
+```rust
+pub trait ComponentSchema {
+    const MIGRATIONS: &'static Migrations;
+}
+pub struct ComponentStore<S> {
+    database: Arc<Database>,
+    schema: PhantomData<S>,
+}
+pub struct IdentitySchema;
+impl ComponentSchema for IdentitySchema {
+    const MIGRATIONS: &'static Migrations = &MIGRATIONS;
+}
+pub type DatabaseStore = ComponentStore<IdentitySchema>;
+impl IdentityStore for DatabaseStore { /* ... */ }
+```
+
+The identity's and the issuer's stores are the same wrapper around the
+database; only the migrations differ (TD-71). `ComponentStore`
+(`portitor-runtime/src/component_store.rs`) is written once, generic
+over `S`, a type that holds nothing and only names the schema:
+`S::MIGRATIONS` is a constant of the trait, read by `open` and
+`in_memory`. A struct must use each of its type parameters in a field,
+so `PhantomData<S>` is a field of size zero that "uses" `S`.
+
+`pub type DatabaseStore = ...` gives the type a short name in each
+component, so `DatabaseStore::open(...)` reads as before. Each
+component then implements its own port (`IdentityStore`,
+`IssuerStore`) for its own `ComponentStore<...>`; Rust allows that
+because the port is the component's own trait. The shared port
+methods (used token ids, leases) are implemented once, in
+`portitor-runtime`, for every `ComponentStore<S>`.
+
+```rust
+pub trait WithLeaseTable: ComponentSchema {}
+impl<S: WithLeaseTable + Send + Sync> LeaseStore for ComponentStore<S> { /* ... */ }
+impl WithLeaseTable for IdentitySchema {}
+```
+
+A *marker trait*: it has no methods, it only marks a type. Only the
+identity's schema has the `lease` table, so only its store is a
+`LeaseStore`; asking the issuer's store for a lease does not compile,
+instead of failing at run time with "no such table".
+
 ### `BoxFuture` in a trait
 
 A trait whose objects are kept as `dyn Trait` cannot have an `async fn`

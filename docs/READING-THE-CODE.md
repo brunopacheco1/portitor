@@ -52,7 +52,10 @@ Read the first lines of each `lib.rs`: they say what the crate does.
 7. `portitor-connector/src/lib.rs`. The connector: its settings
    (`Config`), and `build`, which wires ports to adapters and lists
    every route. `portitor-identity` and `portitor-issuer` have the same
-   shape: `main.rs`, `config.rs`, `lib.rs` with the routes, `store.rs`.
+   shape: `main.rs`, `config.rs`, `lib.rs` with the routes, `store.rs`
+   (its `DatabaseStore` is `ComponentStore` of
+   `portitor-runtime/src/component_store.rs`, with the component's own
+   store port on it).
 
 ## Part 2: one request, end to end
 
