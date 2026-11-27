@@ -615,7 +615,9 @@ check (`GET /api/check/readiness` on the management port) answers HTTP
 2. Give participants the issuer's DID; each adds it to
    `PORTITOR_TRUSTED_ISSUERS` (identity and connector) and asks for its
    credentials (or you send it an offer).
-3. When a participant leaves, revoke its credentials. Revocation cannot
+3. When what you say about a participant changes, replace its claims
+   (`PUT`, below) and let it ask again; revoke what no longer holds.
+4. When a participant leaves, revoke its credentials. Revocation cannot
    be undone.
 
 Management API (`Authorization: Bearer <key>`; described in
@@ -625,6 +627,7 @@ Management API (`Authorization: Bearer <key>`; described in
 |---|---|
 | `POST /v1/participants` `{"did": ..., "claims": {...}}` | registers a participant (409 if registered) |
 | `GET /v1/participants` | lists them |
+| `PUT /v1/participants/{did}` `{"claims": {...}}` | since 1.4: replaces all of a participant's claims (404 if not registered); it stays registered. Issued credentials keep their claims; a request decided from now on gets the new ones |
 | `DELETE /v1/participants/{did}` | removes a registration (the DID percent-encoded as a whole, for example `jq -rR @uri`); issued credentials stay valid until revoked |
 | `POST /v1/offers` `{"participantDid": ..., "credentialIds": [...]}` | sends a `CredentialOfferMessage` to the participant's credential service |
 | `GET /v1/credentials?holder={did}` | lists issued credentials, with their delivery state (`PENDING`, `DELIVERED`, `FAILED`) |
@@ -803,7 +806,10 @@ Besides the [settings of every component](#settings-of-every-component):
   is where the component serves it (the example serves
   `/cs/presentations/query`, `/cs/credentials`, `/cs/offers`).
 - Only trusted issuers may deliver credentials (Storage API) or offers,
-  and nothing is sent to any other issuer.
+  and nothing is sent to any other issuer. An issuer limited by
+  `PORTITOR_TRUSTED_ISSUER_TYPES` may deliver and offer only its types;
+  a delivery or offer with another type gets `400` with the reason, and
+  the identity does not ask it for another type.
 - To switch EDC's scope alias off, set `PORTITOR_SCOPE_TYPE_ALIASES` to
   `org.eclipse.dspace.dcp.vc.type`.
 - The Gaia-X settings go together
@@ -1572,8 +1578,11 @@ PORTITOR_TRUSTED_ISSUER_TYPES=did:web:hdab.example=DataPermitCredential
   ([TD-74](RISKS_AND_TECHNICAL_DEBTS.md#td-74)): name every issuer now.
 - Each DID named must be in `PORTITOR_TRUSTED_ISSUERS`, or the
   component does not start.
+- A credential has several types. As in EDC, a limited issuer must be
+  trusted for each of them except `VerifiableCredential`: a credential
+  typed `DataPermitCredential` and `MembershipCredential` needs both.
 - On the identity, an issuer may deliver and offer only the types it is
-  limited to.
+  limited to; anything else gets `400` with the reason.
 
 ### Credential constraints
 

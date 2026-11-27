@@ -190,6 +190,7 @@ GET {issuerService}/status-lists/{name}
 ```text
 GET /v1/participants
 POST /v1/participants
+PUT /v1/participants/{did}
 DELETE /v1/participants/{did}
 POST /v1/offers
 GET /v1/credentials

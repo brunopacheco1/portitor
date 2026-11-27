@@ -278,6 +278,16 @@ pub trait IssuerStore: UsedTokenStore + Send + Sync {
     /// The store fails.
     fn participants(&self) -> Result<Vec<Participant>, StoreError>;
 
+    /// Replaces the claims of a registered participant (TD-46), in one
+    /// statement: two processes that replace them at once leave one of
+    /// the two sets, whole. Credentials issued already keep their
+    /// claims; a request decided from now on gets the new ones. Returns
+    /// false if the DID is not registered (nothing changes).
+    ///
+    /// # Errors
+    /// The store fails.
+    fn replace_claims(&self, did: &str, claims: &Map<String, Value>) -> Result<bool, StoreError>;
+
     /// Removes a registration. Issued credentials stay valid until
     /// revoked. Returns false if there was none.
     ///
@@ -653,6 +663,15 @@ impl IssuerStore for DatabaseStore {
             values![],
         )?;
         rows.iter().map(participant_from).collect()
+    }
+
+    fn replace_claims(&self, did: &str, claims: &Map<String, Value>) -> Result<bool, StoreError> {
+        let claims = to_json(claims)?;
+        let replaced = self.db().execute(
+            "UPDATE participant SET claims = $1 WHERE did = $2",
+            values![claims, did],
+        )?;
+        Ok(replaced == 1)
     }
 
     fn delete_participant(&self, did: &str) -> Result<bool, StoreError> {
@@ -1414,7 +1433,23 @@ mod tests {
             store.participant(HOLDER).unwrap(),
             Some(participant.clone())
         );
-        assert_eq!(store.participants().unwrap(), [participant]);
+        assert_eq!(
+            store.participants().unwrap(),
+            std::slice::from_ref(&participant)
+        );
+        // new claims replace the old ones; the registration time stays
+        let mut new_claims = Map::new();
+        new_claims.insert("role".to_owned(), Value::from("consumer"));
+        assert!(store.replace_claims(HOLDER, &new_claims).unwrap());
+        assert!(
+            !store
+                .replace_claims("did:web:unknown", &new_claims)
+                .unwrap()
+        );
+        let replaced = store.participant(HOLDER).unwrap().unwrap();
+        assert_eq!(replaced.claims, new_claims);
+        assert_eq!(replaced.registered_at, 50);
+        assert!(store.replace_claims(HOLDER, &participant.claims).unwrap());
 
         // a request, its duplicate, and its decision
         assert!(store.add_request(&request("i-1", "h-1")).unwrap());

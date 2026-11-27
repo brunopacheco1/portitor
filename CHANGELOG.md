@@ -31,8 +31,21 @@ setting and file format still works, and every new setting is optional
   loopback, private and link-local addresses in URLs a partner chooses
   ([R-17](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-17),
   [DEPLOYING](docs/DEPLOYING.md#internal-addresses)).
+- Issuer management route `PUT /v1/participants/{did}`: replaces a
+  registered participant's claims without deleting the registration;
+  issued credentials keep theirs, a request decided from then on gets
+  the new ones ([TD-46](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-46),
+  [DEPLOYING](docs/DEPLOYING.md#registering-participants-and-issuing)).
 
 ### Changed
+
+- The connector skips a credential whose issuer
+  `PORTITOR_TRUSTED_ISSUER_TYPES` does not trust for each of its types
+  (except `VerifiableCredential`), as EDC's `HasValidIssuer`, before it
+  fetches anything for it. The identity refuses such a credential in a
+  delivery and such a type in an offer (`400`, with the reason), and
+  does not ask a limited issuer for another type
+  ([R-48](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-48)).
 
 ### Fixed
 

@@ -175,6 +175,8 @@ services:
       PORTITOR_STS_CLIENT_SECRET_FILE: /run/secrets/biobank-sts-secret
       # the authority, and the HDAB's issuer for data permits
       PORTITOR_TRUSTED_ISSUERS: did:web:authority%3A8070,did:web:hdab-issuer%3A8070
+      # the HDAB's issuer for data permits only (since 1.4, R-48)
+      PORTITOR_TRUSTED_ISSUER_TYPES: did:web:hdab-issuer%3A8070=DataPermitCredential
       # status lists fetched on every check, so a revocation is seen at once
       PORTITOR_STATUS_LIST_CACHE_SECONDS: "0"
       # where data addresses point: the apps reach it in this network
@@ -258,6 +260,8 @@ services:
       PORTITOR_STS_CLIENT_SECRET_FILE: /run/secrets/schuman-sts-secret
       # the authority, and the HDAB's issuer, which delivers data permits
       PORTITOR_TRUSTED_ISSUERS: did:web:authority%3A8070,did:web:hdab-issuer%3A8070
+      # the HDAB's issuer may deliver data permits only (since 1.4, R-48)
+      PORTITOR_TRUSTED_ISSUER_TYPES: did:web:hdab-issuer%3A8070=DataPermitCredential
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8091
       PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/schuman-identity-management-key
       PORTITOR_ALLOW_HTTP: "true"

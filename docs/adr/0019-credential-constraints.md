@@ -151,6 +151,22 @@ an untrusted issuer. An issuer the setting does not name keeps every
 type (EDC's `"*"`), so a 1.3 deployment behaves the same. The safer
 default waits for 2.0 ([TD-74](../RISKS_AND_TECHNICAL_DEBTS.md#td-74)).
 
+A credential has several types, for example `["VerifiableCredential",
+"DataPermitCredential"]`. As in EDC's `HasValidIssuer` (its default
+mode; `core/common/lib/core-lib/src/main/java/org/eclipse/edc/iam/verifiablecredentials/rules/HasValidIssuer.java`,
+read at EDC Connector commit `4215744` on 2026-11-27), a limited issuer
+must be trusted for **every** type of the credential except
+`VerifiableCredential`, which never limits. A credential with only
+`VerifiableCredential` needs that type in the list.
+
+- The connector skips such a credential before it fetches anything for
+  it (its issuer's DID document, its status list), and logs it at
+  DEBUG. A membership kept with a transfer is checked again against the
+  setting too.
+- The identity refuses such a credential in a delivery (Storage API)
+  and such a type in an offer (`400`, with the reason), and does not
+  ask a limited issuer for an id of another type.
+
 ### Negative operators are not deny lists (R-43)
 
 A constraint holds if **at least one** valid credential of the type has

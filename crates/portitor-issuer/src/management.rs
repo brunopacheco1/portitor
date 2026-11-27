@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The issuer's management API, for the dataspace authority: register,
-//! list and delete participants with their claims, send a credential
+//! list, change and delete participants with their claims, send a credential
 //! offer, list issued credentials, revoke one. Not part of DCP, so it is
 //! served on its own port (`PORTITOR_MANAGEMENT_BIND`), and every call
 //! needs the API key (`Authorization: Bearer <key>`), as the connector's
@@ -24,7 +24,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use portitor_dcp::message::{
     Context, CredentialObject, CredentialOfferMessage, CredentialOfferType,
@@ -51,6 +51,16 @@ pub struct NewParticipant {
     /// named `id`.
     #[serde(default)]
     #[schema(value_type = Object, example = json!({"role": "provider"}))]
+    claims: Map<String, Value>,
+}
+
+/// The new claims of a registered participant.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NewClaims {
+    /// They replace all its claims, as at registration. A claim may not
+    /// be named `id`.
+    #[schema(value_type = Object, example = json!({"role": "consumer"}))]
     claims: Map<String, Value>,
 }
 
@@ -228,6 +238,53 @@ async fn list_participants(State(issuer): State<Arc<Issuer>>) -> Response {
                 .collect();
             Json(views).into_response()
         }
+        Err(e) => internal_error("issuer store", &e),
+    }
+}
+
+/// Replace a registered participant's claims (TD-46). Credentials issued
+/// already keep their claims; a request decided from now on gets the new
+/// ones. The participant stays registered all along. Eclipse EDC's Issuer
+/// Service changes a holder with `PUT` too (`IssuerHolderAdminApiController`,
+/// `updateHolder`, in eclipse-edc/IdentityHub, read at commit `aeb8a7d`).
+#[utoipa::path(
+    put,
+    path = "/v1/participants/{did}",
+    params(("did" = String, Path, description = "The DID, percent-encoded as a whole")),
+    request_body = NewClaims,
+    responses(
+        (status = 200, description = "The claims are replaced", body = ParticipantView),
+        (status = 400, description = "Invalid body or claims", body = Problem, content_type = "application/problem+json"),
+        (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "Not registered", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(("api_key" = [])),
+    tag = "Participants"
+)]
+async fn replace_claims(
+    State(issuer): State<Arc<Issuer>>,
+    Path(did): Path<String>,
+    body: Result<Json<NewClaims>, JsonRejection>,
+) -> Response {
+    let new = match body {
+        Ok(Json(new)) => new,
+        Err(e) => return problem(StatusCode::BAD_REQUEST, &e.body_text()),
+    };
+    if new.claims.contains_key("id") {
+        return problem(StatusCode::BAD_REQUEST, "a claim may not be named id");
+    }
+    // one UPDATE: no read before it, so two replicas cannot mix two sets
+    match issuer.store.replace_claims(&did, &new.claims) {
+        Ok(true) => {}
+        Ok(false) => return problem(StatusCode::NOT_FOUND, "not registered"),
+        Err(e) => return internal_error("issuer store", &e),
+    }
+    tracing::info!(%did, "participant claims replaced");
+    // read back for the answer; deleted in between, it is not registered
+    match issuer.store.participant(&did) {
+        Ok(Some(participant)) => Json(ParticipantView::from(participant)).into_response(),
+        Ok(None) => problem(StatusCode::NOT_FOUND, "not registered"),
         Err(e) => internal_error("issuer store", &e),
     }
 }
@@ -421,8 +478,8 @@ async fn revoke(State(issuer): State<Arc<Issuer>>, Path(id): Path<String>) -> Re
         description = "Participants, offers, issued credentials and revocation of the dataspace authority's issuer. Served on its own port (PORTITOR_MANAGEMENT_BIND), never on the public port. Every call except this description, the health checks (/api/check/...) and GET /health needs the API key. Without PORTITOR_MANAGEMENT_API_KEY_FILE, the port serves the health checks only. The API key is opaque (see the api_key security scheme). HTTP 403 is reserved for tokens with limited rights in 1.x; 1.0 never answers it.",
         license(name = "Apache-2.0", identifier = "Apache-2.0"),
     ),
-    paths(create_participant, list_participants, delete_participant, send_offer, list_credentials, revoke),
-    components(schemas(NewParticipant, ParticipantView, NewOffer, CredentialView, Problem)),
+    paths(create_participant, list_participants, replace_claims, delete_participant, send_offer, list_credentials, revoke),
+    components(schemas(NewParticipant, NewClaims, ParticipantView, NewOffer, CredentialView, Problem)),
     modifiers(&BearerKey),
     tags(
         (name = "Participants", description = "Who may get credentials, and what their credentials say"),
@@ -451,7 +508,10 @@ pub fn router(issuer: Arc<Issuer>, key: ApiKey) -> Router {
             "/v1/participants",
             post(create_participant).get(list_participants),
         )
-        .route("/v1/participants/{did}", delete(delete_participant))
+        .route(
+            "/v1/participants/{did}",
+            put(replace_claims).delete(delete_participant),
+        )
         .route("/v1/offers", post(send_offer))
         .route("/v1/credentials", get(list_credentials))
         .route("/v1/credentials/{id}/revoke", post(revoke))

@@ -32,7 +32,7 @@ pub const VERY_LONG_IN_AN_ADDRESS: usize = 8_000;
 /// One route of a management API, with real values in its path.
 #[derive(Debug, Clone)]
 pub struct Call {
-    /// `GET`, `POST` or `DELETE`.
+    /// `GET`, `POST`, `PUT` or `DELETE`.
     pub method: &'static str,
     /// The path, for example `/v1/negotiations/urn:uuid:1`.
     pub path: &'static str,

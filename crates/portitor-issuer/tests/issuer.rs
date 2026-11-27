@@ -41,7 +41,7 @@ use portitor_runtime::testing::management_calls::{
 };
 use portitor_runtime::testing::{TempDir, databases};
 use portitor_runtime::used_tokens::UsedTokenStore;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tower::ServiceExt as _;
 
 const ISSUER: &str = "did:web:issuer.example";
@@ -1321,6 +1321,9 @@ impl IssuerStore for PanicsOnRequest {
     fn participants(&self) -> Result<Vec<Participant>, StoreError> {
         self.inner.participants()
     }
+    fn replace_claims(&self, did: &str, claims: &Map<String, Value>) -> Result<bool, StoreError> {
+        self.inner.replace_claims(did, claims)
+    }
     fn delete_participant(&self, did: &str) -> Result<bool, StoreError> {
         self.inner.delete_participant(did)
     }
@@ -1620,6 +1623,72 @@ async fn participants_are_managed_with_the_api_key() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// `GET /v1/participants`.
+fn list_participants() -> Request<Body> {
+    authed(Request::get("/v1/participants"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+/// `PUT /v1/participants/{did}` with `claims`: the status and the body.
+async fn replace_claims(world: &World, did_in_path: &str, claims: &Value) -> (StatusCode, Value) {
+    call(
+        &world.management,
+        authed(Request::put(format!("/v1/participants/{did_in_path}")))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(json!({"claims": claims}).to_string()))
+            .unwrap(),
+    )
+    .await
+}
+
+/// TD-46: the claims change without deleting the registration; what was
+/// issued keeps its claims, a new request gets the new ones.
+#[tokio::test]
+async fn a_participants_claims_are_replaced_and_new_requests_get_them() {
+    let world = World::new();
+    world.register(HOLDER, json!({"role": "provider"})).await;
+    let (_, before) = call(&world.management, list_participants()).await;
+    assert_eq!(world.ask("h-1", &["membership-vc20"]).await, "ISSUED");
+    delivery::send_due(&world.issuer).await;
+
+    let encoded = "did%3Aweb%3Aholder.example";
+    let (status, body) = replace_claims(&world, encoded, &json!({"role": "consumer"})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["did"], HOLDER);
+    assert_eq!(body["claims"], json!({"role": "consumer"}));
+    assert_eq!(body["registered"], before[0]["registered"]);
+    let (_, list) = call(&world.management, list_participants()).await;
+    assert_eq!(list[0]["claims"], json!({"role": "consumer"}));
+
+    assert_eq!(world.ask("h-2", &["membership-vc20"]).await, "ISSUED");
+    delivery::send_due(&world.issuer).await;
+    let role_in = |n: usize| {
+        let credential = Credential::parse(&world.delivered(n)[0]).unwrap();
+        credential.subjects[0]["role"].clone()
+    };
+    assert_eq!(role_in(0), "provider", "issued before: its claims stay");
+    assert_eq!(role_in(1), "consumer", "issued after: the new claims");
+
+    // an unknown participant, a claim named id, no claims member
+    let (status, _) =
+        replace_claims(&world, "did%3Aweb%3Anobody.example", &json!({"role": "x"})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = replace_claims(&world, encoded, &json!({"id": "x"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = call(
+        &world.management,
+        authed(Request::put(format!("/v1/participants/{encoded}")))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (_, list) = call(&world.management, list_participants()).await;
+    assert_eq!(list[0]["claims"], json!({"role": "consumer"}));
 }
 
 #[tokio::test]
@@ -1981,6 +2050,12 @@ fn every_management_call() -> Vec<Call> {
     vec![
         Call::post("/v1/participants", participant),
         Call::without_body("GET", "/v1/participants"),
+        Call {
+            method: "PUT",
+            path: "/v1/participants/did:web:holder.example",
+            body: Some(json!({"claims": {"role": "consumer"}})),
+            old_names: &[],
+        },
         Call::without_body("DELETE", "/v1/participants/did:web:nobody.example"),
         Call::post("/v1/offers", offer),
         Call::without_body("GET", "/v1/credentials"),
@@ -1992,7 +2067,7 @@ fn every_management_call() -> Vec<Call> {
 async fn every_management_route_answers_401_without_the_key_and_never_403() {
     let world = World::new();
     let answers = without_the_key(&world.management, &every_management_call(), API_KEY).await;
-    assert_eq!(answers.len(), 6 * 6);
+    assert_eq!(answers.len(), 7 * 6);
     assert_eq!(statuses_other_than(&[401], &answers), "");
 }
 
@@ -2027,7 +2102,7 @@ async fn odd_management_paths_and_queries_are_never_an_error_of_the_server() {
     world.register(HOLDER, json!({})).await;
     let answers =
         with_odd_paths_and_queries(&world.management, &every_management_call(), API_KEY).await;
-    assert_eq!(answers.len(), 6 * 14);
+    assert_eq!(answers.len(), 7 * 14);
     // 409: the good body of a new participant, sent a second time
     assert_eq!(
         statuses_other_than(&[200, 201, 204, 400, 404, 409], &answers),

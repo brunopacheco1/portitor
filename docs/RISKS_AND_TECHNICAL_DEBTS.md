@@ -116,7 +116,7 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [R-45](#r-45) | No request limit per partner | Security | Open | 1.7 |
 | [R-46](#r-46) | The EDC Issuer Service names a request status address that is not found | Interoperability, upstream | Open | report upstream; the next EDC release |
 | [R-47](#r-47) | The EDC Issuer Service's admin API may change with the next release candidate | Interoperability | Accepted | EDC 1.0.0 |
-| [R-48](#r-48) | An issuer trusted for data permits can also issue memberships | Security | Open | 1.4 |
+| [R-48](#r-48) | An issuer trusted for data permits can also issue memberships | Security | Open | in progress, 1.4 |
 | [R-49](#r-49) | Leases in the database depend on the hosts' clocks | Operations | Mitigated | none |
 | [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | Open | 1.8 |
 | [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | Open | research; code 1.7 |
@@ -143,7 +143,7 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | Mitigated | 1.14 (Helm chart) |
 | [TD-40](#td-40) | Database calls block the async runtime | Technical debt | Accepted | 1.12 |
 | [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | Open | 1.7 |
-| [TD-46](#td-46) | The issuer keeps one set of claims per participant | Technical debt | Open | 1.4 |
+| [TD-46](#td-46) | The issuer keeps one set of claims per participant | Technical debt | Open | in progress, 1.4 |
 | [TD-49](#td-49) | After a failed message, the two parties of a negotiation can stay in different states | Technical debt, interoperability | Accepted | none |
 | [TD-59](#td-59) | SQLite is deprecated; no tool copies a SQLite file into PostgreSQL | Technical debt | Accepted | removal: 2.0 (no copy tool) |
 | [TD-60](#td-60) | A repeated first contract request starts a second negotiation | Technical debt, interoperability | Open | 1.4 |
@@ -811,11 +811,14 @@ to TD-58).
   authority (ROADMAP 1.4 and 1.5). With one list, that issuer can grant
   any role, so the authority is no longer the only one who decides who
   is a member. EDC limits each trusted issuer to its `supportedtypes`.
-- **Current state: Open.** Only an issuer's operator can misuse it, and
-  each holder chooses whom it trusts.
-- **Next.** Trusted issuers by credential type (TD-03 calls it
-  additive), in ROADMAP 1.4, with the data permit (maintainer,
-  2026-11-24).
+- **Current state: Open; in progress, 1.4: built.** Only an issuer's
+  operator can misuse it, and each holder chooses whom it trusts.
+- **Next.** 1.4 adds `PORTITOR_TRUSTED_ISSUER_TYPES` ([ADR 0019,
+  Amendment in 1.4](adr/0019-credential-constraints.md#trusted-issuers-by-credential-type-r-48)):
+  the connector skips a credential from an issuer not trusted for each
+  of its types, unfetched, and the identity refuses its delivery and
+  offer. The data-permits scenario, step 5, checks it. An issuer the
+  setting does not name keeps every type ([TD-74](#td-74)).
 
 <a id="r-49"></a>
 ### R-49 Leases in the database depend on the hosts' clocks
@@ -1329,11 +1332,14 @@ to TD-58).
   (maintainer, 2026-11-24), each with its own id and purpose. Deleting
   and registering again leaves a moment when the participant is not
   registered, and a request it made then ends `REJECTED`.
-- **Current state: Open.**
-- **Next.** Claims per credential request, or per issued credential,
-  in ROADMAP 1.4, with the data permit (maintainer, 2026-11-24). Check
-  first how EDC's
-  Issuer Service (attestations) and the EHDS permit template do it.
+- **Current state: Open; in progress, 1.4: built.**
+- **Next.** 1.4 adds `PUT /v1/participants/{did}` to the issuer's
+  management API, as EDC's Issuer Service changes a holder with `PUT`:
+  it replaces the claims in one statement, and the participant stays
+  registered. Issued credentials keep their claims; a request decided
+  from then on gets the new ones. The data-permits scenario, step 3,
+  uses it. Claims per credential request are not built: a second
+  permit still means new claims, then a new request.
 
 <a id="td-49"></a>
 ### TD-49 After a failed message, the two parties of a negotiation can stay in different states
