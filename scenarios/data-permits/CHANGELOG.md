@@ -40,7 +40,7 @@ version it ran on.
   saw the revoked permit). The step diagram says so.
 - The README says it needs 1.4 images; `compose.yaml` keeps the 1.3.0
   release images as defaults until 1.4 is released.
-- Ran on 2026-11-27 with images built from commit `a6dcaee` (1.4 before
+- Ran on 2026-11-27 with images built from commit `0ff97b5` (1.4 before
   the tag), rootless Podman 4.9.3, Pop!\_OS 24.04: every step passed.
 
 ## 2026-11-26, for 1.3.0

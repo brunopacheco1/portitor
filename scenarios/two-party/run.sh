@@ -167,13 +167,15 @@ register() { # did claims-json
 request_credentials() { # name management-port credential-id...: asks, then waits for the delivery
   local name=$1 port=$2
   shift 2 # the rest: the credential ids
-  local key ids holder_pid view status
+  local key ids answer holder_pid view status
   key=$(cat "$RUN/$name/identity-management.key")
   ids=$(printf '%s\n' "$@" | jq -R . | jq -sc .)
-  holder_pid=$(curl -sS --fail-with-body -X POST "http://127.0.0.1:$port/v1/credential-requests" \
+  # the answer is kept, so that a refusal shows the identity's reason
+  answer=$(curl -sS --fail-with-body -X POST "http://127.0.0.1:$port/v1/credential-requests" \
     -H "authorization: Bearer $key" -H 'content-type: application/json' \
-    -d "$(jq -nc --arg issuer "$AUTHORITY" --argjson ids "$ids" '{issuerDid: $issuer, credentialIds: $ids}')" |
-    jq -r '.holderPid') || fail "the $name's credential request"
+    -d "$(jq -nc --arg issuer "$AUTHORITY" --argjson ids "$ids" '{issuerDid: $issuer, credentialIds: $ids}')") ||
+    fail "the $name's credential request: $answer"
+  holder_pid=$(jq -r '.holderPid' <<<"$answer")
   for _ in $(seq 1 100); do
     view=$(curl -sf "http://127.0.0.1:$port/v1/credential-requests/$holder_pid" \
       -H "authorization: Bearer $key") || fail "read the $name's credential request"

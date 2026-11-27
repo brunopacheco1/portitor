@@ -217,9 +217,11 @@ for did in "$PROVIDER_DID" "$CONSUMER_DID" "$OUTSIDER_DID"; do
     '{did: $did, claims: {memberOf: $m}}')" >/dev/null || fail "register $did"
 done
 for name in provider consumer outsider; do
-  HOLDER_PID=$(identity_api "$name" POST /v1/credential-requests "$(jq -nc --arg issuer "$AUTHORITY" \
-    '{issuerDid: $issuer, credentialIds: ["membership-vc20"]}')" | jq -r '.holderPid') ||
-    fail "the $name's credential request"
+  # the answer is kept, so that a refusal shows the identity's reason
+  ANSWER=$(identity_api "$name" POST /v1/credential-requests "$(jq -nc --arg issuer "$AUTHORITY" \
+    '{issuerDid: $issuer, credentialIds: ["membership-vc20"]}')") ||
+    fail "the $name's credential request: $ANSWER"
+  HOLDER_PID=$(jq -r '.holderPid' <<<"$ANSWER")
   STATUS=
   for _ in $(seq 1 60); do
     STATUS=$(identity_api "$name" GET "/v1/credential-requests/$HOLDER_PID" | jq -r '.status') ||
