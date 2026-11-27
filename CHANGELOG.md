@@ -51,6 +51,11 @@ setting and file format still works, and every new setting is optional
   is off), 1 not applicable
   ([SECURITY-ASSURANCE](docs/SECURITY-ASSURANCE.md#level-1-self-assessment),
   [R-05](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-05)).
+- A research note on checking that a transfer's destination matches a
+  data permit (maintainer decision, 2026-11-27: research only in 1.4).
+  No specification or product does it; the note proposes checking the
+  receiving participant's DID in 1.5 or later
+  ([spike](docs/spikes/1.4-destination-matches-permit.md)).
 - TD-47 (a transfer left REQUESTED when its provider is revoked), fixed
   in 1.1, moved to the closed items.
 

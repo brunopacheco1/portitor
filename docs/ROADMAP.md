@@ -368,7 +368,8 @@ Several containers serve one participant on one shared database
     and every replica serves it from there, as EDC IssuerService does,
     instead of a revocation counter that makes each process sign again
     (D5).
-- Not in 1.3: a tool that copies a SQLite file into PostgreSQL (1.4;
+- Not in 1.3: a tool that copies a SQLite file into PostgreSQL. It was
+  planned for 1.4 and then dropped (maintainer, 2026-11-27;
   [TD-59](RISKS_AND_TECHNICAL_DEBTS.md#td-59)).
 - Exit: a test runs two processes of each image on one PostgreSQL
   database, with requests spread over both, and the scenarios pass; one
@@ -388,6 +389,12 @@ Several containers serve one participant on one shared database
   in TESTING). Benchmark: [BENCHMARKS](BENCHMARKS.md#13-compared-with-12-on-sqlite-and-on-postgresql).
 
 ### 1.4 Purpose and data permit in policies
+
+In progress on the release branch. Scope set by the maintainer on
+2026-11-27: the items below. Two items first planned here are not in
+1.4: the Helm chart moved to
+[1.14](#114-operations-hardening-added-2026-11-26), and the SQLite to
+PostgreSQL copy tool was dropped ("Moved out" below).
 
 - An ODRL `purpose` constraint (a left operand of the ODRL 2.2
   vocabulary), with purposes named by Data Privacy Vocabulary (DPV)
@@ -416,23 +423,34 @@ Several containers serve one participant on one shared database
 - A second health scenario, the HDAB as permit authority (maintainer,
   2026-11-23): the HDAB only issues the data permit; Lux Biobank checks
   it at negotiation and sends the data where the permit says. It needs
-  the permit credential (above) and push (1.1), and one more piece no
-  release has yet: a check that the transfer's destination matches a
-  claim in the permit. No specification for that is known; research
-  first. A folder in `scenarios/` once it runs.
-- Debts and risks assigned to this release (maintainer, 2026-11-26):
-  server-side request forgery: block internal addresses ([R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17));
-  negative credential constraints ([R-43](RISKS_AND_TECHNICAL_DEBTS.md#r-43)); a transfer left
-  REQUESTED when its provider is revoked ([TD-47](RISKS_AND_TECHNICAL_DEBTS.md#td-47)); the written
-  OpenSSF Baseline level 1 self-assessment ([R-05](RISKS_AND_TECHNICAL_DEBTS.md#r-05)); the tool that
-  copies a SQLite file into PostgreSQL ([TD-59](RISKS_AND_TECHNICAL_DEBTS.md#td-59)); a Helm chart
-  ([TD-39](RISKS_AND_TECHNICAL_DEBTS.md#td-39)); a repeated first contract request and the outbox's
-  delivery check ([TD-60](RISKS_AND_TECHNICAL_DEBTS.md#td-60), [TD-61](RISKS_AND_TECHNICAL_DEBTS.md#td-61)).
-  Suggested by the 1.3 readability review (2026-11-26), small, to be
-  confirmed: one helper for the loops that tick ([TD-70](RISKS_AND_TECHNICAL_DEBTS.md#td-70)); one
-  shared database wrapper for the identity and the issuer ([TD-71](RISKS_AND_TECHNICAL_DEBTS.md#td-71)).
-  Suggested by the 1.3 benchmark (2026-11-27), to be confirmed: find and remove the writes that make
-  a negotiation step about 3.5 ms slower on SQLite ([TD-73](RISKS_AND_TECHNICAL_DEBTS.md#td-73)).
+  a check that the transfer's destination matches a claim in the
+  permit. In 1.4 this is research only, no code (maintainer,
+  2026-11-27): [what the specifications say](spikes/1.4-destination-matches-permit.md).
+  The scenario follows in 1.5 or later.
+- Debts and risks in this release:
+  - server-side request forgery: block internal addresses
+    ([R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17)); on by default in 2.0
+    ([below](#for-20));
+  - negative credential constraints, documented, no code change
+    ([R-43](RISKS_AND_TECHNICAL_DEBTS.md#r-43));
+  - the written OpenSSF Baseline level 1 self-assessment
+    ([R-05](RISKS_AND_TECHNICAL_DEBTS.md#r-05));
+  - a repeated first contract request and the outbox's delivery check
+    ([TD-60](RISKS_AND_TECHNICAL_DEBTS.md#td-60),
+    [TD-61](RISKS_AND_TECHNICAL_DEBTS.md#td-61));
+  - from the 1.3 readability review: one helper for the loops that tick
+    ([TD-70](RISKS_AND_TECHNICAL_DEBTS.md#td-70)) and one shared
+    database wrapper for the identity and the issuer
+    ([TD-71](RISKS_AND_TECHNICAL_DEBTS.md#td-71));
+  - from the 1.3 benchmark: at most one day of profiling for the slower
+    negotiation step on SQLite; with no clear cause, it moves to 1.12
+    with TD-40 ([TD-73](RISKS_AND_TECHNICAL_DEBTS.md#td-73)).
+- Moved out (maintainer, 2026-11-27): the Helm chart to 1.14
+  ([TD-39](RISKS_AND_TECHNICAL_DEBTS.md#td-39)); the copy tool dropped,
+  as no deployment needs one yet; SQLite is still removed in 2.0
+  ([TD-59](RISKS_AND_TECHNICAL_DEBTS.md#td-59)). A transfer left
+  REQUESTED when its provider is revoked was fixed in 1.1 and is closed
+  ([TD-47](RISKS_AND_TECHNICAL_DEBTS.md#td-47)).
 - Exit: purpose and permit tested granted and refused; data-permits runs
   with the R-48, TD-46 and TD-20 steps changed to refusals or passes;
   the TCKs and the EDC interop test stay green.
@@ -522,8 +540,9 @@ large item per release, so a regression is easy to trace. Each item is
 a debt with a release (maintainer, 2026-11-26): files above 1,000 lines
 in 1.5 ([TD-63](RISKS_AND_TECHNICAL_DEBTS.md#td-63)), simpler types in
 1.6 ([TD-64](RISKS_AND_TECHNICAL_DEBTS.md#td-64)), `Negotiator` in 1.7
-([TD-65](RISKS_AND_TECHNICAL_DEBTS.md#td-65)), the Helm chart in 1.4
-([TD-39](RISKS_AND_TECHNICAL_DEBTS.md#td-39)). The 1.3 readability review (2026-11-26) adds
+([TD-65](RISKS_AND_TECHNICAL_DEBTS.md#td-65)), the Helm chart in 1.14
+([TD-39](RISKS_AND_TECHNICAL_DEBTS.md#td-39); moved from 1.4 by the
+maintainer, 2026-11-27). The 1.3 readability review (2026-11-26) adds
 small items, suggested next to them and to be confirmed: a loop helper
 and a shared database wrapper in 1.4 ([TD-70](RISKS_AND_TECHNICAL_DEBTS.md#td-70),
 [TD-71](RISKS_AND_TECHNICAL_DEBTS.md#td-71)), one database error type in 1.5 with the file
@@ -628,7 +647,7 @@ data holder are compared, with pros and cons (maintainer, 2026-11-23).
 
 | Scenario | What it shows | Runs on |
 | --- | --- | --- |
-| The HDAB as permit authority | The HDAB only issues the data permit; the holder checks it at negotiation and sends the data where the permit says | 1.1 and 1.4, plus a destination check no release has yet |
+| The HDAB as permit authority | The HDAB only issues the data permit; the holder checks it at negotiation and sends the data where the permit says | 1.1 and 1.4, plus a destination check no release has yet ([research, 1.4](spikes/1.4-destination-matches-permit.md)) |
 | The HDAB on a data user's behalf | The HDAB negotiates with the holder for a data user | research first: a delegation the holder can check (1.5) |
 | A mixed data space | One participant runs Eclipse EDC instead of Portitor, in the health story | 1.0 |
 | The holder withdraws its dataset | New negotiations fail, existing agreements keep their data (ADR 0020) | 1.0 |
@@ -830,6 +849,10 @@ Every risk and debt that needs work gets a release (maintainer,
 ### 1.14 Operations hardening (added 2026-11-26)
 
 - OTLP logs export, gRPC and compression ([TD-29](RISKS_AND_TECHNICAL_DEBTS.md#td-29)).
+- A Helm chart for the three images, next to the Compose example
+  ([TD-39](RISKS_AND_TECHNICAL_DEBTS.md#td-39); moved from 1.4,
+  maintainer, 2026-11-27). Its exit is in
+  [Code quality in 1.x](#code-quality-in-1x).
 - What the runs of 1.3 to 1.13 showed in operation, each recorded as a
   debt first.
 - The first yearly risk review: every item with no release is read
@@ -853,7 +876,8 @@ Every risk and debt that needs work gets a release (maintainer,
 Empty since 2026-11-26: every risk, debt and improvement that needs work
 has a release (maintainer, 2026-11-26). What used to be here moved:
 
-- the SQLite to PostgreSQL copy tool to 1.4 ([TD-59](RISKS_AND_TECHNICAL_DEBTS.md#td-59));
+- the SQLite to PostgreSQL copy tool to 1.4; then dropped (maintainer,
+  2026-11-27; [TD-59](RISKS_AND_TECHNICAL_DEBTS.md#td-59));
 - harvest sources, the registry, catalog checks, bundle expiry and
   bundle key rotation to 1.8 ([TD-16](RISKS_AND_TECHNICAL_DEBTS.md#td-16), [TD-67](RISKS_AND_TECHNICAL_DEBTS.md#td-67),
   [TD-68](RISKS_AND_TECHNICAL_DEBTS.md#td-68));
@@ -881,6 +905,9 @@ they wait for 2.0. No date.
   `PORTITOR_TRUSTED_ISSUER_TYPES` is trusted for `MembershipCredential`
   only, not for every type (maintainer, 2026-11-27;
   [TD-74](RISKS_AND_TECHNICAL_DEBTS.md#td-74)).
+- The block on internal addresses for partner-chosen URLs is on by
+  default (maintainer, 2026-11-27;
+  [R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17)).
 
 ## Technical debt
 
