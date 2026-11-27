@@ -30,7 +30,10 @@ setting and file format still works, and every new setting is optional
   `PORTITOR_INTERNAL_ADDRESSES_ALLOWED` on all three components: refuse
   loopback, private and link-local addresses in URLs a partner chooses
   ([R-17](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-17),
-  [DEPLOYING](docs/DEPLOYING.md#internal-addresses)).
+  [DEPLOYING](docs/DEPLOYING.md#internal-addresses)). The address
+  checked is the one the call connects to. A refused call is not sent,
+  and counts as a partner that cannot be reached; its error names the
+  setting that allows it.
 - Issuer management route `PUT /v1/participants/{did}`: replaces a
   registered participant's claims without deleting the registration;
   issued credentials keep theirs, a request decided from then on gets
@@ -64,8 +67,26 @@ setting and file format still works, and every new setting is optional
   ([TD-11](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-11)).
 - hdab-intermediary scenario: Lux Biobank's offer for EU processors
   names a purpose, and a request with another purpose is refused.
+- The identity's presentation API checks the caller's access token and
+  the ID token's `aud` before it resolves the caller's DID. A caller
+  without a valid access token gets the same 401 as before, and no DID
+  document is fetched (F-06 in
+  [SECURITY-ASSURANCE](docs/SECURITY-ASSURANCE.md),
+  [R-17](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-17)).
 
 ### Fixed
+
+- A first contract request sent again by the same consumer (same
+  `consumerPid`, our answer lost) gets the negotiation it already
+  started, with the same status, instead of starting a second one; a
+  repeat with another offer or callback address gets 400. Two replicas
+  that get the repeat at once make one negotiation. A new index on
+  `negotiation`, added by the database migration at start
+  ([TD-60](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-60)).
+- The outbox counts a refused message as delivered only when the
+  partner's state is the one the message leads to **for the same
+  process**: `providerPid` and `consumerPid` are compared too
+  ([TD-61](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-61)).
 
 ### Documentation
 

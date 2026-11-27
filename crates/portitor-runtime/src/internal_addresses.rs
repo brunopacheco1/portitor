@@ -139,6 +139,15 @@ pub struct InternalAddresses {
 }
 
 impl InternalAddresses {
+    /// Reads the two settings from the process environment, at start.
+    ///
+    /// # Errors
+    ///
+    /// As [`InternalAddresses::from_vars`].
+    pub fn from_env() -> Result<Self, String> {
+        Self::from_vars(|name| std::env::var_os(name))
+    }
+
     /// Reads the two settings with `var`.
     ///
     /// # Errors
@@ -168,6 +177,18 @@ impl InternalAddresses {
             }
         }
         Ok(allowed)
+    }
+
+    /// Says in the log, at start, whether the block is on, and how many
+    /// exceptions it has.
+    pub fn log_at_start(&self) {
+        if self.block {
+            tracing::info!(
+                allowed_hosts = self.allowed_hosts.len(),
+                allowed_networks = self.allowed_networks.len(),
+                "internal addresses are refused for URLs partners choose ({BLOCK_SETTING})"
+            );
+        }
     }
 
     /// Whether a call to `host` (as written in the URL), which resolved

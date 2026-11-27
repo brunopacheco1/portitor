@@ -18,6 +18,7 @@ use serde_json::Value;
 use crate::BoxFuture;
 use crate::did::DidWebResolver;
 use crate::http::{HttpSender, Sender as _};
+use crate::internal_addresses::InternalAddresses;
 
 /// Port: reads other parties' public documents. Each lookup returns,
 /// later ([`BoxFuture`]), the value or the reason it failed.
@@ -40,15 +41,31 @@ impl WebDirectory {
     /// With `allow_http`, plain-HTTP DIDs and URLs are used (tests only).
     /// A DID document is reused for `did_cache_seconds`
     /// (`PORTITOR_DID_CACHE_SECONDS`, read with
-    /// [`crate::did::cache_seconds`]); 0 fetches it every time.
+    /// [`crate::did::cache_seconds`]); 0 fetches it every time. For DIDs
+    /// the operator chose (a bundle authority): the block on internal
+    /// addresses does not apply ([`WebDirectory::for_partners`]).
     ///
     /// # Errors
     /// The HTTP client cannot be built.
     pub fn new(allow_http: bool, did_cache_seconds: u64) -> Result<Self, String> {
+        Self::for_partners(allow_http, did_cache_seconds, &InternalAddresses::default())
+    }
+
+    /// Like [`WebDirectory::new`], for other parties' DIDs and documents
+    /// (callers, holders, issuers): each is fetched only from an address
+    /// that `internal_addresses` allows (R-17).
+    ///
+    /// # Errors
+    /// The HTTP client cannot be built.
+    pub fn for_partners(
+        allow_http: bool,
+        did_cache_seconds: u64,
+        internal_addresses: &InternalAddresses,
+    ) -> Result<Self, String> {
         let did_cache = Duration::from_secs(did_cache_seconds);
         Ok(Self {
-            resolver: DidWebResolver::new(allow_http, did_cache)?,
-            http: HttpSender::new(allow_http)?,
+            resolver: DidWebResolver::for_partners(allow_http, did_cache, internal_addresses)?,
+            http: HttpSender::for_partners(allow_http, internal_addresses)?,
         })
     }
 }

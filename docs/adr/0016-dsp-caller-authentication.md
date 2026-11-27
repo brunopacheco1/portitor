@@ -367,6 +367,25 @@ replaces "The SSRF block ... (roadmap, later)" in Security above.
   makes the identity fetch a URL of its choice. Always on: nothing
   changes for a valid caller.
 
+Details settled when it was built (1.4):
+
+- A URL read from a document another party serves counts as chosen by
+  that party, even when the operator named the party: credential
+  issuers' DID documents and status lists (connector, identity), and an
+  issuer's metadata and credential request address (identity). A
+  trusted issuer on an internal network needs an entry in
+  `PORTITOR_INTERNAL_ADDRESSES_ALLOWED`.
+- Not checked: our own DID document, and the provider address the
+  operator gives the management API (the consumer's negotiations,
+  transfers and catalog requests). No provider address is learned from
+  a partner: the `Link` headers of catalog pages are not followed.
+- A refused call is not sent and counts as a partner that cannot be
+  reached, so the outbox tries it as it tries any failed send.
+- The host is resolved by the HTTP client's own resolver, which keeps
+  only the allowed addresses, and the connection goes to one of them;
+  an IP address written in the URL is checked without a lookup
+  (`portitor-runtime/src/http/connect.rs`).
+
 ## Consequences
 
 - Running a connector now needs an identity component (or a compatible

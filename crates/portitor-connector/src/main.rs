@@ -22,6 +22,7 @@ use portitor_connector::store::{ConnectorStore, MIGRATIONS};
 use portitor_runtime::database::{Database, DatabaseSetting, SQLITE_DEPRECATED};
 use portitor_runtime::directory::{Directory, WebDirectory};
 use portitor_runtime::health;
+use portitor_runtime::internal_addresses::InternalAddresses;
 use portitor_runtime::management::management_port;
 use portitor_runtime::request_size::RequestLimits;
 use portitor_runtime::serve::{
@@ -56,18 +57,28 @@ async fn serve_connector() -> ExitCode {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    // first, so a wrong value stops the start before anything else
+    let internal_addresses = InternalAddresses::from_env()?;
     let config = portitor_connector::Config::from_env()?;
     let limits = RequestLimits::from_env()?;
-    let sender = portitor_connector::dsp_sender(config.allow_http)?;
+    // to consumers, at the callback addresses they chose (R-17)
+    let sender = portitor_connector::dsp_sender(config.allow_http, &internal_addresses)?;
     if config.allow_http {
         tracing::warn!("plain http allowed for every outgoing call (PORTITOR_ALLOW_HTTP)");
     }
+    internal_addresses.log_at_start();
     // one database for every store, shared with the readiness check
     let database = open_database(&config.database)?;
     let store = Arc::new(ConnectorStore::new(Arc::clone(&database)));
     #[cfg(feature = "tck")]
     let sender = portitor_connector::tck::LateStart(sender);
     let mut ports = portitor_connector::Ports::new(Arc::new(sender), &store);
+    // to providers, at the addresses our operator gives in the management
+    // API: not checked (R-17)
+    let to_providers =
+        portitor_connector::dsp_sender(config.allow_http, &InternalAddresses::default())?;
+    ports.provider_sender = Arc::new(to_providers);
+    ports.internal_addresses = internal_addresses.clone();
     ports.object_storage = object_storage()?;
     let settings = AuthSettings::from_env(&config.participant_id, config.allow_http)?;
     if let Some(settings) = &settings
@@ -87,7 +98,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     // the callers' token ids go into the connector's database (TD-09)
     let used_token_ids = Arc::clone(&store) as Arc<dyn UsedTokenStore>;
-    (ports.verifier, ports.prover) = auth_adapters(settings, used_token_ids).await?;
+    (ports.verifier, ports.prover) =
+        auth_adapters(settings, used_token_ids, &internal_addresses).await?;
     let bundle = start_bundle_harvest(&config, &mut ports, &store).await?;
     // `build` runs the first harvest before it returns: blocking work (a
     // file read, the database, SHACL) on this async task, done once at start
@@ -282,11 +294,12 @@ fn schedule_harvest(
 async fn auth_adapters(
     settings: Option<AuthSettings>,
     used_token_ids: Arc<dyn UsedTokenStore>,
+    internal_addresses: &InternalAddresses,
 ) -> Result<AuthAdapters, String> {
     let settings = settings.ok_or(
         "PORTITOR_STS_URL is required: DSP requests are authenticated with DCP (ADR 0016)",
     )?;
-    dcp_adapters(&settings, used_token_ids).await
+    dcp_adapters(&settings, used_token_ids, internal_addresses).await
 }
 
 /// The DSP TCK build: the fixed header in `PORTITOR_TCK_AUTHORIZATION`
@@ -296,11 +309,12 @@ async fn auth_adapters(
 async fn auth_adapters(
     settings: Option<AuthSettings>,
     used_token_ids: Arc<dyn UsedTokenStore>,
+    internal_addresses: &InternalAddresses,
 ) -> Result<AuthAdapters, String> {
     use portitor_connector::auth::{NoTokens, RefuseAll};
     use portitor_connector::tck::{TckProver, TckVerifier};
     let (verifier, prover): AuthAdapters = if let Some(settings) = settings {
-        dcp_adapters(&settings, used_token_ids).await?
+        dcp_adapters(&settings, used_token_ids, internal_addresses).await?
     } else {
         tracing::warn!(
             "TCK build without PORTITOR_STS_URL: only the TCK's fixed header is accepted"

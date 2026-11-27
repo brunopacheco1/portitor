@@ -84,12 +84,15 @@ does three things and holds no protocol rule:
 `portitor-dsp/src/negotiation/provider.rs`. For a new negotiation it
 calls `start`, which:
 
+- answers a repeat of a first request (same caller, same `consumerPid`)
+  with the negotiation it already started (`requested_before`, TD-60);
 - checks that the offer is the one in the catalog (`check_offer`);
 - asks the state machine for the next state (`next_state`, from Part 1);
 - builds a `Negotiation` value with a new `provider_pid`;
 - decides what the provider sends next (`next`, through the `Decider`
   port) and stores that message in the field `pending`;
-- saves it: `self.store.insert(...)`.
+- saves it: `self.store.insert(...)`, which adds nothing when a copy
+  of the same request was saved meanwhile.
 
 `ProviderService<S, D, C, E>` has four type parameters. They are its
 four ports: `S` the store, `D` the decider, `C` the catalog, `E` the

@@ -932,9 +932,15 @@ fn status_list_cache_seconds(value: Option<&str>) -> Result<u64, String> {
 pub async fn dcp_adapters(
     settings: &AuthSettings,
     used_token_ids: Arc<dyn portitor_runtime::used_tokens::UsedTokenStore>,
+    internal_addresses: &portitor_runtime::internal_addresses::InternalAddresses,
 ) -> Result<(Arc<dyn CallerVerifier>, Arc<dyn Prover>), String> {
     let sts: Arc<dyn sts::SecureTokenService> = Arc::new(sts::StsClient::new(settings)?);
-    let verifier = dcp::DcpVerifier::new(settings, Arc::clone(&sts), used_token_ids)?;
+    let verifier = dcp::DcpVerifier::for_partners(
+        settings,
+        Arc::clone(&sts),
+        used_token_ids,
+        internal_addresses,
+    )?;
     verifier.check_own_identity().await?;
     let prover = sts::StsProver::new(sts, settings.scopes.clone());
     Ok((Arc::new(verifier), Arc::new(prover)))

@@ -1175,6 +1175,30 @@ body (`membership_watchdog` in `portitor-dataplane/src/download.rs`). `AbortOnDr
 `abort()` in `Drop`, so the task ends when the body ends, however it
 ends.
 
+### A step of hyper's client written by hand: `tower_service::Service`
+
+```rust
+impl tower_service::Service<Uri> for CheckedConnector {
+    type Response = TokioIo<TcpStream>;
+    type Error = BoxError;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> { ... }
+    fn call(&mut self, uri: Uri) -> Self::Future { Box::pin(async move { ... }) }
+}
+```
+
+hyper's client opens a connection by calling a "service": `call` with
+the URL gives, later, the open connection. Resolving a host name is a
+service too (`call` with the name gives the addresses). Read `call` as
+an `async fn` whose result type is spelled out (`type Future`); the
+body is an `async move` block in a `Box::pin`. `poll_ready` asks "can
+you take a call now?"; ours always can, or asks the connector it wraps.
+`CheckedConnector` and `CheckedResolver` in
+`portitor-runtime/src/http/connect.rs` use this to check the address a
+call connects to (R-17). A refusal travels as a boxed error, and
+`refusal_in` finds it again in hyper's error with `source()` and
+`downcast_ref`.
+
 ### Set once, later: `OnceLock` and `Weak`
 
 ```rust

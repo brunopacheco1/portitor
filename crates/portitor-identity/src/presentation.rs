@@ -5,9 +5,13 @@
 //! The presentation API (DCP v1.0.1, presentation protocol, section 5.4):
 //! `POST <credential service>/presentations/query`.
 //!
-//! 1. The verifier's self-issued ID token is checked (`caller.rs`).
-//! 2. Its `token` claim must be an access token this component's STS
-//!    signed, for that verifier ([`AccessToken::verify`]).
+//! 1. What needs no fetch is checked first (F-06, ADR 0016 amended in
+//!    1.4): the ID token's `aud` is this holder, and its `token` claim is
+//!    an access token this component's STS signed, for that verifier,
+//!    not expired ([`AccessToken::verify`]). A caller without one never
+//!    makes the component fetch a DID document of its choice.
+//! 2. Only then is the caller's DID resolved and its self-issued ID token
+//!    checked (`caller.rs`).
 //! 3. The query must ask by `scope`; presentation definitions are not
 //!    supported (ADR 0015).
 //! 4. The answer holds the credentials the scopes asked for **and** the
@@ -28,6 +32,7 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
+use portitor_dcp::Claims;
 use portitor_dcp::credential::{Credential, Profile};
 use portitor_dcp::gaiax::{contexts, matches_scope_type};
 use portitor_dcp::holder::{AccessToken, TokenFrame, sign_presentation};
@@ -36,7 +41,7 @@ use portitor_dcp::scope::Scope;
 use portitor_runtime::api_key::problem;
 use portitor_runtime::system::{new_uuid, now_secs};
 
-use crate::caller::{Callers, authenticate, refused};
+use crate::caller::{authenticate_if, refused};
 use crate::store::StoredCredential;
 use crate::{Identity, LEEWAY, TOKEN_SECONDS};
 
@@ -46,29 +51,30 @@ pub(crate) async fn query(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let caller = match authenticate(&identity, &headers, Callers::Anyone).await {
+    let now = now_secs();
+    // the access token is checked on the claims before the DID is
+    // resolved (F-06); `admit` keeps it for the answer
+    let mut access = None;
+    let admit = |claimed: &Claims| match access_before_resolving(&identity, claimed, now) {
+        Ok(checked) => {
+            access = Some(checked);
+            true
+        }
+        Err(reason) => {
+            tracing::info!(
+                reason,
+                "presentation query refused before resolving the caller"
+            );
+            false
+        }
+    };
+    let caller = match authenticate_if(&identity, &headers, admit).await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
-    let Some(token) = caller.token.as_deref() else {
-        return refused("no access token in the ID token");
-    };
-    let now = now_secs();
-    // the current key, or a retired key still listed (TD-05)
-    let public_key = match identity.own_key_for(token) {
-        Ok(key) => key,
-        Err(e) => return refused(&format!("access token: {e}")),
-    };
-    let access = match AccessToken::verify(
-        token,
-        &public_key,
-        &identity.participant_id,
-        &caller.sub,
-        now,
-        LEEWAY,
-    ) {
-        Ok(access) => access,
-        Err(e) => return refused(&e.to_string()),
+    let Some(access) = access else {
+        // not reached: `authenticate_if` goes on only once `admit` said yes
+        return refused("no access token");
     };
     let message: PresentationQueryMessage = match serde_json::from_slice(&body) {
         Ok(message) => message,
@@ -97,6 +103,38 @@ pub(crate) async fn query(
             problem(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
         }
     }
+}
+
+/// The access token in the ID token whose claims are `claimed`, checked
+/// with what needs no fetch: the ID token is for this holder (`aud`), and
+/// its `token` claim is an access token our STS signed for the caller
+/// (`sub`), not expired. `claimed` is not verified yet: the caller's DID
+/// is resolved and the ID token's signature checked afterwards, and the
+/// access token is bound to the `sub` that check confirms.
+fn access_before_resolving(
+    identity: &Identity,
+    claimed: &Claims,
+    now: u64,
+) -> Result<AccessToken, String> {
+    if claimed.aud != identity.participant_id {
+        return Err("the ID token is for another audience".to_owned());
+    }
+    let Some(token) = claimed.token.as_deref() else {
+        return Err("no access token in the ID token".to_owned());
+    };
+    // the current key, or a retired key still listed (TD-05)
+    let public_key = identity
+        .own_key_for(token)
+        .map_err(|e| format!("access token: {e}"))?;
+    AccessToken::verify(
+        token,
+        &public_key,
+        &identity.participant_id,
+        &claimed.sub,
+        now,
+        LEEWAY,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// The scopes the query asks for, parsed. 400 for a query DCP calls

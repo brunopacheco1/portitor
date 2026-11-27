@@ -502,7 +502,11 @@ async fn played_provider() -> (String, Seen) {
 /// A consumer's management router whose connector sends with the real
 /// HTTP client. `allow_http` is `PORTITOR_ALLOW_HTTP`.
 fn consumer_over_http(allow_http: bool) -> Router {
-    let sender = portitor_connector::dsp_sender(allow_http).unwrap();
+    let sender = portitor_connector::dsp_sender(
+        allow_http,
+        &portitor_runtime::internal_addresses::InternalAddresses::default(),
+    )
+    .unwrap();
     let ports = authenticating(common::ports(Arc::new(sender)), CONSUMER);
     let mut config = config(CONSUMER, "https://consumer.example", None);
     config.allow_http = allow_http;

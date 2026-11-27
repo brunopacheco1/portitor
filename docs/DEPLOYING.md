@@ -458,13 +458,32 @@ refused when its host is a loopback, private or link-local address
 one the call uses.
 
 - Off by default in 1.x, so a 1.3 setup starts unchanged. It will be on
-  by default in 2.0 ([ROADMAP](ROADMAP.md#for-20)).
+  by default in 2.0 ([ROADMAP](ROADMAP.md#for-20)). A component with
+  the block on says so in its log at start. A wrong value of either
+  setting stops the start.
 - Partners on your own network (a Compose demo, a test) go into
   `PORTITOR_INTERNAL_ADDRESSES_ALLOWED`: host names as written in the
   URL, IP addresses, or networks such as `10.1.0.0/16`.
-- URLs you choose are never checked: your STS, your data sources
-  (`portitor:source`), your object storage, the bundle URL and the
-  database.
+- Checked, because another party chooses the URL or serves the
+  document it comes from:
+  - connector: consumers' callback addresses (as provider), callers'
+    and credential issuers' DID documents, callers' credential
+    services, status lists, and push endpoints;
+  - identity: callers' and issuers' DID documents, issuers' metadata
+    and credential request addresses;
+  - issuer: holders' DID documents and credential services.
+- So a trusted issuer on your own network needs an entry too: its DID
+  document is fetched like any other party's.
+- URLs you choose are never checked: your own DID document, your STS,
+  your data sources (`portitor:source`), your object storage, the
+  bundle URL and the authority's DID, the Gaia-X compliance service,
+  the OTLP receiver, the database, and the provider address you give
+  the management API (negotiations, transfers and catalog requests as
+  consumer).
+- A refused call is not sent, and counts as a partner that cannot be
+  reached: the connector's outbox tries it as often as any failed send,
+  then ends the negotiation or transfer. The error names the host, the
+  address and `PORTITOR_INTERNAL_ADDRESSES_ALLOWED`.
 - Keep the egress firewall ([Security](#security)): the block is a
   second line.
 

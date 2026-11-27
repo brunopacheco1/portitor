@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The outbound HTTP client: the [`Sender`] port, its adapter
-//! [`HttpSender`] for messages to other participants, and the rule for
-//! which URLs a Portitor process may call.
+//! [`HttpSender`] for messages to other participants, and the rules for
+//! which URLs a Portitor process may call: [`outbound_url_allowed`] for
+//! the URL, and the block on internal addresses for the address a
+//! partner-chosen URL leads to ([`HttpSender::for_partners`], module
+//! [`connect`]; R-17).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,14 +17,17 @@ use http_body_util::Full;
 pub use hyper::body::Bytes;
 use hyper::body::Incoming;
 use hyper_util::client::legacy::Client;
-use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use serde_json::Value;
 
 use tracing::Instrument as _;
 
 use crate::BoxFuture;
+use crate::internal_addresses::InternalAddresses;
 use crate::telemetry::http::{ClientCall, Peer};
+
+pub mod connect;
+use connect::CheckedConnector;
 
 /// Why an exchange of [`HttpSender`] got no 2xx answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,8 +44,10 @@ pub enum HttpError {
     /// No answer: the connection failed, no answer came in time, or the
     /// answer broke off while it was read.
     NoAnswer(String),
-    /// The request was not sent: the URL is not allowed, or there are no
-    /// CA certificates to check an `https://` server.
+    /// The request was not sent: the URL is not allowed, its host is an
+    /// internal address a partner may not make us call
+    /// ([`connect::InternalAddressRefused`]), or there are no CA
+    /// certificates to check an `https://` server.
     NotSent(String),
     /// A 2xx answer that cannot be used: larger than the limit, or not
     /// UTF-8 text where text was asked for.
@@ -212,8 +220,10 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 /// provider's catalog) states its own limit ([`AnswerLimits`]).
 const MAX_ANSWER: usize = 64 * 1024;
 
-/// The hyper client both binaries use: rustls, HTTP/1.
-pub type HttpsClient = Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>;
+/// The hyper client every binary uses: rustls, HTTP/1, and TCP through
+/// [`CheckedConnector`] (the rule for internal addresses, off unless the
+/// client was made for partner-chosen URLs).
+pub type HttpsClient = Client<hyper_rustls::HttpsConnector<CheckedConnector>, Full<Bytes>>;
 
 /// Adapter: HTTP(S) client. TLS uses rustls with the ring provider and the
 /// system's CA certificates.
@@ -241,8 +251,12 @@ impl std::fmt::Debug for HttpSender {
 }
 
 impl HttpSender {
-    /// Builds the client. Plain `http://` targets are refused unless
-    /// `allow_http` (development and conformance tests only).
+    /// Builds the client for URLs the operator chose (its own STS, a
+    /// Gaia-X compliance service, a provider named in the management
+    /// API): the block on internal addresses does not apply. For URLs a
+    /// partner chose, use [`HttpSender::for_partners`]. Plain `http://`
+    /// targets are refused unless `allow_http` (development and
+    /// conformance tests only).
     ///
     /// Without the system's CA certificates (the release image has none
     /// unless the operator mounts them) the client still starts, so the
@@ -254,7 +268,26 @@ impl HttpSender {
     /// The ring provider supports no safe TLS version (does not happen with
     /// the rustls versions in `Cargo.lock`).
     pub fn new(allow_http: bool) -> Result<Self, String> {
-        let (client, has_ca_certificates) = https_client(allow_http)?;
+        Self::for_partners(allow_http, &InternalAddresses::default())
+    }
+
+    /// Like [`HttpSender::new`], for URLs a partner chose (a consumer's
+    /// callback address, a caller's DID document and credential service,
+    /// a status list, a holder's credential service): each call connects
+    /// only to an address that `internal_addresses` allows
+    /// (`PORTITOR_BLOCK_INTERNAL_ADDRESSES`, R-17). A refused call is an
+    /// [`HttpError::NotSent`] that names the setting that would allow it.
+    ///
+    /// # Errors
+    ///
+    /// As [`HttpSender::new`].
+    pub fn for_partners(
+        allow_http: bool,
+        internal_addresses: &InternalAddresses,
+    ) -> Result<Self, String> {
+        let (connector, has_ca_certificates) =
+            https_connector(allow_http, None, internal_addresses.clone())?;
+        let client = Client::builder(TokioExecutor::new()).build(connector);
         Ok(Self {
             client,
             allow_http,
@@ -299,7 +332,10 @@ impl HttpSender {
 /// The ring provider supports no safe TLS version (does not happen with
 /// the rustls versions in `Cargo.lock`).
 pub fn https_client(allow_http: bool) -> Result<(HttpsClient, bool), String> {
-    let (connector, has_ca_certificates) = https_connector(allow_http, None)?;
+    // operator-chosen URLs only (data sources, object storage, the bundle,
+    // OTLP): the block on internal addresses is off
+    let (connector, has_ca_certificates) =
+        https_connector(allow_http, None, InternalAddresses::default())?;
     let client = Client::builder(TokioExecutor::new()).build(connector);
     Ok((client, has_ca_certificates))
 }
@@ -308,31 +344,42 @@ pub fn https_client(allow_http: bool) -> Result<(HttpsClient, bool), String> {
 /// request body that is streamed (any `axum` body), for uploads of
 /// unknown length.
 pub type StreamingHttpsClient =
-    Client<hyper_rustls::HttpsConnector<HttpConnector>, axum::body::Body>;
+    Client<hyper_rustls::HttpsConnector<CheckedConnector>, axum::body::Body>;
 
 /// How long [`https_streaming_client`] waits for a connection to open.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Like [`https_client`], for requests whose body is streamed as it is
 /// read rather than held whole: the connector's push of a dataset to a
-/// consumer (ADR 0027). A connection must open within
-/// [`CONNECT_TIMEOUT`]; the caller limits the rest.
+/// consumer (ADR 0027). The consumer chose the push endpoint, so each
+/// connection goes only to an address that `internal_addresses` allows
+/// (R-17). A connection must open within [`CONNECT_TIMEOUT`]; the caller
+/// limits the rest.
 ///
 /// # Errors
 ///
 /// As [`https_client`].
-pub fn https_streaming_client(allow_http: bool) -> Result<StreamingHttpsClient, String> {
-    let (connector, _) = https_connector(allow_http, Some(CONNECT_TIMEOUT))?;
+pub fn https_streaming_client(
+    allow_http: bool,
+    internal_addresses: &InternalAddresses,
+) -> Result<StreamingHttpsClient, String> {
+    let (connector, _) = https_connector(
+        allow_http,
+        Some(CONNECT_TIMEOUT),
+        internal_addresses.clone(),
+    )?;
     Ok(Client::builder(TokioExecutor::new()).build(connector))
 }
 
-/// The TLS connector of both clients, and whether the system's CA
+/// The TLS connector of every client, and whether the system's CA
 /// certificates were found. `connect_timeout`: how long a connection may
 /// take to open; `None` waits as long as the system does.
+/// `internal_addresses`: the rule each connection's address must pass.
 fn https_connector(
     allow_http: bool,
     connect_timeout: Option<Duration>,
-) -> Result<(hyper_rustls::HttpsConnector<HttpConnector>, bool), String> {
+    internal_addresses: InternalAddresses,
+) -> Result<(hyper_rustls::HttpsConnector<CheckedConnector>, bool), String> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let (https, has_ca_certificates) = match hyper_rustls::HttpsConnectorBuilder::new()
         .with_provider_and_native_roots(Arc::clone(&provider))
@@ -351,10 +398,8 @@ fn https_connector(
             )
         }
     };
-    // what `build()` makes, with the time limit
-    let mut http = HttpConnector::new();
-    http.enforce_http(false);
-    http.set_connect_timeout(connect_timeout);
+    // what `build()` makes, with the time limit and the rule
+    let http = CheckedConnector::new(internal_addresses, connect_timeout);
     let connector = if allow_http {
         https.https_or_http().enable_http1().wrap_connector(http)
     } else {
@@ -702,11 +747,14 @@ impl HttpSender {
         call: &mut ClientCall,
     ) -> Result<(hyper::HeaderMap, Bytes), HttpError> {
         use http_body_util::BodyExt as _;
-        let response = self
-            .client
-            .request(request)
-            .await
-            .map_err(|e| HttpError::NoAnswer(e.to_string()))?;
+        let response = self.client.request(request).await.map_err(|e| {
+            // a refused internal address is not sent, and would be refused
+            // again: not a missing answer to try again later
+            match connect::refusal_in(&e) {
+                Some(refused) => HttpError::NotSent(refused.to_string()),
+                None => HttpError::NoAnswer(e.to_string()),
+            }
+        })?;
         let status = response.status();
         call.answered(status.as_u16());
         if !status.is_success() {
@@ -1267,6 +1315,82 @@ mod tests {
         assert!(matches!(posted.await, Err(HttpError::NotSent(_))));
         let got = Plain.get_authorized_within("u", "x", limits);
         assert!(matches!(got.await, Err(HttpError::NotSent(_))));
+    }
+
+    /// R-17: with the block on, a sender for partner-chosen URLs refuses
+    /// a loopback address, written as such or as a host name that
+    /// resolves to it, and says which setting allows it; the list of
+    /// exceptions lets it through; with the block off, and in a sender
+    /// for operator-chosen URLs, nothing changes.
+    #[tokio::test]
+    async fn the_block_on_internal_addresses_refuses_loopback_unless_allowed() {
+        use crate::internal_addresses::{ALLOWED_SETTING, BLOCK_SETTING};
+        use crate::testing::vars;
+        let url = serve(axum::http::StatusCode::OK).await;
+        let by_name = url.replace("127.0.0.1", "localhost");
+        let body = serde_json::json!({});
+        let rule =
+            |settings: &[(&str, &str)]| InternalAddresses::from_vars(vars(settings)).unwrap();
+
+        let blocking = HttpSender::for_partners(true, &rule(&[(BLOCK_SETTING, "true")])).unwrap();
+        for refused_url in [&url, &by_name] {
+            let error = blocking
+                .post_json_authorized(refused_url, &body, "Bearer t")
+                .await
+                .unwrap_err();
+            let HttpError::NotSent(reason) = &error else {
+                panic!("{refused_url}: {error:?}");
+            };
+            assert!(reason.contains(ALLOWED_SETTING), "{reason}");
+            // not worth trying again
+            assert!(!error.is_temporary());
+            // the `Sender` port has the same text
+            let text = blocking.post(refused_url, &body).await.unwrap_err();
+            assert!(text.contains(ALLOWED_SETTING), "{text}");
+        }
+
+        let allowed = [
+            rule(&[
+                (BLOCK_SETTING, "true"),
+                (ALLOWED_SETTING, "127.0.0.0/8, ::1"),
+            ]),
+            rule(&[
+                (BLOCK_SETTING, "true"),
+                (ALLOWED_SETTING, "localhost, 127.0.0.1"),
+            ]),
+            rule(&[(BLOCK_SETTING, "false")]),
+        ];
+        for internal_addresses in allowed {
+            let sender = HttpSender::for_partners(true, &internal_addresses).unwrap();
+            for allowed_url in [&url, &by_name] {
+                sender.post(allowed_url, &body).await.unwrap();
+            }
+        }
+        // a sender for operator-chosen URLs never applies the block
+        HttpSender::new(true)
+            .unwrap()
+            .post(&by_name, &body)
+            .await
+            .unwrap();
+    }
+
+    /// The push client is checked the same way (R-17).
+    #[tokio::test]
+    async fn the_streaming_client_applies_the_block_too() {
+        use crate::internal_addresses::BLOCK_SETTING;
+        use crate::testing::vars;
+        let url = serve(axum::http::StatusCode::OK).await;
+        let blocking = InternalAddresses::from_vars(vars(&[(BLOCK_SETTING, "true")])).unwrap();
+        let request = || {
+            hyper::Request::post(url.as_str())
+                .body(axum::body::Body::empty())
+                .unwrap()
+        };
+        let client = https_streaming_client(true, &blocking).unwrap();
+        let error = client.request(request()).await.unwrap_err();
+        assert!(connect::refusal_in(&error).is_some(), "{error:?}");
+        let open = https_streaming_client(true, &InternalAddresses::default()).unwrap();
+        assert!(open.request(request()).await.unwrap().status().is_success());
     }
 
     #[tokio::test]

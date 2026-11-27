@@ -84,7 +84,11 @@ async fn the_outbox_sends_no_trace_context() {
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     };
     // the sender `main` gives the outbox
-    let sender = portitor_connector::dsp_sender(true).unwrap();
+    let sender = portitor_connector::dsp_sender(
+        true,
+        &portitor_runtime::internal_addresses::InternalAddresses::default(),
+    )
+    .unwrap();
     let ports = authenticating(common::ports(Arc::new(sender)), CONSUMER);
     let (_, negotiator) = portitor_connector::build(&config, ports).unwrap();
     let app = router(negotiator, ApiKey::new(KEY).unwrap());

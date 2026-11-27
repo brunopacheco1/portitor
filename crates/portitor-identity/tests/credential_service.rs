@@ -341,6 +341,50 @@ async fn presentation_queries_need_a_valid_caller_and_access_token() {
     );
 }
 
+/// F-06 (ADR 0016, amended in 1.4): the access token and the ID token's
+/// `aud` are checked before the caller's DID is resolved, so a caller
+/// without a valid access token cannot make the identity fetch a DID
+/// document of its choice. The answer is the same 401 as before.
+#[tokio::test]
+async fn no_did_is_fetched_for_a_caller_without_a_valid_access_token() {
+    let world = World::new();
+    let query = scope_query(&[MEMBERSHIP_SCOPE]);
+    let path = "/cs/presentations/query";
+    let (_, answer) = world.sts_token(VERIFIER, Some(MEMBERSHIP_SCOPE)).await;
+    let access = World::access_token_of(&answer);
+    // a caller whose DID document would point anywhere it likes
+    let mallory = Party::new("did:web:internal.mallory.example");
+    world.directory.add(&mallory);
+
+    let refused = [
+        // no access token, or a made-up one
+        mallory.id_token(HOLDER, None),
+        mallory.id_token(HOLDER, Some("fake")),
+        // the verifier's access token, used by someone else
+        mallory.id_token(HOLDER, Some(&access)),
+        // a good access token, in an ID token for someone else
+        world.verifier.id_token(VERIFIER, Some(&access)),
+    ];
+    for token in refused {
+        let (status, _) = call(&world.app, post_json(path, Some(&token), &query)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+    assert!(
+        !world.directory.looked_up(mallory.did),
+        "mallory's DID was fetched"
+    );
+    assert!(
+        !world.directory.looked_up(VERIFIER),
+        "the verifier's DID was fetched"
+    );
+
+    // a valid caller: its DID is resolved, as before
+    let valid = world.verifier.id_token(HOLDER, Some(&access));
+    let (status, _) = call(&world.app, post_json(path, Some(&valid), &query)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(world.directory.looked_up(VERIFIER));
+}
+
 #[tokio::test]
 async fn storage_api_accepts_only_what_was_asked_from_whom_it_was_asked() {
     let world = World::new();

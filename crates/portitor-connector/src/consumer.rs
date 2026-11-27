@@ -65,7 +65,7 @@ impl Consumer {
                 participant_id,
             )
             .with_credential_types(ports.credential_types.clone()),
-            link: Link::new(ports),
+            link: Link::to_providers(ports),
             allow_http,
         }
     }
@@ -211,8 +211,14 @@ impl Outbox for Consumer {
     }
 
     fn reached(out: &Outgoing, state: Value) -> bool {
-        serde_json::from_value::<ContractNegotiation>(state)
-            .is_ok_and(|negotiation| negotiation.state == out.to)
+        serde_json::from_value::<ContractNegotiation>(state).is_ok_and(|negotiation| {
+            negotiation.state == out.to
+                && outbox::same_process(
+                    &out.body,
+                    &negotiation.provider_pid,
+                    &negotiation.consumer_pid,
+                )
+        })
     }
 
     fn delivered(

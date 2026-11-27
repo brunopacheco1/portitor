@@ -33,7 +33,8 @@ const CALLBACK: &str = "https://consumer.example/cb";
 /// at all) or `refuses_with` is (the consumer's answer, such as
 /// `HTTP 404 Not Found`). Holds POSTs whose URL ends with `hold` until
 /// `release`. Answers a GET of the consumer's state with `reported`, if
-/// set.
+/// set, for the negotiation the last POST was about, or for another one
+/// with `reported_for_another`.
 #[derive(Default)]
 struct FakeSender {
     sent: Mutex<Vec<(String, Value)>>,
@@ -42,6 +43,7 @@ struct FakeSender {
     hold: Option<&'static str>,
     release: Notify,
     reported: Option<&'static str>,
+    reported_for_another: bool,
 }
 
 impl Sender for FakeSender {
@@ -68,10 +70,20 @@ impl Sender for FakeSender {
         Box::pin(async move {
             assert_eq!(url, format!("{CALLBACK}/negotiations/urn:uuid:consumer-1"));
             let state = self.reported.ok_or("no answer")?;
+            let provider_pid = if self.reported_for_another {
+                "urn:uuid:another-negotiation".to_owned()
+            } else {
+                let sent = self.sent.lock().unwrap();
+                let last = sent.last().ok_or("nothing sent")?;
+                last.1["providerPid"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned()
+            };
             Ok(json!({
                 "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
                 "@type": "ContractNegotiation",
-                "providerPid": "ignored",
+                "providerPid": provider_pid,
                 "consumerPid": "urn:uuid:consumer-1",
                 "state": state
             }))
@@ -530,6 +542,58 @@ async fn a_lost_answer_is_checked_with_the_consumer() {
         2,
         "two tries of the agreement, no termination"
     );
+}
+
+/// TD-61: the consumer's state of another negotiation (one that a
+/// repeated first request started before 1.4) is no proof that our
+/// agreement arrived: the provider ends its negotiation.
+#[tokio::test]
+async fn the_state_of_another_negotiation_is_no_proof_of_delivery() {
+    let sender = Arc::new(FakeSender {
+        fail: true,
+        reported: Some("AGREED"),
+        reported_for_another: true,
+        ..FakeSender::default()
+    });
+    let app = app(ports(&sender));
+    let pid = start(&app).await;
+    state(&app, &pid, "TERMINATED").await;
+}
+
+/// TD-60: a first request sent again (our answer was lost) gets the
+/// negotiation it started, with the same status, and nothing new is
+/// sent; one with the same consumer pid and other terms is refused.
+#[tokio::test]
+async fn a_repeated_first_request_gets_the_negotiation_it_started() {
+    let sender = Arc::new(FakeSender {
+        hold: Some("/agreement"),
+        ..FakeSender::default()
+    });
+    let app = app(ports(&sender));
+    let pid = start(&app).await;
+    sent(&sender, 1).await;
+
+    let (status, again) = call(&app, post(&format!("{BASE}/request"), &request(CALLBACK))).await;
+    assert_eq!(status, StatusCode::CREATED, "{again}");
+    assert_eq!(again["providerPid"], pid.as_str());
+    assert_eq!(again["consumerPid"], "urn:uuid:consumer-1");
+    assert_eq!(again["state"], "REQUESTED");
+
+    let other = request("https://elsewhere.example/cb");
+    let (status, refusal) = call(&app, post(&format!("{BASE}/request"), &other)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refusal}");
+    assert!(
+        refusal["reason"][0]
+            .as_str()
+            .unwrap()
+            .contains("already used")
+    );
+
+    // `notify_one` keeps the wake-up if the agreement is not waiting yet
+    sender.release.notify_one();
+    state(&app, &pid, "AGREED").await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(sender.count(), 1, "one agreement only");
 }
 
 #[tokio::test]
