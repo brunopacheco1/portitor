@@ -98,7 +98,12 @@
               {
                 "leftOperand": "DataPermitCredential.purpose",
                 "operator": "eq",
-                "rightOperand": "scientific-research"
+                "rightOperand": "https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch"
+              },
+              {
+                "leftOperand": "purpose",
+                "operator": "eq",
+                "rightOperand": "https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch"
               },
               {
                 "leftOperand": "dateTime",
@@ -124,7 +129,12 @@
               {
                 "leftOperand": "DataPermitCredential.purpose",
                 "operator": "eq",
-                "rightOperand": "scientific-research"
+                "rightOperand": "https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch"
+              },
+              {
+                "leftOperand": "purpose",
+                "operator": "eq",
+                "rightOperand": "https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch"
               },
               {
                 "leftOperand": "dateTime",

@@ -13,17 +13,19 @@
 #    the permit's claims, and Schuman's identity asks for the credential.
 # 2. Schuman takes Lux Biobank's offer for that permit and pulls the
 #    genotypes. The offer for P-2026-002 is refused: no such permit yet.
-# 3. A second permit, P-2026-002. The issuer keeps one set of claims per
-#    participant, so the HDAB registers Schuman again with the new ones.
-#    Schuman holds both permits and takes the second offer.
+# 3. A second permit, P-2026-002. The HDAB replaces Schuman's claims at
+#    its issuer (PUT, since 1.4, TD-46); Schuman stays registered. Schuman
+#    holds both permits and takes the second offer.
 # 4. The HDAB revokes P-2026-001. Schuman shows every permit it holds,
 #    and a presentation with a revoked credential is refused as a whole:
 #    the transfer under P-2026-002 is refused too, until Schuman deletes
 #    the revoked permit from its identity.
-# 5. A trusted issuer is trusted for every credential type: the HDAB's
-#    issuer gives Schuman a MembershipCredential with the role
-#    health-data-access-body, and Lux Biobank's offer for access bodies
-#    accepts it.
+# 5. A trusted issuer is trusted only for its types (since 1.4, R-48):
+#    the HDAB's issuer would give Schuman a MembershipCredential with the
+#    role health-data-access-body, but Schuman's identity and Lux
+#    Biobank trust it for DataPermitCredential only
+#    (PORTITOR_TRUSTED_ISSUER_TYPES). Schuman's identity does not ask for
+#    it, and Lux Biobank's offer for access bodies refuses Schuman.
 #
 # The permit's claims (permitId, purpose) are placeholders: no data permit
 # format is published yet (EHDS Art. 68(10) lists what a permit states;
@@ -55,14 +57,13 @@ SCHUMAN_ID=$(participant_did schuman)
 HDAB_ISSUER=did:web:hdab-issuer%3A8070
 GENOTYPES=https://biobank.health-lu.example/datasets/genotypes
 ORIGINAL=examples/genotypes/genotypes.vcf
-PURPOSE=scientific-research # EHDS Art. 53(1)(e), as a placeholder value
+# EHDS Art. 53(1)(e), as the DPV EHDS extension names it
+PURPOSE=https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch
 
-register_schuman() { # claims-json: the HDAB's issuer registers Schuman, again if it was
-  if issuer_api hdab-issuer GET /v1/participants | jq -e --arg d "$SCHUMAN_ID" 'any(.[]; .did == $d)' >/dev/null; then
-    issuer_api hdab-issuer DELETE "/v1/participants/$(uri "$SCHUMAN_ID")" >/dev/null ||
-      fail "remove Schuman's registration"
-  fi
-  register hdab-issuer schuman "$1"
+replace_schuman_claims() { # claims-json: the HDAB's issuer replaces Schuman's claims; it stays registered
+  issuer_api hdab-issuer PUT "/v1/participants/$(uri "$SCHUMAN_ID")" "$(jq -nc --argjson c "$1" '{claims: $c}')" \
+    >/dev/null || fail "replace Schuman's claims"
+  echo "hdab-issuer replaced schuman's claims: $1"
 }
 
 schuman_asks() { # credential-id: Schuman's identity asks the HDAB's issuer, then waits for it
@@ -100,7 +101,7 @@ permit_offer() { # catalog permit-id
 # --- 1 ------------------------------------------------------------------------
 
 step "1. The HDAB grants Schuman data permit P-2026-001, as a credential from its own issuer"
-register_schuman "$(jq -nc --arg p "$PURPOSE" '{permitId: "P-2026-001", purpose: $p}')"
+register hdab-issuer schuman "$(jq -nc --arg p "$PURPOSE" '{permitId: "P-2026-001", purpose: $p}')"
 schuman_asks data-permit-vc20
 PERMIT_1=$(newest_permit)
 echo "permit P-2026-001 is credential $PERMIT_1"
@@ -124,8 +125,8 @@ expect "Schuman's request under P-2026-002" "$VIEW" TERMINATED
 
 # --- 3 ------------------------------------------------------------------------
 
-step "3. A second permit, P-2026-002: the issuer keeps one set of claims per participant, so the HDAB registers Schuman again"
-register_schuman "$(jq -nc --arg p "$PURPOSE" '{permitId: "P-2026-002", purpose: $p}')"
+step "3. A second permit, P-2026-002: the HDAB replaces Schuman's claims at its issuer; Schuman stays registered"
+replace_schuman_claims "$(jq -nc --arg p "$PURPOSE" '{permitId: "P-2026-002", purpose: $p}')"
 schuman_asks data-permit-vc20
 [[ $(permits_held) == 2 ]] || fail "Schuman does not hold two permits: $(identity_api schuman GET /v1/credentials)"
 echo "Schuman holds two permits"
@@ -159,13 +160,20 @@ pull_genotypes "$AGREEMENT_2"
 
 # --- 5 ------------------------------------------------------------------------
 
-step "5. The HDAB's issuer gives Schuman a MembershipCredential with the role health-data-access-body"
-register_schuman '{"memberOf": "Lux health data space", "role": "health-data-access-body"}'
-schuman_asks membership-vc20
+step "5. The HDAB's issuer would make Schuman an access body: it gives Schuman the role health-data-access-body"
+replace_schuman_claims '{"memberOf": "Lux health data space", "role": "health-data-access-body"}'
 
-step "5. Lux Biobank's offer for access bodies accepts it: a trusted issuer is trusted for every type"
+step "5. Schuman's identity does not ask for that MembershipCredential: it trusts the HDAB's issuer for data permits only"
+ASK=$(jq -nc --arg issuer "$HDAB_ISSUER" '{issuerDid: $issuer, credentialIds: ["membership-vc20"]}')
+if ANSWER=$(identity_api schuman POST /v1/credential-requests "$ASK"); then
+  fail "Schuman's identity asked the HDAB's issuer for a MembershipCredential: $ANSWER"
+fi
+grep -q PORTITOR_TRUSTED_ISSUER_TYPES <<<"$ANSWER" || fail "Schuman's identity refused for another reason: $ANSWER"
+echo "refused: $(jq -r '.detail' <<<"$ANSWER")"
+
+step "5. Lux Biobank's offer for access bodies refuses Schuman"
 VIEW=$(negotiate schuman "$BIOBANK" "$BIOBANK_ID" "$GENOTYPES" "$(offer "$CATALOG" "$GENOTYPES" genotypes:offer:access-body)")
-expect "Schuman's request for the offer for access bodies" "$VIEW" FINALIZED
-echo "accepted: Lux Biobank cannot say which issuer may issue which type"
+expect "Schuman's request for the offer for access bodies" "$VIEW" TERMINATED
+echo "refused: Lux Biobank trusts the HDAB's issuer for data permits only"
 
-step "Done: two permits gave two agreements; one revoked permit blocked the other until Schuman deleted it; an issuer trusted for permits could also make Schuman an access body"
+step "Done: two permits gave two agreements under one registration; one revoked permit blocked the other until Schuman deleted it; an issuer trusted for permits could not make Schuman an access body"

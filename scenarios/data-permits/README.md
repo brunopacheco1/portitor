@@ -43,7 +43,9 @@ Digital Lux Trust gives Lux Biobank a `MembershipCredential` with the
 issuer has its own credential definitions,
 [hdab-issuer-credentials.json](hdab-issuer-credentials.json): a
 `DataPermitCredential` (claims `permitId` and `purpose`) and, on
-purpose, a `MembershipCredential` (step 5).
+purpose, a `MembershipCredential` (step 5). Lux Biobank's connector and
+Schuman's identity trust the HDAB's issuer for `DataPermitCredential`
+only (`PORTITOR_TRUSTED_ISSUER_TYPES`, since 1.4).
 
 ![Deployment: data-permits on one machine](diagrams/deployment.drawio.svg)
 
@@ -55,8 +57,11 @@ in `examples/genotypes/`: no real person is in them. Its dataset
 checked against the data space's release 8 bundle at start, with three
 offers: one per permit (`DataPermitCredential.permitId` = `P-2026-001`,
 or `P-2026-002`, and `DataPermitCredential.purpose` =
-`scientific-research`, until 2027-12-31), and one for access bodies
-(`MembershipCredential.role` = `health-data-access-body`).
+`https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch`, the
+[DPV EHDS](https://w3id.org/dpv/legal/eu/ehds) purpose for EHDS Art.
+53(1)(e), with an ODRL `purpose` constraint of the same value, until
+2027-12-31), and one for access bodies (`MembershipCredential.role` =
+`health-data-access-body`).
 
 ## Scope
 
@@ -68,12 +73,13 @@ In:
 - Two permits held at once by one data user (maintainer, 2026-11-24),
   each with its own offer and agreement.
 - Revoking a permit, and what it does to the other.
-- A second trusted issuer next to the authority, and what it may issue.
+- A second trusted issuer next to the authority, trusted for data
+  permits only.
 
 Out, on purpose:
 
 - A real permit format. The claims `permitId` and `purpose` are
-  placeholders: EHDS Art. 68(10) lists what a permit states, and the
+  placeholders (the purpose value is a DPV EHDS IRI): EHDS Art. 68(10) lists what a permit states, and the
   template of Art. 70 is still to come. The permit's end is the
   credential's own `validUntil`.
 - A secure processing environment. Schuman pulls the genotypes itself.
@@ -81,17 +87,15 @@ Out, on purpose:
   the checks only.
 - Sending the data where the permit says: that needs push transfers and
   a destination check (1.1, 1.4).
-- An ODRL `purpose` constraint (1.4): the purpose is checked as a claim
-  of the permit.
 
 ## Components tested, and why
 
 | Component or interface | Why it is in the story |
 | --- | --- |
-| `portitor-issuer` (the HDAB's) | Issues the permits from configuration alone; one registration per participant, so a second permit means registering again; revokes a permit. |
+| `portitor-issuer` (the HDAB's) | Issues the permits from configuration alone; replaces a participant's claims for a second permit (`PUT /v1/participants/{did}`, since 1.4); revokes a permit. |
 | `portitor-issuer` (Digital Lux Trust) | Issues the memberships and serves the HealthDCAT-AP bundle. |
-| `portitor-identity` (Schuman) | Trusts both issuers, stores both permits, presents every credential of the type asked for, and deletes the revoked permit. |
-| `portitor-connector` as provider (Lux Biobank) | Trusts both issuers (`PORTITOR_TRUSTED_ISSUERS`), reads `DataPermitCredential` claims in its offers (`PORTITOR_POLICY_CREDENTIALS`), checks them at negotiation and at each transfer, refuses a presentation with a revoked credential. |
+| `portitor-identity` (Schuman) | Trusts both issuers, the HDAB's for data permits only; stores both permits, presents every credential of the type asked for, deletes the revoked permit, and does not ask the HDAB's issuer for a membership. |
+| `portitor-connector` as provider (Lux Biobank) | Trusts both issuers (`PORTITOR_TRUSTED_ISSUERS`), the HDAB's for data permits only (`PORTITOR_TRUSTED_ISSUER_TYPES`), reads `DataPermitCredential` claims in its offers (`PORTITOR_POLICY_CREDENTIALS`), checks them at negotiation and at each transfer, refuses a presentation with a revoked credential. |
 | `portitor-connector` as consumer (Schuman) | Asks for the `DataPermitCredential` scope the offer needs, negotiates and transfers. |
 | The built-in data plane (HTTP pull) | Schuman's app fetches the genotypes, checked against the original. |
 | Status lists | Lux Biobank reads the HDAB issuer's list and sees the revoked permit. |
@@ -129,10 +133,10 @@ those of hdab-intermediary, so run one at a time.
    P-2026-001 and pulls the genotypes, checked against the original. The
    offer for P-2026-002 is refused: Schuman has no such permit.
 3. **A second permit.** A data user may hold several permits at once.
-   The issuer keeps one set of claims per participant, so the HDAB
-   deletes Schuman's registration and makes it again with P-2026-002.
-   Schuman holds both, takes the second offer, and the first agreement
-   still works.
+   The HDAB replaces Schuman's claims at its issuer with those of
+   P-2026-002 (`PUT /v1/participants/{did}`); Schuman stays registered
+   all along. Schuman holds both, takes the second offer, and the first
+   agreement still works.
 4. **A revoked permit.** The HDAB revokes P-2026-001, and a transfer
    under it is refused. A transfer under P-2026-002 is refused too:
    Schuman shows every permit it holds, and Lux Biobank refuses a
@@ -140,26 +144,32 @@ those of hdab-intermediary, so run one at a time.
    no reason; the script checks that Lux Biobank's log does. Once
    Schuman deletes the revoked permit from its identity, P-2026-002
    works again.
-5. **Trust covers every type.** The HDAB's issuer gives Schuman a
-   `MembershipCredential` with the role `health-data-access-body`, and
-   Lux Biobank's offer for access bodies accepts it. The HDAB issuer's
-   configuration holds a `MembershipCredential` on purpose, to show
-   this.
+5. **Trust by type.** The HDAB's issuer would give Schuman a
+   `MembershipCredential` with the role `health-data-access-body`: its
+   configuration holds one on purpose. Schuman's identity trusts that
+   issuer for data permits only, so it refuses to ask for the
+   membership, with the reason. Lux Biobank's offer for access bodies
+   refuses Schuman. Had Schuman held such a membership, Lux Biobank's
+   connector would skip it too, unfetched: it trusts the HDAB's issuer
+   for data permits only.
 
 ## Findings
 
-- **An issuer trusted for permits can issue memberships too**
-  ([R-48](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#r-48), fix planned
-  for 1.4): trusted issuers are one list for every credential type
-  (step 5). The list is configuration, so an issuer also stays trusted
-  when its owner leaves the data space.
+- **An issuer trusted for permits could issue memberships too**
+  ([R-48](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#r-48), fixed in 1.4):
+  `PORTITOR_TRUSTED_ISSUER_TYPES` limits the HDAB's issuer to data
+  permits (step 5). An issuer the setting does not name still keeps
+  every type until 2.0 ([TD-74](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-74)).
+  The list is configuration, so an issuer also stays trusted when its
+  owner leaves the data space.
 - **One revoked permit blocks all the others**
   ([TD-20](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-20), fix planned
   for 1.4) until the data user deletes it, and the data user is told no reason (step 4).
 - **One set of claims per participant at the issuer**
-  ([TD-46](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-46), fix planned
-  for 1.4): a second
-  permit needs the registration made again (step 3).
+  ([TD-46](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-46), fixed in
+  1.4): a second permit replaces the claims, and the participant stays
+  registered (step 3). The issuer still keeps one set of claims at a
+  time: the new claims go into the next request.
 - **One offer per permit.** Lux Biobank must add an offer, by editing
   its datasets file, for each permit the HDAB grants; here both are
   written in advance.

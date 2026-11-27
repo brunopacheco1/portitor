@@ -9,6 +9,25 @@ SPDX-License-Identifier: Apache-2.0
 How the scenario changed, newest first. Each entry names the Portitor
 version it ran on.
 
+## 2026-11-27, for 1.4.0 (not run yet)
+
+- Step 3 replaces Schuman's claims at the HDAB's issuer with
+  `PUT /v1/participants/{did}` (1.4,
+  [TD-46](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-46)) instead of
+  deleting and registering it again.
+- Step 5 is now a refusal (1.4,
+  [R-48](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#r-48)): Lux Biobank's
+  connector and Schuman's identity set `PORTITOR_TRUSTED_ISSUER_TYPES`
+  to trust the HDAB's issuer for `DataPermitCredential` only. Schuman's
+  identity refuses to ask it for a `MembershipCredential`, and Lux
+  Biobank's offer for access bodies ends `TERMINATED`.
+- The permits' purpose is the DPV EHDS IRI
+  `https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch`
+  instead of `scientific-research`, and the two permit offers add an
+  ODRL `purpose` constraint with that value.
+- Step 4 is unchanged.
+- Not run yet: it needs images built from the 1.4 code.
+
 ## 2026-11-26, for 1.3.0
 
 - The Portitor components keep their state in PostgreSQL (1.3,
