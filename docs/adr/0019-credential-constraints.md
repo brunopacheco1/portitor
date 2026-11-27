@@ -140,12 +140,40 @@ negotiation. Portitor does the same, per dataset:
   (ADR 0019 scopes, as for offers).
   A dataset request asks for the scopes of that dataset's access policy.
   The caller's token must allow them: Portitor as consumer adds those
-  given in `additionalScopes` of its management catalog request.
+  given in `additionalScopes` of its management catalog request and
+  dataset request (EDC's `DatasetRequest` has no `additionalScopes`;
+  Portitor takes it anyway).
 - Details found when building it (2026-11-27): an access policy must
   have at least one permission, and has no other field (no `@id` or
   `@type`). It is stored with the dataset, in its own column, and kept
-  in the stored entry too, so a check with new rules reads it again. A
-  negotiation checks the offer only, not the access policy.
+  in the stored entry too, so a check with new rules reads it again.
+- **A contract request checks the access policy too** (changed on
+  2026-11-27; the first build checked the offer only, so a member that
+  knew a hidden offer's `@id` could negotiate it). EDC does so: its
+  provider resolves the offer's contract definition with its access
+  policy (`ConsumerOfferResolverImpl`), and
+  `ContractValidationServiceImpl.validateInitialOffer` evaluates that
+  access policy before the contract policy, on every
+  `ContractRequestMessage`, the first and a counter request
+  (`ContractNegotiationProtocolServiceImpl.notifyRequested`; all three
+  under `core/control-plane/`, read at EDC Connector commit `4215744` on
+  2026-11-27). Portitor does the same: on every contract request, the
+  access policy of the offer's dataset must hold for the caller's
+  credentials, at the time of the request. If it does not, the answer is
+  the one an unknown offer gets (400, "unknown offer for this dataset"),
+  as a dataset request for a hidden dataset gets the answer of an
+  unknown dataset; nothing is stored. The rule is in the domain
+  (`negotiation/provider.rs`, `check_offer`); the connector asks for the
+  credentials.
+- The provider asks for the scopes of the offer's constraints and of the
+  dataset's access policy in one presentation query. EDC asks only for
+  those its scope extractors find in the contract policy (and the
+  default scopes) and evaluates the access policy with what comes back.
+  Portitor as consumer grants, in a negotiation's token, the scopes of
+  the offer only: an access policy on a credential type that the offer
+  does not name can then hold at negotiation only if the type's scope is
+  a configured one (`PORTITOR_DCP_SCOPES`, the membership). The datasets
+  file should name such a type in the offer too.
 
 ### Trusted issuers by credential type (R-48)
 

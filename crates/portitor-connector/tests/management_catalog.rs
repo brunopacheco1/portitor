@@ -347,9 +347,12 @@ async fn bad_dataset_requests_are_refused() {
         ),
         (json!({"protocol": "ids-multipart"}), "is not supported"),
         (json!({"@type": "CatalogRequest"}), "@type must be"),
-        // EDC's DatasetRequest has neither
+        // EDC's DatasetRequest has no querySpec
         (json!({"querySpec": {}}), "unknown field"),
-        (json!({"additionalScopes": []}), "unknown field"),
+        // nor additionalScopes; Portitor takes it, checked as for a catalog
+        (json!({"additionalScopes": ["a b"]}), "additionalScopes"),
+        (json!({"additionalScopes": [""]}), "additionalScopes"),
+        (json!({"additionalScopes": "a"}), "additionalScopes"),
         (
             json!({"counterPartyAddress": "http://provider.example/dsp/2025-1"}),
             "https URL",
@@ -729,12 +732,23 @@ async fn additional_scopes_go_into_the_token() {
     let request = dataset_request(PROVIDER_ADDRESS, "CAT0102");
     let answer = post(&app, "/v1/catalog/dataset/request", &request).await;
     assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    // a dataset request takes additionalScopes too (ADR 0019, amendment
+    // in 1.4), and an empty list is the same as none
+    let mut request = dataset_request(PROVIDER_ADDRESS, "CAT0102");
+    request["additionalScopes"] = json!([scope]);
+    let answer = post(&app, "/v1/catalog/dataset/request", &request).await;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    request["additionalScopes"] = json!([]);
+    let answer = post(&app, "/v1/catalog/dataset/request", &request).await;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
     let provider = PROVIDER_DID.to_owned();
     assert_eq!(
         *asked.lock().unwrap(),
         [
             (provider.clone(), vec![scope.to_owned()]),
             (provider.clone(), Vec::new()),
+            (provider.clone(), Vec::new()),
+            (provider.clone(), vec![scope.to_owned()]),
             (provider, Vec::new()),
         ]
     );

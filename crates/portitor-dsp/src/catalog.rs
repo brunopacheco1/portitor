@@ -111,8 +111,9 @@ pub struct Requester<'a> {
 
 impl Requester<'_> {
     /// Whether the requester may see a dataset with this access policy.
-    /// Without one, every member may (as before 1.4).
-    fn may_see(&self, access_policy: Option<&AccessPolicy>) -> bool {
+    /// Without one, every member may (as before 1.4). A contract request
+    /// asks this too (the provider's negotiation).
+    pub(crate) fn may_see(&self, access_policy: Option<&AccessPolicy>) -> bool {
         match access_policy {
             None => true,
             Some(policy) => access_policy_holds(policy, self.now, self.credentials).is_ok(),

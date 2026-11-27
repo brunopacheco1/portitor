@@ -169,16 +169,19 @@ impl CatalogReader {
     }
 
     /// The dataset `dataset_id` of the provider `provider_id` whose DSP
-    /// endpoint is `provider_address`.
+    /// endpoint is `provider_address`. Our token grants
+    /// `additional_scopes` too, as for [`CatalogReader::catalog`].
     pub(crate) async fn dataset(
         &self,
         provider_address: &str,
         provider_id: &str,
         dataset_id: &str,
+        additional_scopes: &[String],
     ) -> Result<ProviderAnswer, ReadFailure> {
         check_dataset_id(dataset_id)?;
         let wanted = Wanted::Dataset(dataset_id);
-        self.read(provider_address, provider_id, &[], &wanted).await
+        self.read(provider_address, provider_id, additional_scopes, &wanted)
+            .await
     }
 
     /// Checks the address and the id, gets a token, sends the request
@@ -312,12 +315,12 @@ mod tests {
             );
         }
         let read = reader(false)
-            .dataset("https://provider.example/dsp", provider, " ")
+            .dataset("https://provider.example/dsp", provider, " ", &[])
             .await;
         assert!(matches!(read, Err(ReadFailure::BadRequest(_))));
         for dots in [".", ".."] {
             let read = reader(false)
-                .dataset("https://provider.example/dsp", provider, dots)
+                .dataset("https://provider.example/dsp", provider, dots, &[])
                 .await;
             assert!(matches!(read, Err(ReadFailure::BadRequest(_))), "{dots}");
         }

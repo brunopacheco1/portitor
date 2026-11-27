@@ -544,6 +544,109 @@ async fn the_catalog_shows_a_dataset_only_to_callers_its_access_policy_holds_for
     }
 }
 
+/// TD-13 (ADR 0019, amendment in 1.4): a contract request is checked
+/// against the access policy of its dataset, as Eclipse EDC's
+/// `validateInitialOffer` does. A caller that meets the offer (here it
+/// has no constraint) but not the access policy gets the answer of an
+/// unknown offer; one that meets both gets the agreement. The provider
+/// asks for the offer's and the access policy's scopes in one query.
+#[tokio::test]
+async fn a_contract_request_is_checked_against_the_access_policy() {
+    let network = Arc::new(Network::default());
+    let fakes = Fakes::default();
+    let membership = credential(MEMBERSHIP, &json!({}));
+    let mut open = reports();
+    open["@id"] = json!("open");
+    open["hasPolicy"] = json!([{"@id": "open:use", "@type": "Offer",
+        "permission": [{"action": "use"}]}]);
+    let mut restricted = reports();
+    restricted["hasPolicy"] = json!([{"@id": "reports:use", "@type": "Offer",
+        "permission": [{"action": "use"}]}]);
+    restricted["portitor:accessPolicy"] = json!({"permission": [{"action": "use",
+        "constraint": [{"leftOperand": "DataProcessorCredential.processing",
+            "operator": "eq", "rightOperand": "eu"}]}]});
+    let mut provider_ports = fake_ports(&network, PROVIDER_DID, &fakes);
+    provider_ports.harvest.source = Some(Arc::new(FixedSource::new(vec![open, restricted])));
+    let (provider_app, provider) =
+        portitor_connector::build(&config(PROVIDER_DID, PROVIDER), provider_ports).unwrap();
+    assert_eq!(provider.catalog_size().unwrap(), 2);
+    network.join(PROVIDER, provider_app);
+    // the consumer only records what the provider sends it
+    let received: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+    network.join(CONSUMER, recording_provider(&received));
+
+    let request = |consumer_pid: &str, offer_id: &str, target: &str| {
+        json!({
+            "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+            "@type": "ContractRequestMessage",
+            "consumerPid": consumer_pid,
+            "callbackAddress": format!("{CONSUMER}/cb"),
+            "offer": {"@id": offer_id, "@type": "Offer", "target": target,
+                "permission": [{"action": "use"}]}
+        })
+    };
+    let url = format!("{PROVIDER}{DSP}/negotiations/request");
+    let header = format!("Bearer {CONSUMER_DID}|{MEMBERSHIP_SCOPE} {PROCESSOR_SCOPE}");
+    let agreement_sent = |consumer_pid: &str| {
+        let path = format!("cb/negotiations/{consumer_pid}/agreement");
+        received
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(sent, _)| sent.ends_with(&path))
+    };
+
+    for (processing, meets_access_policy) in [("us", false), ("eu", true)] {
+        fakes.wallets.lock().unwrap().insert(
+            CONSUMER_DID.to_owned(),
+            vec![
+                membership.clone(),
+                credential(PROCESSOR, &json!({"processing": processing})),
+            ],
+        );
+        let consumer_pid = format!("c-{processing}");
+        let before = fakes.queries.lock().unwrap().len();
+        let answer = network
+            .post_authorized(
+                &url,
+                &request(&consumer_pid, "reports:use", "reports"),
+                &header,
+            )
+            .await;
+        // one query, with the access policy's scope
+        let asked = fakes.queries.lock().unwrap()[before..].to_vec();
+        assert_eq!(
+            asked,
+            vec![vec![
+                MEMBERSHIP_SCOPE.to_owned(),
+                PROCESSOR_SCOPE.to_owned()
+            ]]
+        );
+        if meets_access_policy {
+            assert_eq!(answer.unwrap()["state"], "REQUESTED");
+            until(|| agreement_sent(&consumer_pid), |sent| *sent).await;
+        } else {
+            // the same answer as an unknown offer
+            let unknown = network
+                .post_authorized(&url, &request(&consumer_pid, "unknown", "reports"), &header)
+                .await;
+            assert_eq!(answer.unwrap_err(), unknown.unwrap_err());
+        }
+    }
+
+    // a dataset without an access policy: unchanged, membership is enough
+    let membership_only = format!("Bearer {CONSUMER_DID}|{MEMBERSHIP_SCOPE}");
+    let answer = network
+        .post_authorized(
+            &url,
+            &request("c-open", "open:use", "open"),
+            &membership_only,
+        )
+        .await;
+    assert_eq!(answer.unwrap()["state"], "REQUESTED");
+    until(|| agreement_sent("c-open"), |sent| *sent).await;
+}
+
 /// A bad access policy (here a purpose, which is a term of an agreement)
 /// rejects the dataset at harvest, as a bad offer is (check `odrl`).
 #[tokio::test]

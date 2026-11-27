@@ -1066,8 +1066,11 @@ to TD-58).
   with the caller's credentials (one presentation query per request);
   a dataset it does not hold for is left out, or answered as unknown
   ([ADR 0019](adr/0019-credential-constraints.md), amendment in 1.4).
-  The offers of a shown dataset are still shown to all; a negotiation
-  checks the offer, not the access policy.
+  A contract request is checked against the access policy too, as in
+  EDC: a hidden dataset's offer gets the answer of an unknown offer.
+  Portitor as consumer passes `additionalScopes` on its management
+  catalog and dataset requests. The offers of a shown dataset are still
+  shown to all.
 - **Next.** Close at the 1.4 release.
 
 <a id="td-14"></a>

@@ -86,7 +86,8 @@ calls `start`, which:
 
 - answers a repeat of a first request (same caller, same `consumerPid`)
   with the negotiation it already started (`requested_before`, TD-60);
-- checks that the offer is the one in the catalog (`check_offer`);
+- checks that the offer is the one in the catalog, and that its
+  dataset's access policy, if any, holds for the caller (`check_offer`);
 - asks the state machine for the next state (`next_state`, from Part 1);
 - builds a `Negotiation` value with a new `provider_pid`;
 - decides what the provider sends next (`next`, through the `Decider`

@@ -51,9 +51,19 @@ setting and file format still works, and every new setting is optional
   1.4; [TD-13](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-13),
   [DEPLOYING](docs/DEPLOYING.md#datasets-file)). A database migration
   adds the column `dataset.access_policy`.
+- Connector management API: optional `additionalScopes` on
+  `POST /v1/catalog/dataset/request`, as on `POST /v1/catalog/request`,
+  to read a dataset behind an access policy
+  ([TD-13](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-13)).
 
 ### Changed
 
+- A contract request is checked against the access policy of its
+  dataset, as in EDC: an offer of a dataset hidden from the caller gets
+  the answer of an unknown offer, and the provider asks for the access
+  policy's scopes with the offer's
+  ([ADR 0019](docs/adr/0019-credential-constraints.md), amendment in
+  1.4; [TD-13](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-13)).
 - The connector skips a credential whose issuer
   `PORTITOR_TRUSTED_ISSUER_TYPES` does not trust for each of its types
   (except `VerifiableCredential`), as EDC's `HasValidIssuer`, before it

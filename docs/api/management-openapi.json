@@ -129,7 +129,7 @@
         "tags": [
           "Catalog"
         ],
-        "summary": "Read one dataset from a provider (DSP 2025-1 `Dataset`), by its\n`@id`. Works as `POST /v1/catalog/request` does: the connector's own\nDCP token, one try, the provider's JSON as it came.",
+        "summary": "Read one dataset from a provider (DSP 2025-1 `Dataset`), by its\n`@id`. Works as `POST /v1/catalog/request` does: the connector's own\nDCP token (with `additionalScopes`, if given), one try, the provider's\nJSON as it came.",
         "operationId": "request_dataset",
         "requestBody": {
           "content": {
@@ -153,7 +153,7 @@
             }
           },
           "400": {
-            "description": "Invalid request, a protocol other than dataspace-protocol-http:2025-1, a dataset id that is \".\" or \"..\", or an address that is not an https URL",
+            "description": "Invalid request, a protocol other than dataspace-protocol-http:2025-1, a dataset id that is \".\" or \"..\", a scope in additionalScopes that is not one word, or an address that is not an https URL",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1517,7 +1517,7 @@
       },
       "DatasetRequest": {
         "type": "object",
-        "description": "Ask a provider for one dataset.\n\nThe body is the `DatasetRequest` of Eclipse EDC's management API v4\n(EDC v1.0.0-RC8: `dataset-request-schema.json`, `DatasetRequest.java`\nand `DatasetRequestValidator.java`). `@id` (the dataset's id),\n`counterPartyAddress` and `counterPartyId` are required, and exactly\none of `protocol` and `profile`; all are read as in\n[`CatalogRequest`]. EDC's `DatasetRequest` has no `querySpec` and no\n`additionalScopes`, so neither is taken here.",
+        "description": "Ask a provider for one dataset.\n\nThe body is the `DatasetRequest` of Eclipse EDC's management API v4\n(EDC v1.0.0-RC8: `dataset-request-schema.json`, `DatasetRequest.java`\nand `DatasetRequestValidator.java`). `@id` (the dataset's id),\n`counterPartyAddress` and `counterPartyId` are required, and exactly\none of `protocol` and `profile`; all are read as in\n[`CatalogRequest`]. EDC's `DatasetRequest` has no `querySpec`, so\nnone is taken here. It has no `additionalScopes` either; Portitor\ntakes it anyway, optional and read as in [`CatalogRequest`], so that\na dataset a provider shows only to holders of a credential can be read\n(ADR 0019, amendment in 1.4). A body written for EDC works unchanged.",
         "required": [
           "@id",
           "counterPartyAddress",
@@ -1549,6 +1549,16 @@
             ],
             "description": "`DatasetRequest`, when present.",
             "example": "DatasetRequest"
+          },
+          "additionalScopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Scopes the provider may read from our Credential Service with our\ntoken, on top of the configured ones (`PORTITOR_DCP_SCOPES`): for a\ndataset a provider shows only to holders of a credential. Not in\nEclipse EDC's `DatasetRequest`.",
+            "example": [
+              "org.eclipse.dspace.dcp.vc.type:DataProcessorCredential:read"
+            ]
           },
           "counterPartyAddress": {
             "type": "string",

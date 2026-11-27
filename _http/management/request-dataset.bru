@@ -34,7 +34,9 @@ docs {
   Use the "two-connectors" environment (docs/TESTING.md, Two connectors).
   One dataset of the provider, by its @id, through the consumer's management API: the
   connector gets a DCP token from its own STS and returns the provider's Dataset as it
-  came. The body is the DatasetRequest of Eclipse EDC's management API v4.
+  came. The body is the DatasetRequest of Eclipse EDC's management API v4, plus the
+  optional additionalScopes (not in EDC's): scopes added to the token, for a dataset
+  the provider shows only to holders of a credential (its access policy).
   502 with "the provider answered HTTP 404 Not Found" in the detail for a dataset the
   provider does not have.
 }

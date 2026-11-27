@@ -1363,9 +1363,19 @@ the catalog serves them, without `@context`. See
   The provider asks the caller's credential service for the scopes of
   the access policies once per catalog request. The caller's token must
   allow them: on Portitor as consumer, pass them in `additionalScopes`
-  of `POST /v1/catalog/request`. List the credential types in
-  `PORTITOR_POLICY_CREDENTIALS`, as for offers. The negotiation checks
-  the offer, not the access policy.
+  of `POST /v1/catalog/request` or `POST /v1/catalog/dataset/request`.
+  List the credential types in `PORTITOR_POLICY_CREDENTIALS`, as for
+  offers.
+
+  A contract request is checked against the access policy too, as
+  Eclipse EDC does: a member that knows the offer's `@id` of a dataset
+  hidden from it gets the answer of an unknown offer. The provider asks
+  for the scopes of the offer and of the access policy in one query.
+  Portitor as consumer grants, in a negotiation's token, only the scopes
+  of the offer's constraints. So write the access policy's credential
+  constraints into the offer too (or use only the membership, whose scope
+  every token grants), or a Portitor consumer cannot meet the access
+  policy at negotiation.
 
 ### Policies
 
@@ -1942,7 +1952,10 @@ dataset, by its `@id`. Both request bodies follow Eclipse EDC's
 management API (`/v4/catalog/request`, EDC v1.0.0-RC8), so a client
 written for EDC can send the same body. What Portitor does with each
 member (`querySpec` is refused, for example) is in the `CatalogRequest`
-and `DatasetRequest` schemas of the OpenAPI file.
+and `DatasetRequest` schemas of the OpenAPI file. Both take the
+optional `additionalScopes` (EDC's `DatasetRequest` does not): scopes
+added to the token, for a provider that shows a dataset only to holders
+of a credential (an access policy, [Datasets file](#datasets-file)).
 
 If the provider refuses, cannot be reached or sends something else, the
 answer is 502 and its `detail` says which (for example `the provider
@@ -2203,7 +2216,8 @@ known risk and technical debt, with its status and target release.
   (`MembershipCredential`, `PORTITOR_DCP_SCOPES`); offers may add
   credential claims (ADR 0019), compared as text only. Since 1.4 a
   dataset's access policy hides it from the members it does not hold
-  for; the offers of a dataset that is shown are shown to all. Credential schemas are not
+  for, in the catalog and at negotiation; the offers of a dataset that
+  is shown are shown to all. Credential schemas are not
   checked: the issuer publishes each definition's `credentialSchema` URL
   and no component fetches it.
 - **Revocation** takes up to `PORTITOR_STATUS_LIST_CACHE_SECONDS` to be
