@@ -145,26 +145,37 @@ pub fn consumer_may_accept<'a>(
         .ok_or_else(|| PolicyError::Unsupported(format!("current time {now:?}")))?
         .start;
     for constraint in terms.permission.iter().flat_map(|rule| &rule.constraint) {
-        if as_consumer(constraint, now) == Some(false) {
+        if as_consumer(constraint, now) == ConsumerView::Fails {
             return Err(PolicyError::NotSatisfied(describe(constraint)));
         }
     }
     Ok(())
 }
 
-/// Evaluates an understood constraint as the consumer sees it:
-/// `Some(true)` or `Some(false)` when it knows, `None` when the answer
-/// depends on its own credentials (only the provider checks those).
+/// What the consumer can say about one understood constraint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConsumerView {
+    /// It holds, whatever the consumer's credentials are.
+    Holds,
+    /// It does not hold, whatever the consumer's credentials are.
+    Fails,
+    /// The answer depends on the consumer's own credentials, which only
+    /// the provider verifies.
+    ProviderDecides,
+}
+
+/// Evaluates an understood constraint as the consumer sees it.
 /// Logical constraints combine the three answers as three-valued
-/// (Kleene) logic: `and` is false if one part is false, `or` is true if
-/// one part is true, otherwise an unknown part makes the whole unknown.
-fn as_consumer(constraint: &Constraint, now: i128) -> Option<bool> {
+/// (Kleene) logic: `and` fails if one part fails, `or` holds if one part
+/// holds, otherwise a part the provider decides makes the whole one the
+/// provider decides.
+fn as_consumer(constraint: &Constraint, now: i128) -> ConsumerView {
     match constraint {
         Constraint::Atomic(atomic) => {
-            let left = short(&atomic.left_operand);
-            if left != Some("dateTime") && left != Some("purpose") {
+            match short(&atomic.left_operand) {
+                Some("dateTime" | "purpose") => {}
                 // a credential constraint (the only other understood kind)
-                return None;
+                _ => return ConsumerView::ProviderDecides,
             }
             let no_credentials = CallerCredentials::default();
             let mode = Mode::Evaluate {
@@ -172,45 +183,49 @@ fn as_consumer(constraint: &Constraint, now: i128) -> Option<bool> {
                 caller: &no_credentials,
             };
             // already validated; an error here would mean "does not hold"
-            Some(check_atomic(atomic, &mode).unwrap_or(false))
+            if check_atomic(atomic, &mode).unwrap_or(false) {
+                ConsumerView::Holds
+            } else {
+                ConsumerView::Fails
+            }
         }
         Constraint::Logical(logical) => {
             let (_name, parts) = logical_parts(logical);
-            let (mut held, mut failed, mut unknown) = (0, 0, 0);
+            let (mut held, mut failed, mut provider_decides) = (0, 0, 0);
             for part in parts {
                 match as_consumer(part, now) {
-                    Some(true) => held += 1,
-                    Some(false) => failed += 1,
-                    None => unknown += 1,
+                    ConsumerView::Holds => held += 1,
+                    ConsumerView::Fails => failed += 1,
+                    ConsumerView::ProviderDecides => provider_decides += 1,
                 }
             }
             match logical {
                 LogicalConstraint::And(_) | LogicalConstraint::AndSequence(_) => {
                     if failed > 0 {
-                        Some(false)
-                    } else if unknown > 0 {
-                        None
+                        ConsumerView::Fails
+                    } else if provider_decides > 0 {
+                        ConsumerView::ProviderDecides
                     } else {
-                        Some(true)
+                        ConsumerView::Holds
                     }
                 }
                 LogicalConstraint::Or(_) => {
                     if held > 0 {
-                        Some(true)
-                    } else if unknown > 0 {
-                        None
+                        ConsumerView::Holds
+                    } else if provider_decides > 0 {
+                        ConsumerView::ProviderDecides
                     } else {
-                        Some(false)
+                        ConsumerView::Fails
                     }
                 }
                 // exactly one part must hold
                 LogicalConstraint::Xone(_) => {
-                    if held > 1 || (held == 0 && unknown == 0) {
-                        Some(false)
-                    } else if unknown > 0 {
-                        None
+                    if held > 1 || (held == 0 && provider_decides == 0) {
+                        ConsumerView::Fails
+                    } else if provider_decides > 0 {
+                        ConsumerView::ProviderDecides
                     } else {
-                        Some(true)
+                        ConsumerView::Holds
                     }
                 }
             }
