@@ -327,8 +327,8 @@ async fn status_of(
             "the credential has more than {MAX_STATUS_ENTRIES} status entries"
         )));
     }
-    let issuer = match directory.did_document_or_error(&parsed.issuer).await {
-        Ok(issuer) => issuer,
+    let issuer_document = match directory.did_document_or_error(&parsed.issuer).await {
+        Ok(document) => document,
         Err(error) if error.is_temporary() => return Err(NotRead::Unavailable(error.reason)),
         Err(error) => return Err(NotRead::Rejected(error.reason)),
     };
@@ -339,7 +339,7 @@ async fn status_of(
             .list_credential(
                 check.source.as_ref(),
                 &parsed.issuer,
-                &issuer,
+                &issuer_document,
                 url,
                 now,
                 LEEWAY,

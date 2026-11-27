@@ -101,9 +101,10 @@ impl DcpVerifier {
         if membership.status.is_empty() {
             return Ok(());
         }
-        let document = self.resolver.resolve(issuer).await?;
+        let issuer_document = self.resolver.resolve(issuer).await?;
         for entry in &membership.status {
-            self.check_status(issuer, &document, entry, now).await?;
+            self.check_status(issuer, &issuer_document, entry, now)
+                .await?;
         }
         Ok(())
     }
@@ -117,14 +118,14 @@ impl DcpVerifier {
     pub(super) async fn check_status(
         &self,
         issuer_did: &str,
-        issuer: &DidDocument,
+        issuer_document: &DidDocument,
         entry: &StatusEntry,
         now: u64,
     ) -> Result<(), VerifyError> {
         let url = &entry.status_list_credential;
         let read = self
             .status_lists
-            .list_credential(&self.http, issuer_did, issuer, url, now, LEEWAY)
+            .list_credential(&self.http, issuer_did, issuer_document, url, now, LEEWAY)
             .await;
         let list_credential = match read {
             Ok(read) => {
