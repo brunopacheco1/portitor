@@ -24,6 +24,7 @@ use portitor_connector::shacl::BundleRules;
 use portitor_dcp::bundle::{self, FileEntry, Manifest, MediaType, Role};
 use portitor_dsp::catalog::CatalogDatasets;
 use portitor_dsp::policy::CredentialTypes;
+use portitor_dsp::Dataset;
 
 const PUBLIC: &str = "http://publications.europa.eu/resource/authority/access-right/PUBLIC";
 
@@ -78,10 +79,21 @@ static FILE: LazyLock<PathBuf> = LazyLock::new(|| {
     ))
 });
 
+/// The datasets in the catalog now, without their access policies.
+fn catalog_datasets(harvester: &DatasetHarvester) -> Vec<Dataset> {
+    harvester
+        .catalog()
+        .all_with_access_policies()
+        .expect("catalog")
+        .into_iter()
+        .map(|listed| listed.dataset)
+        .collect()
+}
+
 /// Checks the catalog after a run: offers, distributions, unique ids.
 fn check_catalog(harvester: &DatasetHarvester) {
     let mut ids = BTreeSet::new();
-    for dataset in harvester.catalog().all().expect("catalog") {
+    for dataset in catalog_datasets(harvester) {
         assert!(
             !dataset.has_policy.is_empty(),
             "{} has no offer",
@@ -129,8 +141,8 @@ fuzz_target!(|data: &[u8]| {
     harvester.start().expect("start");
     check_last_job(&store);
     check_catalog(&harvester);
-    let first = harvester.catalog().all().expect("catalog");
+    let first = catalog_datasets(&harvester);
     // the same file again: nothing changes
     let _ = harvester.run(Trigger::Interval);
-    assert_eq!(harvester.catalog().all().expect("catalog"), first);
+    assert_eq!(catalog_datasets(&harvester), first);
 });
