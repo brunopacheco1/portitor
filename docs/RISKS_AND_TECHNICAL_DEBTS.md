@@ -1698,8 +1698,8 @@ to TD-58).
   each insert.
 - **Next.** ROADMAP 1.12, with [TD-40](#td-40) (asynchronous store
   ports): choose one of the ways above and measure again with
-  `scripts/bench.sh` (maintainer decision D1, 2026-11-27: not fixed in
-  1.4).
+  `scripts/bench.sh` (decided by the maintainer on 2026-11-27: not
+  fixed in 1.4).
 
 <a id="td-74"></a>
 ### TD-74 An issuer not limited by type is trusted for every credential type
