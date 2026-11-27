@@ -84,7 +84,8 @@ does three things and holds no protocol rule:
 `portitor-dsp/src/negotiation/provider.rs`. For a new negotiation it
 calls `start`, which:
 
-- checks that the offer is the one in the catalog (`check_offer`);
+- checks that the offer is the one in the catalog, and that its
+  dataset's access policy, if any, holds for the caller (`check_offer`);
 - asks the state machine for the next state (`next_state`, from Part 1);
 - builds a `Negotiation` value with a new `provider_pid`;
 - decides what the provider sends next (`next`, through the `Decider`
