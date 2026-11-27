@@ -52,7 +52,10 @@ Read the first lines of each `lib.rs`: they say what the crate does.
 7. `portitor-connector/src/lib.rs`. The connector: its settings
    (`Config`), and `build`, which wires ports to adapters and lists
    every route. `portitor-identity` and `portitor-issuer` have the same
-   shape: `main.rs`, `config.rs`, `lib.rs` with the routes, `store.rs`.
+   shape: `main.rs`, `config.rs`, `lib.rs` with the routes, `store.rs`
+   (its `DatabaseStore` is `ComponentStore` of
+   `portitor-runtime/src/component_store.rs`, with the component's own
+   store port on it).
 
 ## Part 2: one request, end to end
 
@@ -222,7 +225,10 @@ From there the steps are the same: state machine, store, outbox.
 - `portitor-dataplane/src/audit.rs`: the audit line of each pull, push
   sent and push received.
 - The DCP check of step 2 in full:
-  `portitor-connector/src/auth/dcp.rs`.
+  `portitor-connector/src/auth/dcp.rs`. Status lists are read and
+  cached in `portitor-runtime/src/status_lists.rs` (moved from the
+  connector in 1.4), which the identity's credential status check
+  (`portitor-identity/src/status_check.rs`, TD-20) uses too.
 - Datasets and the bundle: `portitor-connector/src/harvest.rs` and
   `bundle_harvest.rs`.
 - Files above 1,000 lines and the macros that write types are known

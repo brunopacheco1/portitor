@@ -65,7 +65,7 @@
 //! from the caller's or the issuer's server.
 //!
 //! Status list credentials are cached for a short time, by URL
-//! ([`status_list_cache`]; ADR 0016, amended in 0.11). Tokens and
+//! (`portitor_runtime::status_lists::cache`; ADR 0016, amended in 0.11). Tokens and
 //! presentations are not: they are checked on every request.
 //!
 //! The caller's `MembershipCredential`s go with it too ([`Membership`]),
@@ -106,9 +106,8 @@ use super::sts::{SecureTokenService, TokenRequest};
 use super::{AuthSettings, Caller, CallerVerifier, Membership, VerifyError, with_linked_scopes};
 
 pub mod membership;
-pub mod status_list_cache;
 
-use status_list_cache::StatusListCache;
+use portitor_runtime::status_lists::StatusListReader;
 
 /// Where the verifier reads the current time, in seconds since 1970:
 /// [`now_secs`], except in tests, which move time forward.
@@ -116,11 +115,6 @@ type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
 /// Allowed clock difference between participants, in seconds.
 const LEEWAY: u64 = 60;
-
-/// The largest status list credential read, in bytes. A list of the
-/// minimum size (16 KiB uncompressed) is a few kilobytes even when many
-/// bits are set.
-const MAX_STATUS_LIST: usize = 2 * 1024 * 1024;
 
 /// The credential type every caller must hold (ADR 0016).
 pub const MEMBERSHIP: &str = portitor_dsp::policy::MEMBERSHIP;
@@ -169,9 +163,10 @@ pub struct DcpVerifier {
     /// database, so every process of the connector refuses a token used
     /// on another one (TD-09).
     used_token_ids: Arc<dyn UsedTokenStore>,
-    /// Verified status list credentials, by URL
-    /// (`PORTITOR_STATUS_LIST_CACHE_SECONDS`).
-    status_lists: StatusListCache,
+    /// Reads and checks status list credentials, with a cache by URL
+    /// (`PORTITOR_STATUS_LIST_CACHE_SECONDS`;
+    /// `portitor_runtime::status_lists`).
+    status_lists: StatusListReader,
     /// The current time.
     clock: Clock,
     start_tries: u32,
@@ -258,7 +253,7 @@ impl DcpVerifier {
             // on the prover's side (ADR 0022)
             scopes: with_linked_scopes(&settings.scopes),
             used_token_ids,
-            status_lists: StatusListCache::new(settings.status_list_cache_seconds),
+            status_lists: StatusListReader::new(settings.status_list_cache_seconds),
             clock: Arc::new(now_secs),
             start_tries: START_TRIES,
             deadline: DEADLINE,

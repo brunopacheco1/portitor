@@ -16,14 +16,12 @@
 //! transaction, so the two cannot disagree.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 use portitor_dcp::credential::Profile;
 use portitor_dcp::issuance::STATUS_LIST_ENTRIES;
 use portitor_dcp::message::RequestStatus;
-use portitor_runtime::database::{
-    Database, DatabaseSetting, DbError, Executor, Migrations, Row, from_db_int, to_db_int,
-};
+use portitor_runtime::component_store::{ComponentSchema, ComponentStore};
+use portitor_runtime::database::{DbError, Executor, Migrations, Row, from_db_int, to_db_int};
 use portitor_runtime::system::random_below;
 use portitor_runtime::used_tokens::UsedTokenStore;
 use portitor_runtime::values;
@@ -585,52 +583,21 @@ const ISSUED_COLUMNS: &str = "id, issuer_pid, holder_did, definition_id, credent
 const DELIVERY_COLUMNS: &str =
     "o.issuer_pid, r.holder_did, r.access_token, o.message, o.attempts, o.next_attempt_at";
 
-/// Adapter: the store in the issuer's database (PostgreSQL, or a
-/// `SQLite` file), shared with the health check.
-#[derive(Debug, Clone)]
-pub struct DatabaseStore(Arc<Database>);
+/// Names the issuer component's schema ([`MIGRATIONS`]) for the shared
+/// [`ComponentStore`].
+#[derive(Debug, Clone, Copy)]
+pub struct IssuerSchema;
 
-impl DatabaseStore {
-    /// The store in `db`, whose schema is [`MIGRATIONS`].
-    #[must_use]
-    pub fn new(db: Arc<Database>) -> Self {
-        Self(db)
-    }
-
-    /// Opens (or creates) the database `setting` names and brings its
-    /// schema up to date.
-    ///
-    /// # Errors
-    /// The database cannot be opened, or was written by a newer Portitor.
-    pub fn open(setting: &DatabaseSetting) -> Result<Self, StoreError> {
-        Ok(Self::new(Arc::new(Database::open(setting, &MIGRATIONS)?)))
-    }
-
-    /// An in-memory `SQLite` store, for tests.
-    ///
-    /// # Errors
-    /// `SQLite` cannot allocate the database.
-    pub fn in_memory() -> Result<Self, StoreError> {
-        Ok(Self::new(Arc::new(Database::in_memory(&MIGRATIONS)?)))
-    }
-
-    /// The database, for the health check.
-    #[must_use]
-    pub fn database(&self) -> &Arc<Database> {
-        &self.0
-    }
-
-    /// The database, to run one statement on (`self.db().execute(...)`).
-    fn db(&self) -> &Database {
-        &self.0
-    }
+impl ComponentSchema for IssuerSchema {
+    const MIGRATIONS: &'static Migrations = &MIGRATIONS;
 }
 
-impl UsedTokenStore for DatabaseStore {
-    fn use_token_id(&self, token_id: &str, expires_at: u64, now: u64) -> Result<bool, String> {
-        self.db().use_token_id(token_id, expires_at, now)
-    }
-}
+/// Adapter: the store in the issuer component's database (PostgreSQL, or
+/// a `SQLite` file), shared with the health check. `new`, `open`,
+/// `in_memory`, `database`, `db` and the used token ids and leases are
+/// written once, in `portitor-runtime` ([`ComponentStore`], TD-71); the
+/// [`IssuerStore`] methods are below.
+pub type DatabaseStore = ComponentStore<IssuerSchema>;
 
 impl IssuerStore for DatabaseStore {
     fn add_participant(&self, participant: &Participant) -> Result<bool, StoreError> {
@@ -1280,6 +1247,10 @@ fn from_json<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, StoreError
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use std::sync::Arc;
+
+    use portitor_runtime::database::{Database, DatabaseSetting};
+
     use super::*;
     use portitor_runtime::testing::{databases, schema};
     use std::path::Path;

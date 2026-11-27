@@ -49,7 +49,7 @@ use portitor_dsp::transfer::{
     Transition,
 };
 use portitor_runtime::leases::HeldLease;
-use portitor_runtime::panics::spawn_supervised;
+use portitor_runtime::panics::spawn_every;
 use portitor_runtime::telemetry::metrics;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -371,22 +371,12 @@ impl TransferProvider {
     /// called inside the Tokio runtime.
     pub(crate) fn schedule_sweep(self: &Arc<Self>, every: Duration) -> tokio::task::JoinHandle<()> {
         let provider = Arc::clone(self);
-        // supervised, as every task that runs as long as the process: the
-        // closure makes the task anew after a panic
+        // one sweep; `spawn_every` runs it on the timer, supervised
         let sweep = move || {
             let provider = Arc::clone(&provider);
-            async move {
-                let first = tokio::time::Instant::now() + every;
-                let mut ticks = tokio::time::interval_at(first, every);
-                // a tick missed while a sweep was going on is skipped
-                ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                loop {
-                    ticks.tick().await;
-                    provider.sweep().await;
-                }
-            }
+            async move { provider.sweep().await }
         };
-        spawn_supervised("transfer_step_sweep", sweep)
+        spawn_every("transfer_step_sweep", every, sweep)
     }
 
     /// One sweep ([`TransferProvider::schedule_sweep`]).

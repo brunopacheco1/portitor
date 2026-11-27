@@ -2,11 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! The status list cache of the DCP verifier (ADR 0016, amended in 0.11;
-//! TD-06).
+//! The status list cache (ADR 0016, amended in 0.11; TD-06): of the
+//! connector's DCP verifier, and since 1.4 of the identity's credential
+//! status check (TD-20). Moved here from
+//! `portitor-connector/src/auth/dcp/status_list_cache.rs` in 1.4.
 //!
 //! A status list credential is kept for `PORTITOR_STATUS_LIST_CACHE_SECONDS`
-//! (default [`DEFAULT_SECONDS`], at most [`MAX_SECONDS`]), keyed by its URL
+//! on the connector (default [`DEFAULT_SECONDS`], at most
+//! [`MAX_SECONDS`]), keyed by its URL
 //! (`statusListCredential`). Only a list that was fetched and verified
 //! (signed by its issuer, valid now) is kept; a failed fetch or check is
 //! never kept. A list is never kept past its own end (`validUntil`, or

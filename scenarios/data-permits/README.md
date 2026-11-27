@@ -94,11 +94,11 @@ Out, on purpose:
 | --- | --- |
 | `portitor-issuer` (the HDAB's) | Issues the permits from configuration alone; replaces a participant's claims for a second permit (`PUT /v1/participants/{did}`, since 1.4); revokes a permit. |
 | `portitor-issuer` (Digital Lux Trust) | Issues the memberships and serves the HealthDCAT-AP bundle. |
-| `portitor-identity` (Schuman) | Trusts both issuers, the HDAB's for data permits only; stores both permits, presents every credential of the type asked for, deletes the revoked permit, and does not ask the HDAB's issuer for a membership. |
+| `portitor-identity` (Schuman) | Trusts both issuers, the HDAB's for data permits only; stores both permits, presents every credential of the type asked for, reads their status lists and leaves the revoked permit out (`PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS`, since 1.4), and does not ask the HDAB's issuer for a membership. |
 | `portitor-connector` as provider (Lux Biobank) | Trusts both issuers (`PORTITOR_TRUSTED_ISSUERS`), the HDAB's for data permits only (`PORTITOR_TRUSTED_ISSUER_TYPES`), reads `DataPermitCredential` claims in its offers (`PORTITOR_POLICY_CREDENTIALS`), checks them at negotiation and at each transfer, refuses a presentation with a revoked credential. |
 | `portitor-connector` as consumer (Schuman) | Asks for the `DataPermitCredential` scope the offer needs, negotiates and transfers. |
 | The built-in data plane (HTTP pull) | Schuman's app fetches the genotypes, checked against the original. |
-| Status lists | Lux Biobank reads the HDAB issuer's list and sees the revoked permit. |
+| Status lists | Schuman's identity reads the HDAB issuer's list and records the permit as revoked; Lux Biobank's connector reads the same list at each check. |
 | PostgreSQL (`postgres` 19) | One database and role per Portitor component, over TLS ([ADR 0029](../../docs/adr/0029-several-replicas.md)): the documented default from 1.3. A store bug that only PostgreSQL shows would show here. |
 
 ## Run it
@@ -137,13 +137,16 @@ those of hdab-intermediary, so run one at a time.
    P-2026-002 (`PUT /v1/participants/{did}`); Schuman stays registered
    all along. Schuman holds both, takes the second offer, and the first
    agreement still works.
-4. **A revoked permit.** The HDAB revokes P-2026-001, and a transfer
-   under it is refused. A transfer under P-2026-002 is refused too:
-   Schuman shows every permit it holds, and Lux Biobank refuses a
-   presentation that holds a revoked credential. Schuman's record gives
-   no reason; the script checks that Lux Biobank's log does. Once
-   Schuman deletes the revoked permit from its identity, P-2026-002
-   works again.
+4. **A revoked permit.** The HDAB revokes P-2026-001. Schuman's
+   identity reads the status lists of the credentials it holds (since
+   1.4, every 2 seconds here: `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS`
+   in [compose.yaml](compose.yaml)); the script waits until its
+   management API shows the permit `REVOKED`. From then on the identity
+   leaves the revoked permit out of its presentations, so a transfer
+   under P-2026-002 works without deleting anything by hand, and a
+   transfer under P-2026-001 is refused: Schuman no longer presents that
+   permit. Before 1.4, the revoked permit made Lux Biobank refuse every
+   presentation of Schuman's permits until Schuman deleted it.
 5. **Trust by type.** The HDAB's issuer would give Schuman a
    `MembershipCredential` with the role `health-data-access-body`: its
    configuration holds one on purpose. Schuman's identity trusts that
@@ -162,9 +165,12 @@ those of hdab-intermediary, so run one at a time.
   every type until 2.0 ([TD-74](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-74)).
   The list is configuration, so an issuer also stays trusted when its
   owner leaves the data space.
-- **One revoked permit blocks all the others**
-  ([TD-20](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-20), fix planned
-  for 1.4) until the data user deletes it, and the data user is told no reason (step 4).
+- **One revoked permit blocked all the others**
+  ([TD-20](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-20), fixed in
+  1.4): the data user's identity now reads the status lists of what it
+  holds and stops presenting a revoked permit, within one check period
+  (step 4). Until it has checked, a transfer can still be refused, and
+  the data user is then told no reason.
 - **One set of claims per participant at the issuer**
   ([TD-46](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-46), fixed in
   1.4): a second permit replaces the claims, and the participant stays

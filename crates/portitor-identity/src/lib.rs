@@ -15,6 +15,8 @@
 //!   [`issuance`];
 //! - a management API (API key, as the connector's), [`management`];
 //! - its readiness checks (ADR 0023), [`health`];
+//! - the scheduled check of its credentials' status lists (TD-20),
+//!   [`status_check`];
 //! - the X.509 chain of its key, [`certificate`], and Gaia-X onboarding,
 //!   [`gaiax`] (ADR 0021).
 //!
@@ -41,6 +43,7 @@ pub mod health;
 pub mod issuance;
 pub mod management;
 pub mod presentation;
+pub mod status_check;
 pub mod storage;
 pub mod store;
 pub mod sts;
@@ -49,6 +52,8 @@ use certificate::CertificateChain;
 use config::Config;
 use gaiax::{GaiaxCompliance, Onboarding};
 use issuance::IssuerClient;
+use portitor_runtime::status_lists::StatusListSource;
+use status_check::StatusCheck;
 use store::IdentityStore;
 
 /// Allowed clock difference with other parties, in seconds.
@@ -90,6 +95,8 @@ pub struct Identity {
     certificate: Option<Arc<CertificateChain>>,
     /// Gaia-X onboarding, if configured (ADR 0021).
     gaiax: Option<Onboarding>,
+    /// The credential status check, unless off (TD-20).
+    status_check: Option<StatusCheck>,
 }
 
 impl std::fmt::Debug for Identity {
@@ -112,6 +119,9 @@ pub struct Ports {
     /// The Gaia-X compliance service; needed when
     /// `PORTITOR_GAIAX_COMPLIANCE_URL` is set, unused otherwise.
     pub compliance: Option<Arc<dyn GaiaxCompliance>>,
+    /// Where the status lists of held credentials are fetched (TD-20):
+    /// the partner HTTP sender, as for DID documents.
+    pub status_lists: Arc<dyn StatusListSource>,
 }
 
 impl Identity {
@@ -175,6 +185,12 @@ impl Identity {
                 .map_err(|e| format!("PORTITOR_GAIAX_PARTICIPANT_FILE: {e}"))?,
             ),
         };
+        let status_check = StatusCheck::new(
+            config.credential_status_check_seconds,
+            ports.status_lists,
+            // the same store, seen as the lease port
+            Arc::clone(&ports.store) as Arc<dyn portitor_runtime::leases::LeaseStore>,
+        );
         let service_path = config::base_path(&config.credential_service_url)
             .ok_or("PORTITOR_CREDENTIAL_SERVICE_URL is not an http(s) URL")?;
         Ok(Self {
@@ -197,6 +213,7 @@ impl Identity {
             public_path,
             certificate,
             gaiax,
+            status_check,
         })
     }
 

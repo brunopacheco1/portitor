@@ -16,6 +16,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse as _;
 use portitor_dcp::credential::{VC1_CONTEXT, VC2_CONTEXT};
 use portitor_dcp::{Claims, Relationship, Service, SigningKey, VerificationMethod};
+use portitor_runtime::status_lists::MAX_STATUS_LIST;
 use portitor_runtime::system::xsd_date_time;
 use serde_json::json;
 
@@ -1858,7 +1859,7 @@ impl Dataspace {
     fn cache_status_lists(&mut self, seconds: u64) -> Offset {
         let offset: Offset = Arc::default();
         let ahead = Arc::clone(&offset);
-        self.verifier.status_lists = StatusListCache::new(seconds);
+        self.verifier.status_lists = StatusListReader::new(seconds);
         // A fixed start, so a tick of the real clock during the test does
         // not move the verifier's time past a cache boundary.
         let start = now_secs();

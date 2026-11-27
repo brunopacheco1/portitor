@@ -83,6 +83,14 @@ setting and file format still works, and every new setting is optional
   document is fetched (F-06 in
   [SECURITY-ASSURANCE](docs/SECURITY-ASSURANCE.md),
   [R-17](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-17)).
+- Code: one helper, `spawn_every` in `portitor-runtime`, runs a
+  background round on a timer; the connector's outbox loop, transfer
+  step sweep, dataset harvest and bundle check use it, with no change
+  of behaviour ([TD-70](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-70)).
+- Code: the identity's and the issuer's `DatabaseStore` share one
+  wrapper, `ComponentStore` in `portitor-runtime`, with the used token
+  ids and leases written once; no change of behaviour
+  ([TD-71](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-71)).
 
 ### Fixed
 
@@ -97,9 +105,30 @@ setting and file format still works, and every new setting is optional
   partner's state is the one the message leads to **for the same
   process**: `providerPid` and `consumerPid` are compared too
   ([TD-61](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-61)).
+- The identity reads the status lists of the credentials it holds
+  every `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS` and no longer
+  presents a revoked or suspended one; a lifted suspension presents it
+  again, and a list that cannot be read keeps the last status. So a
+  revoked credential need not be deleted by hand any more. One replica
+  runs each round, under the lease `job`/`credential_status_check`.
+  `GET /v1/credentials` of its management API shows `status` and
+  `statusCheckedAt`. A database migration adds the columns
+  `credential.status_state` and `credential.status_checked_at`. The
+  status list reading and its cache moved from the connector to
+  `portitor-runtime` (`status_lists.rs`), unchanged
+  ([TD-20](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-20),
+  [DEPLOYING](docs/DEPLOYING.md#getting-a-credential)).
+- data-permits scenario, step 4: the transfer under the second permit
+  works once Schuman's identity has checked, without deleting the
+  revoked permit; the one under the revoked permit is still refused.
 
 ### Documentation
 
+- TD-73 (a negotiation step slower on SQLite in 1.3): the statements of
+  one provider negotiation counted against 1.2.0. The cause is the new
+  commits of 1.3 (a lease claim and release for each message sent, and
+  the used token id of each DCP token), not a bug; moved to 1.12 with
+  TD-40 ([TD-73](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-73)).
 - The SQLite to PostgreSQL copy tool announced for 1.4 is dropped
   (maintainer, 2026-11-27): no deployment needs one yet. A component
   moved to PostgreSQL starts empty; SQLite is still removed in 2.0

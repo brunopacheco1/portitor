@@ -4,7 +4,8 @@
 
 //! What the identity component and the issuer read from other parties:
 //! their DID documents (to check their tokens, and to find their
-//! services), and an issuer's metadata (the identity component only).
+//! services), and an issuer's metadata and status lists (the identity
+//! component only).
 //! [`Directory`] is the port, [`WebDirectory`] the adapter over HTTPS
 //! (`did:web` resolution with a cache, and the shared client: HTTPS only
 //! unless allowed, time and size limits, no redirects).
@@ -17,8 +18,9 @@ use serde_json::Value;
 
 use crate::BoxFuture;
 use crate::did::DidWebResolver;
-use crate::http::{HttpSender, Sender as _};
+use crate::http::{HttpError, HttpSender, Sender as _};
 use crate::internal_addresses::InternalAddresses;
+use crate::status_lists::StatusListSource;
 
 /// Port: reads other parties' public documents. Each lookup returns,
 /// later ([`BoxFuture`]), the value or the reason it failed.
@@ -82,5 +84,14 @@ impl Directory for WebDirectory {
 
     fn json<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Value, String>> {
         self.http.get(url)
+    }
+}
+
+/// The status lists of credentials are read with the same sender as the
+/// other parties' documents: their URLs are chosen by issuers too (the
+/// identity's status check, TD-20).
+impl StatusListSource for WebDirectory {
+    fn status_list_text<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<String, HttpError>> {
+        self.http.status_list_text(url)
     }
 }

@@ -262,6 +262,9 @@ services:
       PORTITOR_TRUSTED_ISSUERS: did:web:authority%3A8070,did:web:hdab-issuer%3A8070
       # the HDAB's issuer may deliver data permits only (since 1.4, R-48)
       PORTITOR_TRUSTED_ISSUER_TYPES: did:web:hdab-issuer%3A8070=DataPermitCredential
+      # reads the status lists of its credentials every 2 seconds, not 60,
+      # so step 4 does not wait (since 1.4, TD-20)
+      PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS: "2"
       PORTITOR_MANAGEMENT_BIND: 0.0.0.0:8091
       PORTITOR_MANAGEMENT_API_KEY_FILE: /run/secrets/schuman-identity-management-key
       PORTITOR_ALLOW_HTTP: "true"

@@ -564,6 +564,51 @@ different names on purpose: if they had the same name, a call on the
 type would pick the type's own method first, and a reader could take
 the trait method for one that calls itself.
 
+### A type that names what it does not hold: `PhantomData`
+
+```rust
+pub trait ComponentSchema {
+    const MIGRATIONS: &'static Migrations;
+}
+pub struct ComponentStore<S> {
+    database: Arc<Database>,
+    schema: PhantomData<S>,
+}
+pub struct IdentitySchema;
+impl ComponentSchema for IdentitySchema {
+    const MIGRATIONS: &'static Migrations = &MIGRATIONS;
+}
+pub type DatabaseStore = ComponentStore<IdentitySchema>;
+impl IdentityStore for DatabaseStore { /* ... */ }
+```
+
+The identity's and the issuer's stores are the same wrapper around the
+database; only the migrations differ (TD-71). `ComponentStore`
+(`portitor-runtime/src/component_store.rs`) is written once, generic
+over `S`, a type that holds nothing and only names the schema:
+`S::MIGRATIONS` is a constant of the trait, read by `open` and
+`in_memory`. A struct must use each of its type parameters in a field,
+so `PhantomData<S>` is a field of size zero that "uses" `S`.
+
+`pub type DatabaseStore = ...` gives the type a short name in each
+component, so `DatabaseStore::open(...)` reads as before. Each
+component then implements its own port (`IdentityStore`,
+`IssuerStore`) for its own `ComponentStore<...>`; Rust allows that
+because the port is the component's own trait. The shared port
+methods (used token ids, leases) are implemented once, in
+`portitor-runtime`, for every `ComponentStore<S>`.
+
+```rust
+pub trait WithLeaseTable: ComponentSchema {}
+impl<S: WithLeaseTable + Send + Sync> LeaseStore for ComponentStore<S> { /* ... */ }
+impl WithLeaseTable for IdentitySchema {}
+```
+
+A *marker trait*: it has no methods, it only marks a type. Only the
+identity's schema has the `lease` table, so only its store is a
+`LeaseStore`; asking the issuer's store for a lease does not compile,
+instead of failing at run time with "no such table".
+
 ### `BoxFuture` in a trait
 
 A trait whose objects are kept as `dyn Trait` cannot have an `async fn`
@@ -692,7 +737,8 @@ Use the helpers, not `catch_unwind` itself:
 `answer_500_on_panic(router)` for HTTP handlers (already on every
 server, `serve.rs`), `spawn_supervised(name, || task())` instead of
 `tokio::spawn` for a task that runs as long as the process (the closure
-makes the task again after a panic), `report_panic(name, task)` around
+makes the task again after a panic), `spawn_every(name, every, || round())`
+for such a task that does one round every few seconds or minutes, `report_panic(name, task)` around
 a task that does one piece of work, and `report_sync_panic(name, || ...)`
 around one piece of work in a loop that is not async (one credential
 decision of many, `decide_guarded` in `portitor-issuer/src/issue.rs`).
@@ -950,22 +996,38 @@ stops it when the time is up (`UrlSource::get` in
 `portitor-bundle/src/source.rs`).
 
 ```rust
-pub fn schedule(self: &Arc<Self>, every: Duration) -> Option<JoinHandle<()>> {
+pub fn schedule(self: &Arc<Self>, every: Duration, leases: &Leases) -> Option<JoinHandle<()>> {
     let harvester = Arc::clone(self);
-    let schedule = move || {
+    let leases = leases.clone();
+    let round = move || {
         let harvester = Arc::clone(&harvester);
-        async move {
-            /* ... */
-            let ran = tokio::task::spawn_blocking(move || runner.run(Trigger::Interval));
-        }
+        let leases = leases.clone();
+        async move { run_if_due(&harvester, &leases, every).await }
     };
-    Some(spawn_supervised("dataset_harvest", schedule))
+    Some(spawn_every("dataset_harvest", every, round))
 }
 ```
 
-`schedule` is a closure that makes the task: `spawn_supervised` calls
-it once now and again after a panic ("Panics" above). Each call clones
-the pointer, so every new task has its own.
+`round` is a closure that makes the work of one round: `spawn_every`
+calls it on each tick of a timer, inside `spawn_supervised` ("Panics"
+above). Each call clones the pointers, so every round has its own.
+
+```rust
+let first = tokio::time::Instant::now() + every;
+let mut ticks = tokio::time::interval_at(first, every);
+ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+loop {
+    ticks.tick().await;
+    round().await;
+}
+```
+
+The timer inside `spawn_every` (`portitor-runtime/src/panics.rs`),
+written once for every loop that ticks. `interval_at(first, every)`
+ticks at `first`, then every `every`; the first round is one period
+after the start. `Skip`: when a round lasted longer than the period,
+the tick that was due runs at once, and the ticks missed meanwhile are
+dropped, so rounds never pile up behind a slow one.
 
 `self: &Arc<Self>` is a method that can be called only on a value kept in
 an `Arc`. It needs that, as the background task keeps its own pointer
@@ -975,7 +1037,7 @@ an `Arc`. It needs that, as the background task keeps its own pointer
 thread (reading a file, `SQLite`, a long computation) on a separate pool
 of threads, so the async threads stay free for requests. Awaiting it
 gives the closure's result, or an error if it panicked
-(`DatasetHarvester::schedule` in `portitor-connector/src/harvest.rs`).
+(`run_if_due` in `portitor-connector/src/harvest.rs`).
 
 ```rust
 tokio::select! {

@@ -242,3 +242,16 @@ no deployment needs one yet, so no data has to be copied. A component
 moved to PostgreSQL starts with an empty database
 ([OPERATING](../OPERATING.md#from-sqlite-to-postgresql)). SQLite is
 still removed in 2.0 ([TD-59](../RISKS_AND_TECHNICAL_DEBTS.md#td-59)).
+
+## Note added in 1.4 (2026-11-27): the credential status check
+
+The identity has a new scheduled job: it reads the status lists of the
+credentials it holds every `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS`
+(default 60) and records what they say
+([TD-20](../RISKS_AND_TECHNICAL_DEBTS.md#td-20), maintainer decision
+D6). It runs as the dataset harvest of decision 6: one round at a time
+under the lease `job`/`credential_status_check` in the identity's
+database, kept after a round until a second before the next tick
+(`crates/portitor-identity/src/status_check.rs`). Its result is a row
+change per credential, guarded by the credential's JWT, so a round run
+twice records the same answers again.

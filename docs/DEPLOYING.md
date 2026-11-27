@@ -947,15 +947,31 @@ request. Credentials are stored as received (JWT); `GET
 /v1/credentials` lists them and `DELETE /v1/credentials/{id}` removes one,
 after which it is no longer presented.
 
-**Revoked credentials.** The component does not read status lists, so it
-keeps presenting a credential its issuer revoked (DCP v1.0.1, 5.4.2: a
-presentation "SHOULD only include valid" credentials). After a reissue,
-delete the revoked credential from the identity with
-`DELETE /v1/credentials/{id}` once the new one is listed. Otherwise
-other participants refuse you: a presentation that holds a revoked
-credential is invalid (DCP v1.0.1, 5.4.3, step 8), so Portitor
-verifiers refuse it even with the new credential next to it, and EDC
-verifiers may too.
+**Revoked credentials.** From 1.4 the identity reads the status lists
+of the credentials it holds every `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS`
+(default 60; `0` turns it off), as Eclipse EDC's IdentityHub does
+(`edc.iam.credential.status.check.period`). A credential found revoked
+or suspended is no longer presented (DCP v1.0.1, 5.4.2: a presentation
+"SHOULD only include valid" credentials), and is presented again when
+a suspension is lifted. You need not delete it: other participants
+would refuse a presentation that holds it (DCP v1.0.1, 5.4.3, step 8),
+and now it is left out. `GET /v1/credentials` shows the result
+(`status`: `VALID`, `REVOKED` or `SUSPENDED`, and `statusCheckedAt`;
+null until checked).
+
+- A list is trusted as the connector trusts it: signed by the
+  credential's issuer and valid now. The lists are fetched with the
+  same HTTP client as other parties' DID documents.
+- A credential whose lists cannot be read (the issuer's server is
+  down, the answer is not a valid list) keeps its last recorded status,
+  and the log says so (`credential status cannot be read`, WARN): an
+  outage of a status list does not cut you off. A credential never
+  checked is presented.
+- A revocation is seen within one period. Until then, verifiers may
+  refuse you, as before 1.4. With the check off (`0`), delete a revoked
+  credential by hand with `DELETE /v1/credentials/{id}`.
+- With several replicas, one runs each round (a lease in the
+  database, [ADR 0029](adr/0029-several-replicas.md)).
 
 **Offers.** An issuer may tell you that credentials are waiting (DCP
 6.6), for example before its key changes. `GET /v1/offers` lists the
@@ -2040,10 +2056,10 @@ consumer's DID (`counterPartyId`), never the data token or its hash.
     expired, bad signature, status list not readable, about someone
     else) makes its presentation invalid and refuses the caller, even
     next to a valid membership credential (DCP v1.0.1, 5.4.3, step 8);
-    the log names it (`credential refused`, INFO). So a participant must
-    delete a revoked credential once its reissued one arrives
-    ([Getting a credential](#getting-a-credential)). Credentials from
-    other issuers are skipped.
+    the log names it (`credential refused`, INFO). From 1.4 a Portitor
+    identity stops presenting a credential its status list revokes
+    ([Getting a credential](#getting-a-credential), "Revoked
+    credentials"). Credentials from other issuers are skipped.
   - A refused caller gets a DSP error that says only "unauthorized":
     HTTP 404 on the negotiation and transfer routes (DSP 2025-1 HTTPS
     bindings, "Unauthorized Access"; Eclipse EDC does the same), HTTP

@@ -823,7 +823,9 @@ Every risk and debt that needs work gets a release (maintainer,
 - A data plane step that no longer runs inside the request: the
   connector records it and a worker runs it ([TD-66](RISKS_AND_TECHNICAL_DEBTS.md#td-66)).
 - Asynchronous store ports, so a database call no longer blocks its
-  thread ([TD-40](RISKS_AND_TECHNICAL_DEBTS.md#td-40)).
+  thread ([TD-40](RISKS_AND_TECHNICAL_DEBTS.md#td-40)); with them, fewer
+  commits for each negotiation step on SQLite (cause counted in 1.4,
+  [TD-73](RISKS_AND_TECHNICAL_DEBTS.md#td-73)).
 - Exit: the built-in data plane runs as its own image and as part of the
   connector, with the same tests; an outside data plane passes the
   interop test.

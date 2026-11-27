@@ -76,14 +76,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // in them: with the block on internal addresses (R-17). The Gaia-X
     // compliance service above is the operator's choice: without it
     internal_addresses.log_at_start();
-    let directory =
-        WebDirectory::for_partners(config.allow_http, did_cache_seconds, &internal_addresses)?;
+    let directory = Arc::new(WebDirectory::for_partners(
+        config.allow_http,
+        did_cache_seconds,
+        &internal_addresses,
+    )?);
     let issuers = HttpIssuerClient::for_partners(config.allow_http, &internal_addresses)?;
     let ports = Ports {
         store: Arc::new(store),
-        directory: Arc::new(directory),
+        directory: Arc::clone(&directory) as _,
         issuers: Arc::new(issuers),
         compliance,
+        // the same partner sender as the DID documents (TD-20)
+        status_lists: directory,
     };
     let identity = Arc::new(Identity::new(&config, key, sts_client_secret, ports)?);
     for retired in identity.retired_keys() {
@@ -102,6 +107,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         spawn_supervised("gaiax_schedule", move || {
             portitor_identity::gaiax::run_schedule(Arc::clone(&scheduled))
         });
+    }
+    // the credential status check (TD-20), unless
+    // PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS is 0
+    if portitor_identity::status_check::schedule(&identity).is_some() {
+        tracing::info!(
+            every_seconds = config.credential_status_check_seconds,
+            "credential status check on (PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS)"
+        );
     }
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
 

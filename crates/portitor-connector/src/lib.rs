@@ -725,28 +725,21 @@ impl Negotiator {
     #[must_use]
     pub fn schedule_outbox(&self, every: Duration) -> tokio::task::JoinHandle<()> {
         let outboxes = self.outboxes();
-        // supervised, as every task that runs as long as the process: the
-        // closure makes the task anew after a panic
-        let rounds = move || {
+        // one round; `spawn_every` runs it on the timer, supervised
+        let round = move || {
             let outboxes = outboxes.clone();
             async move {
-                let first = tokio::time::Instant::now() + every;
-                let mut ticks = tokio::time::interval_at(first, every);
-                ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                loop {
-                    ticks.tick().await;
-                    match outboxes.take_up() {
-                        Ok(0) => {}
-                        Ok(count) => tracing::info!(count, "pending messages taken up"),
-                        Err(failure) => {
-                            tracing::error!(?failure, "cannot read pending messages");
-                        }
+                match outboxes.take_up() {
+                    Ok(0) => {}
+                    Ok(count) => tracing::info!(count, "pending messages taken up"),
+                    Err(failure) => {
+                        tracing::error!(?failure, "cannot read pending messages");
                     }
-                    outboxes.leases.forget_old();
                 }
+                outboxes.leases.forget_old();
             }
         };
-        portitor_runtime::panics::spawn_supervised("outbox_loop", rounds)
+        portitor_runtime::panics::spawn_every("outbox_loop", every, round)
     }
 
     /// The four senders of DSP messages, for the loop.

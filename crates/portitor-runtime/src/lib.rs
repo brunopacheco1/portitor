@@ -16,6 +16,7 @@ use std::pin::Pin;
 
 pub mod api_key;
 pub mod caller;
+pub mod component_store;
 pub mod database;
 pub mod did;
 pub mod did_document;
@@ -31,6 +32,7 @@ pub mod retry;
 pub mod serve;
 pub mod settings;
 pub mod sqlite;
+pub mod status_lists;
 pub mod system;
 pub mod telemetry;
 #[cfg(any(test, feature = "test-support"))]
