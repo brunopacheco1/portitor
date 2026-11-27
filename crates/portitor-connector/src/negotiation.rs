@@ -87,6 +87,23 @@ impl Provider {
         credentials_for(&*self.verifier, types, caller, &scopes).await
     }
 
+    /// The caller's verified credentials for a contract request with
+    /// `offer`: those of the offer's credential constraints and of its
+    /// dataset's access policy, in one presentation query (ADR 0019,
+    /// amendment in 1.4).
+    ///
+    /// When the catalog cannot be read, only the offer's scopes are asked
+    /// for: `service.request` reads the catalog again and answers the
+    /// store failure itself.
+    async fn request_credentials(&self, caller: &Caller, offer: &Offer) -> CallerCredentials {
+        let types = &self.link.credential_types;
+        let scopes = match self.service.request_scopes(offer, types) {
+            Ok(scopes) => scopes,
+            Err(_) => credential_scopes(offer, types),
+        };
+        credentials_for(&*self.verifier, types, caller, &scopes).await
+    }
+
     /// Sends every message saved as pending, for example after a
     /// restart. Returns how many.
     ///
@@ -222,7 +239,7 @@ pub(crate) async fn request_new(
             "callbackAddress must be an https URL",
         ));
     }
-    let credentials = provider.credentials(&caller, &msg.offer).await;
+    let credentials = provider.request_credentials(&caller, &msg.offer).await;
     let handled = provider
         .service
         .request(None, msg, &caller.id, &credentials);
@@ -240,7 +257,7 @@ pub(crate) async fn request_counter(
         Ok(m) => m,
         Err(e) => return bad_request(*e),
     };
-    let credentials = provider.credentials(&caller, &msg.offer).await;
+    let credentials = provider.request_credentials(&caller, &msg.offer).await;
     let handled = provider
         .service
         .request(Some(&pid), msg, &caller.id, &credentials);

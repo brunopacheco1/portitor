@@ -26,8 +26,8 @@
 //! three services use too; this file holds what only the provider's
 //! negotiation does.
 
-use crate::catalog::CatalogDatasets;
-use crate::policy::CallerCredentials;
+use crate::catalog::{CatalogDatasets, Requester};
+use crate::policy::{CallerCredentials, CredentialTypes, credential_scopes};
 use crate::process::{self, Lookup, Message, Record, Records, Refused, Write};
 pub use crate::process::{Environment, StoreError};
 use crate::{Context, Offer};
@@ -265,12 +265,45 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
         Ok(self.load(provider_pid, "", caller)?.offer)
     }
 
+    /// The DCP scopes to ask the caller's credential service for before a
+    /// contract request with `offer` (ADR 0019): those of the offer's
+    /// credential constraints, then those of the access policy of the
+    /// dataset it names (amendment in 1.4), each once. One presentation
+    /// query brings both.
+    ///
+    /// # Errors
+    ///
+    /// The catalog cannot be read.
+    pub fn request_scopes(
+        &self,
+        offer: &Offer,
+        types: &CredentialTypes,
+    ) -> Result<Vec<String>, Failure> {
+        let mut scopes = credential_scopes(offer, types);
+        let Some(target) = offer.target.as_deref() else {
+            return Ok(scopes);
+        };
+        let listed = self
+            .catalog
+            .get_with_access_policy(target)
+            .map_err(Failure::Store)?;
+        if let Some(policy) = listed.and_then(|listed| listed.access_policy) {
+            for scope in credential_scopes(&policy, types) {
+                if !scopes.contains(&scope) {
+                    scopes.push(scope);
+                }
+            }
+        }
+        Ok(scopes)
+    }
+
     /// `POST /negotiations/request` (no `provider_pid`) and
     /// `POST /negotiations/:providerPid/request` (counter-offer).
     ///
-    /// `credentials` are the caller's verified credentials, against which
-    /// the offer's permissions are evaluated if the provider agrees now
-    /// (ADR 0019).
+    /// `credentials` are the caller's verified credentials: the access
+    /// policy of the offer's dataset must hold for them (ADR 0019,
+    /// amendment in 1.4), and the offer's permissions are evaluated with
+    /// them if the provider agrees now (ADR 0019).
     ///
     /// # Errors
     ///
@@ -298,7 +331,7 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
             // the request must name the consumer pid this negotiation was
             // started with, like every other message on it (TD-36)
             check_ids(negotiation, pid, &consumer_pid)?;
-            self.check_offer(&msg.offer, pid, &consumer_pid, caller)?;
+            self.check_offer(&msg.offer, pid, &consumer_pid, caller, credentials)?;
             receive(negotiation, Transition::Request)?;
             negotiation.offer = msg.offer.clone();
             Ok(())
@@ -315,7 +348,7 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
         let Some(callback_address) = msg.callback_address.filter(|c| !c.is_empty()) else {
             return Err(bad("", &consumer_pid, "callbackAddress is required"));
         };
-        self.check_offer(&msg.offer, "", &consumer_pid, caller)?;
+        self.check_offer(&msg.offer, "", &consumer_pid, caller, credentials)?;
         let state = next_state(None, Transition::Request, Role::Consumer)
             .map_err(|e| bad("", &consumer_pid, &e.to_string()))?;
         let mut negotiation = Negotiation {
@@ -623,13 +656,18 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
 
     /// The offer must name a dataset of this provider and one of its
     /// offers. If it names its parties, they must be this provider and
-    /// `caller`, the consumer that sent it.
+    /// `caller`, the consumer that sent it. The dataset's access policy,
+    /// if it has one, must hold for the caller's `credentials` (ADR 0019,
+    /// amendment in 1.4, as Eclipse EDC's `validateInitialOffer`): a
+    /// dataset the caller may not see gets the answer of an unknown offer,
+    /// as a dataset request for it gets the answer of an unknown dataset.
     fn check_offer(
         &self,
         offer: &Offer,
         pid: &str,
         cpid: &str,
         caller: &str,
+        credentials: &CallerCredentials,
     ) -> Result<(), Failure> {
         let Some(target) = offer.target.as_deref() else {
             return Err(bad(pid, cpid, "the offer has no target"));
@@ -637,8 +675,22 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
         if let Err(reason) = crate::policy::check_parties(offer, &self.participant_id, caller) {
             return Err(bad(pid, cpid, reason));
         }
-        let dataset = self.catalog.get(target).map_err(Failure::Store)?;
-        let known = dataset.is_some_and(|d| d.has_policy.iter().any(|o| o.id == offer.id));
+        let listed = self
+            .catalog
+            .get_with_access_policy(target)
+            .map_err(Failure::Store)?;
+        let now = self.env.now();
+        let requester = Requester {
+            now: &now,
+            credentials,
+        };
+        let known = match listed {
+            None => false,
+            Some(listed) => {
+                listed.dataset.has_policy.iter().any(|o| o.id == offer.id)
+                    && requester.may_see(listed.access_policy.as_ref())
+            }
+        };
         if known {
             Ok(())
         } else {

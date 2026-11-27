@@ -8,6 +8,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 
 use super::*;
+use crate::catalog::ListedDataset;
 use crate::{Dataset, DatasetType, Distribution, DistributionType, OfferType, Rule};
 
 /// `.1`: every write fails; `.2`: how many writes lose the version check
@@ -76,7 +77,7 @@ impl CatalogDatasets for Catalog {
             .unwrap(),
         ];
         let policy = match id {
-            "d1" => offer(None),
+            "d1" | "d4" => offer(None),
             "d2" => expired,
             "d3" => providers_only(None),
             _ => return Ok(None),
@@ -93,6 +94,27 @@ impl CatalogDatasets for Catalog {
                 metadata: crate::Metadata::default(),
             }],
             metadata: crate::Metadata::default(),
+        }))
+    }
+    /// d4 has an access policy: only members with role `provider` see it
+    /// (ADR 0019, amendment in 1.4). Its offer has no constraint.
+    fn get_with_access_policy(&self, id: &str) -> Result<Option<ListedDataset>, StoreError> {
+        let Some(dataset) = self.get(id)? else {
+            return Ok(None);
+        };
+        let access_policy = if id == "d4" {
+            Some(
+                serde_json::from_value(serde_json::json!({"permission": [{"action": "use",
+                    "constraint": [{"leftOperand": "MembershipCredential.role",
+                    "operator": "eq", "rightOperand": "provider"}]}]}))
+                .unwrap(),
+            )
+        } else {
+            None
+        };
+        Ok(Some(ListedDataset {
+            dataset,
+            access_policy,
         }))
     }
 }
@@ -653,6 +675,90 @@ fn agrees_only_when_the_callers_credentials_meet_the_offer() {
             .unwrap();
         assert_eq!(out.unwrap().transition, expected, "{role}");
     }
+}
+
+/// ADR 0019, amendment in 1.4: a contract request is checked against the
+/// access policy of its dataset, as in Eclipse EDC's
+/// `validateInitialOffer`. A caller the access policy does not hold for
+/// gets the answer of an unknown offer, even when it meets the offer.
+#[test]
+fn a_contract_request_is_checked_against_the_access_policy() {
+    let store = Store::default();
+    let p = service(&store, AgreeToCatalogOffers);
+    let mut msg = request(None);
+    msg.offer = offer(Some("d4"));
+
+    // meets the offer (it has no constraint), not the access policy
+    let mut unknown = request(None);
+    unknown.offer = offer(Some("d9"));
+    let unknown_answer = reason(&p.request(None, unknown, "c", &none()).unwrap_err());
+    for credentials in [member_with_role("consumer"), none()] {
+        let failure = p.request(None, msg.clone(), "c", &credentials).unwrap_err();
+        assert!(matches!(failure, Failure::BadRequest(_)));
+        assert_eq!(reason(&failure), unknown_answer);
+    }
+    assert!(store.0.borrow().is_empty(), "nothing is started");
+
+    // meets both: the agreement
+    let (_, out) = p
+        .request(None, msg.clone(), "c", &member_with_role("provider"))
+        .unwrap();
+    assert_eq!(out.unwrap().transition, Transition::Agree);
+
+    // a counter request is checked too (EDC checks every contract request)
+    let p = service(
+        &store,
+        Script(BTreeMap::from([(
+            NegotiationState::Requested,
+            Decision::Offer,
+        )])),
+    );
+    let (ack_offered, _) = p
+        .request(None, msg.clone(), "c", &member_with_role("provider"))
+        .unwrap();
+    let pid = ack_offered.provider_pid;
+    let mut counter = msg.clone();
+    counter.provider_pid = Some(pid.clone());
+    let failure = p
+        .request(Some(&pid), counter, "c", &member_with_role("consumer"))
+        .unwrap_err();
+    assert_eq!(reason(&failure), unknown_answer);
+
+    // a dataset without an access policy: unchanged
+    let p = service(&store, AgreeToCatalogOffers);
+    let (_, out) = p.request(None, request(None), "c", &none()).unwrap();
+    assert_eq!(out.unwrap().transition, Transition::Agree);
+}
+
+/// One presentation query brings the scopes of the offer and of its
+/// dataset's access policy.
+#[test]
+fn a_contract_request_asks_for_the_access_policy_scopes_too() {
+    let store = Store::default();
+    let p = service(&store, AgreeToCatalogOffers);
+    let mut types = crate::policy::CredentialTypes::default();
+    types.add("MembershipCredential", "scope:membership");
+    assert_eq!(
+        p.request_scopes(&offer(Some("d4")), &types).unwrap(),
+        vec!["scope:membership".to_owned()]
+    );
+    // the offer's and the access policy's scope, each once
+    assert_eq!(
+        p.request_scopes(&providers_only(Some("d4")), &types)
+            .unwrap(),
+        vec!["scope:membership".to_owned()]
+    );
+    assert!(
+        p.request_scopes(&offer(Some("d1")), &types)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(p.request_scopes(&offer(None), &types).unwrap().is_empty());
+    assert!(
+        p.request_scopes(&offer(Some("d9")), &types)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 /// An offer that names its parties (Eclipse EDC sends `assigner`, the DSP
