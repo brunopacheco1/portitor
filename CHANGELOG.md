@@ -12,7 +12,9 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
-Portitor 1.3 (in progress): several containers of each image (connector,
+## [1.3.0] - 2026-11-27
+
+Portitor 1.3: several containers of each image (connector,
 identity, issuer) share one PostgreSQL database, and SQLite is
 deprecated ([ADR 0029](docs/adr/0029-several-replicas.md)). Every 1.2
 route, setting and file format still works

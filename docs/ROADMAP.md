@@ -39,6 +39,7 @@ and debts each release raised or closed are in
 | 1.0 | 2026-11-24 | v1.0.0 | Stable: the 0.14 release candidate, tried as v1.0.0-rc.1 on 2026-11-22; routes and settings kept until 2.0 ([STABILITY](STABILITY.md)); the demos as self-contained scenarios, with two health scenarios | [1.0.0](../CHANGELOG.md#100---2026-11-24) |
 | 1.1 | 2026-11-25 | v1.1.0 | Push transfers by the Data Plane Signaling HTTP profile into the consumer's object storage; `s3://` dataset sources; the provider can always end access (provider routes, membership checked on every request, running downloads cut); suspend and start as consumer; audit line per transfer; ADR 0027 | [1.1.0](../CHANGELOG.md#110---2026-11-25) |
 | 1.2 | 2026-11-26 | v1.2.0 | The built-in data plane in its own crate, `portitor-dataplane`, behind ports (no route, setting or image change); the source travels in the DPS start message's `metadata` and stays with the flow; the data plane is told once, after the transfer's write (TD-48); ADR 0028 step 1 | [1.2.0](../CHANGELOG.md#120---2026-11-26) |
+| 1.3 | 2026-11-27 | v1.3.0 | Several replicas of each image on one PostgreSQL database (PostgreSQL 16 to 19); coordination through the database with leases and compare-and-swap writes, no lock in one process; SQLite deprecated (removed in 2.0); TD-08, TD-09, TD-50 to TD-58 closed; ADR 0029 | [1.3.0](../CHANGELOG.md#130---2026-11-27) |
 
 Older documents cite sections of this file that the table replaced, for
 example "ROADMAP 0.11, Decisions on the 0.11 plan". Their full text is in
@@ -316,7 +317,7 @@ not a CI job (maintainer, 2026-11-15).
 - Tried before the tag: all six scenarios ran on the maintainer's
   Linux laptop on 2026-11-26.
 
-### 1.3 Several replicas and PostgreSQL
+### 1.3 Several replicas and PostgreSQL (released 2026-11-27 as v1.3.0)
 
 Several containers serve one participant on one shared database
 (maintainer, 2026-11-26;
@@ -379,6 +380,12 @@ Several containers serve one participant on one shared database
   connectors behind nginx.
 - Main risk: a piece of state held in one process that the review did
   not find; the two-process test is the guard.
+- Tried before the tag: every scenario passed on the maintainer's Linux
+  laptop on 2026-11-27 (Podman 4.9.3, commit `a1e75ee`), among them the
+  two-party demo with two connectors behind nginx and
+  `run-replicas.sh`; `gaiax-compliance` passed on its second run (the
+  container name lookups failed in the first, the aardvark-dns problem
+  in TESTING). Benchmark: [BENCHMARKS](BENCHMARKS.md#13-compared-with-12-on-sqlite-and-on-postgresql).
 
 ### 1.4 Purpose and data permit in policies
 

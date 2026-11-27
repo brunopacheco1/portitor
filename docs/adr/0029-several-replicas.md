@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0
 - Status: **Accepted** (decided by the maintainer, 2026-11-26)
 - Date: 2026-11-26
 - Scope: release 1.3
-  ([ROADMAP](../ROADMAP.md#13-several-replicas-and-postgresql)).
+  ([ROADMAP](../ROADMAP.md#13-several-replicas-and-postgresql-released-2026-11-27-as-v130)).
   Amends [ADR 0006](0006-negotiation-storage.md) (one process per
   SQLite file) and the data line of the stack that
   [ADR 0002](0002-technology-stack.md) proposed (sqlx). Answers
