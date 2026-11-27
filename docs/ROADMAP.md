@@ -877,6 +877,10 @@ they wait for 2.0. No date.
 - Remove SQLite and the setting `PORTITOR_DB_FILE`; PostgreSQL is then
   the only database (maintainer, 2026-11-26;
   [ADR 0029](adr/0029-several-replicas.md)).
+- An issuer named in `PORTITOR_TRUSTED_ISSUERS` but not in
+  `PORTITOR_TRUSTED_ISSUER_TYPES` is trusted for `MembershipCredential`
+  only, not for every type (maintainer, 2026-11-27;
+  [TD-74](RISKS_AND_TECHNICAL_DEBTS.md#td-74)).
 
 ## Technical debt
 

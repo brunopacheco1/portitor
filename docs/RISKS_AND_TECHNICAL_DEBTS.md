@@ -161,6 +161,7 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [TD-71](#td-71) | The identity and the issuer each wrap the database the same way | Technical debt, readability | Open | 1.4 (suggested) |
 | [TD-72](#td-72) | Two error types for the database, converted both ways | Technical debt, readability | Open | 1.5 (suggested, with TD-63) |
 | [TD-73](#td-73) | A negotiation step is about 3.5 ms slower on SQLite in 1.3 | Technical debt, performance | Open | 1.4 (suggested) |
+| [TD-74](#td-74) | An issuer not limited by type is trusted for every credential type | Technical debt, security | Accepted | 2.0 |
 
 Counts on 2026-11-27, at the 1.3.0 release: 37 risks and 43 technical
 debts are not closed (Open 43, Mitigated 22, Accepted 15); 12 risks and
@@ -1594,6 +1595,22 @@ to TD-58).
 - **Next.** Profile one negotiation on both databases and count the
   statements and transactions per message; remove writes that are not
   needed. Suggested for 1.4 (to be confirmed by the maintainer).
+
+<a id="td-74"></a>
+### TD-74 An issuer not limited by type is trusted for every credential type
+
+- **What.** 1.4 adds `PORTITOR_TRUSTED_ISSUER_TYPES`, which limits a
+  trusted issuer to a list of credential types ([R-48](#r-48)). An
+  issuer of `PORTITOR_TRUSTED_ISSUERS` that the new setting does not
+  name keeps every type, as in 1.3 and as EDC's `supportedtypes` with
+  `"*"`. The safer default trusts such an issuer for
+  `MembershipCredential` only (option B of the 1.4 plan, maintainer,
+  2026-11-27).
+- **Why it matters.** An operator who adds a second issuer and forgets
+  the new setting trusts it for memberships too.
+- **Current state: Accepted.** The default cannot change in 1.x: a 1.3
+  deployment must start and behave unchanged ([STABILITY](STABILITY.md)).
+- **Next.** Change the default in 2.0 ([ROADMAP, For 2.0](ROADMAP.md#for-20)).
 
 ## Closed
 
