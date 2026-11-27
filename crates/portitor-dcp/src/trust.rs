@@ -30,7 +30,7 @@ const BASE_TYPES: [&str; 2] = [
 /// default limits no issuer.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IssuerTypes {
-    /// Issuer DID to its types, in the order they were first named.
+    /// Issuer DID (sorted) to its types (in the order they were first named).
     limits: BTreeMap<String, Vec<String>>,
 }
 
@@ -112,9 +112,12 @@ impl IssuerTypes {
         if to_check.is_empty() {
             return false;
         }
-        to_check
-            .iter()
-            .all(|credential_type| limit.contains(*credential_type))
+        for credential_type in to_check {
+            if !limit.contains(credential_type) {
+                return false;
+            }
+        }
+        true
     }
 
     /// Whether no issuer is limited (the setting is not set).
