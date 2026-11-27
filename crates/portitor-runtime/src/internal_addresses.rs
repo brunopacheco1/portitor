@@ -66,10 +66,21 @@ impl Network {
     }
 
     /// Whether `address` is in this network. An IPv4 address mapped into
-    /// IPv6 (`::ffff:10.0.0.1`) counts as the IPv4 address.
+    /// IPv6 (`::ffff:10.0.0.1`) counts as the IPv4 address: it is the
+    /// same host, as a dual-stack socket writes it.
+    ///
+    /// Only the mapped form is read here, while [`is_internal`] reads all
+    /// the forms that carry an IPv4 address ([`ipv4_inside`]: also
+    /// compatible, NAT64, 6to4, Teredo). On purpose: [`is_internal`]
+    /// decides what is blocked, and reading more forms blocks more; this
+    /// decides the exceptions, and reading more forms would allow more.
+    /// A 6to4 or Teredo address names a network or a client behind the
+    /// IPv4 address, not that host, so an exception for `10.1.0.0/16`
+    /// should not let them through. An operator who wants a NAT64 form
+    /// lists its IPv6 network (`64:ff9b::a01:0/112`).
     #[must_use]
     pub fn contains(&self, address: IpAddr) -> bool {
-        match (self.address, plain(address)) {
+        match (self.address, as_ipv4_if_mapped(address)) {
             (IpAddr::V4(network), IpAddr::V4(address)) => {
                 same_prefix(&network.octets(), &address.octets(), self.prefix_length)
             }
@@ -81,17 +92,18 @@ impl Network {
     }
 }
 
-/// Whether the first `length` bits of `a` and `b` are the same.
-fn same_prefix(a: &[u8], b: &[u8], length: u8) -> bool {
-    let mut bits_left = usize::from(length);
-    for (byte_a, byte_b) in a.iter().zip(b) {
+/// Whether the first `prefix_length` bits of `network` and `address`
+/// (their bytes, highest first) are the same.
+fn same_prefix(network: &[u8], address: &[u8], prefix_length: u8) -> bool {
+    let mut bits_left = usize::from(prefix_length);
+    for (network_byte, address_byte) in network.iter().zip(address) {
         if bits_left == 0 {
             return true;
         }
         let bits = bits_left.min(8);
         // the `bits` highest bits of a byte, for example 0b1110_0000 for 3
         let mask: u8 = 0xff << (8 - bits);
-        if byte_a & mask != byte_b & mask {
+        if network_byte & mask != address_byte & mask {
             return false;
         }
         bits_left -= bits;
@@ -99,8 +111,9 @@ fn same_prefix(a: &[u8], b: &[u8], length: u8) -> bool {
     true
 }
 
-/// `address`, with an IPv4 address mapped into IPv6 written as IPv4.
-fn plain(address: IpAddr) -> IpAddr {
+/// `address`, with an IPv4 address mapped into IPv6 (`::ffff:a.b.c.d`)
+/// written as IPv4; any other address as it is.
+fn as_ipv4_if_mapped(address: IpAddr) -> IpAddr {
     match address {
         IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
             Some(v4) => IpAddr::V4(v4),
@@ -110,16 +123,18 @@ fn plain(address: IpAddr) -> IpAddr {
     }
 }
 
-/// An IPv4 network, for the table below.
-const fn v4(a: u8, b: u8, c: u8, d: u8, prefix_length: u8) -> Network {
+/// An IPv4 network `first.second.third.fourth/prefix_length`, for the
+/// table below.
+const fn v4(first: u8, second: u8, third: u8, fourth: u8, prefix_length: u8) -> Network {
     Network {
-        address: IpAddr::V4(Ipv4Addr::new(a, b, c, d)),
+        address: IpAddr::V4(Ipv4Addr::new(first, second, third, fourth)),
         prefix_length,
     }
 }
 
-/// An IPv6 network whose address starts with `first` and `second` (the
-/// rest is zeros), for the table below.
+/// An IPv6 network whose address starts with the four groups `first`,
+/// `second`, `third` and `fourth` (the last four groups are zeros), for
+/// the table below.
 const fn v6(first: u16, second: u16, third: u16, fourth: u16, prefix_length: u8) -> Network {
     Network {
         address: IpAddr::V6(Ipv6Addr::new(first, second, third, fourth, 0, 0, 0, 0)),
@@ -418,6 +433,34 @@ mod tests {
         ] {
             assert_eq!(Network::parse(wrong), None, "{wrong}");
         }
+    }
+
+    /// An exception for an IPv4 network covers the mapped form only: a
+    /// NAT64, 6to4 or Teredo address that carries one of its addresses is
+    /// still refused, unless its IPv6 network is listed too.
+    #[test]
+    fn an_ipv4_exception_does_not_cover_other_ipv6_forms() {
+        let on = InternalAddresses::from_vars(vars(&[
+            (BLOCK_SETTING, "true"),
+            (ALLOWED_SETTING, "10.1.0.0/16"),
+        ]))
+        .unwrap();
+        assert!(on.allows("provider", ip("::ffff:10.1.0.5")));
+        for other_form in [
+            "::10.1.0.5",
+            "64:ff9b::10.1.0.5",
+            "2002:a01:5::1",
+            "2001:0:4136:e378:8000:63bf:f5fe:fffa",
+        ] {
+            assert!(is_internal(ip(other_form)), "{other_form}");
+            assert!(!on.allows("provider", ip(other_form)), "{other_form}");
+        }
+        let with_nat64 = InternalAddresses::from_vars(vars(&[
+            (BLOCK_SETTING, "true"),
+            (ALLOWED_SETTING, "10.1.0.0/16, 64:ff9b::a01:0/112"),
+        ]))
+        .unwrap();
+        assert!(with_nat64.allows("provider", ip("64:ff9b::10.1.0.5")));
     }
 
     #[test]
