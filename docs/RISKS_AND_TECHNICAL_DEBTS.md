@@ -159,7 +159,7 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [TD-70](#td-70) | Four loops that tick each write their own timer | Technical debt, readability | Open | in progress, 1.4: built |
 | [TD-71](#td-71) | The identity and the issuer each wrap the database the same way | Technical debt, readability | Open | in progress, 1.4: built |
 | [TD-72](#td-72) | Two error types for the database, converted both ways | Technical debt, readability | Open | 1.5 (suggested, with TD-63) |
-| [TD-73](#td-73) | A negotiation step is about 3.5 ms slower on SQLite in 1.3 | Technical debt, performance | Open | 1.4 (one day of profiling; else 1.12) |
+| [TD-73](#td-73) | A negotiation step is about 3.5 ms slower on SQLite in 1.3 | Technical debt, performance | Open | 1.12 (with TD-40; cause found in 1.4) |
 | [TD-74](#td-74) | An issuer not limited by type is trusted for every credential type | Technical debt, security | Accepted | 2.0 |
 
 Counts on 2026-11-27, at the 1.3.0 release: 37 risks and 43 technical
@@ -1634,12 +1634,40 @@ to TD-58).
   storage that is deprecated; data throughput and the TD-40 check are
   unchanged. On PostgreSQL the same steps take about twice as long
   again, because each write is a network round trip.
-- **Current state: Open.**
-- **Next.** Profile one negotiation on both databases and count the
-  statements and transactions per message; remove writes that are not
-  needed. In 1.4, at most one day of profiling (maintainer,
-  2026-11-27); if it finds no clear cause, the item moves to 1.12 with
-  [TD-40](#td-40).
+- **Current state: Open; cause found in 1.4, moved to 1.12 with
+  [TD-40](#td-40).** Counted on 2026-11-27 (1.4 branch, SQLite, the
+  connector test `negotiate_transfer_fetch_and_complete` with every
+  statement logged by a temporary counter, not committed), and compared
+  with the 1.2.0 store code (`git show v1.2.0:...`). For one whole
+  negotiation, the provider's connector ran 8 writes and 8 reads, and
+  no explicit transaction: every write is its own commit, so one sync
+  of the WAL with `synchronous=FULL`.
+
+  | Provider, one negotiation (request, verification) | 1.2.0 | 1.3 / 1.4 |
+  |---|---|---|
+  | Negotiation row: insert or update when a message arrives, update when ours was sent | 4 writes | 4 writes (the same statements) |
+  | Lease on each message sent (TD-53): claim, then release | none | 4 writes |
+  | Used token id of each DCP token received (TD-09): delete expired, insert | none (in memory) | up to 4 writes |
+  | Reads of the negotiation | 4 | 4 |
+  | Reads of the dataset (ADR 0020: from the database since 1.3) | none (copy in memory) | 2 |
+
+  So a provider step went from 2 commits to up to 6 (4 without DCP);
+  each costs about one disk sync, which fits the 3.5 ms. The consumer's
+  side and the identities (used token ids of presentation queries)
+  gained the same kinds of writes. None of the new writes can go
+  without changing what is stored or the replica rules: the lease and
+  the used token id are what make two replicas safe (ADR 0029), and
+  deleting expired token ids less often keeps old rows longer. Ways to
+  make them cheaper, each a design change for the maintainer: write
+  the lease claim in the same transaction as the step that saves the
+  message (one commit instead of two); on SQLite, where one process
+  per file is enforced (ADR 0029, D3), keep message leases in memory;
+  delete expired token ids in the scheduled loop instead of before
+  each insert.
+- **Next.** ROADMAP 1.12, with [TD-40](#td-40) (asynchronous store
+  ports): choose one of the ways above and measure again with
+  `scripts/bench.sh` (maintainer decision D1, 2026-11-27: not fixed in
+  1.4).
 
 <a id="td-74"></a>
 ### TD-74 An issuer not limited by type is trusted for every credential type

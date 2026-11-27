@@ -94,6 +94,11 @@ setting and file format still works, and every new setting is optional
 
 ### Documentation
 
+- TD-73 (a negotiation step slower on SQLite in 1.3): the statements of
+  one provider negotiation counted against 1.2.0. The cause is the new
+  commits of 1.3 (a lease claim and release for each message sent, and
+  the used token id of each DCP token), not a bug; moved to 1.12 with
+  TD-40 ([TD-73](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-73)).
 - The SQLite to PostgreSQL copy tool announced for 1.4 is dropped
   (maintainer, 2026-11-27): no deployment needs one yet. A component
   moved to PostgreSQL starts empty; SQLite is still removed in 2.0
