@@ -38,6 +38,22 @@ setting and file format still works, and every new setting is optional
 
 ### Documentation
 
+- The SQLite to PostgreSQL copy tool announced for 1.4 is dropped
+  (maintainer, 2026-11-27): no deployment needs one yet. A component
+  moved to PostgreSQL starts empty; SQLite is still removed in 2.0
+  ([OPERATING, From SQLite to PostgreSQL](docs/OPERATING.md#from-sqlite-to-postgresql),
+  [TD-59](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-59)).
+- DEPLOYING, "Credential constraints": `neq` and `isNoneOf` are not
+  deny lists ([R-43](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-43)).
+- The OpenSSF Baseline level 1 self-assessment checked again against
+  v2026.08.28 on 2026-11-27, with the GitHub settings read through the
+  API: 21 met, 1 to confirm, 1 not met (the website's "Enforce HTTPS"
+  is off), 1 not applicable
+  ([SECURITY-ASSURANCE](docs/SECURITY-ASSURANCE.md#level-1-self-assessment),
+  [R-05](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-05)).
+- TD-47 (a transfer left REQUESTED when its provider is revoked), fixed
+  in 1.1, moved to the closed items.
+
 ## [1.3.0] - 2026-11-27
 
 Portitor 1.3: several containers of each image (connector,

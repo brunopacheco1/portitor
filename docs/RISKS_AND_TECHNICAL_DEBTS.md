@@ -85,7 +85,7 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [R-02](#r-02) | One maintainer: no two-person review | Delivery, security | Accepted | until a second maintainer |
 | [R-03](#r-03) | Pre-1.0 JSON-LD and VC crates | Dependency | Mitigated | none |
 | [R-04](#r-04) | Most dependencies are exempted, not audited (cargo-vet) | Dependency, security | Mitigated | every release |
-| [R-05](#r-05) | No written OpenSSF Baseline level 1 self-assessment | Security | Open | 1.4 |
+| [R-05](#r-05) | No written OpenSSF Baseline level 1 self-assessment | Security | Open | in progress, 1.4 |
 | [R-06](#r-06) | Data Plane Signaling is a draft (v1.0-RC4) | Upstream | Mitigated | Signaling 1.0 |
 | [R-08](#r-08) | The DSP TCK v1.0.2 needs a test-only build | Interoperability | Mitigated | a fixed TCK release |
 | [R-09](#r-09) | EDC is tested at a release candidate (1.0.0-RC8) | Interoperability | Mitigated | EDC 1.0.0 |
@@ -111,7 +111,7 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [R-40](#r-40) | No shared list of EHDS purposes | Interoperability | Open | 1.4 |
 | [R-41](#r-41) | A key removed from a DID document is still trusted for up to 5 minutes | Security | Mitigated | none |
 | [R-42](#r-42) | The STS shares the identity's public port | Security | Open | 1.6 |
-| [R-43](#r-43) | Negative credential constraints can be met with another credential | Security | Open | 1.4 |
+| [R-43](#r-43) | Negative credential constraints can be met with another credential | Security | Open | in progress, 1.4 |
 | [R-44](#r-44) | One slow holder delays every issuer delivery | Security | Open | 1.6 |
 | [R-45](#r-45) | No request limit per partner | Security | Open | 1.7 |
 | [R-46](#r-46) | The EDC Issuer Service names a request status address that is not found | Interoperability, upstream | Open | report upstream; the next EDC release |
@@ -140,13 +140,12 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [TD-29](#td-29) | No OTLP logs export, no gRPC, no compression | Technical debt | Open | 1.14 |
 | [TD-31](#td-31) | No audit trail of management actions | Technical debt | Mitigated | 1.7 |
 | [TD-35](#td-35) | No negotiation started by the provider | Technical debt, interoperability | Open | 1.5 |
-| [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | Mitigated | 1.4 |
+| [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | Mitigated | 1.14 (Helm chart) |
 | [TD-40](#td-40) | Database calls block the async runtime | Technical debt | Accepted | 1.12 |
 | [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | Open | 1.7 |
 | [TD-46](#td-46) | The issuer keeps one set of claims per participant | Technical debt | Open | 1.4 |
-| [TD-47](#td-47) | A transfer stays REQUESTED when its provider is revoked | Technical debt | Open | 1.4 |
 | [TD-49](#td-49) | After a failed message, the two parties of a negotiation can stay in different states | Technical debt, interoperability | Accepted | none |
-| [TD-59](#td-59) | SQLite is deprecated; no tool yet to copy a SQLite file into PostgreSQL | Technical debt | Accepted | the copy tool: 1.4; removal: 2.0 |
+| [TD-59](#td-59) | SQLite is deprecated; no tool copies a SQLite file into PostgreSQL | Technical debt | Accepted | removal: 2.0 (no copy tool) |
 | [TD-60](#td-60) | A repeated first contract request starts a second negotiation | Technical debt, interoperability | Open | 1.4 |
 | [TD-61](#td-61) | The outbox's "it arrived before" check compares the state only | Technical debt | Open | 1.4 |
 | [TD-62](#td-62) | Why and when a negotiation ended is not stored | Technical debt | Open | 1.5 |
@@ -160,7 +159,7 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [TD-70](#td-70) | Four loops that tick each write their own timer | Technical debt, readability | Open | 1.4 (suggested) |
 | [TD-71](#td-71) | The identity and the issuer each wrap the database the same way | Technical debt, readability | Open | 1.4 (suggested) |
 | [TD-72](#td-72) | Two error types for the database, converted both ways | Technical debt, readability | Open | 1.5 (suggested, with TD-63) |
-| [TD-73](#td-73) | A negotiation step is about 3.5 ms slower on SQLite in 1.3 | Technical debt, performance | Open | 1.4 (suggested) |
+| [TD-73](#td-73) | A negotiation step is about 3.5 ms slower on SQLite in 1.3 | Technical debt, performance | Open | 1.4 (one day of profiling; else 1.12) |
 | [TD-74](#td-74) | An issuer not limited by type is trusted for every credential type | Technical debt, security | Accepted | 2.0 |
 
 Counts on 2026-11-27, at the 1.3.0 release: 37 risks and 43 technical
@@ -256,11 +255,21 @@ to TD-58).
   self-assessment is not written.
 - **Why it matters.** Until then, level 1 rests on settings and CI, not
   on evidence anyone can check.
-- **Current state: Open.** Decided (maintainer, 2026-11-20): the target
-  stays level 1 for 1.0.
-- **Next.** ROADMAP 0.14, done last so it assesses the final state, in
-  [SECURITY-ASSURANCE](SECURITY-ASSURANCE.md#openssf-baseline).
-  Assigned to 1.4 (maintainer, 2026-11-26).
+- **Current state: Open; in progress, 1.4: written.** Decided
+  (maintainer, 2026-11-20): the target stays level 1 for 1.0. The
+  self-assessment, first written for 0.14, was checked again control by
+  control on 2026-11-27 against Baseline v2026.08.28, still the current
+  version that day, in
+  [SECURITY-ASSURANCE](SECURITY-ASSURANCE.md#level-1-self-assessment):
+  of 24 level 1 requirements, 21 met, 1 not applicable, 1 to confirm
+  (two-factor authentication on the maintainer's account) and 1 not
+  met: the website answers over plain HTTP ("Enforce HTTPS" is off for
+  the repository's Pages, OSPS-BR-03.01).
+- **Next.** The maintainer turns on "Enforce HTTPS" and confirms
+  two-factor authentication
+  ([Settings to confirm](SECURITY-ASSURANCE.md#settings-to-confirm));
+  then the item moves to Closed with 1.4. Assigned to 1.4 (maintainer,
+  2026-11-26).
 
 <a id="r-06"></a>
 ### R-06 Data Plane Signaling is a draft (v1.0-RC4)
@@ -709,9 +718,13 @@ to TD-58).
   chooses what it presents (SECURITY-ASSURANCE, F-07).
 - **Why it matters.** An operator may read `neq` as "refuse holders
   with this value". It is not.
-- **Current state: Open.**
-- **Next.** Say in ADR 0019 and DEPLOYING that negative operators are
-  not deny lists. Assigned to 1.4 (maintainer, 2026-11-26).
+- **Current state: Open; in progress, 1.4: documented.** ADR 0019,
+  [amended in 1.4](adr/0019-credential-constraints.md#negative-operators-are-not-deny-lists-r-43),
+  and [DEPLOYING, "Credential constraints"](DEPLOYING.md#credential-constraints)
+  say that `neq` and `isNoneOf` are not deny lists, and how to keep
+  someone out instead. The behaviour does not change.
+- **Next.** Move to Closed when 1.4 ships. Assigned to 1.4
+  (maintainer, 2026-11-26; docs only, maintainer, 2026-11-27).
 
 <a id="r-44"></a>
 ### R-44 One slow holder delays every issuer delivery
@@ -1252,9 +1265,10 @@ to TD-58).
   it is; [docs/adr/README.md](adr/README.md) indexes the ADRs.
 - **Decision (maintainer, 2026-11-18).** DEPLOYING is written for an
   operations team; running the demo on a laptop belongs in TESTING.
-- **Next.** A Helm chart in a 1.x release (ROADMAP "Code quality in
-  1.x"). Until then there is the Compose example.
-  Assigned to 1.4 (maintainer, 2026-11-26).
+- **Next.** A Helm chart, in
+  [1.14](ROADMAP.md#114-operations-hardening-added-2026-11-26) (moved
+  from 1.4 by the maintainer, 2026-11-27). Until then there is the
+  Compose example.
 
 <a id="td-40"></a>
 ### TD-40 Database calls block the async runtime
@@ -1321,29 +1335,6 @@ to TD-58).
   first how EDC's
   Issuer Service (attestations) and the EHDS permit template do it.
 
-<a id="td-47"></a>
-### TD-47 A transfer stays REQUESTED when its provider is revoked
-
-- **What.** Once a provider's `MembershipCredential` is revoked, the
-  consumer's connector refuses all its DSP messages, which is right for
-  new work. That includes the provider's termination of a transfer the
-  consumer just requested, so the transfer stays `REQUESTED` until the
-  consumer's operator ends it
-  ([hdab-intermediary, step 6](../scenarios/hdab-intermediary/README.md#the-steps)).
-- **Why it matters.** Transfers pile up that will never start, and the
-  operator learns why only from the logs.
-- **Current state: Open; fixed on the 1.1 branch.** A termination is
-  accepted from a caller with a valid DCP token who is the transfer's
-  counter-party, even without a valid membership, on both sides, and
-  logged ([ADR 0016](adr/0016-dsp-caller-authentication.md), amended in
-  1.1, with what was built). Tests: `provider_control.rs`
-  (`a_consumer_without_membership_may_still_end_its_transfer`,
-  `a_provider_without_membership_may_still_end_our_transfer`); the
-  hdab-intermediary scenario, step 6, now expects `TERMINATED`.
-- **Next.** Move to Closed when 1.1 is released, after a run of the
-  hdab-intermediary scenario on 1.1.
-  Assigned to 1.4 (maintainer, 2026-11-26).
-
 <a id="td-49"></a>
 ### TD-49 After a failed message, the two parties of a negotiation can stay in different states
 
@@ -1365,7 +1356,7 @@ to TD-58).
   move can ask the partner, and terminate it from its side.
 
 <a id="td-59"></a>
-### TD-59 SQLite is deprecated; no tool yet to copy a SQLite file into PostgreSQL
+### TD-59 SQLite is deprecated; no tool copies a SQLite file into PostgreSQL
 
 - **What.** From 1.3 each image runs on PostgreSQL or on a SQLite file
   ([ADR 0029](adr/0029-several-replicas.md)). SQLite is deprecated and
@@ -1373,14 +1364,16 @@ to TD-58).
   two migration lists, one per database, and every store test runs on
   both.
 - **Why it matters.** A deployment on SQLite cannot move to PostgreSQL
-  without losing its state: no tool copies the data yet
+  without losing its state: no tool copies the data
   ([OPERATING](OPERATING.md#from-sqlite-to-postgresql)). Two schemas
   can drift apart.
 - **Current state: Accepted** (maintainer, 2026-11-26: deprecated in
   1.3, not removed, because [STABILITY](STABILITY.md#database) keeps
   `PORTITOR_DB_FILE` for 1.x). A test compares the two schemas.
-- **Next.** The copy tool in 1.4 (maintainer, 2026-11-26); SQLite and
-  `PORTITOR_DB_FILE` removed in 2.0 (ROADMAP "For 2.0").
+  The copy tool planned for 1.4 is dropped (maintainer, 2026-11-27):
+  no deployment needs one yet, so no data has to be copied.
+- **Next.** SQLite and `PORTITOR_DB_FILE` removed in 2.0
+  ([ROADMAP, For 2.0](ROADMAP.md#for-20)).
 
 <a id="td-60"></a>
 ### TD-60 A repeated first contract request starts a second negotiation
@@ -1594,7 +1587,9 @@ to TD-58).
 - **Current state: Open.**
 - **Next.** Profile one negotiation on both databases and count the
   statements and transactions per message; remove writes that are not
-  needed. Suggested for 1.4 (to be confirmed by the maintainer).
+  needed. In 1.4, at most one day of profiling (maintainer,
+  2026-11-27); if it finds no clear cause, the item moves to 1.12 with
+  [TD-40](#td-40).
 
 <a id="td-74"></a>
 ### TD-74 An issuer not limited by type is trusted for every credential type
@@ -1661,6 +1656,7 @@ entries are in [CHANGELOG](../CHANGELOG.md) under the release named.
 | <a id="td-56"></a>TD-56 | Scheduled jobs run once in every container | 1.3 | Leases `job`/`dataset_harvest` and `job`/`gaiax_compliance`; job ids from the database; [ADR 0029](adr/0029-several-replicas.md), decision 6 |
 | <a id="td-57"></a>TD-57 | The issuer's credential outbox does not claim a delivery before it sends it | 1.3 | `claim_due_delivery` in `crates/portitor-issuer/src/store.rs` (lease columns on the outbox row); [ADR 0029](adr/0029-several-replicas.md), decision 6 |
 | <a id="td-58"></a>TD-58 | The DID document is built at start | 1.3 | No code: the two-step rolling key rotation in [OPERATING](OPERATING.md#rotating-a-key-with-several-replicas); [ADR 0029](adr/0029-several-replicas.md), decision 6 (D7) |
+| <a id="td-47"></a>TD-47 | A transfer stayed REQUESTED when its provider was revoked | 1.1 | [ADR 0016](adr/0016-dsp-caller-authentication.md), amended in 1.1: a termination is accepted from the transfer's counter-party with a valid DCP token, even without a valid membership; tests in `crates/portitor-connector/tests/provider_control.rs`; the [hdab-intermediary](../scenarios/hdab-intermediary/README.md) scenario, step 6, expects `TERMINATED` and passed on 1.3 ([ROADMAP 1.3](ROADMAP.md#13-several-replicas-and-postgresql-released-2026-11-27-as-v130), "Tried before the tag"). Moved here on 2026-11-27 |
 
 ### Left over from closed items
 

@@ -588,7 +588,7 @@ one database ([ADR 0029](adr/0029-several-replicas.md)).
    to do until 2.0.
 3. **PostgreSQL is optional in 1.3** for an existing deployment. To use
    it, read [From SQLite to PostgreSQL](#from-sqlite-to-postgresql)
-   first: there is no tool yet that copies your data.
+   first: no tool copies your data.
 4. **Several replicas** need PostgreSQL
    ([DEPLOYING, Database](DEPLOYING.md#database)), and the two-step
    [key rotation](#rotating-a-key-with-several-replicas).
@@ -601,10 +601,11 @@ one database ([ADR 0029](adr/0029-several-replicas.md)).
 
 ### From SQLite to PostgreSQL
 
-The tool that copies a SQLite file into PostgreSQL is planned for 1.4,
-before 2.0 removes SQLite
-([ROADMAP](ROADMAP.md#14-purpose-and-data-permit-in-policies)). Until
-then, a component moved to PostgreSQL starts with an empty database:
+No tool copies a SQLite file into PostgreSQL, and none is planned: the
+maintainer dropped it on 2026-11-27, as no deployment needs one yet
+([TD-59](RISKS_AND_TECHNICAL_DEBTS.md#td-59)). 2.0 removes SQLite
+([ROADMAP, For 2.0](ROADMAP.md#for-20)). A component moved to
+PostgreSQL starts with an empty database, and nothing is copied:
 
 - the connector forgets its negotiations, agreements, transfers and
   data flows, while partners keep theirs. Existing agreements can no
@@ -614,12 +615,16 @@ then, a component moved to PostgreSQL starts with an empty database:
 - the issuer forgets its participants, the credentials it issued and
   their status lists, so it can no longer revoke them.
 
-So move a component only if it can start over, for example a new
-dataspace or a test. Otherwise keep it on its SQLite file, with one
-container, until the copy tool exists. For a move: set
-`PORTITOR_DATABASE_URL` and `PORTITOR_DATABASE_PASSWORD_FILE`, and
-leave `PORTITOR_DB_FILE` unset (a component with both refuses to
-start).
+So move a component when it can start over, for example a new
+dataspace or a test, or before 2.0 at the latest. To move:
+
+1. Start an empty PostgreSQL database for the component
+   ([DEPLOYING, Database](DEPLOYING.md#database)).
+2. Set `PORTITOR_DATABASE_URL` and `PORTITOR_DATABASE_PASSWORD_FILE`,
+   and leave `PORTITOR_DB_FILE` unset (a component with both refuses
+   to start).
+3. Start the component: its migrations create the tables. Then do again
+   what the list above says was lost.
 
 ### From 1.1 to 1.2
 

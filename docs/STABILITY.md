@@ -344,8 +344,9 @@ PostgreSQL versions are supported is in
 **SQLite is deprecated since 1.3** (maintainer, 2026-11-26;
 [ADR 0029](adr/0029-several-replicas.md)). It keeps working in 1.x,
 for one process per file, and `PORTITOR_DB_FILE` stays in the list
-above until 2.0. 2.0 removes SQLite and `PORTITOR_DB_FILE`. A tool to
-copy a SQLite file into PostgreSQL comes in a 1.x release before 2.0.
+above until 2.0. 2.0 removes SQLite and `PORTITOR_DB_FILE`. No tool
+copies a SQLite file into PostgreSQL (maintainer, 2026-11-27;
+[OPERATING](OPERATING.md#from-sqlite-to-postgresql)).
 
 Migrations run at start and **forward only**. An older release refuses a
 database that a newer one migrated. To go back, restore the backup taken

@@ -457,72 +457,88 @@ version 2026-08-28 ([ADR 0012](adr/0012-openssf-baseline.md)). The target
 stays level 1 for 1.0 (maintainer, 2026-11-20;
 [R-05](RISKS_AND_TECHNICAL_DEBTS.md#r-05)).
 
-### Level 1 self-assessment (2026-11-20)
+### Level 1 self-assessment
+
+Written for 0.14 on 2026-11-20; checked again, control by control, on
+2026-11-27 for 1.4 ([R-05](RISKS_AND_TECHNICAL_DEBTS.md#r-05)).
 
 **Source.** The control list is the Baseline's own source, tag
 [`v2026.08.28`](https://github.com/ossf/security-baseline/tree/v2026.08.28/baseline)
 (commit `a26a796`): every requirement that applies to maturity level 1.
-The requirement column is our short paraphrase; the Baseline's text
-decides.
+On 2026-11-27, [baseline.openssf.org](https://baseline.openssf.org/)
+still named v2026.08.28 (released 2026-08-28) as the current version,
+and its [level 1 checklist](https://baseline.openssf.org/versions/2026-08-28-checklist.md)
+has the same 24 ids as this table. Since 2026.02.19 no level 1 id
+changed; "While active" left the requirement texts, OSPS-LE-03.01 also
+accepts a `LICENSE/` folder, and OSPS-GV-03.01 also accepts a statement
+that public contributions are not accepted
+([release notes](https://baseline.openssf.org/release_notes), read
+2026-11-27). The requirement column is our short paraphrase; the
+Baseline's text decides.
 
-**Scope.** The repository at version 0.14.0, the release candidate.
+**Scope.** The repository at 1.4.0-dev (commit `3eeba24`), after the
+1.3.0 release.
 
 **Status.** *Met*: the evidence is in the repository, or is a GitHub
-setting read through the GitHub API on 2026-11-20, and was checked
-there. *Met, to confirm*: the evidence is a GitHub setting that could
-not be read; the maintainer confirms it in the
+setting read through the GitHub API (`gh api`) on 2026-11-27, and was
+checked there. *Met, to confirm*: the evidence is a GitHub setting that
+could not be read; the maintainer confirms it in the
 [settings checklist](#settings-to-confirm) below. *Not met* and *Not
 applicable* mean what they say.
 
-**Result.** 24 requirements apply (one more is retired): 19 met, 4 met,
-to confirm, 1 not applicable.
-Level 1 is reached when the four settings are confirmed. Private
-vulnerability reporting, the one requirement that was not met when this
-was written, was turned on on 2026-11-21.
+**Result (2026-11-27).** 24 requirements apply (one more is retired):
+21 met, 1 met, to confirm (OSPS-AC-01.01), 1 not met (OSPS-BR-03.01),
+1 not applicable. Level 1 is reached when the maintainer turns on
+"Enforce HTTPS" for the website and confirms two-factor authentication
+(checklist rows 4 and 1). On 2026-11-20 it was 19 met, 4 to confirm and
+1 not applicable; three of those settings could be read this time, and
+one of them, the website, is not as expected.
 
 | Control | Requirement (paraphrase) | Status | Evidence |
 |---|---|---|---|
 | OSPS-AC-01.01 | Reading or changing a sensitive resource of the repository needs multi-factor authentication | Met, to confirm | The only account with such access is the maintainer's ([GOVERNANCE, "Roles"](../GOVERNANCE.md#roles)). The repository belongs to a personal account, so no organisation rule can show it. Checklist 1 |
-| OSPS-AC-02.01 | A new collaborator gets permissions by hand, or the lowest ones by default | Met, to confirm | Only the owner can add a collaborator, by hand; none is planned without a record in [GOVERNANCE](../GOVERNANCE.md#roles). Checklist 2 |
-| OSPS-AC-03.01 | A direct commit to the primary branch is prevented | Met | The ruleset `main`, as read: active, on the default branch, with the rule "pull request" (one approval) and required status checks; an admin may bypass it only to merge a pull request ([R-02](RISKS_AND_TECHNICAL_DEBTS.md#r-02)). Described in [ROADMAP, "Repository settings"](ROADMAP.md#decisions-recorded-here) |
+| OSPS-AC-02.01 | A new collaborator gets permissions by hand, or the lowest ones by default | Met | Only the owner can add a collaborator, by hand; none is planned without a record in [GOVERNANCE](../GOVERNANCE.md#roles). As read on 2026-11-27: the only collaborator is the owner. Checklist 2 |
+| OSPS-AC-03.01 | A direct commit to the primary branch is prevented | Met | The ruleset `main`, as read on 2026-11-27: active, on the default branch, with the rule "pull request" (one approval) and required status checks; an admin may bypass it only to merge a pull request ([R-02](RISKS_AND_TECHNICAL_DEBTS.md#r-02)). Described in [ROADMAP, "Repository settings"](ROADMAP.md#decisions-recorded-here) |
 | OSPS-AC-03.02 | Deleting the primary branch is prevented or needs explicit confirmation | Met | The same ruleset, as read: the rules "deletion" and "non fast forward" (no deletion, no force push) |
 | OSPS-BR-01.01 | Untrusted metadata (branch names, titles, tags) is validated before the pipeline uses it | Met | No `run:` step holds an untrusted `${{ }}` expression: values reach scripts as environment variables ([`changes.yml`](../.github/workflows/changes.yml), step "Which jobs does this change need?"); the tag name is matched against a pattern before use ([`release.yml`](../.github/workflows/release.yml), job `verify`); values fetched for the website are reduced to plain characters ([`pages.yml`](../.github/workflows/pages.yml), `clean`). CodeQL analyses the workflows ([`codeql.yml`](../.github/workflows/codeql.yml), language `actions`) |
 | OSPS-BR-01.02 | Retired by the Baseline | Retired | |
-| OSPS-BR-01.03 | Untrusted code (a pull request) cannot reach privileged credentials | Met, to confirm | No workflow uses `pull_request_target`. Every workflow starts with `permissions: contents: read`. The only repository secret a pull request job reads, `SONAR_TOKEN`, goes to the scan step alone, and GitHub gives no secrets to a pull request from a fork ([`ci.yml`](../.github/workflows/ci.yml), job `sonar`). Pushing, signing and releasing run only for a tag, in the `release` environment ([`release.yml`](../.github/workflows/release.yml), jobs `images` and `release`). Checklist 3 |
-| OSPS-BR-03.01 | Every official project address is served over an encrypted channel only | Met, to confirm | The project's addresses are `https://github.com/brunopacheco1/portitor` and `https://bruno.pacheco.lu/portitor/` ([README](../README.md)). The website is on GitHub Pages with its own domain. Checklist 4 |
+| OSPS-BR-01.03 | Untrusted code (a pull request) cannot reach privileged credentials | Met | No workflow uses `pull_request_target`. Every workflow starts with `permissions: contents: read`. The only repository secret a pull request job reads, `SONAR_TOKEN`, goes to the scan step alone, and GitHub gives no secrets to a pull request from a fork ([`ci.yml`](../.github/workflows/ci.yml), job `sonar`). Pushing, signing and releasing run only for a tag, in the `release` environment ([`release.yml`](../.github/workflows/release.yml), jobs `images` and `release`). As read on 2026-11-27: workflows of all outside contributors wait for approval; `release` deploys only from tags `v*` and needs the maintainer's approval; `SONAR_TOKEN` is the only repository secret. Checklist 3 |
+| OSPS-BR-03.01 | Every official project address is served over an encrypted channel only | **Not met** | The project's addresses are `https://github.com/brunopacheco1/portitor` and `https://bruno.pacheco.lu/portitor/` ([README](../README.md)). GitHub sends `http://` to `https://`. The website is not: on 2026-11-27 `http://bruno.pacheco.lu/portitor/` answered `200 OK` over plain HTTP, and the repository's Pages setting reads `"https_enforced": false` (the user site `bruno.pacheco.lu` itself has it on). Checklist 4 |
 | OSPS-BR-03.02 | Distribution channels are protected against an attacker in the middle | Met | Images come from `ghcr.io` and release files from GitHub Releases, both over HTTPS; each image is signed and has provenance ([RELEASING, "Checking a release"](RELEASING.md#checking-a-release)) |
-| OSPS-BR-07.01 | Secrets are kept out of version control | Met | Secret scanning and push protection are on, as read ([ROADMAP, "Repository settings"](ROADMAP.md#decisions-recorded-here)); the rule and the naming of test keys ([AGENTS, "Rules"](../AGENTS.md#rules)); checkouts do not keep the workflow token (`persist-credentials: false`), except the tag check of the release |
+| OSPS-BR-07.01 | Secrets are kept out of version control | Met | Secret scanning and push protection are on, as read on 2026-11-27 ([ROADMAP, "Repository settings"](ROADMAP.md#decisions-recorded-here)); the rule and the naming of test keys ([AGENTS, "Rules"](../AGENTS.md#rules)); checkouts do not keep the workflow token (`persist-credentials: false`), except the tag check of the release |
 | OSPS-DO-01.01 | User guides for all basic functionality | Met | [README](../README.md), [DEPLOYING](DEPLOYING.md), [OPERATING](OPERATING.md), the OpenAPI files in [`docs/api/`](api/), and the quickstart on the [website](https://bruno.pacheco.lu/portitor/) |
 | OSPS-DO-02.01 | A guide for reporting defects | Met | [CONTRIBUTING](../CONTRIBUTING.md#before-you-start); the issue forms in [`.github/ISSUE_TEMPLATE/`](../.github/ISSUE_TEMPLATE/); vulnerabilities in [SECURITY](../SECURITY.md#reporting-a-vulnerability) |
 | OSPS-GV-02.01 | A public place to discuss proposed changes and problems of use | Met | GitHub issues (on, as read) and pull requests ([CONTRIBUTING](../CONTRIBUTING.md#before-you-start); [GOVERNANCE, "Decisions"](../GOVERNANCE.md#decisions)) |
-| OSPS-GV-03.01 | The contribution process is explained | Met | [CONTRIBUTING](../CONTRIBUTING.md#pull-requests) |
+| OSPS-GV-03.01 | The contribution process is explained, or public contributions are said not to be accepted | Met | [CONTRIBUTING](../CONTRIBUTING.md#pull-requests) |
 | OSPS-LE-02.01 | The source code licence is an open source licence (OSI or FSF) | Met | Apache-2.0 ([LICENSE](../LICENSE)); every file carries its licence, checked by `reuse lint` in [`ci.yml`](../.github/workflows/ci.yml) (job `reuse`) |
 | OSPS-LE-02.02 | The licence of the released software is an open source licence | Met | The images are Apache-2.0 and hold one third-party file, the CA certificate bundle, MPL-2.0 ([NOTICE](../NOTICE)). Crates linked into the binaries must have a licence on the allowlist in [`deny.toml`](../deny.toml) (cargo-deny in [`dependencies.yml`](../.github/workflows/dependencies.yml)) |
-| OSPS-LE-03.01 | The source licence is in `LICENSE`, `COPYING` or `LICENSES/` | Met | [LICENSE](../LICENSE) and [`LICENSES/`](../LICENSES/) |
+| OSPS-LE-03.01 | The source licence is in `LICENSE`, `COPYING`, `LICENSES/` or `LICENSE/` | Met | [LICENSE](../LICENSE) and [`LICENSES/`](../LICENSES/) |
 | OSPS-LE-03.02 | The licence of the released software is in the released source, or in a licence file next to the release assets | Met | The released source (the tag) holds `LICENSE` and `LICENSES/`; each GitHub release also has `THIRD-PARTY-NOTICES.txt` ([`release.yml`](../.github/workflows/release.yml), job `release`). The images hold no licence file: they name the licence in the label `org.opencontainers.image.licenses` ([Dockerfile](../Dockerfile)) |
 | OSPS-QA-01.01 | The source repository is public, at a fixed address | Met | `https://github.com/brunopacheco1/portitor` (public, as read) |
 | OSPS-QA-01.02 | A public record of every change: what, who and when | Met | The Git history, with signed commits ([CONTRIBUTING, "Pull requests"](../CONTRIBUTING.md#pull-requests), step 6) |
 | OSPS-QA-02.01 | A dependency list for the direct language dependencies | Met | [`Cargo.toml`](../Cargo.toml) and [`Cargo.lock`](../Cargo.lock) (also `fuzz/Cargo.lock`) |
 | OSPS-QA-04.01 | A project with several repositories lists its codebases | Not applicable | One repository ([AGENTS, "Repository layout"](../AGENTS.md#repository-layout)) |
-| OSPS-QA-05.01 | No generated executable in version control | Met | Checked on 2026-11-20: the files Git marks executable are shell and Python scripts. Scorecard's Binary-Artifacts check runs weekly ([`scorecard.yml`](../.github/workflows/scorecard.yml)) |
-| OSPS-QA-05.02 | No binary in version control that cannot be reviewed | Met | Checked on 2026-11-20: two binary files, neither executable. A font for the website (`site/fonts/cinzel-regular.woff2`, source and licence in [NOTICE](../NOTICE)) and a test-only RSA key in DER (`crates/portitor-dcp/tests/fixtures/test-only-rsa-2048.der`) |
-| OSPS-VM-02.01 | The documentation names security contacts | Met | [SECURITY, "Reporting a vulnerability"](../SECURITY.md#reporting-a-vulnerability) names one contact: a private report through GitHub. Private vulnerability reporting is on for the repository (the API answered `enabled: true` on 2026-11-21; it was off the day before) |
+| OSPS-QA-05.01 | No generated executable in version control | Met | Checked on 2026-11-20 and 2026-11-27: the files Git marks executable are shell and Python scripts. Scorecard's Binary-Artifacts check runs weekly ([`scorecard.yml`](../.github/workflows/scorecard.yml)) |
+| OSPS-QA-05.02 | No binary in version control that cannot be reviewed | Met | Checked on 2026-11-20 and 2026-11-27: two binary files, neither executable. A font for the website (`site/fonts/cinzel-regular.woff2`, source and licence in [NOTICE](../NOTICE)) and a test-only RSA key in DER (`crates/portitor-dcp/tests/fixtures/test-only-rsa-2048.der`) |
+| OSPS-VM-02.01 | The documentation names security contacts | Met | [SECURITY, "Reporting a vulnerability"](../SECURITY.md#reporting-a-vulnerability) names one contact: a private report through GitHub. Private vulnerability reporting is on for the repository (the API answered `enabled: true` on 2026-11-21 and on 2026-11-27; it was off on 2026-11-20) |
 
 ### Settings to confirm
 
-Read through the GitHub API on 2026-11-20, so not in this list: the
+Read through the GitHub API on 2026-11-27, so not in this list: the
 ruleset `main`, secret scanning and push protection, the repository's
-visibility and its issue tracker. The maintainer checks the rest in
-GitHub and writes the date here.
+visibility and its issue tracker. The "As read" column holds what the
+API answered that day; the maintainer checks the rows it could not
+read, or that are not as they must be, in GitHub and writes the date
+here.
 
-| # | Control | Where in GitHub | What must be true |
-|---|---|---|---|
-| 1 | OSPS-AC-01.01 | The maintainer's account: Settings, Password and authentication, Two-factor authentication | Two-factor authentication is on |
-| 2 | OSPS-AC-02.01 | Repository: Settings, Collaborators | No collaborator, or only people named in GOVERNANCE |
-| 3 | OSPS-BR-01.03 | Repository: Settings, Actions, General (approval for fork pull request workflows); Settings, Environments, `release`; Settings, Secrets and variables, Actions | Workflows of outside contributors wait for approval; `release` deploys only from tags `v*`; `SONAR_TOKEN` is the only repository secret |
-| 4 | OSPS-BR-03.01 | Repository: Settings, Pages | "Enforce HTTPS" is on for the custom domain |
-| 5 | OSPS-VM-02.01 | Repository: Settings, Advanced Security, Private vulnerability reporting | Done on 2026-11-21: the API answers `enabled: true` |
-| 6 | OSPS-AC-04.01 (level 2) | Repository: Settings, Actions, General, Workflow permissions | "Read repository contents and packages permissions" is selected |
+| # | Control | Where in GitHub | What must be true | As read on 2026-11-27 |
+|---|---|---|---|---|
+| 1 | OSPS-AC-01.01 | The maintainer's account: Settings, Password and authentication, Two-factor authentication | Two-factor authentication is on | Could not be read: maintainer to confirm |
+| 2 | OSPS-AC-02.01 | Repository: Settings, Collaborators | No collaborator, or only people named in GOVERNANCE | Met: the owner only |
+| 3 | OSPS-BR-01.03 | Repository: Settings, Actions, General (approval for fork pull request workflows); Settings, Environments, `release`; Settings, Secrets and variables, Actions | Workflows of outside contributors wait for approval; `release` deploys only from tags `v*`; `SONAR_TOKEN` is the only repository secret | Met: approval for `all_external_contributors`; `release` from tags `v*`, with the maintainer as required reviewer; `SONAR_TOKEN` only |
+| 4 | OSPS-BR-03.01 | Repository: Settings, Pages | "Enforce HTTPS" is on | **Not met**: `https_enforced` is `false`, and the site answers over plain HTTP. Maintainer to turn it on |
+| 5 | OSPS-VM-02.01 | Repository: Settings, Advanced Security, Private vulnerability reporting | Private vulnerability reporting is on | Met: `enabled: true` (turned on 2026-11-21) |
+| 6 | OSPS-AC-04.01 (level 2) | Repository: Settings, Actions, General, Workflow permissions | "Read repository contents and packages permissions" is selected | Met: `default_workflow_permissions` is `read` |
 
 ### What level 2 would need
 

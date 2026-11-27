@@ -361,9 +361,9 @@ with `the SQLite file ... is in use by another process`. The process
 that uses the file holds a lease row in it, renewed every 10 seconds
 and removed when it stops; after a crash, a new process can start once
 the lease has ended, at most 30 seconds later.
-There is no tool yet to copy a SQLite file into PostgreSQL; it is
-planned for 1.4 ([TD-59](RISKS_AND_TECHNICAL_DEBTS.md#td-59)). Moving
-to PostgreSQL before then starts from an empty database; see
+No tool copies a SQLite file into PostgreSQL, and none is planned
+(maintainer, 2026-11-27; [TD-59](RISKS_AND_TECHNICAL_DEBTS.md#td-59)).
+Moving to PostgreSQL starts from an empty database; see
 [OPERATING](OPERATING.md#from-sqlite-to-postgresql).
 
 ### Settings of every component
@@ -1603,6 +1603,13 @@ for example only data processors in the EU:
   verified credentials of that type has the claim, as text, and the
   comparison is true; a claim that is missing or not text never grants
   access.
+- **`neq` and `isNoneOf` are not deny lists.** They hold if *one* of
+  the consumer's credentials of the type has another value. A consumer
+  with two credentials of the type, one with the excluded value and one
+  without, meets them, and it chooses what it presents. To keep someone
+  out, revoke its credential at the issuer, or limit the issuer by type
+  ([ADR 0019, "Negative operators are not deny lists"](adr/0019-credential-constraints.md#negative-operators-are-not-deny-lists-r-43);
+  [R-43](RISKS_AND_TECHNICAL_DEBTS.md#r-43)).
 - An EDC participant needs the same mapping, per type, for example:
 
   ```yaml
