@@ -343,12 +343,12 @@ impl NegotiationStore for AnyStore {
     fn get(&self, provider_pid: &str) -> Result<Option<Negotiation>, StoreError> {
         self.0.get(provider_pid)
     }
-    fn requested(
+    fn negotiation_requested_by(
         &self,
         counter_party: &str,
         consumer_pid: &str,
     ) -> Result<Option<Negotiation>, StoreError> {
-        self.0.requested(counter_party, consumer_pid)
+        self.0.negotiation_requested_by(counter_party, consumer_pid)
     }
     fn insert(&self, negotiation: &Negotiation) -> Result<bool, StoreError> {
         let inserted = self.0.insert(negotiation)?;

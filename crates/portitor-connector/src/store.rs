@@ -713,7 +713,7 @@ impl NegotiationStore for ConnectorStore {
         self.query_first(&sql, values![provider_pid], negotiation_from_row)
     }
 
-    fn requested(
+    fn negotiation_requested_by(
         &self,
         counter_party: &str,
         consumer_pid: &str,
@@ -1521,9 +1521,7 @@ mod tests {
         );
         // the one stored first answers a repeated request, and no third
         // row is added
-        let found = TransferStore::requested(&store, "did:web:c", "urn:uuid:c")
-            .unwrap()
-            .unwrap();
+        let found = store.requested("did:web:c", "urn:uuid:c").unwrap().unwrap();
         assert_eq!(found.provider_pid, "urn:uuid:z-first");
         let mut third = found.clone();
         third.provider_pid = "urn:uuid:third".to_owned();
@@ -1567,7 +1565,8 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
-        let found = NegotiationStore::requested(&store, "did:web:c", "urn:uuid:c")
+        let found = store
+            .negotiation_requested_by("did:web:c", "urn:uuid:c")
             .unwrap()
             .unwrap();
         assert_eq!(found.provider_pid, "urn:uuid:z-first");
@@ -1659,7 +1658,8 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
-        let found = NegotiationStore::requested(&store, "did:web:c", "urn:uuid:c")
+        let found = store
+            .negotiation_requested_by("did:web:c", "urn:uuid:c")
             .unwrap()
             .unwrap();
         assert!(
@@ -1684,7 +1684,7 @@ mod tests {
 
     fn a_first_contract_request_is_found_and_added_once_on(store: &ConnectorStore) {
         let first = sample("urn:uuid:p1", NegotiationState::Requested);
-        let found = |party: &str| NegotiationStore::requested(store, party, "urn:uuid:c").unwrap();
+        let found = |party: &str| store.negotiation_requested_by(party, "urn:uuid:c").unwrap();
         assert_eq!(found("did:web:c.example"), None);
         assert!(NegotiationStore::insert(store, &first).unwrap());
         assert_eq!(found("did:web:c.example"), Some(first.clone()));

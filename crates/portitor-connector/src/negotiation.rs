@@ -484,7 +484,11 @@ mod tests {
         fn get(&self, _: &str) -> Result<Option<Negotiation>, StoreError> {
             Err(StoreError("disk I/O error".to_owned()))
         }
-        fn requested(&self, _: &str, _: &str) -> Result<Option<Negotiation>, StoreError> {
+        fn negotiation_requested_by(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<Negotiation>, StoreError> {
             Err(StoreError("disk I/O error".to_owned()))
         }
         fn insert(&self, _: &Negotiation) -> Result<bool, StoreError> {

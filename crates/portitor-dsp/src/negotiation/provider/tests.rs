@@ -24,7 +24,11 @@ impl NegotiationStore for &Store {
     fn get(&self, pid: &str) -> Result<Option<Negotiation>, StoreError> {
         Ok(self.0.borrow().get(pid).cloned())
     }
-    fn requested(&self, party: &str, cpid: &str) -> Result<Option<Negotiation>, StoreError> {
+    fn negotiation_requested_by(
+        &self,
+        party: &str,
+        cpid: &str,
+    ) -> Result<Option<Negotiation>, StoreError> {
         Ok(self
             .0
             .borrow()
@@ -33,7 +37,10 @@ impl NegotiationStore for &Store {
             .cloned())
     }
     fn insert(&self, n: &Negotiation) -> Result<bool, StoreError> {
-        if self.requested(&n.counter_party, &n.consumer_pid)?.is_some() {
+        if self
+            .negotiation_requested_by(&n.counter_party, &n.consumer_pid)?
+            .is_some()
+        {
             return Ok(false);
         }
         self.0
@@ -1106,10 +1113,14 @@ impl NegotiationStore for &Racing<'_> {
     fn get(&self, pid: &str) -> Result<Option<Negotiation>, StoreError> {
         (&self.0).get(pid)
     }
-    fn requested(&self, party: &str, cpid: &str) -> Result<Option<Negotiation>, StoreError> {
+    fn negotiation_requested_by(
+        &self,
+        party: &str,
+        cpid: &str,
+    ) -> Result<Option<Negotiation>, StoreError> {
         // the first lookup comes before the other copy is saved
         if self.1.replace(true) {
-            (&self.0).requested(party, cpid)
+            (&self.0).negotiation_requested_by(party, cpid)
         } else {
             Ok(None)
         }

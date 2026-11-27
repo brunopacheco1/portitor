@@ -58,7 +58,7 @@ impl NegotiationStore for InMemoryNegotiations {
         Ok(self.map().get(provider_pid).cloned())
     }
 
-    fn requested(
+    fn negotiation_requested_by(
         &self,
         counter_party: &str,
         consumer_pid: &str,

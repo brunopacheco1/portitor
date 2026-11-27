@@ -1452,7 +1452,7 @@ to TD-58).
   callback address gets 400. The lookup and the insert are one
   transaction (`SERIALIZABLE` on PostgreSQL), so two replicas that get
   the same repeat at once make one negotiation. Not a UNIQUE index: a
-  1.3 database may already hold repeats. `NegotiationStore::requested`
+  1.3 database may already hold repeats. `NegotiationStore::negotiation_requested_by`
   and `insert` in `portitor-dsp/src/negotiation/provider.rs`.
 - **Next.** The same lookup, with an index on
   `(counter_party, consumer_pid)`, as for transfers since 0.12
