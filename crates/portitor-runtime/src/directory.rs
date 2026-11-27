@@ -17,7 +17,7 @@ use portitor_dcp::DidDocument;
 use serde_json::Value;
 
 use crate::BoxFuture;
-use crate::did::DidWebResolver;
+use crate::did::{DidWebResolver, ResolveError};
 use crate::http::{HttpError, HttpSender, Sender as _};
 use crate::internal_addresses::InternalAddresses;
 use crate::status_lists::StatusListSource;
@@ -27,6 +27,21 @@ use crate::status_lists::StatusListSource;
 pub trait Directory: Send + Sync {
     /// The DID document of `did`.
     fn did_document<'a>(&'a self, did: &'a str) -> BoxFuture<'a, Result<Arc<DidDocument>, String>>;
+
+    /// Like [`Directory::did_document`], and the error says whether
+    /// trying again later may help ([`ResolveError::is_temporary`]). By
+    /// default every failure is final; [`WebDirectory`] tells them apart.
+    fn did_document_or_error<'a>(
+        &'a self,
+        did: &'a str,
+    ) -> BoxFuture<'a, Result<Arc<DidDocument>, ResolveError>> {
+        Box::pin(async move {
+            self.did_document(did).await.map_err(|reason| ResolveError {
+                reason,
+                temporary: false,
+            })
+        })
+    }
 
     /// The JSON document at `url` (an issuer's metadata).
     fn json<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Value, String>>;
@@ -80,6 +95,13 @@ impl Directory for WebDirectory {
             let doc = self.resolver.resolve(did).await?;
             Ok(doc)
         })
+    }
+
+    fn did_document_or_error<'a>(
+        &'a self,
+        did: &'a str,
+    ) -> BoxFuture<'a, Result<Arc<DidDocument>, ResolveError>> {
+        Box::pin(self.resolver.resolve(did))
     }
 
     fn json<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Value, String>> {

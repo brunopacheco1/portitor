@@ -84,6 +84,8 @@ pub struct Identity {
     sts_client_secret: ApiKey,
     store: Arc<dyn IdentityStore>,
     directory: Arc<dyn Directory>,
+    /// DID documents the operator chose ([`Ports::operator_directory`]).
+    operator_directory: Arc<dyn Directory>,
     issuers: Arc<dyn IssuerClient>,
     /// Where the participant's public documents are: its `did:web` URL
     /// without `did.json` ([`gaiax::public_base`]).
@@ -112,8 +114,14 @@ impl std::fmt::Debug for Identity {
 pub struct Ports {
     /// Where credentials, requests and offers are kept.
     pub store: Arc<dyn IdentityStore>,
-    /// Where other parties' DID documents and metadata are read.
+    /// Where other parties' DID documents and metadata are read: with
+    /// the block on internal addresses (R-17).
     pub directory: Arc<dyn Directory>,
+    /// Where DID documents the operator chose are read (the Gaia-X
+    /// compliance service, `PORTITOR_GAIAX_COMPLIANCE_DID`): never with
+    /// the block on internal addresses, as for any URL the operator
+    /// chooses.
+    pub operator_directory: Arc<dyn Directory>,
     /// Where the participant asks issuers for credentials.
     pub issuers: Arc<dyn IssuerClient>,
     /// The Gaia-X compliance service; needed when
@@ -208,6 +216,7 @@ impl Identity {
             sts_client_secret,
             store: ports.store,
             directory: ports.directory,
+            operator_directory: ports.operator_directory,
             issuers: ports.issuers,
             public_base,
             public_path,

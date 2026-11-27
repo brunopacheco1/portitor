@@ -32,9 +32,9 @@ fn checking() -> portitor_identity::config::Config {
     checking_every(60)
 }
 
-/// A config with the status check on, every `seconds`. Every second for
-/// tests that run several rounds: the lists are then not cached between
-/// rounds (`status_check::cache_seconds`).
+/// A config with the status check on, every `seconds`. Each round reads
+/// the lists fresh (`status_check::cache_seconds`), so tests that run
+/// several rounds see what was published between them.
 fn checking_every(seconds: u64) -> portitor_identity::config::Config {
     portitor_identity::config::Config {
         credential_status_check_seconds: seconds,
@@ -186,6 +186,7 @@ async fn a_revoked_credential_is_no_longer_presented() {
             valid: 1,
             revoked: 1,
             suspended: 0,
+            uncheckable: 0,
             unreadable: 0
         }
     );
@@ -292,9 +293,75 @@ async fn a_list_signed_by_another_party_is_not_believed() {
         .lock()
         .unwrap()
         .insert(REVOCATION_LIST.to_owned(), forged);
+    // a verifier refuses such a credential: it is no longer presented,
+    // and the management API says why
     let counts = run_if_due(&world.identity).await.unwrap();
-    assert_eq!(counts.unreadable, 2);
+    assert_eq!(counts.uncheckable, 2);
+    assert_eq!(counts.unreadable, 0);
+    assert_eq!(recorded(&world, &first), Some(HeldStatus::Uncheckable));
+    assert_eq!(recorded(&world, &second), Some(HeldStatus::Uncheckable));
+    assert!(presented(&world).await.is_empty());
+}
+
+/// A list that is gone (HTTP 404) is not a passing failure: the
+/// credential is recorded as uncheckable and no longer presented, also
+/// when it was valid before; once the list is back, it is presented
+/// again.
+#[tokio::test]
+async fn a_credential_whose_list_is_gone_is_no_longer_presented_until_it_is_back() {
+    let world = World::with(&checking_every(1));
+    let (first, second) = with_two_memberships(&world).await;
+    publish(&world, &[], &[]);
+    run_if_due(&world.identity).await.unwrap();
+    assert_eq!(recorded(&world, &first), Some(HeldStatus::Valid));
+
+    // the suspension list is gone
+    world
+        .directory
+        .status_lists
+        .lock()
+        .unwrap()
+        .remove(SUSPENSION_LIST);
+    world
+        .directory
+        .gone_lists
+        .lock()
+        .unwrap()
+        .push(SUSPENSION_LIST.to_owned());
+    end_the_round_lease(&world);
+    let counts = run_if_due(&world.identity).await.unwrap();
+    assert_eq!(counts.uncheckable, 2);
+    assert_eq!(recorded(&world, &first), Some(HeldStatus::Uncheckable));
+    assert!(presented(&world).await.is_empty());
+    // a second round changes nothing
+    end_the_round_lease(&world);
+    let counts = run_if_due(&world.identity).await.unwrap();
+    assert_eq!(counts.uncheckable, 2);
+
+    world.directory.gone_lists.lock().unwrap().clear();
+    publish(&world, &[], &[]);
+    end_the_round_lease(&world);
+    let counts = run_if_due(&world.identity).await.unwrap();
+    assert_eq!(counts.valid, 2);
     assert_eq!(presented(&world).await, sorted(&[&first, &second]));
+}
+
+/// An issuer whose DID document cannot be used (here: none) makes its
+/// credentials uncheckable: the connector's verifier refuses them too.
+#[tokio::test]
+async fn a_credential_whose_issuer_cannot_be_resolved_is_uncheckable() {
+    let world = World::with(&checking());
+    let (first, _second) = with_two_memberships(&world).await;
+    publish(&world, &[], &[]);
+    world
+        .directory
+        .documents
+        .lock()
+        .unwrap()
+        .remove(world.issuer.did);
+    let counts = run_if_due(&world.identity).await.unwrap();
+    assert_eq!(counts.uncheckable, 2);
+    assert_eq!(recorded(&world, &first), Some(HeldStatus::Uncheckable));
 }
 
 #[tokio::test]

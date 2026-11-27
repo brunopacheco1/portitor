@@ -717,8 +717,11 @@ async fn send_and_check(
             answer.issuer, onboarding.compliance_did
         ));
     }
+    // the operator chose this DID: read without the block on internal
+    // addresses, which is for partners' URLs (DEPLOYING, "Internal
+    // addresses")
     let service = identity
-        .directory
+        .operator_directory
         .did_document(&answer.issuer)
         .await
         .map_err(|e| format!("cannot resolve {}: {e}", answer.issuer))?;

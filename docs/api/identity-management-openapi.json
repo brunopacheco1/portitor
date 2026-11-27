@@ -773,7 +773,7 @@
               "string",
               "null"
             ],
-            "description": "What the last check of its status lists found (since 1.4, TD-20):\n`VALID`, `REVOKED` or `SUSPENDED`; null until a check found an\nanswer (`PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS`). A revoked or\nsuspended credential is not presented to verifiers.",
+            "description": "What the last check of its status lists found (since 1.4, TD-20):\n`VALID`, `REVOKED`, `SUSPENDED` or `UNCHECKABLE` (its lists\ncannot be used, and not for a passing reason); null until a check\nfound an answer (`PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS`). Only\na `VALID` (or never checked) credential is presented to verifiers.",
             "example": "VALID"
           },
           "statusCheckedAt": {

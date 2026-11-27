@@ -74,16 +74,25 @@ pub enum HeldStatus {
     /// Portitor does not know; a verifier refuses either): it may come
     /// back when the issuer clears the bit.
     Suspended,
+    /// Its status cannot be checked, and not for a passing reason: a
+    /// list is gone (404), signed by another party, or not a status list
+    /// for it; its issuer's DID document cannot be used; or it has too
+    /// many status entries. A verifier refuses such a credential, and
+    /// the whole presentation with it, as it does a revoked one. It may
+    /// come back when its lists can be read again.
+    Uncheckable,
 }
 
 impl HeldStatus {
-    /// How it is written: `VALID`, `REVOKED` or `SUSPENDED`.
+    /// How it is written: `VALID`, `REVOKED`, `SUSPENDED` or
+    /// `UNCHECKABLE`.
     #[must_use]
     pub fn text(self) -> &'static str {
         match self {
             Self::Valid => "VALID",
             Self::Revoked => "REVOKED",
             Self::Suspended => "SUSPENDED",
+            Self::Uncheckable => "UNCHECKABLE",
         }
     }
 
@@ -92,18 +101,19 @@ impl HeldStatus {
             "VALID" => Ok(Self::Valid),
             "REVOKED" => Ok(Self::Revoked),
             "SUSPENDED" => Ok(Self::Suspended),
+            "UNCHECKABLE" => Ok(Self::Uncheckable),
             other => Err(StoreError(format!("unknown credential status {other}"))),
         }
     }
 
     /// Whether a credential in this state is shown to verifiers: not when
-    /// revoked or suspended, as a verifier would refuse the whole
-    /// presentation (DCP v1.0.1, 5.4.3, step 8).
+    /// revoked, suspended or uncheckable, as a verifier would refuse the
+    /// whole presentation (DCP v1.0.1, 5.4.3, step 8).
     #[must_use]
     pub fn is_presented(self) -> bool {
         match self {
             Self::Valid => true,
-            Self::Revoked | Self::Suspended => false,
+            Self::Revoked | Self::Suspended | Self::Uncheckable => false,
         }
     }
 }
@@ -505,8 +515,8 @@ const SQLITE_MIGRATIONS: &[&str] = &[
         PRIMARY KEY (kind, id)
     )",
     // 1.4: what the last status check of a held credential found (TD-20):
-    // `VALID`, `REVOKED` or `SUSPENDED`, and when, in seconds since 1970;
-    // NULL until a check found an answer
+    // `VALID`, `REVOKED`, `SUSPENDED` or `UNCHECKABLE` (`HeldStatus`), and
+    // when, in seconds since 1970; NULL until a check found an answer
     "ALTER TABLE credential ADD COLUMN status_state TEXT;
     ALTER TABLE credential ADD COLUMN status_checked_at INTEGER",
 ];

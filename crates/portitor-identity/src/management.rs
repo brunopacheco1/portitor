@@ -182,9 +182,10 @@ pub struct CredentialView {
     #[schema(example = "2027-11-13T12:00:00Z")]
     expiry: Option<String>,
     /// What the last check of its status lists found (since 1.4, TD-20):
-    /// `VALID`, `REVOKED` or `SUSPENDED`; null until a check found an
-    /// answer (`PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS`). A revoked or
-    /// suspended credential is not presented to verifiers.
+    /// `VALID`, `REVOKED`, `SUSPENDED` or `UNCHECKABLE` (its lists
+    /// cannot be used, and not for a passing reason); null until a check
+    /// found an answer (`PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS`). Only
+    /// a `VALID` (or never checked) credential is presented to verifiers.
     #[schema(example = "VALID")]
     status: Option<String>,
     /// When that check read its status lists (`xsd:dateTime`, UTC), or

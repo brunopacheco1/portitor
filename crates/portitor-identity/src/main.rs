@@ -74,7 +74,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let did_cache_seconds = portitor_runtime::did::cache_seconds_from_env()?;
     // callers and issuers choose their DID documents and the addresses
     // in them: with the block on internal addresses (R-17). The Gaia-X
-    // compliance service above is the operator's choice: without it
+    // compliance service above and its DID are the operator's choice:
+    // without it
     internal_addresses.log_at_start();
     let directory = Arc::new(WebDirectory::for_partners(
         config.allow_http,
@@ -82,9 +83,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         &internal_addresses,
     )?);
     let issuers = HttpIssuerClient::for_partners(config.allow_http, &internal_addresses)?;
+    // the Gaia-X compliance service's DID is the operator's choice too
+    let operator_directory = Arc::new(WebDirectory::new(config.allow_http, did_cache_seconds)?);
     let ports = Ports {
         store: Arc::new(store),
         directory: Arc::clone(&directory) as _,
+        operator_directory,
         issuers: Arc::new(issuers),
         compliance,
         // the same partner sender as the DID documents (TD-20)
