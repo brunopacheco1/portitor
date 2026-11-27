@@ -840,7 +840,7 @@ impl CallerVerifier for DcpVerifier {
         &'a self,
         caller: &'a Caller,
         scopes: &'a [String],
-    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, String>> {
+    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, VerifyError>> {
         Box::pin(async move {
             // the first query asked for the configured scopes already
             if scopes.iter().all(|scope| self.scopes.contains(scope)) {
@@ -852,8 +852,9 @@ impl CallerVerifier for DcpVerifier {
                     self.more_credentials(caller, scopes),
                 )
                 .await;
-            // this port gives text: any failure means no credentials
-            more.map_err(|error| error.to_string())
+            // the kind is kept: the catalog answers 503 for a failure
+            // that may pass (`credentials_or_unavailable`)
+            more
         })
     }
 

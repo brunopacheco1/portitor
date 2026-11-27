@@ -1222,6 +1222,55 @@ async fn a_membership_is_no_longer_trusted_once_its_issuer_is_limited() {
     assert!(error.to_string().contains("no longer trusted"), "{error}");
 }
 
+/// A membership with a second type is checked again for both, as at
+/// the first check: once its issuer is trusted for memberships only, it
+/// no longer holds (R-48).
+#[tokio::test]
+async fn a_membership_is_checked_again_for_each_of_its_types() {
+    let mut ds = dataspace().await;
+    let trusted = vec![ds.issuer.did.clone()];
+    let both = vec![
+        format!("{}=MembershipCredential", ds.issuer.did),
+        format!("{}=ResearcherCredential", ds.issuer.did),
+    ];
+    ds.verifier.issuer_types = IssuerTypes::parse(&both, &trusted).unwrap();
+    ds.answer_member(
+        &json!({"type": ["VerifiableCredential", "MembershipCredential", "ResearcherCredential"]}),
+    );
+    let caller = ds.verify(&ds.header()).await.unwrap();
+    let membership = caller.memberships[0].clone();
+    assert!(
+        membership
+            .types
+            .contains(&"ResearcherCredential".to_owned())
+    );
+    assert!(
+        ds.verifier
+            .check_membership_again(&membership)
+            .await
+            .is_ok()
+    );
+    let only_memberships = vec![format!("{}=MembershipCredential", ds.issuer.did)];
+    ds.verifier.issuer_types = IssuerTypes::parse(&only_memberships, &trusted).unwrap();
+    let error = ds
+        .verifier
+        .check_membership_again(&membership)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("no longer trusted"), "{error}");
+    // a membership kept before 1.4 (no types) is checked as a membership
+    let before_1_4 = Membership {
+        types: Vec::new(),
+        ..membership
+    };
+    assert!(
+        ds.verifier
+            .check_membership_again(&before_1_4)
+            .await
+            .is_ok()
+    );
+}
+
 #[tokio::test]
 async fn answers_are_bounded() {
     let ds = dataspace().await;
@@ -1392,7 +1441,7 @@ async fn more_credentials_are_asked_for_with_the_callers_access_token() {
     );
     ds.answer(&[ds.presentation(&ds.holder, &[member, revoked])]);
     let err = ds.verifier.credentials(&caller, &extra).await.unwrap_err();
-    assert!(err.contains("revoked"), "{err}");
+    assert!(err.reason().contains("revoked"), "{err}");
 
     // a caller without an access token cannot be asked again
     let anonymous = Caller::new(holder);
@@ -1401,7 +1450,7 @@ async fn more_credentials_are_asked_for_with_the_callers_access_token() {
         .credentials(&anonymous, &extra)
         .await
         .unwrap_err();
-    assert!(err.contains("no access token"), "{err}");
+    assert!(err.reason().contains("no access token"), "{err}");
 }
 
 /// A `gx:LegalPerson` credential (VC 2.0) by `issuer`, as in the 0.8
@@ -1761,6 +1810,35 @@ async fn a_trusted_issuers_legal_person_is_a_dataspace_credential() {
     ds.answer20(&[ds.member20(), about_third]);
     let err = ds.refusal().await;
     assert!(err.contains("not about the caller"), "{err}");
+}
+
+/// A trusted issuer limited by `PORTITOR_TRUSTED_ISSUER_TYPES` cannot be
+/// trusted for `gx:LegalPerson` (a type with `:` cannot be listed), so
+/// its `gx:LegalPerson` goes to the Gaia-X checks
+/// (`takes_gaiax_checks`). There, a legal person that no compliance
+/// credential names is skipped without a fetch, and the caller is not
+/// refused: it keeps only its membership.
+#[tokio::test]
+async fn a_limited_issuers_legal_person_takes_the_gaiax_checks_and_is_skipped() {
+    let mut ds = dataspace().await;
+    let trusted = vec![ds.issuer.did.clone()];
+    let limit = vec![format!("{}=MembershipCredential", ds.issuer.did)];
+    ds.verifier.issuer_types = IssuerTypes::parse(&limit, &trusted).unwrap();
+    // `gx:LegalPerson` cannot be named in the setting
+    let with_prefix = vec![format!("{}=gx:LegalPerson", ds.issuer.did)];
+    assert!(IssuerTypes::parse(&with_prefix, &trusted).is_err());
+
+    let person = Dataspace::credential20(&ds.issuer, "gx:LegalPerson", &ds.holder.did, &json!({}));
+    ds.answer20(&[ds.member20(), person]);
+    let caller = ds.verify(&ds.header()).await.unwrap();
+    assert_eq!(caller.credentials.len(), 1, "{:?}", caller.credentials);
+    assert!(caller.credentials[0].has_type(MEMBERSHIP));
+    // about a third party: skipped all the same, not "not about the caller"
+    let about_third =
+        Dataspace::credential20(&ds.issuer, "gx:LegalPerson", &ds.third.did, &json!({}));
+    ds.answer20(&[ds.member20(), about_third]);
+    let caller = ds.verify(&ds.header()).await.unwrap();
+    assert_eq!(caller.credentials.len(), 1);
 }
 
 /// ADR 0022: the consumer's token and the provider's query carry the same

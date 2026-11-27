@@ -58,6 +58,7 @@ pub fn membership() -> Membership {
         issuer: ISSUER.to_owned(),
         valid_until: None,
         status: Vec::new(),
+        types: Vec::new(),
     }
 }
 
@@ -87,7 +88,7 @@ impl CallerVerifier for NamedCaller {
         &'a self,
         caller: &'a Caller,
         _: &'a [String],
-    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, String>> {
+    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, VerifyError>> {
         Box::pin(async move { Ok(caller.credentials.clone()) })
     }
 
@@ -146,7 +147,7 @@ impl CallerVerifier for Revocable {
         &'a self,
         caller: &'a Caller,
         _: &'a [String],
-    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, String>> {
+    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, VerifyError>> {
         Box::pin(async move { Ok(caller.credentials.clone()) })
     }
 

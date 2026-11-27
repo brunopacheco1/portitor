@@ -11,8 +11,8 @@
 //!   every credential check of the verifier.
 //! - [`DcpVerifier::check_membership_again`]: a `MembershipCredential`
 //!   the caller presented when it started a transfer, checked again
-//!   without the caller: its issuer is still trusted (for memberships,
-//!   R-48), it has not expired, and none of its status bits is set. The data plane runs it on every
+//!   without the caller: its issuer is still trusted (for each of its
+//!   types, R-48), it has not expired, and none of its status bits is set. The data plane runs it on every
 //!   `/data` request, while a download runs, and around a push
 //!   ([`CallerVerifier::check_membership`](super::CallerVerifier::check_membership)).
 //!   The signature and the holder binding are not checked again: they
@@ -46,13 +46,14 @@ pub fn recheck_interval(cache_seconds: u64) -> Duration {
 
 /// What is kept of a verified `MembershipCredential`: its issuer, the end
 /// of its validity (the earlier of its stated end and its JWT's `exp`),
-/// and its status entries.
+/// its status entries and its types.
 #[must_use]
 pub fn of(credential: &Credential) -> Membership {
     Membership {
         issuer: credential.issuer.clone(),
         valid_until: credential.validity.until,
         status: credential.status.clone(),
+        types: credential.types.clone(),
     }
 }
 
@@ -69,11 +70,18 @@ impl DcpVerifier {
         membership: &Membership,
     ) -> Result<(), VerifyError> {
         let issuer = &membership.issuer;
-        // still trusted, and for memberships: the settings may have
-        // changed since (PORTITOR_TRUSTED_ISSUER_TYPES, R-48)
-        let membership_types = [MEMBERSHIP.to_owned()];
-        let trusted = self.trusted_issuers.contains(issuer)
-            && self.issuer_types.allows(issuer, &membership_types);
+        // still trusted, for every type of the credential as at the first
+        // check: the settings may have changed since
+        // (PORTITOR_TRUSTED_ISSUER_TYPES, R-48). A membership kept before
+        // 1.4 has no types: `MembershipCredential` then
+        let kept_before_1_4 = [MEMBERSHIP.to_owned()];
+        let types: &[String] = if membership.types.is_empty() {
+            &kept_before_1_4
+        } else {
+            &membership.types
+        };
+        let trusted =
+            self.trusted_issuers.contains(issuer) && self.issuer_types.allows(issuer, types);
         if !trusted {
             return Err(VerifyError::Rejected(format!(
                 "the membership's issuer {issuer} is no longer trusted"

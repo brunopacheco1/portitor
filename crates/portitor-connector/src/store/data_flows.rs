@@ -263,6 +263,10 @@ mod tests {
             issuer: "did:web:issuer.example".to_owned(),
             valid_until: Some(1_900_000_000),
             status: vec![entry],
+            types: vec![
+                "VerifiableCredential".to_owned(),
+                "MembershipCredential".to_owned(),
+            ],
         }];
         store.keep_memberships("f1", &kept).unwrap();
         store.keep_memberships("f1", &[]).unwrap();

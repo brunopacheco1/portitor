@@ -288,7 +288,7 @@ impl CallerVerifier for TckVerifier {
         &'a self,
         caller: &'a Caller,
         scopes: &'a [String],
-    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, String>> {
+    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, VerifyError>> {
         if caller.id == TCK_PARTICIPANT {
             return Box::pin(async { Ok(Vec::new()) });
         }

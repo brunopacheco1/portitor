@@ -104,6 +104,7 @@ struct FakeCredentialService {
     wallets: Wallets,
     queries: Queries,
     unreachable: Arc<AtomicBool>,
+    refusing: Arc<AtomicBool>,
 }
 
 impl CallerVerifier for FakeCredentialService {
@@ -129,13 +130,18 @@ impl CallerVerifier for FakeCredentialService {
         &'a self,
         caller: &'a Caller,
         scopes: &'a [String],
-    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, String>> {
+    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, VerifyError>> {
         Box::pin(async move {
             let mut asked = vec![MEMBERSHIP_SCOPE.to_owned()];
             asked.extend(scopes.iter().cloned());
             self.queries.lock().unwrap().push(asked.clone());
             if self.unreachable.load(Ordering::SeqCst) {
-                return Err("presentation query: no answer within 10s".to_owned());
+                return Err(VerifyError::Unavailable(
+                    "presentation query: no answer within 10s".to_owned(),
+                ));
+            }
+            if self.refusing.load(Ordering::SeqCst) {
+                return Err(VerifyError::from("presentation query: HTTP 403 Forbidden"));
             }
             let granted = caller.access_token().ok_or("no access token")?;
             Ok(present(&self.wallets, &caller.id, &asked, granted))
@@ -208,6 +214,9 @@ struct Fakes {
     wallets: Wallets,
     queries: Queries,
     unreachable: Arc<AtomicBool>,
+    /// While set, asking a caller for more credentials is refused (a
+    /// final answer, not one to try again).
+    refusing: Arc<AtomicBool>,
     grants: Grants,
 }
 
@@ -226,6 +235,7 @@ fn fake_ports(network: &Arc<Network>, did: &str, fakes: &Fakes) -> Ports {
         wallets: Arc::clone(&fakes.wallets),
         queries: Arc::clone(&fakes.queries),
         unreachable: Arc::clone(&fakes.unreachable),
+        refusing: Arc::clone(&fakes.refusing),
     });
     ports.prover = Arc::new(FakeSts {
         did: did.to_owned(),
@@ -541,6 +551,72 @@ async fn the_catalog_shows_a_dataset_only_to_callers_its_access_policy_holds_for
                 .await
                 .is_ok()
         );
+    }
+}
+
+/// A catalog or dataset request whose second query fails: when it
+/// failed for good, the credentials of the first check (on the HTTP
+/// edge) are used, so a dataset whose access policy only needs the
+/// membership is still shown; when the caller's credential service did
+/// not answer, the answer is 503 with a `CatalogError` (DSP 2025-1,
+/// "Catalog HTTPS Binding", "Catalog Error"), so the caller tries again
+/// rather than see a catalog with datasets missing.
+#[tokio::test]
+async fn a_failed_second_query_keeps_the_first_credentials_or_answers_503() {
+    let network = Arc::new(Network::default());
+    let fakes = Fakes::default();
+    let membership = credential(MEMBERSHIP, &json!({"level": "full"}));
+    fakes
+        .wallets
+        .lock()
+        .unwrap()
+        .insert(CONSUMER_DID.to_owned(), vec![membership]);
+    let mut members = reports();
+    members["@id"] = json!("members");
+    members["hasPolicy"] = json!([{"@id": "members:use", "@type": "Offer",
+        "permission": [{"action": "use"}]}]);
+    members["portitor:accessPolicy"] = json!({"permission": [{"action": "use",
+        "constraint": [{"leftOperand": "MembershipCredential.level",
+            "operator": "eq", "rightOperand": "full"}]}]});
+    let mut provider_ports = fake_ports(&network, PROVIDER_DID, &fakes);
+    provider_ports.harvest.source = Some(Arc::new(FixedSource::new(vec![members])));
+    let (provider_app, provider) =
+        portitor_connector::build(&config(PROVIDER_DID, PROVIDER), provider_ports).unwrap();
+    assert_eq!(provider.catalog_size().unwrap(), 1);
+    network.join(PROVIDER, provider_app);
+    let request = json!({
+        "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+        "@type": "CatalogRequestMessage"
+    });
+    let header = format!("Bearer {CONSUMER_DID}|{MEMBERSHIP_SCOPE}");
+    let catalog_url = format!("{PROVIDER}{DSP}/catalog/request");
+    let dataset_url = format!("{PROVIDER}{DSP}/catalog/datasets/members");
+
+    // refused for good: the membership of the first check still counts
+    fakes.refusing.store(true, Ordering::SeqCst);
+    let before = fakes.queries.lock().unwrap().len();
+    let catalog = network
+        .post_authorized(&catalog_url, &request, &header)
+        .await
+        .unwrap();
+    assert!(fakes.queries.lock().unwrap().len() > before, "it was asked");
+    assert_eq!(catalog["dataset"][0]["@id"], "members", "{catalog}");
+    let dataset = network.get_authorized(&dataset_url, &header).await;
+    assert_eq!(dataset.unwrap()["@id"], "members");
+    fakes.refusing.store(false, Ordering::SeqCst);
+
+    // no answer: 503, a CatalogError, no reason
+    fakes.unreachable.store(true, Ordering::SeqCst);
+    for answer in [
+        network
+            .post_authorized(&catalog_url, &request, &header)
+            .await,
+        network.get_authorized(&dataset_url, &header).await,
+    ] {
+        let error = answer.unwrap_err();
+        assert!(error.starts_with("503"), "{error}");
+        assert!(error.contains("CatalogError"), "{error}");
+        assert!(!error.contains("10s"), "{error}");
     }
 }
 

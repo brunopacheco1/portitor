@@ -1118,7 +1118,10 @@ async fn catalog_request(
         Ok(scopes) => scopes,
         Err(e) => return respond::<()>(Outcome::StoreFailed(e)),
     };
-    let credentials = caller_credentials(&s, &caller, &scopes).await;
+    let credentials = match caller_credentials(&s, &caller, &scopes).await {
+        Ok(credentials) => credentials,
+        Err(answer) => return answer,
+    };
     let now = system::xsd_date_time(system::now_secs());
     let requester = Requester {
         now: &now,
@@ -1138,7 +1141,10 @@ async fn dataset(
         Ok(scopes) => scopes,
         Err(e) => return respond::<()>(Outcome::StoreFailed(e)),
     };
-    let credentials = caller_credentials(&s, &caller, &scopes).await;
+    let credentials = match caller_credentials(&s, &caller, &scopes).await {
+        Ok(credentials) => credentials,
+        Err(answer) => return answer,
+    };
     let now = system::xsd_date_time(system::now_secs());
     let requester = Requester {
         now: &now,
@@ -1149,11 +1155,34 @@ async fn dataset(
 
 /// The caller's credentials for `scopes`: those of the access policies.
 /// Without scopes, none are asked for (the credentials checked on the
-/// HTTP edge are used).
+/// HTTP edge are used); when the query is refused, those are used too
+/// ([`auth::credentials_or_unavailable`]).
+///
+/// # Errors
+///
+/// The answer when the query could not be made now (the caller's
+/// credential service did not answer, or answered 408, 429 or 5xx): HTTP
+/// 503 with a `CatalogError`, as DSP 2025-1, "Catalog HTTPS Binding",
+/// "Catalog Error" asks ("an appropriate HTTP code and a Catalog Error in
+/// the response body"). A partner may try again later, and no dataset is
+/// hidden because a service was down. No reason: it would tell the caller
+/// which service failed (as `auth::require_caller`'s 503).
 async fn caller_credentials(
     s: &AppState,
     caller: &auth::Caller,
     scopes: &[String],
-) -> portitor_dsp::policy::CallerCredentials {
-    auth::credentials_for(&*s.verifier, &s.credential_types, caller, scopes).await
+) -> Result<portitor_dsp::policy::CallerCredentials, Response> {
+    let read =
+        auth::credentials_or_unavailable(&*s.verifier, &s.credential_types, caller, scopes).await;
+    match read {
+        Ok(credentials) => Ok(credentials),
+        Err(reason) => {
+            tracing::warn!(caller = %caller.id, %reason, "catalog: the caller's credentials could not be read now; answered 503");
+            let error = CatalogError::new(
+                "503",
+                "the caller's credentials cannot be read now; try again later",
+            );
+            Err((StatusCode::SERVICE_UNAVAILABLE, Json(error)).into_response())
+        }
+    }
 }

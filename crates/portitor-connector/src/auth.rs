@@ -107,6 +107,12 @@ pub struct Membership {
     /// suspension bits are.
     #[serde(default)]
     pub status: Vec<StatusEntry>,
+    /// Its types (`MembershipCredential` and any other), so the check
+    /// again asks whether the issuer is still trusted for each of them, as
+    /// the first check did (`PORTITOR_TRUSTED_ISSUER_TYPES`, R-48). Empty
+    /// for a membership kept before 1.4: then `MembershipCredential` only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub types: Vec<String>,
 }
 
 /// How often a running download is checked again by default: once a
@@ -308,13 +314,14 @@ pub trait CallerVerifier: Send + Sync {
     ///
     /// # Errors
     ///
-    /// The query failed or a credential did not pass the checks. The text
-    /// goes to the log.
+    /// The query could not be made now ([`VerifyError::Unavailable`]: no
+    /// answer, 408, 429 or 5xx), or failed for another reason or a
+    /// credential did not pass the checks ([`VerifyError::Rejected`]).
     fn credentials<'a>(
         &'a self,
         caller: &'a Caller,
         scopes: &'a [String],
-    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, String>>;
+    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, VerifyError>>;
 
     /// Checks `membership` again, without the caller: its issuer is
     /// still trusted, it has not expired, and no status bit is set (ADR
@@ -367,29 +374,61 @@ pub trait Prover: Send + Sync {
 /// the configured `types`, and the caller's verified credentials for
 /// `scopes`, the scopes that policy needs ([`portitor_dsp::policy::credential_scopes`]).
 /// Without scopes, the credentials of the check on the HTTP edge. A query
-/// that fails gives no credentials, so every credential constraint fails
-/// (closed); the reason goes to the log.
+/// that fails, for any reason, gives the credentials of the check on the
+/// HTTP edge, which were verified already: a constraint on a type they
+/// do not hold fails (closed); the reason goes to the log. For the
+/// negotiation and transfer routes, whose answer to a failure is the
+/// termination of the process.
 pub async fn credentials_for(
     verifier: &dyn CallerVerifier,
     types: &CredentialTypes,
     caller: &Caller,
     scopes: &[String],
 ) -> CallerCredentials {
+    match credentials_or_unavailable(verifier, types, caller, scopes).await {
+        Ok(credentials) => credentials,
+        Err(reason) => {
+            tracing::warn!(caller = %caller.id, %reason, "the caller's credentials for a policy could not be read now; those of its first check are used");
+            CallerCredentials {
+                understood: types.clone(),
+                held: caller.credentials.clone(),
+            }
+        }
+    }
+}
+
+/// As [`credentials_for`], but a query that could not be made now (no
+/// answer, 408, 429 or 5xx: [`VerifyError::Unavailable`]) is an error, so
+/// that the caller can be told to try again (the catalog routes answer
+/// 503). A query refused for another reason gives the credentials of the
+/// check on the HTTP edge, as in [`credentials_for`].
+///
+/// # Errors
+///
+/// The reason the query could not be made now, for the log.
+pub async fn credentials_or_unavailable(
+    verifier: &dyn CallerVerifier,
+    types: &CredentialTypes,
+    caller: &Caller,
+    scopes: &[String],
+) -> Result<CallerCredentials, String> {
     let held = if scopes.is_empty() {
         caller.credentials.clone()
     } else {
         match verifier.credentials(caller, scopes).await {
             Ok(held) => held,
-            Err(reason) => {
-                tracing::warn!(caller = %caller.id, %reason, "the caller's credentials for a policy could not be read");
-                Vec::new()
+            Err(VerifyError::Unavailable(reason)) => return Err(reason),
+            Err(error) => {
+                let reason = error.reason();
+                tracing::warn!(caller = %caller.id, %reason, "the caller's credentials for a policy could not be read; those of its first check are used");
+                caller.credentials.clone()
             }
         }
     };
-    CallerCredentials {
+    Ok(CallerCredentials {
         understood: types.clone(),
         held,
-    }
+    })
 }
 
 /// Adapter: refuses every caller. What [`crate::Ports::new`] starts with,
@@ -406,8 +445,8 @@ impl CallerVerifier for RefuseAll {
         &'a self,
         _: &'a Caller,
         _: &'a [String],
-    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, String>> {
-        Box::pin(async { Err("no caller verifier configured".to_owned()) })
+    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, VerifyError>> {
+        Box::pin(async { Err(VerifyError::from("no caller verifier configured")) })
     }
 }
 
@@ -1551,7 +1590,7 @@ mod tests {
                 &'a self,
                 _: &'a Caller,
                 _: &'a [String],
-            ) -> BoxFuture<'a, Result<Vec<HeldCredential>, String>> {
+            ) -> BoxFuture<'a, Result<Vec<HeldCredential>, VerifyError>> {
                 Box::pin(async { Ok(Vec::new()) })
             }
         }

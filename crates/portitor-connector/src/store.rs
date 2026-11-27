@@ -1526,14 +1526,18 @@ mod tests {
         assert!(!TransferStore::insert(&store, &third).unwrap());
     }
 
-    /// A database of 1.3 may hold two negotiations for one repeated first
-    /// contract request (TD-60). The 1.4 migration must still apply: it
-    /// adds the lookup index and keeps both rows; the first one answers.
+    /// A database from before the index `negotiation_request` (1.3, with
+    /// the other 1.4 migrations applied too) may hold two negotiations for
+    /// one repeated first contract request (TD-60). The index migration
+    /// must still apply: it adds the lookup index and keeps both rows; the
+    /// first one answers.
     #[test]
     fn a_file_with_a_repeated_first_contract_request_still_opens() {
         let mut conn = Connection::open_in_memory().unwrap();
-        let before_1_4 = SQLITE_MIGRATIONS.len() - 1;
-        portitor_runtime::sqlite::migrate(&mut conn, &SQLITE_MIGRATIONS[..before_1_4]).unwrap();
+        // every migration but the last, which adds the index
+        let before_the_index = SQLITE_MIGRATIONS.len() - 1;
+        portitor_runtime::sqlite::migrate(&mut conn, &SQLITE_MIGRATIONS[..before_the_index])
+            .unwrap();
         for provider_pid in ["urn:uuid:z-first", "urn:uuid:a-second"] {
             conn.execute(
                 "INSERT INTO negotiation (provider_pid, consumer_pid, state, callback_address, \
