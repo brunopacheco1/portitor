@@ -31,6 +31,11 @@ setting and file format still works, and every new setting is optional
   loopback, private and link-local addresses in URLs a partner chooses
   ([R-17](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-17),
   [DEPLOYING](docs/DEPLOYING.md#internal-addresses)).
+- Issuer management route `PUT /v1/participants/{did}`: replaces a
+  registered participant's claims without deleting the registration;
+  issued credentials keep theirs, a request decided from then on gets
+  the new ones ([TD-46](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-46),
+  [DEPLOYING](docs/DEPLOYING.md#registering-participants-and-issuing)).
 
 ### Changed
 

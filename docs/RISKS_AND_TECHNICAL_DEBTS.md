@@ -143,7 +143,7 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | Mitigated | 1.4 |
 | [TD-40](#td-40) | Database calls block the async runtime | Technical debt | Accepted | 1.12 |
 | [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | Open | 1.7 |
-| [TD-46](#td-46) | The issuer keeps one set of claims per participant | Technical debt | Open | 1.4 |
+| [TD-46](#td-46) | The issuer keeps one set of claims per participant | Technical debt | Open | in progress, 1.4 |
 | [TD-47](#td-47) | A transfer stays REQUESTED when its provider is revoked | Technical debt | Open | 1.4 |
 | [TD-49](#td-49) | After a failed message, the two parties of a negotiation can stay in different states | Technical debt, interoperability | Accepted | none |
 | [TD-59](#td-59) | SQLite is deprecated; no tool yet to copy a SQLite file into PostgreSQL | Technical debt | Accepted | the copy tool: 1.4; removal: 2.0 |
@@ -1318,11 +1318,14 @@ to TD-58).
   (maintainer, 2026-11-24), each with its own id and purpose. Deleting
   and registering again leaves a moment when the participant is not
   registered, and a request it made then ends `REJECTED`.
-- **Current state: Open.**
-- **Next.** Claims per credential request, or per issued credential,
-  in ROADMAP 1.4, with the data permit (maintainer, 2026-11-24). Check
-  first how EDC's
-  Issuer Service (attestations) and the EHDS permit template do it.
+- **Current state: Open; in progress, 1.4: built.**
+- **Next.** 1.4 adds `PUT /v1/participants/{did}` to the issuer's
+  management API, as EDC's Issuer Service changes a holder with `PUT`:
+  it replaces the claims in one statement, and the participant stays
+  registered. Issued credentials keep their claims; a request decided
+  from then on gets the new ones. The data-permits scenario, step 3,
+  uses it. Claims per credential request are not built: a second
+  permit still means new claims, then a new request.
 
 <a id="td-47"></a>
 ### TD-47 A transfer stays REQUESTED when its provider is revoked

@@ -615,7 +615,9 @@ check (`GET /api/check/readiness` on the management port) answers HTTP
 2. Give participants the issuer's DID; each adds it to
    `PORTITOR_TRUSTED_ISSUERS` (identity and connector) and asks for its
    credentials (or you send it an offer).
-3. When a participant leaves, revoke its credentials. Revocation cannot
+3. When what you say about a participant changes, replace its claims
+   (`PUT`, below) and let it ask again; revoke what no longer holds.
+4. When a participant leaves, revoke its credentials. Revocation cannot
    be undone.
 
 Management API (`Authorization: Bearer <key>`; described in
@@ -625,6 +627,7 @@ Management API (`Authorization: Bearer <key>`; described in
 |---|---|
 | `POST /v1/participants` `{"did": ..., "claims": {...}}` | registers a participant (409 if registered) |
 | `GET /v1/participants` | lists them |
+| `PUT /v1/participants/{did}` `{"claims": {...}}` | since 1.4: replaces all of a participant's claims (404 if not registered); it stays registered. Issued credentials keep their claims; a request decided from now on gets the new ones |
 | `DELETE /v1/participants/{did}` | removes a registration (the DID percent-encoded as a whole, for example `jq -rR @uri`); issued credentials stay valid until revoked |
 | `POST /v1/offers` `{"participantDid": ..., "credentialIds": [...]}` | sends a `CredentialOfferMessage` to the participant's credential service |
 | `GET /v1/credentials?holder={did}` | lists issued credentials, with their delivery state (`PENDING`, `DELIVERED`, `FAILED`) |

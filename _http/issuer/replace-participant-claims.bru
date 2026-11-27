@@ -1,0 +1,35 @@
+meta {
+  name: Replace participant claims
+  type: http
+  seq: 8
+}
+
+put {
+  url: {{issuerMgmtUrl}}/v1/participants/did%3Aweb%3Abruno.example
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "claims": {
+      "memberOf": "Portitor interop dataspace, second term"
+    }
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.claims.memberOf: eq Portitor interop dataspace, second term
+}
+
+docs {
+  Replaces all the claims of the participant that "Register participant" made (since
+  1.4, TD-46); it stays registered all along. Credentials issued already keep their
+  claims; a request decided from now on gets the new ones. The DID is one path segment,
+  percent-encoded as a whole. 404 when it is not registered, 400 for a claim named id.
+}
