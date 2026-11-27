@@ -75,6 +75,23 @@ setting and file format still works, and every new setting is optional
 
 ### Fixed
 
+- The identity reads the status lists of the credentials it holds
+  every `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS` and no longer
+  presents a revoked or suspended one; a lifted suspension presents it
+  again, and a list that cannot be read keeps the last status. So a
+  revoked credential need not be deleted by hand any more. One replica
+  runs each round, under the lease `job`/`credential_status_check`.
+  `GET /v1/credentials` of its management API shows `status` and
+  `statusCheckedAt`. A database migration adds the columns
+  `credential.status_state` and `credential.status_checked_at`. The
+  status list reading and its cache moved from the connector to
+  `portitor-runtime` (`status_lists.rs`), unchanged
+  ([TD-20](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-20),
+  [DEPLOYING](docs/DEPLOYING.md#getting-a-credential)).
+- data-permits scenario, step 4: the transfer under the second permit
+  works once Schuman's identity has checked, without deleting the
+  revoked permit; the one under the revoked permit is still refused.
+
 ### Documentation
 
 - The SQLite to PostgreSQL copy tool announced for 1.4 is dropped

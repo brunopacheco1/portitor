@@ -32,6 +32,7 @@ pub mod retry;
 pub mod serve;
 pub mod settings;
 pub mod sqlite;
+pub mod status_lists;
 pub mod system;
 pub mod telemetry;
 #[cfg(any(test, feature = "test-support"))]

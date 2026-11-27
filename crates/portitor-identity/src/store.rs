@@ -29,10 +29,14 @@ impl From<DbError> for StoreError {
     }
 }
 
-/// The columns of a stored credential, in the order of
-/// [`credential_from`]'s reads and of the `INSERT` in
-/// [`insert_credential`].
+/// The columns of a stored credential as received, in the order of
+/// the `INSERT` in [`insert_credential`].
 const CREDENTIAL_COLUMNS: &str = "id, issuer, types, profile, expires_at, holder_pid, jwt";
+
+/// The columns [`credential_from`] reads, in its order: those received,
+/// then its recorded status (1.4, TD-20).
+const CREDENTIAL_READ_COLUMNS: &str =
+    "id, issuer, types, profile, expires_at, holder_pid, jwt, status_state, status_checked_at";
 
 /// A credential the participant holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +55,66 @@ pub struct StoredCredential {
     pub holder_pid: String,
     /// The credential as received (a JWT).
     pub jwt: String,
+    /// What the last check of its status lists found, and when (1.4,
+    /// TD-20); none until one found an answer. Written only by
+    /// [`IdentityStore::record_credential_status`]; ignored when a
+    /// credential is stored.
+    pub status: Option<CheckedStatus>,
+}
+
+/// What the status lists of a held credential say (TD-20). A credential
+/// without status entries is [`HeldStatus::Valid`] once checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeldStatus {
+    /// No status bit is set.
+    Valid,
+    /// Its bit in a `revocation` list is set: it ends for good.
+    Revoked,
+    /// Its bit in another list is set (`suspension`, or a purpose
+    /// Portitor does not know; a verifier refuses either): it may come
+    /// back when the issuer clears the bit.
+    Suspended,
+}
+
+impl HeldStatus {
+    /// How it is written: `VALID`, `REVOKED` or `SUSPENDED`.
+    #[must_use]
+    pub fn text(self) -> &'static str {
+        match self {
+            Self::Valid => "VALID",
+            Self::Revoked => "REVOKED",
+            Self::Suspended => "SUSPENDED",
+        }
+    }
+
+    fn from_text(text: &str) -> Result<Self, StoreError> {
+        match text {
+            "VALID" => Ok(Self::Valid),
+            "REVOKED" => Ok(Self::Revoked),
+            "SUSPENDED" => Ok(Self::Suspended),
+            other => Err(StoreError(format!("unknown credential status {other}"))),
+        }
+    }
+
+    /// Whether a credential in this state is shown to verifiers: not when
+    /// revoked or suspended, as a verifier would refuse the whole
+    /// presentation (DCP v1.0.1, 5.4.3, step 8).
+    #[must_use]
+    pub fn is_presented(self) -> bool {
+        match self {
+            Self::Valid => true,
+            Self::Revoked | Self::Suspended => false,
+        }
+    }
+}
+
+/// A recorded status check of a held credential.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CheckedStatus {
+    /// What the status lists said.
+    pub state: HeldStatus,
+    /// When they were read, seconds since 1970.
+    pub checked_at: u64,
 }
 
 /// Where a credential request stands. Only a request that is still
@@ -247,6 +311,20 @@ pub trait IdentityStore: UsedTokenStore + LeaseStore + Send + Sync {
     /// The store fails.
     fn delete_credential(&self, id: &str) -> Result<bool, StoreError>;
 
+    /// Records what the status lists of credential `id` said (TD-20),
+    /// if it is still the credential `jwt`: one replaced or deleted
+    /// while its lists were read is left alone. Returns whether it was
+    /// recorded.
+    ///
+    /// # Errors
+    /// The store fails.
+    fn record_credential_status(
+        &self,
+        id: &str,
+        jwt: &str,
+        status: CheckedStatus,
+    ) -> Result<bool, StoreError>;
+
     /// Records offered credentials. An offer of the same credential id by
     /// the same issuer replaces the earlier one, so a repeated offer
     /// changes nothing.
@@ -426,6 +504,11 @@ const SQLITE_MIGRATIONS: &[&str] = &[
         lease_until  INTEGER NOT NULL,
         PRIMARY KEY (kind, id)
     )",
+    // 1.4: what the last status check of a held credential found (TD-20):
+    // `VALID`, `REVOKED` or `SUSPENDED`, and when, in seconds since 1970;
+    // NULL until a check found an answer
+    "ALTER TABLE credential ADD COLUMN status_state TEXT;
+    ALTER TABLE credential ADD COLUMN status_checked_at INTEGER",
 ];
 
 /// The PostgreSQL schema migrations, since 1.3. The first one is the
@@ -483,6 +566,10 @@ const POSTGRES_MIGRATIONS: &[&str] = &[
         lease_until  BIGINT NOT NULL,
         PRIMARY KEY (kind, id)
     )",
+    // 1.4: the credential's last status check, as the SQLite migration of
+    // the same name (TD-20)
+    "ALTER TABLE credential ADD COLUMN status_state TEXT;
+    ALTER TABLE credential ADD COLUMN status_checked_at BIGINT",
 ];
 
 /// The identity component's schema, for both databases.
@@ -623,7 +710,7 @@ impl IdentityStore for DatabaseStore {
 
     fn credentials(&self) -> Result<Vec<StoredCredential>, StoreError> {
         let rows = self.db().query(
-            &format!("SELECT {CREDENTIAL_COLUMNS} FROM credential ORDER BY id"),
+            &format!("SELECT {CREDENTIAL_READ_COLUMNS} FROM credential ORDER BY id"),
             values![],
         )?;
         rows.iter().map(credential_from).collect()
@@ -634,6 +721,22 @@ impl IdentityStore for DatabaseStore {
             .db()
             .execute("DELETE FROM credential WHERE id = $1", values![id])?;
         Ok(deleted == 1)
+    }
+
+    fn record_credential_status(
+        &self,
+        id: &str,
+        jwt: &str,
+        status: CheckedStatus,
+    ) -> Result<bool, StoreError> {
+        // one statement, guarded by the JWT: a credential replaced since
+        // its lists were read is not given the old one's status
+        let recorded = self.db().execute(
+            "UPDATE credential SET status_state = $3, status_checked_at = $4
+                 WHERE id = $1 AND jwt = $2",
+            values![id, jwt, status.state.text(), to_db_int(status.checked_at)],
+        )?;
+        Ok(recorded == 1)
     }
 
     fn record_offer(
@@ -785,7 +888,11 @@ fn insert_credential(tx: &dyn Executor, credential: &StoredCredential) -> Result
              VALUES ($1, $2, $3, $4, $5, $6, $7)
              ON CONFLICT (id) DO UPDATE SET types = excluded.types,
                  profile = excluded.profile, expires_at = excluded.expires_at,
-                 holder_pid = excluded.holder_pid, jwt = excluded.jwt
+                 holder_pid = excluded.holder_pid, jwt = excluded.jwt,
+                 status_state = CASE WHEN credential.jwt = excluded.jwt
+                     THEN credential.status_state END,
+                 status_checked_at = CASE WHEN credential.jwt = excluded.jwt
+                     THEN credential.status_checked_at END
              WHERE credential.issuer = excluded.issuer"
         ),
         values![
@@ -836,11 +943,21 @@ fn request_from(row: &Row) -> Result<CredentialRequest, StoreError> {
     })
 }
 
-/// A stored credential from a row with the [`CREDENTIAL_COLUMNS`], in
-/// their order.
+/// A stored credential from a row with the [`CREDENTIAL_READ_COLUMNS`],
+/// in their order.
 fn credential_from(row: &Row) -> Result<StoredCredential, StoreError> {
     let types: String = row.get(2)?;
     let profile: String = row.get(3)?;
+    let state: Option<String> = row.get(7)?;
+    let checked_at: Option<i64> = row.get(8)?;
+    // both are written together; none before the first check
+    let status = match (state, checked_at) {
+        (Some(state), Some(checked_at)) => Some(CheckedStatus {
+            state: HeldStatus::from_text(&state)?,
+            checked_at: from_db_int(checked_at),
+        }),
+        _ => None,
+    };
     Ok(StoredCredential {
         id: row.get(0)?,
         issuer: row.get(1)?,
@@ -850,6 +967,7 @@ fn credential_from(row: &Row) -> Result<StoredCredential, StoreError> {
         expires_at: row.get(4)?,
         holder_pid: row.get(5)?,
         jwt: row.get(6)?,
+        status,
     })
 }
 
@@ -881,6 +999,7 @@ mod tests {
             expires_at: Some(2_000_000_000),
             holder_pid: "h-1".to_owned(),
             jwt: "a.b.c".to_owned(),
+            status: None,
         }
     }
 
@@ -1091,6 +1210,75 @@ mod tests {
     fn on_every_database() {
         for db in databases::all(&MIGRATIONS) {
             check(&DatabaseStore::new(Arc::new(db)));
+        }
+    }
+
+    /// A credential's recorded status (TD-20): written for the JWT that
+    /// was checked only, kept when the same JWT is stored again, cleared
+    /// when another JWT replaces it.
+    #[test]
+    fn a_status_is_recorded_for_the_credential_that_was_checked() {
+        for db in databases::all(&MIGRATIONS) {
+            let store: &dyn IdentityStore = &DatabaseStore::new(Arc::new(db));
+            let issuer = "did:web:issuer.example";
+            store.add_request(&request("h-1")).unwrap();
+            store
+                .deliver(
+                    "h-1",
+                    answer("i-1", RequestStatus::Issued),
+                    &[credential("c-1", issuer)],
+                )
+                .unwrap();
+            assert_eq!(store.credentials().unwrap()[0].status, None);
+
+            let revoked = CheckedStatus {
+                state: HeldStatus::Revoked,
+                checked_at: 100,
+            };
+            assert!(
+                store
+                    .record_credential_status("c-1", "a.b.c", revoked)
+                    .unwrap()
+            );
+            assert_eq!(store.credentials().unwrap()[0].status, Some(revoked));
+            // another JWT (the credential was replaced meanwhile): not
+            // recorded; an unknown id neither
+            let valid = CheckedStatus {
+                state: HeldStatus::Valid,
+                checked_at: 200,
+            };
+            assert!(
+                !store
+                    .record_credential_status("c-1", "x.y.z", valid)
+                    .unwrap()
+            );
+            assert!(
+                !store
+                    .record_credential_status("c-9", "a.b.c", valid)
+                    .unwrap()
+            );
+            assert_eq!(store.credentials().unwrap()[0].status, Some(revoked));
+
+            // stored again with the same JWT: the status stays
+            store.add_request(&request("h-2")).unwrap();
+            store
+                .deliver(
+                    "h-2",
+                    answer("i-2", RequestStatus::Issued),
+                    &[credential("c-1", issuer)],
+                )
+                .unwrap();
+            assert_eq!(store.credentials().unwrap()[0].status, Some(revoked));
+            // replaced by another JWT: not checked yet
+            let reissued = StoredCredential {
+                jwt: "d.e.f".to_owned(),
+                ..credential("c-1", issuer)
+            };
+            store.add_request(&request("h-3")).unwrap();
+            store
+                .deliver("h-3", answer("i-3", RequestStatus::Issued), &[reissued])
+                .unwrap();
+            assert_eq!(store.credentials().unwrap()[0].status, None);
         }
     }
 

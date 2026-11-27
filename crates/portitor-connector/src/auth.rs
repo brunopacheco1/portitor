@@ -766,7 +766,7 @@ pub struct AuthSettings {
     pub allow_http: bool,
     /// How long a verified status list credential is kept, in seconds
     /// (`PORTITOR_STATUS_LIST_CACHE_SECONDS`, default 300, at most 3600;
-    /// 0: fetched on every check). See [`dcp::status_list_cache`].
+    /// 0: fetched on every check). See `portitor_runtime::status_lists::cache`.
     pub status_list_cache_seconds: u64,
     /// How long a resolved DID document is reused, in seconds
     /// (`PORTITOR_DID_CACHE_SECONDS`, default 300, at most 3600; 0:
@@ -911,11 +911,11 @@ impl AuthSettings {
 }
 
 /// Reads `PORTITOR_STATUS_LIST_CACHE_SECONDS` (`value`): whole seconds
-/// from 0 to [`dcp::status_list_cache::MAX_SECONDS`];
-/// [`dcp::status_list_cache::DEFAULT_SECONDS`] when it is not set or
+/// from 0 to [`portitor_runtime::status_lists::cache::MAX_SECONDS`];
+/// [`portitor_runtime::status_lists::cache::DEFAULT_SECONDS`] when it is not set or
 /// empty ([`bounded_number`]).
 fn status_list_cache_seconds(value: Option<&str>) -> Result<u64, String> {
-    use dcp::status_list_cache::{DEFAULT_SECONDS, MAX_SECONDS};
+    use portitor_runtime::status_lists::cache::{DEFAULT_SECONDS, MAX_SECONDS};
     let name = "PORTITOR_STATUS_LIST_CACHE_SECONDS";
     bounded_number(name, value, 0..=MAX_SECONDS, DEFAULT_SECONDS)
 }

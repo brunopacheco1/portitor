@@ -37,6 +37,7 @@
 //! | A running upload received as consumer (TD-54) | connector, `receiving.rs` | `upload`, the consumer pid |
 //! | The scheduled dataset harvest (TD-56) | connector, `harvest.rs` | `job`, `dataset_harvest` |
 //! | A Gaia-X compliance run (TD-56) | identity, `gaiax.rs` | `job`, `gaiax_compliance` |
+//! | The credential status check (TD-20, 1.4) | identity, `status_check.rs` | `job`, `credential_status_check` |
 //! | A step of a provider's transfer (TD-48) | connector, `portitor-dsp` `transfer/provider/flow_steps.rs` | own columns: `transfer.lease_holder`, `lease_until` |
 //! | Sending one credential delivery (TD-57) | issuer, `delivery.rs` | own columns: `outbox.lease_holder`, `lease_until` |
 //! | The use of a `SQLite` file by one process (ADR 0029, D3) | every component, `database/sqlite_lease.rs` | own table `portitor_process_lease`, one row |

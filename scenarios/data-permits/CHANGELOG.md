@@ -25,7 +25,15 @@ version it ran on.
   `https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch`
   instead of `scientific-research`, and the two permit offers add an
   ODRL `purpose` constraint with that value.
-- Step 4 is unchanged.
+- Step 4: Schuman's identity reads the status lists of its credentials
+  (1.4, [TD-20](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-20);
+  `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS=2` on `schuman-identity`).
+  The script waits until the identity shows the revoked permit as
+  `REVOKED`; the transfer under P-2026-002 then works without deleting
+  the permit by hand, and the one under P-2026-001 is refused. The check
+  of Lux Biobank's log for the reason is dropped: once the identity has
+  checked, Lux Biobank no longer sees the revoked permit. The step
+  diagram says so.
 - Not run yet: it needs images built from the 1.4 code.
 
 ## 2026-11-26, for 1.3.0

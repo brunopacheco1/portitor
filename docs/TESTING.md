@@ -397,10 +397,18 @@ Where the tests are:
   `tests/issuer.rs`, send each limited route a body at its limit and one
   byte over, with and without `Content-Length`.
 - **Status list cache** (ADR 0016, amended): the unit tests in
-  `crates/portitor-connector/src/auth/dcp/status_list_cache.rs`, and the
+  `crates/portitor-runtime/src/status_lists/cache.rs` (moved from the
+  connector in 1.4), and the
   verifier tests in `src/auth/dcp/tests.rs` (at 0 and 300 seconds, a
   list that ends sooner, a failed fetch, a revocation seen once the list
   is stale). `cargo test -p portitor-connector --lib auth::dcp`.
+- **Credential status check** (TD-20, 1.4): the identity's tests in
+  `crates/portitor-identity/tests/status_check.rs` (a revoked
+  credential is not presented, a suspended one again once the
+  suspension is lifted, an unreadable or forged list keeps the last
+  status, 0 is off, two replicas run one round per period), and the
+  store test `a_status_is_recorded_for_the_credential_that_was_checked`.
+  `cargo test -p portitor-identity --test status_check`.
 - **DID document cache** (ADR 0016, amended in 0.12): the unit tests in
   `crates/portitor-runtime/src/did.rs` (at 0, 300 and 3600 seconds, the
   bounds of `PORTITOR_DID_CACHE_SECONDS`),

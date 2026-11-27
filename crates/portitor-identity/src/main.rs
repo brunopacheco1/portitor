@@ -69,11 +69,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     // how long another party's DID document is reused (R-41)
     let did_cache_seconds = portitor_runtime::did::cache_seconds_from_env()?;
+    let directory = Arc::new(WebDirectory::new(config.allow_http, did_cache_seconds)?);
     let ports = Ports {
         store: Arc::new(store),
-        directory: Arc::new(WebDirectory::new(config.allow_http, did_cache_seconds)?),
+        directory: Arc::clone(&directory) as _,
         issuers: Arc::new(HttpIssuerClient::new(config.allow_http)?),
         compliance,
+        // the same partner sender as the DID documents (TD-20)
+        status_lists: directory,
     };
     let identity = Arc::new(Identity::new(&config, key, sts_client_secret, ports)?);
     for retired in identity.retired_keys() {
@@ -92,6 +95,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         spawn_supervised("gaiax_schedule", move || {
             portitor_identity::gaiax::run_schedule(Arc::clone(&scheduled))
         });
+    }
+    // the credential status check (TD-20), unless
+    // PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS is 0
+    if portitor_identity::status_check::schedule(&identity).is_some() {
+        tracing::info!(
+            every_seconds = config.credential_status_check_seconds,
+            "credential status check on (PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS)"
+        );
     }
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
 

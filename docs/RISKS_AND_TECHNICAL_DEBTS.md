@@ -133,7 +133,7 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [TD-16](#td-16) | One harvest source; no dataspace registry; other catalogs not checked; no bundle expiry or bundle key rotation | Technical debt | Open | 1.8 |
 | [TD-17](#td-17) | The data plane runs inside the connector process | Technical debt | Accepted | 1.12 (steps 2 to 4; step 1 done in 1.2) |
 | [TD-19](#td-19) | No TLS inside the services | Technical debt | Accepted | 1.9 |
-| [TD-20](#td-20) | A holder must delete a revoked credential by hand after a reissue | Technical debt | Open | 1.4 |
+| [TD-20](#td-20) | A holder must delete a revoked credential by hand after a reissue | Technical debt | Open | in progress, 1.4: built |
 | [TD-21](#td-21) | Gaia-X beyond 0.8 | Technical debt | Open | 1.13 |
 | [TD-22](#td-22) | Migrations run forward only; a rollback needs the backup | Technical debt | Accepted | none |
 | [TD-28](#td-28) | No trace across participants | Technical debt | Accepted | none |
@@ -1154,10 +1154,24 @@ to TD-58).
   user shows every permit it holds, so one revoked permit blocks all its
   other permits until it is deleted
   ([data-permits, step 4](../scenarios/data-permits/README.md#the-steps)).
-- **Current state: Open.** Documented in DEPLOYING.
-- **Next.** ROADMAP 1.4 (moved from "Keys and credentials", now
-  1.6, by the maintainer, 2026-11-24, because several data permits
-  make it worse).
+- **Current state: Open; in progress, 1.4: built.** The identity
+  reads the status lists of the credentials it holds every
+  `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS` (default 60, 0 off;
+  maintainer decision D6, 2026-11-27, as EDC IdentityHub's
+  `CredentialWatchdog`), records `VALID`, `REVOKED` or `SUSPENDED` with
+  the time, and leaves revoked and suspended credentials out of its
+  presentations (`crates/portitor-identity/src/status_check.rs`). The
+  lists are read and checked by the connector's code, moved to
+  `crates/portitor-runtime/src/status_lists.rs`. A list that cannot be
+  read keeps the last status. One replica runs each round, under a
+  lease ([ADR 0029](adr/0029-several-replicas.md), note of 1.4).
+  Tests: `crates/portitor-identity/tests/status_check.rs`. The
+  [data-permits](../scenarios/data-permits/README.md#the-steps) step 4
+  now expects P-2026-002 to work without a deletion; not run yet.
+- **Next.** Run the data-permits scenario on 1.4 images; then close.
+  ROADMAP 1.4 (moved from "Keys and credentials", now 1.6, by the
+  maintainer, 2026-11-24, because several data permits make it
+  worse).
 
 <a id="td-21"></a>
 ### TD-21 Gaia-X beyond 0.8

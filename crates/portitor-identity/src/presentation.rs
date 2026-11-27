@@ -12,8 +12,9 @@
 //!    supported (ADR 0015).
 //! 4. The answer holds the credentials the scopes asked for **and** the
 //!    access token allows (DCP 5.4.1.2: asking for more is not an error,
-//!    the answer just holds less), not expired, as one presentation per
-//!    profile (DCP "Homogeneity requirement").
+//!    the answer just holds less), not expired, and not found revoked or
+//!    suspended by the last status check (TD-20, [`crate::status_check`]),
+//!    as one presentation per profile (DCP "Homogeneity requirement").
 //!
 //! A scope by type `T` covers a credential whose `type` holds `T`, or
 //! holds `gx:T` while its `@context` names a Gaia-X context (ADR 0021,
@@ -138,8 +139,10 @@ fn granted(asked: &[Scope], identity: &Identity, access: &AccessToken) -> Vec<Sc
         .collect()
 }
 
-/// The credentials that a scope in `allowed` covers and that have not
-/// expired at `now`.
+/// The credentials that a scope in `allowed` covers, that have not
+/// expired at `now`, and that the last status check did not find revoked
+/// or suspended (TD-20; `crate::status_check`). A credential never
+/// checked, or whose lists could not be read, is shown.
 fn visible<'a>(
     credentials: &'a [StoredCredential],
     allowed: &[Scope],
@@ -149,11 +152,15 @@ fn visible<'a>(
     let mut shown = Vec::new();
     for credential in credentials {
         let expired = credential.expires_at.is_some_and(|until| until <= now);
+        let withdrawn = match credential.status {
+            Some(checked) => !checked.state.is_presented(),
+            None => false,
+        };
         let contexts = contexts_of(credential);
         let covered = allowed
             .iter()
             .any(|scope| covers(scope, credential, &contexts));
-        if covered && !expired {
+        if covered && !expired && !withdrawn {
             shown.push(credential);
         }
     }
@@ -229,6 +236,7 @@ mod tests {
             expires_at,
             holder_pid: "h-1".to_owned(),
             jwt: "a.b.c".to_owned(),
+            status: None,
         }
     }
 
@@ -253,6 +261,33 @@ mod tests {
             visible(&credentials, &[], now).is_empty(),
             "no scope, nothing"
         );
+    }
+
+    /// TD-20: a credential the last status check found revoked or
+    /// suspended is left out; one never checked, or found valid, is shown.
+    #[test]
+    fn revoked_and_suspended_credentials_are_not_shown() {
+        use crate::store::{CheckedStatus, HeldStatus};
+        let checked = |id: &str, state: HeldStatus| StoredCredential {
+            status: Some(CheckedStatus {
+                state,
+                checked_at: 900,
+            }),
+            ..held(id, "MembershipCredential", None)
+        };
+        let credentials = [
+            held("never-checked", "MembershipCredential", None),
+            checked("valid", HeldStatus::Valid),
+            checked("revoked", HeldStatus::Revoked),
+            checked("suspended", HeldStatus::Suspended),
+        ];
+        let allowed =
+            [Scope::parse("org.eclipse.dspace.dcp.vc.type:MembershipCredential", &[]).unwrap()];
+        let shown: Vec<&str> = visible(&credentials, &allowed, 1_000)
+            .iter()
+            .map(|credential| credential.id.as_str())
+            .collect();
+        assert_eq!(shown, ["never-checked", "valid"]);
     }
 
     #[test]

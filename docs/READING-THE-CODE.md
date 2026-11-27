@@ -221,7 +221,10 @@ From there the steps are the same: state machine, store, outbox.
 - `portitor-dataplane/src/audit.rs`: the audit line of each pull, push
   sent and push received.
 - The DCP check of step 2 in full:
-  `portitor-connector/src/auth/dcp.rs`.
+  `portitor-connector/src/auth/dcp.rs`. Status lists are read and
+  cached in `portitor-runtime/src/status_lists.rs` (moved from the
+  connector in 1.4), which the identity's credential status check
+  (`portitor-identity/src/status_check.rs`, TD-20) uses too.
 - Datasets and the bundle: `portitor-connector/src/harvest.rs` and
   `bundle_harvest.rs`.
 - Files above 1,000 lines and the macros that write types are known

@@ -23,6 +23,7 @@ use portitor_runtime::BoxFuture;
 use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::directory::Directory;
 use portitor_runtime::http::HttpError;
+use portitor_runtime::status_lists::StatusListSource;
 use portitor_runtime::system::{new_uuid, now_secs};
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
@@ -134,6 +135,9 @@ impl Party {
 pub struct FakeDirectory {
     pub documents: Mutex<HashMap<String, Arc<DidDocument>>>,
     pub json: Mutex<HashMap<String, Value>>,
+    /// Status list credentials (JWTs) by URL; a URL not here answers
+    /// HTTP 503 (TD-20).
+    pub status_lists: Mutex<HashMap<String, String>>,
     pub lookups: Mutex<Vec<String>>,
 }
 
@@ -163,6 +167,14 @@ impl Directory for FakeDirectory {
         self.lookups.lock().unwrap().push(url.to_owned());
         let found = self.json.lock().unwrap().get(url).cloned();
         Box::pin(async move { found.ok_or_else(|| format!("HTTP 404 for {url}")) })
+    }
+}
+
+impl StatusListSource for FakeDirectory {
+    fn status_list_text<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<String, HttpError>> {
+        self.lookups.lock().unwrap().push(url.to_owned());
+        let found = self.status_lists.lock().unwrap().get(url).cloned();
+        Box::pin(async move { found.ok_or(HttpError::Status(503)) })
     }
 }
 
@@ -305,6 +317,7 @@ impl World {
             directory: Arc::clone(&directory) as _,
             issuers: Arc::clone(&issuer_service) as _,
             compliance,
+            status_lists: Arc::clone(&directory) as _,
         };
         let identity = Arc::new(Identity::new(
             config,

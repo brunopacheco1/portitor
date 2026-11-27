@@ -16,10 +16,11 @@
 # 3. A second permit, P-2026-002. The HDAB replaces Schuman's claims at
 #    its issuer (PUT, since 1.4, TD-46); Schuman stays registered. Schuman
 #    holds both permits and takes the second offer.
-# 4. The HDAB revokes P-2026-001. Schuman shows every permit it holds,
-#    and a presentation with a revoked credential is refused as a whole:
-#    the transfer under P-2026-002 is refused too, until Schuman deletes
-#    the revoked permit from its identity.
+# 4. The HDAB revokes P-2026-001. Schuman's identity reads the status
+#    lists of the credentials it holds (since 1.4, TD-20; every 2 seconds
+#    here) and stops presenting the revoked permit: the transfer under
+#    P-2026-002 works without deleting it by hand, and the one under
+#    P-2026-001 is refused.
 # 5. A trusted issuer is trusted only for its types (since 1.4, R-48):
 #    the HDAB's issuer would give Schuman a MembershipCredential with the
 #    role health-data-access-body, but Schuman's identity and Lux
@@ -90,8 +91,21 @@ pull_genotypes() { # agreement: Schuman pulls the genotypes and checks them
   echo "Schuman has the genotypes; transfer COMPLETED"
 }
 
-revoked_permit_refusals() { # how often Lux Biobank's log refused a presentation for a revoked permit
-  "${COMPOSE[@]}" logs --no-color biobank | grep -c 'a DataPermitCredential credential fails its checks.*revoked' || true
+credential_status() { # credential-id: the status Schuman's identity recorded for it (null until checked)
+  identity_api schuman GET /v1/credentials | jq -r --arg id "$1" '.[] | select(.id == $id) | .status'
+}
+
+until_credential_status() { # credential-id status: waits until Schuman's identity recorded that status
+  local tries=0 found=""
+  # PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS is 2 on schuman-identity: a
+  # few periods are enough
+  while ((tries < 100)); do
+    found=$(credential_status "$1")
+    [[ $found == "$2" ]] && return 0
+    sleep 0.2
+    tries=$((tries + 1))
+  done
+  fail "Schuman's identity has not recorded $1 as $2 (status: $found)"
 }
 
 permit_offer() { # catalog permit-id
@@ -142,21 +156,18 @@ pull_genotypes "$AGREEMENT_1"
 step "4. The HDAB revokes permit P-2026-001"
 issuer_api hdab-issuer POST "/v1/credentials/$(uri "$PERMIT_1")/revoke" >/dev/null || fail "revoke $PERMIT_1"
 echo "revoked $PERMIT_1"
+
+step "4. Schuman's identity reads the HDAB issuer's status list and records the permit as revoked"
+until_credential_status "$PERMIT_1" REVOKED
+[[ $(permits_held) == 2 ]] || fail "Schuman holds $(permits_held) permits, not 2: nobody deletes one by hand"
+echo "Schuman's identity: $PERMIT_1 REVOKED, no longer presented; still held"
+
+step "4. A transfer under P-2026-002 works: the revoked permit is not presented, nobody deleted it"
+pull_genotypes "$AGREEMENT_2"
+
+step "4. A transfer under P-2026-001 is refused: Schuman no longer presents that permit"
 TRANSFER=$(transfer schuman "$AGREEMENT_1")
 expect "a transfer under P-2026-001" "$TRANSFER" TERMINATED
-REFUSALS=$(revoked_permit_refusals)
-
-step "4. A transfer under P-2026-002 is refused too: Schuman shows both permits, and one is revoked"
-TRANSFER=$(transfer schuman "$AGREEMENT_2")
-expect "a transfer under P-2026-002" "$TRANSFER" TERMINATED
-# Schuman's record gives no reason; Lux Biobank's log does
-[[ $(revoked_permit_refusals) -gt $REFUSALS ]] || fail "Lux Biobank's log does not name the revoked permit"
-echo "Lux Biobank's log: a DataPermitCredential is revoked, so the presentation is invalid; Schuman is told no reason"
-
-step "4. Schuman deletes the revoked permit from its identity: P-2026-002 works again"
-identity_api schuman DELETE "/v1/credentials/$(uri "$PERMIT_1")" >/dev/null || fail "delete $PERMIT_1"
-[[ $(permits_held) == 1 ]] || fail "Schuman still holds $(permits_held) permits"
-pull_genotypes "$AGREEMENT_2"
 
 # --- 5 ------------------------------------------------------------------------
 
@@ -176,4 +187,4 @@ VIEW=$(negotiate schuman "$BIOBANK" "$BIOBANK_ID" "$GENOTYPES" "$(offer "$CATALO
 expect "Schuman's request for the offer for access bodies" "$VIEW" TERMINATED
 echo "refused: Lux Biobank trusts the HDAB's issuer for data permits only"
 
-step "Done: two permits gave two agreements under one registration; one revoked permit blocked the other until Schuman deleted it; an issuer trusted for permits could not make Schuman an access body"
+step "Done: two permits gave two agreements under one registration; a revoked permit stopped only its own transfers, with no deletion by hand; an issuer trusted for permits could not make Schuman an access body"

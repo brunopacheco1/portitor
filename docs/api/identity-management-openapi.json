@@ -768,6 +768,22 @@
             "description": "The DCP profile: `vc11-sl2021/jwt` or `vc20-bssl/jwt`.",
             "example": "vc11-sl2021/jwt"
           },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the last check of its status lists found (since 1.4, TD-20):\n`VALID`, `REVOKED` or `SUSPENDED`; null until a check found an\nanswer (`PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS`). A revoked or\nsuspended credential is not presented to verifiers.",
+            "example": "VALID"
+          },
+          "statusCheckedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When that check read its status lists (`xsd:dateTime`, UTC), or\nnull.",
+            "example": "2026-11-27T12:00:00Z"
+          },
           "types": {
             "type": "array",
             "items": {
