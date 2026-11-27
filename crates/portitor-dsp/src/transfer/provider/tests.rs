@@ -11,7 +11,9 @@ use serde_json::json;
 
 use super::*;
 use crate::Context;
+use crate::catalog::ListedDataset;
 use crate::negotiation::AgreementType;
+use crate::policy::AccessPolicy;
 use crate::transfer::{DataAddressType, EndpointProperty, TransferRequestMessageType};
 use crate::{Dataset, DatasetType, Distribution, DistributionType, Rule};
 
@@ -264,25 +266,41 @@ impl DataFlows for &Flows {
 /// the data plane cannot do).
 struct Catalog;
 
-impl CatalogDatasets for Catalog {
-    fn all(&self) -> Result<Vec<Dataset>, StoreError> {
-        Ok(self.get("d1")?.into_iter().collect())
-    }
-    fn get(&self, id: &str) -> Result<Option<Dataset>, StoreError> {
+impl Catalog {
+    /// Dataset `id`, if there is one.
+    fn dataset(id: &str) -> Option<Dataset> {
         let distribution = |format: &str| Distribution {
             kind: DistributionType,
             format: format.to_owned(),
             access_service: "svc".to_owned(),
             metadata: crate::Metadata::default(),
         };
-        Ok((id == "d1").then(|| Dataset {
+        (id == "d1").then(|| Dataset {
             context: None,
             id: id.to_owned(),
             kind: DatasetType,
             has_policy: vec![],
             distribution: vec![distribution("HttpData-PULL"), distribution("HttpData-PUSH")],
             metadata: crate::Metadata::default(),
+        })
+    }
+}
+
+impl CatalogDatasets for Catalog {
+    fn get_for_agreement(&self, id: &str) -> Result<Option<Dataset>, StoreError> {
+        Ok(Self::dataset(id))
+    }
+    fn all_with_access_policies(&self) -> Result<Vec<ListedDataset>, StoreError> {
+        Ok(self.get_with_access_policy("d1")?.into_iter().collect())
+    }
+    fn get_with_access_policy(&self, id: &str) -> Result<Option<ListedDataset>, StoreError> {
+        Ok(Self::dataset(id).map(|dataset| ListedDataset {
+            dataset,
+            access_policy: None,
         }))
+    }
+    fn access_policies(&self) -> Result<Vec<AccessPolicy>, StoreError> {
+        Ok(Vec::new())
     }
 }
 

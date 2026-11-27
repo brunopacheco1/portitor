@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::catalog::ListedDataset;
+use crate::policy::AccessPolicy;
 use crate::{Dataset, DatasetType, Distribution, DistributionType, OfferType, Rule};
 
 /// `.1`: every write fails; `.2`: how many writes lose the version check
@@ -81,11 +82,9 @@ impl NegotiationStore for &Store {
 
 struct Catalog;
 
-impl CatalogDatasets for Catalog {
-    fn all(&self) -> Result<Vec<Dataset>, StoreError> {
-        Ok(self.get("d1")?.into_iter().collect())
-    }
-    fn get(&self, id: &str) -> Result<Option<Dataset>, StoreError> {
+impl Catalog {
+    /// Dataset `id`, if there is one.
+    fn dataset(id: &str) -> Option<Dataset> {
         // d2's offer expired before the test clock (2026-11-12)
         let mut expired = offer(None);
         expired.permission[0].constraint = vec![
@@ -98,9 +97,9 @@ impl CatalogDatasets for Catalog {
             "d1" | "d4" => offer(None),
             "d2" => expired,
             "d3" => providers_only(None),
-            _ => return Ok(None),
+            _ => return None,
         };
-        Ok(Some(Dataset {
+        Some(Dataset {
             context: None,
             id: id.to_owned(),
             kind: DatasetType,
@@ -112,12 +111,22 @@ impl CatalogDatasets for Catalog {
                 metadata: crate::Metadata::default(),
             }],
             metadata: crate::Metadata::default(),
-        }))
+        })
+    }
+}
+
+impl CatalogDatasets for Catalog {
+    fn get_for_agreement(&self, id: &str) -> Result<Option<Dataset>, StoreError> {
+        Ok(Self::dataset(id))
+    }
+    /// Only d1 is listed.
+    fn all_with_access_policies(&self) -> Result<Vec<ListedDataset>, StoreError> {
+        Ok(self.get_with_access_policy("d1")?.into_iter().collect())
     }
     /// d4 has an access policy: only members with role `provider` see it
     /// (ADR 0019, amendment in 1.4). Its offer has no constraint.
     fn get_with_access_policy(&self, id: &str) -> Result<Option<ListedDataset>, StoreError> {
-        let Some(dataset) = self.get(id)? else {
+        let Some(dataset) = Self::dataset(id) else {
             return Ok(None);
         };
         let access_policy = if id == "d4" {
@@ -134,6 +143,9 @@ impl CatalogDatasets for Catalog {
             dataset,
             access_policy,
         }))
+    }
+    fn access_policies(&self) -> Result<Vec<AccessPolicy>, StoreError> {
+        Ok(Vec::new())
     }
 }
 
@@ -1000,10 +1012,16 @@ fn an_acknowledgement_written_first_makes_the_settling_write_lose() {
 struct Unreadable;
 
 impl CatalogDatasets for Unreadable {
-    fn all(&self) -> Result<Vec<Dataset>, StoreError> {
+    fn get_for_agreement(&self, _: &str) -> Result<Option<Dataset>, StoreError> {
         Err(StoreError("database down".to_owned()))
     }
-    fn get(&self, _: &str) -> Result<Option<Dataset>, StoreError> {
+    fn all_with_access_policies(&self) -> Result<Vec<ListedDataset>, StoreError> {
+        Err(StoreError("database down".to_owned()))
+    }
+    fn get_with_access_policy(&self, _: &str) -> Result<Option<ListedDataset>, StoreError> {
+        Err(StoreError("database down".to_owned()))
+    }
+    fn access_policies(&self) -> Result<Vec<AccessPolicy>, StoreError> {
         Err(StoreError("database down".to_owned()))
     }
 }

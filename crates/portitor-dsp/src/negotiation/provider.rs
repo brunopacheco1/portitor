@@ -697,8 +697,9 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
     ) -> Result<Result<(), String>, Failure> {
         let dataset = self
             .catalog
-            .get(negotiation.dataset_id())
-            .map_err(Failure::Store)?;
+            .get_with_access_policy(negotiation.dataset_id())
+            .map_err(Failure::Store)?
+            .map(|listed| listed.dataset);
         let listed = dataset.and_then(|d| {
             d.has_policy
                 .into_iter()
