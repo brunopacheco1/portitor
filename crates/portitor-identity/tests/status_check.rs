@@ -435,6 +435,7 @@ async fn revoked_wins_over_suspended() {
             valid: 1,
             revoked: 1,
             suspended: 0,
+            uncheckable: 0,
             unreadable: 0
         }
     );
