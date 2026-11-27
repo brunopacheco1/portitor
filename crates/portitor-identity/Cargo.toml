@@ -32,7 +32,9 @@ base64.workspace = true
 # the store tests reach the SQLite connection (poison tests, old files)
 rusqlite.workspace = true
 tower = { version = "0.5", features = ["util"] }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# test-util: a paused clock for the status check schedule test
+# (tests/status_check.rs)
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 
 [lints]
 workspace = true
