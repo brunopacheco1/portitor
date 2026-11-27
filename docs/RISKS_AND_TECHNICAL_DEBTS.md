@@ -444,11 +444,20 @@ to TD-58).
   are not followed and the answer's body is not read; a push has no
   time limit, since a dataset can be large. Internal addresses are not
   blocked.
-- **Next.** Block internal addresses with an operator allow list
-  (F-01), and check `aud` and the access token before resolving a
-  caller (F-06). The 0.13 freeze passed without
-  it, so a block that is on by default would now be a behaviour change
-  to announce. Assigned to 1.4 (maintainer, 2026-11-26).
+- **In progress, 1.4.** Built: the block on internal addresses (F-01),
+  off by default: `PORTITOR_BLOCK_INTERNAL_ADDRESSES` and
+  `PORTITOR_INTERNAL_ADDRESSES_ALLOWED`, read at start by all three
+  components. The HTTP clients for partner-chosen URLs resolve the host
+  themselves and connect only to an address the rule allows, so no
+  second DNS lookup can change it (`portitor-runtime/src/http/connect.rs`);
+  clients for URLs the operator chooses do not apply it
+  ([DEPLOYING](DEPLOYING.md#internal-addresses) has both lists). The
+  identity checks `aud` and the access token before it resolves a
+  caller of its presentation API (F-06), always on.
+- **Next.** The block on by default in 2.0 ([ROADMAP](ROADMAP.md#for-20)).
+  The 0.13 freeze passed without it, so a block that is on by default
+  would now be a behaviour change to announce. Assigned to 1.4
+  (maintainer, 2026-11-26).
 
 <a id="r-19"></a>
 ### R-19 Consumer's data access tokens in the database and the management API
@@ -1395,6 +1404,15 @@ to TD-58).
 - **Current state: Open.** DSP has no idempotency rule for contract
   requests; EDC answers a repeated first request with the negotiation
   it already started, found by consumer pid and counter-party.
+- **In progress, 1.4.** Built: the provider answers a repeated first
+  request of the same consumer with the negotiation it already has
+  (same status, 201), found with the new index `negotiation_request`
+  on `(counter_party, consumer_pid)`; a repeat with another offer or
+  callback address gets 400. The lookup and the insert are one
+  transaction (`SERIALIZABLE` on PostgreSQL), so two replicas that get
+  the same repeat at once make one negotiation. Not a UNIQUE index: a
+  1.3 database may already hold repeats. `NegotiationStore::requested`
+  and `insert` in `portitor-dsp/src/negotiation/provider.rs`.
 - **Next.** The same lookup, with an index on
   `(counter_party, consumer_pid)`, as for transfers since 0.12
   ([TD-34](#td-34)). Small. Assigned to 1.4 (maintainer, 2026-11-26).
@@ -1409,6 +1427,9 @@ to TD-58).
 - **Why it matters.** With [TD-60](#td-60), an orphan negotiation can
   count its agreement as delivered.
 - **Current state: Open.**
+- **In progress, 1.4.** Built: each outbox's `reached` also compares
+  the `providerPid` and `consumerPid` of the answer with those of the
+  message sent (`same_process`, `portitor-connector/src/outbox.rs`).
 - **Next.** Also compare `providerPid` and `consumerPid`. Small, in
   the same pull request as TD-60. Assigned to 1.4 (maintainer,
   2026-11-26).

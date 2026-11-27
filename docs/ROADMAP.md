@@ -881,6 +881,9 @@ they wait for 2.0. No date.
   `PORTITOR_TRUSTED_ISSUER_TYPES` is trusted for `MembershipCredential`
   only, not for every type (maintainer, 2026-11-27;
   [TD-74](RISKS_AND_TECHNICAL_DEBTS.md#td-74)).
+- The block on internal addresses is on by default
+  (`PORTITOR_BLOCK_INTERNAL_ADDRESSES`; maintainer, 2026-11-27;
+  [R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17)).
 
 ## Technical debt
 
