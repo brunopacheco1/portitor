@@ -30,6 +30,9 @@
 #   BENCH_HISTORY  how many negotiations and transfers are stored (default 10000)
 #   BENCH_SECONDS  how long each steady load of the td40 part runs (default 30)
 #   BENCH_KEEP_LOGS  a folder to copy each part's logs to (default: not kept)
+#   BENCH_ACCESS_POLICY  `1`: every dataset gets an access policy on the
+#                  consumer's membership (`portitor:accessPolicy`, since 1.4),
+#                  which it meets (default: none)
 # Needs Linux, curl, jq, openssl and python3. Prints key=value lines; exits
 # non-zero if a step fails. Every wait is bounded.
 
@@ -111,9 +114,11 @@ rss_kb() { # pid field: VmRSS (now) or VmHWM (peak)
 # from the upstream; `extra` more datasets without data fill the catalog.
 write_datasets() {
   local file=$1 extra=${2:-0}
-  python3 - "$file" "http://$UPSTREAM/bytes" "$extra" "$((LARGE_GB * 1024 * MIB))" <<'PYTHON'
+  python3 - "$file" "http://$UPSTREAM/bytes" "$extra" "$((LARGE_GB * 1024 * MIB))" \
+    "${BENCH_ACCESS_POLICY:-}" "$MEMBER_OF" <<'PYTHON'
 import json, sys
 file, upstream, extra, large = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+access_policy, member_of = sys.argv[5] == "1", sys.argv[6]
 KIB, MIB = 1024, 1024 * 1024
 sources = {
     "pull-tiny": f"{upstream}/{KIB}",                          # 1 KiB
@@ -133,6 +138,11 @@ def dataset(name, source=None):
     }
     if source:
         entry["portitor:source"] = source
+    if access_policy:
+        # a credential constraint the consumer meets with its membership
+        entry["portitor:accessPolicy"] = {"permission": [{"action": "use", "constraint": [
+            {"leftOperand": "MembershipCredential.memberOf", "operator": "eq",
+             "rightOperand": member_of}]}]}
     return entry
 datasets = [dataset(name, source) for name, source in sources.items()]
 datasets += [dataset(f"catalog-{n:05}") for n in range(extra)]
