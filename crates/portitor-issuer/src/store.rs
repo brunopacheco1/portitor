@@ -1433,7 +1433,10 @@ mod tests {
             store.participant(HOLDER).unwrap(),
             Some(participant.clone())
         );
-        assert_eq!(store.participants().unwrap(), [participant.clone()]);
+        assert_eq!(
+            store.participants().unwrap(),
+            std::slice::from_ref(&participant)
+        );
         // new claims replace the old ones; the registration time stays
         let mut new_claims = Map::new();
         new_claims.insert("role".to_owned(), Value::from("consumer"));
