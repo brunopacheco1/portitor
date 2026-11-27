@@ -185,11 +185,13 @@ fn ipv4_inside(address: Ipv6Addr) -> Option<Ipv4Addr> {
         return Some(mapped);
     }
     match segments {
-        [0, 0, 0, 0, 0, 0, _, _] => Some(last_32_bits),
-        [0x64, 0xff9b, 0, 0, 0, 0, _, _] => Some(last_32_bits),
+        // IPv4-compatible `::a.b.c.d`, or NAT64 `64:ff9b::a.b.c.d`
+        [0, 0, 0, 0, 0, 0, _, _] | [0x64, 0xff9b, 0, 0, 0, 0, _, _] => Some(last_32_bits),
+        // 6to4: the IPv4 address follows `2002:`
         [0x2002, _, _, _, _, _, _, _] => {
             Some(Ipv4Addr::new(octets[2], octets[3], octets[4], octets[5]))
         }
+        // Teredo: the client's address, each bit inverted
         [0x2001, 0, _, _, _, _, _, _] => Some(Ipv4Addr::from(!u32::from(last_32_bits))),
         _ => None,
     }
