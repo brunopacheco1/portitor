@@ -619,6 +619,27 @@ tasks"](#async-await-and-background-tasks)). The data plane's
 plane's gate as `Arc<dyn AccessGate>` without knowing its type
 (`portitor-dataplane/src/access.rs`).
 
+### One function for several inputs: `impl Into<Terms<'a>>`
+
+```rust
+impl<'a> From<&'a Offer> for Terms<'a> { /* ... */ }
+impl<'a> From<&'a Agreement> for Terms<'a> { /* ... */ }
+impl<'a> From<&'a AccessPolicy> for Terms<'a> { /* ... */ }
+
+pub fn credential_scopes<'a>(policy: impl Into<Terms<'a>>, types: &CredentialTypes) -> Vec<String> {
+    let terms = policy.into();
+    /* ... */
+}
+```
+
+`Terms` is a view of the rules of an offer, an agreement or an access
+policy. It borrows them and copies nothing. Each of the three types
+says how it becomes `Terms` (`impl From<...> for Terms`). A function
+that takes `impl Into<Terms<'a>>` then accepts any of them:
+`credential_scopes(&offer, types)` and `credential_scopes(&policy,
+types)` both work. Its first line, `let terms = policy.into();`, makes
+the view (`portitor-dsp/src/policy.rs`, `policy/access.rs`).
+
 ## Sharing between threads: `Arc` and `Mutex`
 
 - `Arc<T>` is a pointer that many owners share. `Arc::clone` copies the
@@ -1248,10 +1269,13 @@ ends.
 ### A step of hyper's client written by hand: `tower_service::Service`
 
 ```rust
+/// A task that finishes later with a `T` or an error.
+type Later<T> = Pin<Box<dyn Future<Output = Result<T, BoxError>> + Send>>;
+
 impl tower_service::Service<Uri> for CheckedConnector {
     type Response = TokioIo<TcpStream>;
     type Error = BoxError;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+    type Future = Later<Self::Response>;
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> { ... }
     fn call(&mut self, uri: Uri) -> Self::Future { Box::pin(async move { ... }) }
 }
@@ -1261,13 +1285,15 @@ hyper's client opens a connection by calling a "service": `call` with
 the URL gives, later, the open connection. Resolving a host name is a
 service too (`call` with the name gives the addresses). Read `call` as
 an `async fn` whose result type is spelled out (`type Future`); the
-body is an `async move` block in a `Box::pin`. `poll_ready` asks "can
+body is an `async move` block in a `Box::pin`. `Later<T>` is a type
+alias: a short name for that long type, written once and used by both
+services. `poll_ready` asks "can
 you take a call now?"; ours always can, or asks the connector it wraps.
 `CheckedConnector` and `CheckedResolver` in
 `portitor-runtime/src/http/connect.rs` use this to check the address a
 call connects to (R-17). A refusal travels as a boxed error, and
-`refusal_in` finds it again in hyper's error with `source()` and
-`downcast_ref`.
+`refusal_in` finds it again in hyper's error (see
+[Finding an error inside another](#finding-an-error-inside-another-source-and-downcast_ref)).
 
 ### Set once, later: `OnceLock` and `Weak`
 
@@ -1352,6 +1378,26 @@ small. Clippy's `result_large_err` lint asks for this. Read
 a library asks for when it accepts errors of every kind (here oxjsonld's
 context loader). `.into()` turns a `String` into such a boxed error
 (`portitor-shacl/src/jsonld.rs`).
+
+### Finding an error inside another: `source()` and `downcast_ref`
+
+```rust
+let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
+while let Some(error) = current {
+    if let Some(refused) = error.downcast_ref::<InternalAddressRefused>() {
+        return Some(refused);
+    }
+    current = error.source();
+}
+None
+```
+
+A library may wrap our error in its own: hyper's client error holds the
+connector's error, which holds ours. `source()` gives the error one
+level down, or `None` at the bottom; the loop walks down level by level.
+`downcast_ref::<T>()` asks "is this error a `T`?" and gives it back as a
+`T` if it is. So `refusal_in` finds our refusal of an internal address
+however deep hyper put it (`portitor-runtime/src/http/connect.rs`).
 
 ## Attributes and `derive`
 
