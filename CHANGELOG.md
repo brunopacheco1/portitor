@@ -198,6 +198,9 @@ change:
   (maintainer, 2026-11-26). Now 57 crate versions are covered by imported
   audits, 1 partly, and 185 are exempted; `supply-chain/audits.toml` is
   empty ([CONTRIBUTING](CONTRIBUTING.md#dependency-audits-cargo-vet)).
+- regex 1.13.1 to 1.13.2 (with regex-automata 0.4.19 and regex-syntax
+  0.8.12; Dependabot #96) and jsonschema 0.61.2 to 0.63.0 (test-only;
+  Dependabot #97); their cargo-vet exemptions moved to the new versions.
 
 ### Documentation
 

@@ -216,15 +216,15 @@ version = "0.2.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.jsonschema]]
-version = "0.61.2"
+version = "0.63.0"
 criteria = "safe-to-run"
 
 [[exemptions.jsonschema-regex]]
-version = "0.61.2"
+version = "0.63.0"
 criteria = "safe-to-run"
 
 [[exemptions.jsonschema-value]]
-version = "0.61.2"
+version = "0.63.0"
 criteria = "safe-to-run"
 
 [[exemptions.lazy_static]]
@@ -432,19 +432,19 @@ version = "1.0.27"
 criteria = "safe-to-run"
 
 [[exemptions.referencing]]
-version = "0.61.2"
+version = "0.63.0"
 criteria = "safe-to-run"
 
 [[exemptions.regex]]
-version = "1.13.1"
+version = "1.13.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.regex-automata]]
-version = "0.4.18"
+version = "0.4.19"
 criteria = "safe-to-deploy"
 
 [[exemptions.regex-syntax]]
-version = "0.8.11"
+version = "0.8.12"
 criteria = "safe-to-deploy"
 
 [[exemptions.ring]]
