@@ -429,9 +429,10 @@ mod tests {
                 });
             }
             let dataset = serde_json::from_value(entry.clone()).unwrap();
-            if entry.get(ACCESS_POLICY_KEY).is_some() {
-                panic!("the second check sees no access policy");
-            }
+            assert!(
+                entry.get(ACCESS_POLICY_KEY).is_none(),
+                "the second check sees no access policy"
+            );
             Ok(CheckedDataset {
                 dataset,
                 conforms_to: Some("https://shapes.example/1".to_owned()),

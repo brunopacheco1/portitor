@@ -450,7 +450,7 @@ fn purpose(atomic: &AtomicConstraint) -> Result<bool, PolicyError> {
         (Some("isAnyOf"), serde_json::Value::Array(purposes)) => {
             let mut all_texts = !purposes.is_empty();
             for purpose in purposes {
-                if !purpose.as_str().is_some_and(|text| !text.is_empty()) {
+                if purpose.as_str().is_none_or(str::is_empty) {
                     all_texts = false;
                 }
             }

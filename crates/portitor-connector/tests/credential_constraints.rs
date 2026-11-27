@@ -665,6 +665,16 @@ fn recording_provider(received: &Arc<Mutex<Vec<(String, Value)>>>) -> axum::Rout
     )
 }
 
+/// An offer of dataset `reports` with the constraint `<left> eq eu`.
+fn processing_offer(id: &str, left: &str) -> portitor_dsp::Offer {
+    serde_json::from_value(json!({
+        "@id": id, "@type": "Offer", "target": "reports",
+        "permission": [{"action": "use", "constraint": [{
+            "leftOperand": left, "operator": "eq", "rightOperand": "eu"}]}]
+    }))
+    .unwrap()
+}
+
 #[tokio::test]
 async fn an_offer_from_the_provider_with_credential_constraints_is_accepted() {
     // DSP 2025-1: the consumer requests, the provider answers with an
@@ -695,20 +705,8 @@ async fn an_offer_from_the_provider_with_credential_constraints_is_accepted() {
         "permission": [{"action": "use"}]
     }))
     .unwrap();
-    let constrained: portitor_dsp::Offer = serde_json::from_value(json!({
-        "@id": "reports:eu", "@type": "Offer", "target": "reports",
-        "permission": [{"action": "use", "constraint": [{
-            "leftOperand": "DataProcessorCredential.processing",
-            "operator": "eq", "rightOperand": "eu"}]}]
-    }))
-    .unwrap();
-    let unknown: portitor_dsp::Offer = serde_json::from_value(json!({
-        "@id": "reports:other", "@type": "Offer", "target": "reports",
-        "permission": [{"action": "use", "constraint": [{
-            "leftOperand": "UnknownCredential.processing",
-            "operator": "eq", "rightOperand": "eu"}]}]
-    }))
-    .unwrap();
+    let constrained = processing_offer("reports:eu", "DataProcessorCredential.processing");
+    let unknown = processing_offer("reports:other", "UnknownCredential.processing");
     let provider_header = format!("Bearer {PROVIDER_DID}|{MEMBERSHIP_SCOPE}");
     let cases = [
         (open, true, Vec::new()),
