@@ -124,8 +124,6 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [TD-04](#td-04) | User to system authentication and authorisation | Technical debt | Accepted | code 1.7 |
 | [TD-05](#td-05) | Key custody and key rotation | Technical debt | Open | 1.6 (OpenBao) |
 | [TD-07](#td-07) | STS tokens and presentations are not cached | Technical debt | Open | 1.6, if needed |
-| [TD-08](#td-08) | One replica per SQLite file; no PostgreSQL adapter | Technical debt | Open | 1.3 (in progress) |
-| [TD-09](#td-09) | Used token ids are kept in memory only | Technical debt | Open | 1.3 (in progress) |
 | [TD-10](#td-10) | Transfers: no token renewal; whole sources and whole pushes only | Technical debt | Mitigated | 1.7 |
 | [TD-11](#td-11) | Consumer refuses offers with credential constraints; the provider cannot suspend from the management API | Technical debt | Open | 1.4 |
 | [TD-12](#td-12) | ODRL: few constraints; prohibitions and duties not enforced | Technical debt | Open | 1.4 (purpose) |
@@ -148,15 +146,6 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [TD-46](#td-46) | The issuer keeps one set of claims per participant | Technical debt | Open | 1.4 |
 | [TD-47](#td-47) | A transfer stays REQUESTED when its provider is revoked | Technical debt | Open | 1.4 |
 | [TD-49](#td-49) | After a failed message, the two parties of a negotiation can stay in different states | Technical debt, interoperability | Accepted | none |
-| [TD-50](#td-50) | Each connector process holds its own copy of the datasets | Technical debt | Open | 1.3 (in progress) |
-| [TD-51](#td-51) | The issuer's signed status lists live in the memory of one process | Technical debt | Open | 1.3 (in progress) |
-| [TD-52](#td-52) | A cut of a running download or push reaches only its own process | Technical debt | Open | 1.3 (in progress) |
-| [TD-53](#td-53) | The DSP outbox is taken up again only at start, and retried in memory | Technical debt | Open | 1.3 (in progress) |
-| [TD-54](#td-54) | Pushes are resumed only at start; one push or upload per transfer is guarded in one process | Technical debt | Open | 1.3 (in progress) |
-| [TD-55](#td-55) | Each connector process holds its own copy of the rules bundle and its own cache folder | Technical debt | Open | 1.3 (in progress) |
-| [TD-56](#td-56) | Scheduled jobs run once in every container | Technical debt | Open | 1.3 (in progress) |
-| [TD-57](#td-57) | The issuer's credential outbox does not claim a delivery before it sends it | Technical debt | Open | 1.3 (in progress) |
-| [TD-58](#td-58) | The DID document is built at start | Technical debt | Open | 1.3 (in progress) |
 | [TD-59](#td-59) | SQLite is deprecated; no tool yet to copy a SQLite file into PostgreSQL | Technical debt | Accepted | the copy tool: 1.4; removal: 2.0 |
 | [TD-60](#td-60) | A repeated first contract request starts a second negotiation | Technical debt, interoperability | Open | 1.4 |
 | [TD-61](#td-61) | The outbox's "it arrived before" check compares the state only | Technical debt | Open | 1.4 |
@@ -173,10 +162,10 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [TD-72](#td-72) | Two error types for the database, converted both ways | Technical debt, readability | Open | 1.5 (suggested, with TD-63) |
 | [TD-73](#td-73) | A negotiation step is about 3.5 ms slower on SQLite in 1.3 | Technical debt, performance | Open | 1.4 (suggested) |
 
-Counts on 2026-11-26, on the 1.3 branch: 37 risks and 54 technical
-debts are not closed (Open 54, Mitigated 22, Accepted 15), of which 11
-(TD-08, TD-09, TD-50 to TD-58) are done on the 1.3 branch and close at
-the release; 12 risks and 19 technical debts are closed.
+Counts on 2026-11-27, at the 1.3.0 release: 37 risks and 43 technical
+debts are not closed (Open 43, Mitigated 22, Accepted 15); 12 risks and
+30 technical debts are closed (11 of them in 1.3: TD-08, TD-09, TD-50
+to TD-58).
 
 ## Risks
 
@@ -969,61 +958,6 @@ the release; 12 risks and 19 technical debts are closed.
   in R-29.
 - **Next.** Decide from those numbers; code in ROADMAP 1.6 if needed.
 
-<a id="td-08"></a>
-### TD-08 One replica per SQLite file; no PostgreSQL adapter
-
-- **What.** Each image keeps its state in one SQLite file; several
-  replicas need the PostgreSQL adapter, on the same ports and
-  migrations ([ADR 0006](adr/0006-negotiation-storage.md)). Several
-  replicas also need every piece of state that one process holds to
-  move to the database: [TD-09](#td-09) and [TD-50](#td-50) to
-  [TD-58](#td-58), found in a code review on 2026-11-26.
-- **Why it matters.** No horizontal scaling or failover; ARCHITECTURE
-  principles 8 and 14 are not fully met.
-- **Current state: Open; in progress (1.3)** (was Accepted, maintainer,
-  2026-11-12; planned for 1.3 by the maintainer, 2026-11-26). Done on
-  the 1.3 branch: the database layer for both databases
-  (`crates/portitor-runtime/src/database.rs` and `database/`), and the
-  stores of all three images on it (`ConnectorStore` in the
-  connector's `store.rs`, `DatabaseStore` in the `store.rs` of the
-  identity and the issuer). A second process on a SQLite file refuses
-  to start (`database/sqlite_lease.rs`). Tested: every store test runs
-  on SQLite and on PostgreSQL in CI, and
-  `scenarios/two-party/run-replicas.sh` runs two processes of each
-  image on one PostgreSQL database. The status changes at the release.
-- **Next.** [ADR 0029](adr/0029-several-replicas.md) (Accepted
-  2026-11-26): PostgreSQL 16 to 19 behind the same synchronous ports,
-  with `tokio-postgres`; one SQL text; `SERIALIZABLE` transactions
-  tried again on a collision; a PostgreSQL migration list per
-  component under an advisory lock; one database per component
-  (`portitor_schema`); `PORTITOR_DATABASE_URL` and
-  `PORTITOR_DATABASE_PASSWORD_FILE`. A second process on a SQLite file
-  refuses to start. SQLite is deprecated ([TD-59](#td-59)). The items
-  above as in ADR 0029, decision 6. Done on the 1.3 branch; close at
-  the 1.3 release.
-
-<a id="td-09"></a>
-### TD-09 Used token ids are kept in memory only
-
-- **What.** In 1.2 the `jti` replay list lived in memory, at most
-  100,000 entries (ADR 0015, ADR 0016), in each of the three images: the
-  connector (`crates/portitor-connector/src/auth/dcp.rs`), the identity
-  and the issuer (`used_token_ids` in their `lib.rs`).
-- **Why it matters.** A restart forgets them; with two replicas, a
-  token used on one is accepted again on the other.
-- **Current state: Open; in progress (1.3)** (was Accepted,
-  maintainer, 0.5 review: tokens live at most an hour, so the window is
-  small; planned for 1.3 by the maintainer, 2026-11-26). Done on the
-  1.3 branch: a table `used_token (token_id, expires_at)` in the
-  database of all three images, kept until the token expires
-  (`crates/portitor-runtime/src/used_tokens.rs`). One
-  `INSERT ... ON CONFLICT DO NOTHING` decides whether a token was used
-  before, as EDC's `edc_jti_validation` table does. Expired rows are
-  deleted before each insert. Test:
-  `of_two_replicas_only_one_accepts_a_token`. The status changes at
-  the release.
-- **Next.** Close at the 1.3 release.
-
 <a id="td-10"></a>
 ### TD-10 Transfers: no token renewal; whole sources and whole pushes only
 
@@ -1429,243 +1363,6 @@ the release; 12 risks and 19 technical debts are closed.
 - **Next.** None. An operator who sees a negotiation that does not
   move can ask the partner, and terminate it from its side.
 
-<a id="td-50"></a>
-### TD-50 Each connector process holds its own copy of the datasets
-
-- **What.** In 1.2 the read copy of the datasets (`DatasetCopy` in
-  `crates/portitor-connector/src/harvest/copy.rs`) was loaded into
-  memory at start and after this process's own harvest commit
-  (`reload` in `crates/portitor-connector/src/harvest.rs`). Nothing
-  told another process that the stored copy changed.
-- **Why it matters.** With two containers, the one that did not run the
-  harvest keeps offering a withdrawn dataset, with its old policy and
-  source, until it restarts.
-- **Current state: Open; in progress (1.3)** (code review,
-  2026-11-26). Fine with one replica. Done on the 1.3 branch: the copy
-  in memory is gone. `StoredCatalog`
-  (`crates/portitor-connector/src/harvest/catalog.rs`) reads the
-  catalog, and each dataset that an offer, an agreement, a transfer
-  request or a data flow start needs, from the database on each
-  request (`DatasetStore::catalog` and `DatasetStore::dataset`,
-  `store/harvest.rs`). The catalog keeps its content and its order (the
-  bytes of the ids, also on PostgreSQL). A database that cannot be read
-  gives HTTP 500, not an empty catalog or a refusal. Test: a harvest
-  written through one store is in the next answer of another store on
-  the same PostgreSQL database
-  (`a_harvest_through_one_store_is_seen_through_another_on_postgres`).
-  The status changes at the release.
-- **Next.** ADR 0029, D4 (option B, maintainer, 2026-11-26): the
-  catalog, and each dataset the DSP code needs, is read from the
-  database on each request, as EDC reads its catalog from its asset
-  index. No copy in memory decides an answer. (The first
-  recommendation, a copy generation number, was not chosen.) Done on
-  the 1.3 branch.
-
-<a id="td-51"></a>
-### TD-51 The issuer's signed status lists live in the memory of one process
-
-- **What.** In 1.2 the issuer signed its status lists at start and
-  after a revocation, in the process that revoked, and kept them in
-  memory
-  (`StatusLists`, `refresh` in
-  `crates/portitor-issuer/src/status_lists.rs`).
-- **Why it matters.** Another issuer replica never serves the
-  revocation, so a revoked credential still looks valid when its
-  status list is read from that replica.
-- **Current state: Open; in progress (1.3)** (code review,
-  2026-11-26). Fine with one replica. Done on the 1.3 branch (ADR 0029,
-  D5): the process that revokes signs the new status list in the same
-  transaction and stores it in the database (table `status_list`, with
-  the id of the key that signed it); every replica serves it from
-  there, as EDC IssuerService does. At start a process signs a list
-  only when none is stored or another key signed it (a key rotation;
-  `sign_status_list_if_needed` in
-  `crates/portitor-issuer/src/store.rs`). Tests:
-  `a_status_list_is_stored_with_each_revocation`,
-  `two_replicas_share_the_outbox_and_the_status_lists` and
-  `two_replicas_on_postgres_share_the_outbox_and_the_lists`. (The
-  earlier plan, a revocation counter, was not chosen.) The status
-  changes at the release.
-- **Next.** Close at the 1.3 release.
-
-<a id="td-52"></a>
-### TD-52 A cut of a running download or push reaches only its own process
-
-- **What.** The switches that cut running downloads and pushes live in
-  one process (`RunningFlows` in
-  `crates/portitor-dataplane/src/running_flows.rs`).
-- **Why it matters.** With two containers, a suspension or termination
-  that lands on one container does not cut a download that runs on the
-  other, and a start again on another container begins a second push
-  of the same transfer.
-- **Current state: Open; in progress (1.3)** (code review,
-  2026-11-26). Fine with one replica. Done on the 1.3 branch: a
-  watchdog next to each running download and push reads its flow's
-  state every 5 seconds and cuts it once the flow is suspended,
-  terminated or gone (`state_watchdog` in
-  `crates/portitor-dataplane/src/download.rs`); the switches of
-  `RunningFlows` stay, so a cut in the same process is still immediate.
-  Tested with two replicas on one PostgreSQL database
-  (`a_suspension_on_another_replica_cuts_a_running_download`). Left: a
-  suspension and a start again on another container within the same
-  5 seconds are not seen (the flow reads `STARTED` again); a counter of
-  state changes on the flow would close it.
-- **Next.** Close at the 1.3 release.
-
-<a id="td-53"></a>
-### TD-53 The DSP outbox is taken up again only at start, and retried in memory
-
-- **What.** Messages that were saved but not acknowledged are sent
-  again only when a process starts (`resume` in
-  `crates/portitor-connector/src/outbox.rs`, called once from
-  `main.rs`). The tries that follow run in a task of that process.
-- **Why it matters.** With two containers, the messages of a container
-  that died wait until some container restarts, and a container that
-  starts sends again messages that another container is still sending.
-- **Current state: Open; in progress (1.3)** (code review,
-  2026-11-26). Fine with one replica: at start, no other process
-  sends. Done on the 1.3 branch: each saved message is sent under a
-  lease in the database (`lease` table, `portitor_runtime::leases`;
-  id: the process id and the SHA-256 of the message's URL and body, so
-  a counter-party's message racing ours still lets our next one go out
-  at once, ADR 0007). 30 seconds, renewed while it is sent, ended once
-  the outcome is recorded; left to end when the recording failed, so it
-  is sent again about 30 s later. A loop in every process
-  (`Negotiator::schedule_outbox`, every second) takes up the pending
-  messages nobody leases. Tested with two replicas on one PostgreSQL
-  database (`pending_messages_are_sent_once_by_two_replicas`). The loop
-  reads every pending message of the four process tables each round,
-  not only the free ones as EDC's `nextNotLeased` does; fine while few
-  messages are pending at once.
-- **Next.** Close at the 1.3 release.
-
-<a id="td-54"></a>
-### TD-54 Pushes are resumed only at start; one push or upload per transfer is guarded in one process
-
-- **What.** A push that a restart cut is started again only when a
-  process starts (`resume_pushes` in
-  `crates/portitor-connector/src/transfer.rs`). That only one push per
-  transfer runs is checked in one process (`watch_if_idle` in
-  `crates/portitor-dataplane/src/running_flows.rs`). On the consumer's
-  side, that only one upload per transfer runs is checked the same way
-  (`Uploads` in `crates/portitor-connector/src/receiving.rs`); the
-  review rated this part low.
-- **Why it matters.** With two containers, the push of a container that
-  died waits for a restart, and two containers can push the same
-  transfer at once.
-- **Current state: Open; in progress (1.3)** (code review,
-  2026-11-26). Fine with one replica. Done on the 1.3 branch: a push
-  runs under the lease `push` of its transfer (`PUSH_LEASE` in
-  `crates/portitor-connector/src/transfer.rs`), renewed while it runs
-  and ended once its end is recorded; the loop of TD-53 starts the
-  pushes of `STARTED` push transfers that nobody leases. A push or an
-  upload whose lease is lost stops (`HeldLease::lost` in
-  `portitor_runtime::leases`), and `watch_if_idle` stays as a cheap
-  second guard in each process. An upload as consumer runs under the
-  lease `upload`; a second one gets 409 on any container, and 503 when
-  the database does not answer. The limit of 8 uploads at once stays
-  per process (it bounds that process's memory). Tested with two
-  replicas on one PostgreSQL database
-  (`a_push_left_by_a_replica_that_stopped_is_taken_over_once`,
-  `one_upload_per_transfer_among_replicas`).
-- **Next.** Close at the 1.3 release.
-
-<a id="td-55"></a>
-### TD-55 Each connector process holds its own copy of the rules bundle and its own cache folder
-
-- **What.** The authority's bundle is checked and kept in memory, with
-  a cache folder on disk, in each process
-  (`crates/portitor-connector/src/bundle_harvest.rs`).
-- **Why it matters.** With two containers, each downloads and checks
-  the bundle on its own schedule, so for a while they can check
-  datasets and messages against different rules.
-- **Current state: Open; in progress (1.3)** (code review,
-  2026-11-26). Fine with one replica. Done on the 1.3 branch: the
-  version in use is a row of the connector's database (`bundle_in_use`,
-  `crates/portitor-connector/src/store/bundle_in_use.rs`). The process
-  that takes a newer version records it there in one transaction (a
-  version issued before the recorded one is never recorded, except a
-  fixed `PORTITOR_BUNDLE_VERSION`). Every process takes the recorded
-  version at start, before it serves, and looks at the record every
-  5 seconds (`BundleHarvester::follow`), moving to it from its own cache
-  folder or by downloading it. So another process checks with the
-  version before for at most 5 seconds and the time it takes to load
-  the new one. The rules themselves stay in each process's memory, one
-  set per version. The status changes at the release.
-- **Next.** ADR 0029 (S3): the bundle version in use moves to the
-  database, and each process moves to it. The cache folder stays per
-  container. Done on the 1.3 branch.
-
-<a id="td-56"></a>
-### TD-56 Scheduled jobs run once in every container
-
-- **What.** Each container runs its own schedules: the dataset harvest
-  (the job id is `MAX(id) + 1`, in
-  `crates/portitor-connector/src/store/harvest.rs`) and the Gaia-X
-  renewal (`run_schedule` in `crates/portitor-identity/src/gaiax.rs`,
-  which at start marks every run still running as failed).
-- **Why it matters.** With two containers, each job runs twice; two
-  harvests can pick the same job id; a starting identity marks as
-  failed a Gaia-X run that another replica is still running.
-- **Current state: Open; in progress (1.3)** (code review,
-  2026-11-26). Fine with one replica.
-- **Done on the 1.3 branch.** The scheduled dataset harvest runs under
-  the lease `job`/`dataset_harvest`, renewed during the run and kept
-  after it until the next interval, so one run per interval among the
-  processes (`two_replicas_run_one_scheduled_harvest_per_interval`).
-  Harvest job ids come from the database (`INSERT ... RETURNING id`;
-  `runs_of_two_replicas_get_different_ids`). A Gaia-X run, scheduled or
-  started by the operator, needs the lease `job`/`gaiax_compliance`; the
-  start no longer marks every `RUNNING` run as failed: the next run that
-  takes the lease marks those left by a process that stopped
-  (`a_run_waits_for_the_lease_of_another_process`). Left: the retry
-  pauses after a failed Gaia-X run are counted per process, so with two
-  replicas a failing service is asked about twice as often; the bundle
-  harvest still runs in each container (its cache is per container,
-  TD-55); the start harvest runs in each container.
-- **Next.** Close at the 1.3 release.
-
-<a id="td-57"></a>
-### TD-57 The issuer's credential outbox does not claim a delivery before it sends it
-
-- **What.** In 1.2 the issuer read the due deliveries and sent them
-  (`send_due_at` in `crates/portitor-issuer/src/delivery.rs`) without
-  marking them as taken.
-- **Why it matters.** With two issuer replicas, both send the same
-  credential to the holder.
-- **Current state: Open; in progress (1.3)** (code review,
-  2026-11-26). Fine with one replica. Done on the 1.3 branch: a process
-  claims a delivery before it sends it, with one compare-and-swap
-  update of the outbox row (columns `lease_holder` and `lease_until`,
-  30 seconds; `claim_due_delivery` in
-  `crates/portitor-issuer/src/store.rs`). The lease ends when the try
-  is recorded; a process that stops leaves it to run out, then another
-  process takes the delivery over. A try that outlasts its lease may be
-  sent twice, which the holder takes (same `issuerPid`). Tests:
-  `a_delivery_is_held_by_one_process_until_its_lease_ends` and
-  `two_replicas_on_postgres_share_the_outbox_and_the_lists`. The status
-  changes at the release.
-- **Next.** Close at the 1.3 release.
-
-<a id="td-58"></a>
-### TD-58 The DID document is built at start
-
-- **What.** The identity and the issuer build their DID document once,
-  at start, from the key files (`did_document::build` in the `lib.rs`
-  of `crates/portitor-identity` and `crates/portitor-issuer`).
-- **Why it matters.** During a rolling key rotation, the replicas not
-  yet restarted show the old document, so a partner can read a document
-  without the new key.
-- **Current state: Open; in progress (1.3)** (code review,
-  2026-11-26). Fine with one replica. Done on the 1.3 branch, in the
-  docs only (ADR 0029, D7): the DID document is still built at start.
-- **Next.** Close at the 1.3 release. No code: a two-step rolling
-  rotation in
-  [OPERATING](OPERATING.md#rotating-a-key-with-several-replicas): first
-  list the new public key as retired on every replica, then switch the
-  key file and list the old public key as retired; a rolling restart
-  after each step. The start checks already allow the first step.
-
 <a id="td-59"></a>
 ### TD-59 SQLite is deprecated; no tool yet to copy a SQLite file into PostgreSQL
 
@@ -1936,6 +1633,17 @@ entries are in [CHANGELOG](../CHANGELOG.md) under the release named.
 | <a id="td-43"></a>TD-43 | The Gaia-X documents name several versions of the rules | 0.14 | [ARCHITECTURE](ARCHITECTURE.md#specification-versions) |
 | <a id="td-44"></a>TD-44 | A transfer request sent at once after the agreement could be refused | 0.13; the metric in 0.14 | [ADR 0007](adr/0007-outbox-and-proof-of-delivery.md), "Amendment for 0.13" and "Note added in 0.14"; CHANGELOG 0.14.0 |
 | <a id="td-48"></a>TD-48 | Data plane steps ran inside the retried update of a transfer | 1.2 | The write records the step (`transfer.flow_step`) and takes a lease on the transfer in the database in the same compare-and-update; the step runs once, right after the write wins; any other write while the lease holds gets HTTP 503 (`Retry-After: 1`); a step whose lease ended is taken over by the next call, a sweep or the start; a refused step takes the write back or ends the transfer: `crates/portitor-dsp/src/transfer/provider/flow_steps.rs`; [ADR 0028](adr/0028-separate-pluggable-data-plane.md), decision 6 and note added in 1.2; [ADR 0013](adr/0013-transfer-and-data-plane.md), note added in 1.2 |
+| <a id="td-08"></a>TD-08 | One replica per SQLite file; no PostgreSQL adapter | 1.3 | [ADR 0029](adr/0029-several-replicas.md); the database layer `crates/portitor-runtime/src/database.rs` and `database/` (SQLite and PostgreSQL 16 to 19); `ConnectorStore` and the `DatabaseStore` of the identity and the issuer; a second process on a SQLite file refuses to start (`database/sqlite_lease.rs`); `scenarios/two-party/run-replicas.sh` |
+| <a id="td-09"></a>TD-09 | Used token ids are kept in memory only | 1.3 | Table `used_token`, `crates/portitor-runtime/src/used_tokens.rs`; [ADR 0029](adr/0029-several-replicas.md), decision 6 |
+| <a id="td-50"></a>TD-50 | Each connector process holds its own copy of the datasets | 1.3 | The catalog and each dataset are read from the database on each request: `StoredCatalog`, `crates/portitor-connector/src/harvest/catalog.rs`; [ADR 0029](adr/0029-several-replicas.md), decision 6 (D4, option B) |
+| <a id="td-51"></a>TD-51 | The issuer's signed status lists live in the memory of one process | 1.3 | Table `status_list`, signed in the revoking transaction (`sign_status_list_if_needed`, `crates/portitor-issuer/src/store.rs`); [ADR 0029](adr/0029-several-replicas.md), decision 6 (D5) |
+| <a id="td-52"></a>TD-52 | A cut of a running download or push reaches only its own process | 1.3 | `state_watchdog` in `crates/portitor-dataplane/src/download.rs` (every 5 s); [ADR 0029](adr/0029-several-replicas.md), decision 6 (D6) |
+| <a id="td-53"></a>TD-53 | The DSP outbox is taken up again only at start, and retried in memory | 1.3 | Leases in the database (`portitor_runtime::leases`) and the outbox loop in every process (`Negotiator::schedule_outbox`); [ADR 0029](adr/0029-several-replicas.md), decision 6 |
+| <a id="td-54"></a>TD-54 | Pushes are resumed only at start; one push or upload per transfer is guarded in one process | 1.3 | Leases `push` and `upload` of a transfer (`PUSH_LEASE`, `crates/portitor-connector/src/transfer.rs`; `HeldLease::lost`); [ADR 0029](adr/0029-several-replicas.md), decision 6 |
+| <a id="td-55"></a>TD-55 | Each connector process holds its own copy of the rules bundle and its own cache folder | 1.3 | Table `bundle_in_use`, `crates/portitor-connector/src/store/bundle_in_use.rs`; `BundleHarvester::follow`; [ADR 0029](adr/0029-several-replicas.md), decision 6 (S3) |
+| <a id="td-56"></a>TD-56 | Scheduled jobs run once in every container | 1.3 | Leases `job`/`dataset_harvest` and `job`/`gaiax_compliance`; job ids from the database; [ADR 0029](adr/0029-several-replicas.md), decision 6 |
+| <a id="td-57"></a>TD-57 | The issuer's credential outbox does not claim a delivery before it sends it | 1.3 | `claim_due_delivery` in `crates/portitor-issuer/src/store.rs` (lease columns on the outbox row); [ADR 0029](adr/0029-several-replicas.md), decision 6 |
+| <a id="td-58"></a>TD-58 | The DID document is built at start | 1.3 | No code: the two-step rolling key rotation in [OPERATING](OPERATING.md#rotating-a-key-with-several-replicas); [ADR 0029](adr/0029-several-replicas.md), decision 6 (D7) |
 
 ### Left over from closed items
 
@@ -2025,6 +1733,29 @@ plan.
   plane (ADR 0028, step 2) must stay well under it. A message that a
   step left over makes ready, when a call (not the sweep) ran that step
   and its own write then failed, waits for the next restart.
+- **TD-08.** SQLite is deprecated and removed in 2.0
+  ([TD-59](#td-59)). A process that stopped without ending its SQLite
+  lease makes a new start on that file refuse to start for up to 30
+  seconds; start it again after that.
+- **TD-52.** A suspension and a start again on another container within
+  the same 5 seconds are not seen by a running download or push (the
+  flow reads `STARTED` again); a counter of state changes on the flow
+  would close it.
+- **TD-53.** The outbox loop reads every pending message of the four
+  process tables each round, not only the free ones as EDC's
+  `nextNotLeased` does; fine while few messages are pending at once. The
+  loop interval (1 s) and the lease (30 s) are constants.
+- **TD-55.** Another process checks with the bundle version before for
+  up to 5 seconds and the time it takes to load the new one; the rules
+  stay in each process's memory.
+- **TD-56.** The retry pauses after a failed Gaia-X run are counted per
+  process, so with two replicas a failing service is asked about twice
+  as often; the bundle harvest and the start harvest run in each
+  container.
+- **TD-57.** A delivery try that outlasts its 30-second lease may be
+  sent twice; the holder takes it (same `issuerPid`).
+- **TD-58.** The DID document is still built at start: a key change
+  with several replicas takes the two-step rolling rotation.
 
 <a id="upstream-reports"></a>
 ## Upstream reports
