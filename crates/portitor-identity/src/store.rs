@@ -1383,6 +1383,64 @@ mod tests {
     /// The migrations of 1.2 (the last release before PostgreSQL).
     const MIGRATIONS_OF_1_2: usize = 3;
 
+    /// The PostgreSQL migrations of 1.3 (the first release with
+    /// PostgreSQL).
+    const POSTGRES_MIGRATIONS_OF_1_3: usize = 2;
+    /// The `SQLite` migrations of 1.3.
+    const MIGRATIONS_OF_1_3: usize = 5;
+
+    /// A PostgreSQL database written by 1.3, with a credential, opens
+    /// with 1.4: the status columns of 1.4 are added, NULL (never
+    /// checked), the credential reads back, and a status is recorded.
+    #[test]
+    fn a_postgres_database_of_1_3_opens_with_1_4() {
+        let Some(url) = databases::postgres_url() else {
+            return;
+        };
+        let setting = DatabaseSetting::Postgres(Box::new(databases::fresh_postgres_settings(&url)));
+        let of_1_3 = Migrations {
+            component: MIGRATIONS.component,
+            sqlite: &SQLITE_MIGRATIONS[..MIGRATIONS_OF_1_3],
+            postgres: &POSTGRES_MIGRATIONS[..POSTGRES_MIGRATIONS_OF_1_3],
+        };
+        let old = Database::open(&setting, &of_1_3).unwrap();
+        let status_column = "SELECT column_name FROM information_schema.columns
+             WHERE table_name = 'credential' AND column_name = 'status_state'";
+        assert!(old.query(status_column, values![]).unwrap().is_empty());
+        old.execute(
+            "INSERT INTO credential_request (holder_pid, issuer_did, status, credential_ids,
+                 status_url, access_token_id, created_at, issuer_pid, send_error)
+                 VALUES ('h-1', 'did:web:issuer.example', 'ISSUED', '[\"membership\"]',
+                     'https://issuer.example/requests/i-1', 'jti-1', 5, 'i-1', NULL)",
+            values![],
+        )
+        .unwrap();
+        old.execute(
+            "INSERT INTO credential (id, issuer, types, profile, expires_at, holder_pid, jwt)
+                 VALUES ('c-1', 'did:web:issuer.example',
+                     '[\"VerifiableCredential\",\"MembershipCredential\"]',
+                     'vc11-sl2021/jwt', 2000000000, 'h-1', 'a.b.c')",
+            values![],
+        )
+        .unwrap();
+        drop(old);
+
+        let store = DatabaseStore::open(&setting).unwrap();
+        let held = store.credentials().unwrap();
+        assert_eq!(held, [credential("c-1", "did:web:issuer.example")]);
+        assert_eq!(held[0].status, None);
+        let revoked = CheckedStatus {
+            state: HeldStatus::Revoked,
+            checked_at: 100,
+        };
+        assert!(
+            store
+                .record_credential_status("c-1", "a.b.c", revoked)
+                .unwrap()
+        );
+        assert_eq!(store.credentials().unwrap()[0].status, Some(revoked));
+    }
+
     /// A file written by 1.2, with a sent request, a credential and a
     /// Gaia-X run that was running when its process stopped, opens with
     /// 1.3: the rows read back, the run is ended as abandoned, a new run

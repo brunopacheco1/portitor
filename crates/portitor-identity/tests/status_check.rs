@@ -420,3 +420,130 @@ async fn two_replicas_run_one_round_per_period() {
     assert!(!jwts.contains(&first));
     assert_eq!(jwts.len(), 1);
 }
+
+/// A credential whose bit is set in both lists is revoked: revocation is
+/// for good, and wins over a suspension.
+#[tokio::test]
+async fn revoked_wins_over_suspended() {
+    let world = World::with(&checking());
+    let (first, second) = with_two_memberships(&world).await;
+    publish(&world, &[FIRST], &[FIRST]);
+    let counts = run_if_due(&world.identity).await.unwrap();
+    assert_eq!(
+        counts,
+        RoundCounts {
+            valid: 1,
+            revoked: 1,
+            suspended: 0,
+            unreadable: 0
+        }
+    );
+    assert_eq!(recorded(&world, &first), Some(HeldStatus::Revoked));
+    assert_eq!(presented(&world).await, sorted(&[&second]));
+}
+
+/// Pins today's behaviour: the identity records what the lists say in
+/// each round, so a revoked credential whose bit the issuer clears again
+/// is recorded valid and presented again. (A bitstring status list's
+/// `revocation` is meant to be for good; a verifier reads the list
+/// itself, so it would accept it again too.)
+#[tokio::test]
+async fn a_revoked_credential_whose_bit_is_cleared_is_valid_again() {
+    let world = World::with(&checking_every(1));
+    let (first, second) = with_two_memberships(&world).await;
+    publish(&world, &[FIRST], &[]);
+    run_if_due(&world.identity).await.unwrap();
+    assert_eq!(recorded(&world, &first), Some(HeldStatus::Revoked));
+
+    publish(&world, &[], &[]);
+    end_the_round_lease(&world);
+    let counts = run_if_due(&world.identity).await.unwrap();
+    assert_eq!(counts.valid, 2);
+    assert_eq!(recorded(&world, &first), Some(HeldStatus::Valid));
+    assert_eq!(presented(&world).await, sorted(&[&first, &second]));
+}
+
+/// The stores of two replicas on one database: one `SQLite` store shared
+/// (one process per file), then, with a test server, two connections
+/// pools on one new PostgreSQL database.
+fn stores_of_two_replicas() -> Vec<(Arc<dyn IdentityStore>, Arc<dyn IdentityStore>)> {
+    let shared: Arc<dyn IdentityStore> = Arc::new(DatabaseStore::in_memory().unwrap());
+    let mut pairs = vec![(Arc::clone(&shared), shared)];
+    if let Some(url) = portitor_runtime::testing::databases::postgres_url() {
+        let settings = portitor_runtime::testing::databases::fresh_postgres_settings(&url);
+        let setting = portitor_runtime::database::DatabaseSetting::Postgres(Box::new(settings));
+        let one: Arc<dyn IdentityStore> = Arc::new(DatabaseStore::open(&setting).unwrap());
+        let other: Arc<dyn IdentityStore> = Arc::new(DatabaseStore::open(&setting).unwrap());
+        pairs.push((one, other));
+    }
+    pairs
+}
+
+/// Two replicas: once the lease of the first one's round has ended (the
+/// next period), the other replica takes it and runs the round; the
+/// first one then leaves it.
+#[tokio::test]
+async fn the_other_replica_runs_the_next_period() {
+    for (one_store, other_store) in stores_of_two_replicas() {
+        let one = World::with_store(&checking(), one_store);
+        let other = World::with_store(&checking(), other_store);
+        with_two_memberships(&one).await;
+        publish(&one, &[], &[]);
+        publish(&other, &[], &[]);
+
+        assert!(run_if_due(&one.identity).await.is_some());
+        assert_eq!(run_if_due(&other.identity).await, None);
+        assert!(!other.directory.looked_up(REVOCATION_LIST));
+
+        end_the_round_lease(&one);
+        assert!(
+            run_if_due(&other.identity).await.is_some(),
+            "the other replica runs the next period"
+        );
+        assert!(other.directory.looked_up(REVOCATION_LIST));
+        assert_eq!(
+            run_if_due(&one.identity).await,
+            None,
+            "the other replica holds the lease for its period"
+        );
+    }
+}
+
+/// `schedule` runs a round on each tick of its timer, from one period
+/// after the start: with the clock paused, tokio moves it on whenever
+/// the test waits, so the rounds come at once. Every second, so the
+/// lease of a round (kept until a second before the next tick, in the
+/// system's seconds) does not stop the next one.
+#[tokio::test]
+async fn schedule_runs_rounds_on_the_timer() {
+    let world = World::with(&checking_every(1));
+    let (first, _second) = with_two_memberships(&world).await;
+    publish(&world, &[], &[FIRST]);
+    tokio::time::pause();
+    let schedule = portitor_identity::status_check::schedule(&world.identity).unwrap();
+    assert_eq!(
+        recorded(&world, &first),
+        None,
+        "no round before the first tick"
+    );
+
+    let suspended = wait_for_status(&world, &first, HeldStatus::Suspended).await;
+    assert!(suspended, "a round ran on the timer");
+    // the issuer lifts the suspension: a later round sees it
+    publish(&world, &[], &[]);
+    let valid = wait_for_status(&world, &first, HeldStatus::Valid).await;
+    assert!(valid, "a later round ran on the timer");
+    schedule.abort();
+}
+
+/// Waits, on the paused clock, up to 100 periods of one second for
+/// `jwt` to be recorded with `state`: whether it was.
+async fn wait_for_status(world: &World, jwt: &str, state: HeldStatus) -> bool {
+    for _ in 0..100 {
+        if recorded(world, jwt) == Some(state) {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    false
+}

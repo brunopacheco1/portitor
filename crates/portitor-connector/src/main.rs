@@ -61,8 +61,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let internal_addresses = InternalAddresses::from_env()?;
     let config = portitor_connector::Config::from_env()?;
     let limits = RequestLimits::from_env()?;
-    // to consumers, at the callback addresses they chose (R-17)
-    let sender = portitor_connector::dsp_sender(config.allow_http, &internal_addresses)?;
     if config.allow_http {
         tracing::warn!("plain http allowed for every outgoing call (PORTITOR_ALLOW_HTTP)");
     }
@@ -70,15 +68,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // one database for every store, shared with the readiness check
     let database = open_database(&config.database)?;
     let store = Arc::new(ConnectorStore::new(Arc::clone(&database)));
-    #[cfg(feature = "tck")]
-    let sender = portitor_connector::tck::LateStart(sender);
-    let mut ports = portitor_connector::Ports::new(Arc::new(sender), &store);
-    // to providers, at the addresses our operator gives in the management
-    // API: not checked (R-17)
-    let to_providers =
-        portitor_connector::dsp_sender(config.allow_http, &InternalAddresses::default())?;
-    ports.provider_sender = Arc::new(to_providers);
-    ports.internal_addresses = internal_addresses.clone();
+    // to consumers with the block on internal addresses, to providers
+    // without (R-17)
+    let mut ports =
+        portitor_connector::ports_for_partners(&store, config.allow_http, &internal_addresses)?;
     ports.object_storage = object_storage()?;
     let settings = AuthSettings::from_env(&config.participant_id, config.allow_http)?;
     if let Some(settings) = &settings

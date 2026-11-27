@@ -121,6 +121,37 @@ pub fn dsp_sender(
     HttpSender::for_partners(allow_http, internal_addresses)
 }
 
+/// The connector's ports on `store`, with the binary's two DSP senders
+/// and its rule for internal addresses (R-17):
+///
+/// - [`Ports::sender`], to consumers at the callback addresses they
+///   chose: with `internal_addresses`;
+/// - [`Ports::provider_sender`], to providers at the address our
+///   operator gave in the management API: without (the block is off);
+/// - [`Ports::internal_addresses`], for the clients the connector builds
+///   itself (the data plane's push to a consumer's endpoint). The data
+///   plane's reads of our own data sources do not use it.
+///
+/// With the `tck` feature, the sender to consumers waits for the start
+/// ([`tck::LateStart`]).
+///
+/// # Errors
+/// An HTTP client cannot be built.
+pub fn ports_for_partners(
+    store: &std::sync::Arc<store::ConnectorStore>,
+    allow_http: bool,
+    internal_addresses: &InternalAddresses,
+) -> Result<Ports, String> {
+    let to_consumers = dsp_sender(allow_http, internal_addresses)?;
+    #[cfg(feature = "tck")]
+    let to_consumers = tck::LateStart(to_consumers);
+    let mut ports = Ports::new(std::sync::Arc::new(to_consumers), store);
+    let to_providers = dsp_sender(allow_http, &InternalAddresses::default())?;
+    ports.provider_sender = std::sync::Arc::new(to_providers);
+    ports.internal_addresses = internal_addresses.clone();
+    Ok(ports)
+}
+
 /// Path prefix of the DSP 2025-1 endpoints.
 pub const DSP_PATH: &str = "/dsp/2025-1";
 

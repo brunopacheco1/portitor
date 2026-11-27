@@ -116,6 +116,35 @@ pub struct Ports {
     pub sender: Arc<dyn Sender>,
 }
 
+impl Ports {
+    /// The issuer's ports on `store`, as the binary sets them: holders
+    /// choose their DID documents and credential services, so the
+    /// directory and the sender of deliveries and offers apply
+    /// `internal_addresses` (R-17).
+    ///
+    /// # Errors
+    /// An HTTP client cannot be built.
+    pub fn for_partners(
+        store: Arc<dyn IssuerStore>,
+        allow_http: bool,
+        did_cache_seconds: u64,
+        internal_addresses: &portitor_runtime::internal_addresses::InternalAddresses,
+    ) -> Result<Self, String> {
+        let directory = portitor_runtime::directory::WebDirectory::for_partners(
+            allow_http,
+            did_cache_seconds,
+            internal_addresses,
+        )?;
+        let sender =
+            portitor_runtime::http::HttpSender::for_partners(allow_http, internal_addresses)?;
+        Ok(Self {
+            store,
+            directory: Arc::new(directory),
+            sender: Arc::new(sender),
+        })
+    }
+}
+
 impl Issuer {
     /// Builds the component from its settings, its key and its credential
     /// definitions, reads the retired public keys, and signs the status

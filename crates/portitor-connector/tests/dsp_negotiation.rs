@@ -13,7 +13,7 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use portitor_connector::http_client::Sender;
-use portitor_connector::ports::{Retry, Shared};
+use portitor_connector::ports::{AnyStore, Retry, Shared};
 use portitor_connector::{Config, Ports};
 use portitor_dsp::guard::{Direction, MessageGuard, Rejection};
 use portitor_dsp::negotiation::provider::{Decider, Decision, Negotiation};
@@ -34,7 +34,8 @@ const CALLBACK: &str = "https://consumer.example/cb";
 /// `HTTP 404 Not Found`). Holds POSTs whose URL ends with `hold` until
 /// `release`. Answers a GET of the consumer's state with `reported`, if
 /// set, for the negotiation the last POST was about, or for another one
-/// with `reported_for_another`.
+/// with `reported_for_another`; with `reported_consumer_pid`, under that
+/// consumer pid instead of ours.
 #[derive(Default)]
 struct FakeSender {
     sent: Mutex<Vec<(String, Value)>>,
@@ -44,6 +45,7 @@ struct FakeSender {
     release: Notify,
     reported: Option<&'static str>,
     reported_for_another: bool,
+    reported_consumer_pid: Option<&'static str>,
 }
 
 impl Sender for FakeSender {
@@ -84,7 +86,7 @@ impl Sender for FakeSender {
                 "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
                 "@type": "ContractNegotiation",
                 "providerPid": provider_pid,
-                "consumerPid": "urn:uuid:consumer-1",
+                "consumerPid": self.reported_consumer_pid.unwrap_or("urn:uuid:consumer-1"),
                 "state": state
             }))
         })
@@ -560,6 +562,35 @@ async fn the_state_of_another_negotiation_is_no_proof_of_delivery() {
     state(&app, &pid, "TERMINATED").await;
 }
 
+/// TD-61: the consumer's state for our provider pid but another consumer
+/// pid is no proof that our agreement arrived either: the provider ends
+/// its negotiation.
+#[tokio::test]
+async fn a_state_with_another_consumer_pid_is_no_proof_of_delivery() {
+    let sender = Arc::new(FakeSender {
+        fail: true,
+        reported: Some("AGREED"),
+        reported_consumer_pid: Some("urn:uuid:another-consumer-process"),
+        ..FakeSender::default()
+    });
+    let app = app(ports(&sender));
+    let pid = start(&app).await;
+    state(&app, &pid, "TERMINATED").await;
+}
+
+/// Waits until the negotiation `pid` has no message left to send in
+/// `store`: nothing more can be sent for it after that.
+async fn nothing_left_to_send(store: &AnyStore, pid: &str) {
+    for _ in 0..500 {
+        let negotiation = store.0.get(pid).unwrap().unwrap();
+        if negotiation.pending.is_none() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    panic!("negotiation {pid} still has a message to send");
+}
+
 /// TD-60: a first request sent again (our answer was lost) gets the
 /// negotiation it started, with the same status, and nothing new is
 /// sent; one with the same consumer pid and other terms is refused.
@@ -569,7 +600,9 @@ async fn a_repeated_first_request_gets_the_negotiation_it_started() {
         hold: Some("/agreement"),
         ..FakeSender::default()
     });
-    let app = app(ports(&sender));
+    let p = ports(&sender);
+    let store = p.store.clone();
+    let app = app(p);
     let pid = start(&app).await;
     sent(&sender, 1).await;
 
@@ -592,8 +625,68 @@ async fn a_repeated_first_request_gets_the_negotiation_it_started() {
     // `notify_one` keeps the wake-up if the agreement is not waiting yet
     sender.release.notify_one();
     state(&app, &pid, "AGREED").await;
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    nothing_left_to_send(&store, &pid).await;
     assert_eq!(sender.count(), 1, "one agreement only");
+}
+
+/// TD-60: a first request sent again once the negotiation has ended
+/// (here FINALIZED) gets that negotiation, in its state, and nothing is
+/// sent.
+#[tokio::test]
+async fn a_repeated_first_request_after_finalized_answers_finalized() {
+    let sender = Arc::new(FakeSender::default());
+    let p = ports(&sender);
+    let store = p.store.clone();
+    let app = app(p);
+    let pid = start(&app).await;
+    state(&app, &pid, "AGREED").await;
+    let verify = with(
+        ids(&pid),
+        &json!({"@type": "ContractAgreementVerificationMessage"}),
+    );
+    let (status, ack) = call(
+        &app,
+        post(&format!("{BASE}/{pid}/agreement/verification"), &verify),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    state(&app, &pid, "FINALIZED").await;
+    sent(&sender, 2).await;
+
+    let (status, again) = call(&app, post(&format!("{BASE}/request"), &request(CALLBACK))).await;
+    assert_eq!(status, StatusCode::CREATED, "{again}");
+    assert_eq!(again["providerPid"], pid.as_str());
+    assert_eq!(again["state"], "FINALIZED");
+    nothing_left_to_send(&store, &pid).await;
+    assert_eq!(sender.count(), 2, "nothing new sent");
+}
+
+/// TD-60: the same after TERMINATED (the consumer ended it).
+#[tokio::test]
+async fn a_repeated_first_request_after_terminated_answers_terminated() {
+    let sender = Arc::new(FakeSender::default());
+    let mut p = ports(&sender);
+    p.decider = Shared(Arc::new(WaitDecider));
+    let store = p.store.clone();
+    let app = app(p);
+    let pid = start(&app).await;
+    let termination = with(
+        ids(&pid),
+        &json!({"@type": "ContractNegotiationTerminationMessage", "code": "1", "reason": ["no longer needed"]}),
+    );
+    let (status, ack) = call(
+        &app,
+        post(&format!("{BASE}/{pid}/termination"), &termination),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+
+    let (status, again) = call(&app, post(&format!("{BASE}/request"), &request(CALLBACK))).await;
+    assert_eq!(status, StatusCode::CREATED, "{again}");
+    assert_eq!(again["providerPid"], pid.as_str());
+    assert_eq!(again["state"], "TERMINATED");
+    nothing_left_to_send(&store, &pid).await;
+    assert_eq!(sender.count(), 0, "nothing sent");
 }
 
 #[tokio::test]

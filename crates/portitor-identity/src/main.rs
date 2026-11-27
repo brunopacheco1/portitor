@@ -13,12 +13,10 @@ use portitor_identity::config::{
     Config, DEFAULT_MANAGEMENT_BIND, DatabaseSetting, ManagementConfig,
 };
 use portitor_identity::gaiax::{GaiaxCompliance, HttpGaiaxCompliance};
-use portitor_identity::issuance::HttpIssuerClient;
 use portitor_identity::store::{DatabaseStore, MIGRATIONS};
 use portitor_identity::{Identity, Ports};
 use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::database::{Database, SQLITE_DEPRECATED};
-use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::health;
 use portitor_runtime::internal_addresses::InternalAddresses;
 use portitor_runtime::management::management_port;
@@ -77,23 +75,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // compliance service above and its DID are the operator's choice:
     // without it
     internal_addresses.log_at_start();
-    let directory = Arc::new(WebDirectory::for_partners(
+    let ports = Ports::for_partners(
+        Arc::new(store),
+        compliance,
         config.allow_http,
         did_cache_seconds,
         &internal_addresses,
-    )?);
-    let issuers = HttpIssuerClient::for_partners(config.allow_http, &internal_addresses)?;
-    // the Gaia-X compliance service's DID is the operator's choice too
-    let operator_directory = Arc::new(WebDirectory::new(config.allow_http, did_cache_seconds)?);
-    let ports = Ports {
-        store: Arc::new(store),
-        directory: Arc::clone(&directory) as _,
-        operator_directory,
-        issuers: Arc::new(issuers),
-        compliance,
-        // the same partner sender as the DID documents (TD-20)
-        status_lists: directory,
-    };
+    )?;
     let identity = Arc::new(Identity::new(&config, key, sts_client_secret, ports)?);
     for retired in identity.retired_keys() {
         let kid = portitor_runtime::did_document::key_id(identity.participant_id(), retired);

@@ -364,3 +364,20 @@ fn a_different_purpose_is_different_terms() {
     assert!(!same_terms(&with(RESEARCH), &with(EDUCATION)));
     assert!(!same_terms(&with(RESEARCH), &offer(json!([]))));
 }
+
+/// Terms are compared as written (ADR 0009): the order of the purposes
+/// in an `isAnyOf` list counts, so `[A, B]` and `[B, A]` are different
+/// terms.
+#[test]
+fn the_order_of_an_is_any_of_list_makes_different_terms() {
+    let any_of = |purposes: serde_json::Value| {
+        offer(json!([{"leftOperand": "purpose", "operator": "isAnyOf", "rightOperand": purposes}]))
+    };
+    let research_first = any_of(json!([RESEARCH, EDUCATION]));
+    let education_first = any_of(json!([EDUCATION, RESEARCH]));
+    assert!(same_terms(
+        &research_first,
+        &any_of(json!([RESEARCH, EDUCATION]))
+    ));
+    assert!(!same_terms(&research_first, &education_first));
+}

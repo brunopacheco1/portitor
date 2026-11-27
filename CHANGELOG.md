@@ -103,6 +103,11 @@ identity now calls issuers' DID documents and status lists. Details:
   wrapper, `ComponentStore` in `portitor-runtime`, with the used token
   ids and leases written once; no change of behaviour
   ([TD-71](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-71)).
+- Code: the connector, the identity and the issuer build their clients to
+  other parties in a library function (`ports_for_partners`,
+  `Ports::for_partners`) that `main.rs` calls, so tests check the
+  block on internal addresses as the binaries set it; no change of
+  behaviour ([R-17](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-17)).
 
 ### Fixed
 
@@ -159,6 +164,13 @@ identity now calls issuers' DID documents and status lists. Details:
 - The identity reads the Gaia-X compliance service's DID
   (`PORTITOR_GAIAX_COMPLIANCE_DID`) without the block on internal
   addresses, as every URL the operator chooses.
+- PostgreSQL: a transaction that collided with another one (SQLSTATE
+  `40001` or `40P01`) now runs again after a random pause that doubles
+  with each collision (from up to 5 ms to at most 200 ms), for up to 5
+  seconds or 50 tries, and gives its connection back to the pool while
+  it waits. Before, both sides waited the same fixed time and gave up
+  after 10 tries, which busy replicas could reach
+  ([ARCHITECTURE](docs/ARCHITECTURE.md#storage)).
 - data-permits scenario, step 4: the transfer under the second permit
   works once Schuman's identity has checked, without deleting the
   revoked permit; the one under the revoked permit is still refused.

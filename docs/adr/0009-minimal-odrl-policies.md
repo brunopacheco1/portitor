@@ -283,7 +283,11 @@ and does not map them to the points of Article 53.
   (detail found when building it, 2026-11-27).
 - The consumer's contract request must carry the same purpose as the
   offer. Portitor already compares terms as written (Decision above),
-  so a request with a different purpose is refused.
+  so a request with a different purpose is refused. The same holds for
+  the order of an `isAnyOf` list: `[A, B]` and `[B, A]` are different
+  terms (decided on 2026-11-27, test
+  `the_order_of_an_is_any_of_list_makes_different_terms`); copy the
+  offer from the catalog unchanged.
 - **Proof of the purpose** comes from a credential constraint on the
   data permit ([ADR 0019](0019-credential-constraints.md)), for
   example `DataPermitCredential.purpose eq <IRI>`. Portitor does not

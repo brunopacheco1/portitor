@@ -838,3 +838,44 @@ impl EndsTransfers for EndsThroughProvider {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    /// The consumer's answer to a state query.
+    fn state(provider_pid: &str, consumer_pid: &str, state: TransferState) -> Value {
+        serde_json::to_value(TransferProcess::new(provider_pid, consumer_pid, state)).unwrap()
+    }
+
+    /// TD-61: the consumer's state counts as proof that our message
+    /// arrived only for the same transfer: the state the message leads
+    /// to, with both its ids.
+    #[test]
+    fn a_state_of_another_transfer_is_no_proof_of_delivery() {
+        let sent = json!({
+            "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+            "@type": "TransferStartMessage",
+            "providerPid": "p",
+            "consumerPid": "c"
+        });
+        let started = TransferState::Started;
+        assert!(sent_message_reached(
+            state("p", "c", started),
+            started,
+            &sent
+        ));
+        // another state of the same transfer
+        let requested = state("p", "c", TransferState::Requested);
+        assert!(!sent_message_reached(requested, started, &sent));
+        // the same state, of another provider process
+        let other_provider = state("p-other", "c", started);
+        assert!(!sent_message_reached(other_provider, started, &sent));
+        // the same state, of another consumer process
+        let other_consumer = state("p", "c-other", started);
+        assert!(!sent_message_reached(other_consumer, started, &sent));
+    }
+}

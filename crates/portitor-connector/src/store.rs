@@ -977,6 +977,10 @@ mod tests {
     const MIGRATIONS_OF_1_0: usize = 11;
     /// How many migrations a file written by 1.1 has.
     const MIGRATIONS_OF_1_1: usize = 13;
+    /// How many migrations a file written by 1.3 has.
+    const MIGRATIONS_OF_1_3: usize = 21;
+    /// How many PostgreSQL migrations a database written by 1.3 has.
+    const POSTGRES_MIGRATIONS_OF_1_3: usize = 5;
 
     /// Brings `conn` up to date, as `open` does.
     fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
@@ -1534,9 +1538,7 @@ mod tests {
     #[test]
     fn a_file_with_a_repeated_first_contract_request_still_opens() {
         let mut conn = Connection::open_in_memory().unwrap();
-        // every migration but the last, which adds the index
-        let before_the_index = SQLITE_MIGRATIONS.len() - 1;
-        portitor_runtime::sqlite::migrate(&mut conn, &SQLITE_MIGRATIONS[..before_the_index])
+        portitor_runtime::sqlite::migrate(&mut conn, &SQLITE_MIGRATIONS[..MIGRATIONS_OF_1_3])
             .unwrap();
         for provider_pid in ["urn:uuid:z-first", "urn:uuid:a-second"] {
             conn.execute(
@@ -1572,6 +1574,105 @@ mod tests {
         let mut third = found.clone();
         third.provider_pid = "urn:uuid:third".to_owned();
         assert!(!NegotiationStore::insert(&store, &third).unwrap());
+    }
+
+    /// A PostgreSQL database written by 1.3 (its first
+    /// [`POSTGRES_MIGRATIONS_OF_1_3`] migrations), with a dataset and two
+    /// negotiations for one repeated first contract request (TD-60),
+    /// opens with 1.4: the new column is NULL, the lookup index is there,
+    /// the first negotiation answers, and no third one is added.
+    #[test]
+    fn a_postgres_database_of_1_3_opens_with_1_4() {
+        use portitor_runtime::testing::databases;
+        let Some(url) = databases::postgres_url() else {
+            return;
+        };
+        let setting = DatabaseSetting::Postgres(Box::new(databases::fresh_postgres_settings(&url)));
+        let of_1_3 = Migrations {
+            component: MIGRATIONS.component,
+            sqlite: &SQLITE_MIGRATIONS[..MIGRATIONS_OF_1_3],
+            postgres: &POSTGRES_MIGRATIONS[..POSTGRES_MIGRATIONS_OF_1_3],
+        };
+        let old = ConnectorStore::new(Arc::new(Database::open(&setting, &of_1_3).unwrap()));
+        let column_of_1_4 = "SELECT column_name FROM information_schema.columns
+             WHERE table_name = 'dataset' AND column_name = 'access_policy'";
+        let read = |row: &Row| col::<String>(row, 0);
+        assert_eq!(
+            old.query_first(column_of_1_4, values![], read).unwrap(),
+            None
+        );
+        let content = serde_json::json!({
+            "@id": "d", "@type": "Dataset",
+            "hasPolicy": [{"@id": "d:offer", "@type": "Offer", "permission": [{"action": "use"}]}],
+            "distribution": [{"@type": "Distribution", "format": "HttpData-PULL"}]
+        })
+        .to_string();
+        old.execute(
+            "INSERT INTO dataset (id, entry, content, upstream, content_sha256, state,
+                 conforms_to, first_seen, last_changed, last_job)
+             VALUES ('d', $1, $1, NULL, 'ab', 'active', NULL, 1, 1, 1)",
+            values![&content],
+        )
+        .unwrap();
+        let offer = json(&sample("x", NegotiationState::Requested).offer).unwrap();
+        for provider_pid in ["urn:uuid:first", "urn:uuid:second"] {
+            old.execute(
+                "INSERT INTO negotiation (provider_pid, consumer_pid, state, callback_address,
+                     counter_party, offer, agreement, pending, version)
+                 VALUES ($1, 'urn:uuid:c', 'REQUESTED', 'https://c.example/cb', 'did:web:c',
+                     $2, NULL, NULL, 0)",
+                values![provider_pid, &offer],
+            )
+            .unwrap();
+        }
+        drop(old);
+
+        let store = ConnectorStore::new(Arc::new(Database::open(&setting, &MIGRATIONS).unwrap()));
+        let version = store
+            .query_first("SELECT version FROM portitor_schema", values![], |row| {
+                col::<i64>(row, 0)
+            })
+            .unwrap();
+        assert_eq!(
+            version,
+            Some(i64::try_from(POSTGRES_MIGRATIONS.len()).unwrap())
+        );
+        assert_eq!(
+            store.query_first(column_of_1_4, values![], read).unwrap(),
+            Some("access_policy".to_owned())
+        );
+        let dataset = crate::harvest::DatasetStore::dataset(&store, "d")
+            .unwrap()
+            .unwrap();
+        assert_eq!(dataset.access_policy, None);
+        let index = store
+            .query_first(
+                "SELECT tablename FROM pg_indexes WHERE indexname = 'negotiation_request'",
+                values![],
+                |row| col::<String>(row, 0),
+            )
+            .unwrap();
+        assert_eq!(index.as_deref(), Some("negotiation"));
+        // both rows kept; the request is answered with one of them
+        assert!(
+            NegotiationStore::get(&store, "urn:uuid:second")
+                .unwrap()
+                .is_some()
+        );
+        let found = NegotiationStore::requested(&store, "did:web:c", "urn:uuid:c")
+            .unwrap()
+            .unwrap();
+        assert!(
+            ["urn:uuid:first", "urn:uuid:second"].contains(&found.provider_pid.as_str()),
+            "{found:?}"
+        );
+        let mut third = found.clone();
+        third.provider_pid = "urn:uuid:third".to_owned();
+        assert!(!NegotiationStore::insert(&store, &third).unwrap());
+        assert_eq!(
+            NegotiationStore::get(&store, "urn:uuid:third").unwrap(),
+            None
+        );
     }
 
     /// TD-60: a negotiation is found by its consumer and consumer pid, and
