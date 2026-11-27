@@ -106,7 +106,7 @@ commit 17bb5b8, `k8s/provider/application/controlplane-config.yaml`):
 
 ## Amendment in 1.4: access policies, trusted issuers by type, negative operators (accepted 2026-11-27)
 
-Decided by the maintainer on 2026-11-27 (1.4 plan, D4 and D7), for
+Decided by the maintainer on 2026-11-27, for
 [TD-13](../RISKS_AND_TECHNICAL_DEBTS.md#td-13),
 [R-48](../RISKS_AND_TECHNICAL_DEBTS.md#r-48) and
 [R-43](../RISKS_AND_TECHNICAL_DEBTS.md#r-43).

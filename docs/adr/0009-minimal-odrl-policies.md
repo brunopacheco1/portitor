@@ -252,7 +252,7 @@ a constraint it has no function for was not checked here.
 
 ## Amendment in 1.4: the `purpose` left operand (accepted 2026-11-27)
 
-Decided by the maintainer on 2026-11-27 (1.4 plan, D2 and D3), for
+Decided by the maintainer on 2026-11-27, for
 [TD-12](../RISKS_AND_TECHNICAL_DEBTS.md#td-12) and
 [R-40](../RISKS_AND_TECHNICAL_DEBTS.md#r-40).
 

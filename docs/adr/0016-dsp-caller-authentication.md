@@ -341,7 +341,7 @@ As built in 1.1 (2026-11-24):
 
 ### Amended in 1.4: internal addresses and the order of checks (accepted 2026-11-27)
 
-Decided by the maintainer on 2026-11-27 (1.4 plan, D8), for
+Decided by the maintainer on 2026-11-27, for
 [R-17](../RISKS_AND_TECHNICAL_DEBTS.md#r-17) (threat model findings F-01
 and F-06 in [SECURITY-ASSURANCE](../SECURITY-ASSURANCE.md)). This
 replaces "The SSRF block ... (roadmap, later)" in Security above.

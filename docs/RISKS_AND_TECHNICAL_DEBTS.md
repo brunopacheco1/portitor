@@ -1175,7 +1175,7 @@ to TD-58).
 - **Current state: Open; in progress, 1.4: built.** The identity
   reads the status lists of the credentials it holds every
   `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS` (default 60, 0 off;
-  maintainer decision D6, 2026-11-27, as EDC IdentityHub's
+  decided by the maintainer on 2026-11-27, as EDC IdentityHub's
   `CredentialWatchdog`), records `VALID`, `REVOKED`, `SUSPENDED` or `UNCHECKABLE` with
   the time, and leaves revoked and suspended credentials out of its
   presentations (`crates/portitor-identity/src/status_check.rs`). The
