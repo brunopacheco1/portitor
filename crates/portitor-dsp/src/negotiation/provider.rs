@@ -342,10 +342,10 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
         credentials: &CallerCredentials,
     ) -> Handled {
         if let Some(existing) = self.requested_before(caller, &msg.consumer_pid)? {
-            return answer_again(&existing, &msg);
+            return answer_again(&existing, &msg.offer, msg.callback_address.as_deref());
         }
-        let consumer_pid = msg.consumer_pid.clone();
-        let Some(callback_address) = msg.callback_address.clone().filter(|c| !c.is_empty()) else {
+        let consumer_pid = msg.consumer_pid;
+        let Some(callback_address) = msg.callback_address.filter(|c| !c.is_empty()) else {
             return Err(bad("", &consumer_pid, "callbackAddress is required"));
         };
         self.check_offer(&msg.offer, "", &consumer_pid, caller)?;
@@ -357,7 +357,7 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
             state,
             callback_address,
             counter_party: caller.to_owned(),
-            offer: msg.offer.clone(),
+            offer: msg.offer,
             agreement: None,
             pending: None,
             version: 0,
@@ -368,7 +368,11 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
             // a copy of this request was saved while this one was being
             // checked: answer with the negotiation that was saved
             return match self.requested_before(caller, &negotiation.consumer_pid)? {
-                Some(existing) => answer_again(&existing, &msg),
+                Some(existing) => answer_again(
+                    &existing,
+                    &negotiation.offer,
+                    Some(negotiation.callback_address.as_str()),
+                ),
                 None => Err(bad(
                     "",
                     &negotiation.consumer_pid,
@@ -747,8 +751,9 @@ impl<S: NegotiationStore, D, C, E> Records for ProviderService<S, D, C, E> {
     }
 }
 
-/// The answer to a first `ContractRequestMessage` that the consumer of
-/// `existing` sent again with the same `consumerPid` (TD-60): the
+/// The answer to a first `ContractRequestMessage`, with `offer` and
+/// `callback_address`, that the consumer of `existing` sent again with
+/// the same `consumerPid` (TD-60): the
 /// negotiation as it is now, and nothing new to send. A message of ours
 /// still pending is sent by the outbox, as for any negotiation.
 ///
@@ -758,13 +763,13 @@ impl<S: NegotiationStore, D, C, E> Records for ProviderService<S, D, C, E> {
 /// answer for a negotiation it did not ask for. A counter-offer of ours
 /// replaces the offer kept, so a repeat that comes after one is refused
 /// too.
-fn answer_again(existing: &Negotiation, msg: &ContractRequestMessage) -> Handled {
-    let same_request = existing.offer == msg.offer
-        && msg.callback_address.as_deref() == Some(existing.callback_address.as_str());
+fn answer_again(existing: &Negotiation, offer: &Offer, callback_address: Option<&str>) -> Handled {
+    let same_request =
+        existing.offer == *offer && callback_address == Some(existing.callback_address.as_str());
     if !same_request {
         return Err(bad(
             "",
-            &msg.consumer_pid,
+            &existing.consumer_pid,
             "consumerPid is already used by another contract request of this consumer",
         ));
     }
