@@ -663,6 +663,54 @@ async fn tokens_are_checked() {
     );
 }
 
+/// F-06: a token for another verifier, out of its time, or whose `iss`
+/// is not its `sub` is refused before the DID its `iss` names is
+/// resolved: nothing is fetched for it.
+#[tokio::test]
+async fn a_token_refused_on_its_claims_makes_us_fetch_nothing() {
+    let ds = dataspace().await;
+    ds.answer_member(&json!({}));
+    let holder = &ds.holder;
+    let now = now_secs();
+    let claims = |iss: &str, aud: &str, exp: u64| Claims {
+        iss: iss.to_owned(),
+        sub: holder.did.clone(),
+        aud: aud.to_owned(),
+        jti: portitor_runtime::system::new_uuid(),
+        exp,
+        iat: now.saturating_sub(4_000),
+        nbf: None,
+        token: Some("a".to_owned()),
+    };
+    let signed = |claims: Claims| {
+        format!(
+            "Bearer {}",
+            holder.sign(&serde_json::to_value(claims).unwrap())
+        )
+    };
+    let refused = [
+        (
+            signed(claims(&holder.did, &ds.third.did, now + 300)),
+            "aud is not the verifier",
+        ),
+        (
+            signed(claims(&holder.did, &ds.me_did, now - 3_600)),
+            "expired",
+        ),
+        (
+            signed(claims(&ds.third.did, &ds.me_did, now + 300)),
+            "iss and sub differ",
+        ),
+    ];
+    ds.forget_fetches();
+    for (header, reason) in refused {
+        let error = ds.verifier.verify(Some(&header)).await.unwrap_err();
+        assert!(error.reason().contains(reason), "{reason}: {error}");
+        assert!(!error.is_temporary());
+        assert!(ds.fetched().is_empty(), "{reason}: {:?}", ds.fetched());
+    }
+}
+
 #[tokio::test]
 async fn a_key_without_capability_invocation_is_refused() {
     let ds = dataspace().await;

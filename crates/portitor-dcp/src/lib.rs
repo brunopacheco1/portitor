@@ -39,8 +39,8 @@ pub use did::{
     DidDocument, Purpose, Relationship, Service, VerificationMethod, did_web_url, same_did,
 };
 pub use id_token::{
-    Claims, DEFAULT_MAX_TOKEN_IDS, JtiCache, MAX_TOKEN_LIFETIME, UsedTokenIds, unverified_claims,
-    validate_self_issued,
+    Claims, DEFAULT_MAX_TOKEN_IDS, JtiCache, MAX_TOKEN_LIFETIME, UsedTokenIds,
+    check_before_resolving, unverified_claims, validate_self_issued,
 };
 pub use jws::{Alg, Jws};
 pub use keys::{Jwk, Signer, SigningKey};

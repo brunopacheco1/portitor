@@ -117,12 +117,14 @@ async fn the_outbox_sends_no_trace_context() {
     );
 }
 
-/// A token whose `iss` is the recorder's DID: the verifier fetches that
-/// DID document before it checks anything else.
+/// A token whose `iss` is the recorder's DID, for the verifier of
+/// [`settings`] (its participant id is that DID too) and valid now: the
+/// verifier fetches that DID document to check its signature.
 fn token_from(did: &str) -> String {
     let key = portitor_dcp::SigningKey::generate().unwrap();
-    let claims = json!({"iss": did, "sub": did, "aud": "did:web:us.example",
-                        "jti": "test-only-jti", "exp": 4_000_000_000_u64, "iat": 1});
+    let now = portitor_runtime::system::now_secs();
+    let claims = json!({"iss": did, "sub": did, "aud": did,
+                        "jti": "test-only-jti", "exp": now + 300, "iat": now});
     key.sign_json(&format!("{did}#key-1"), "JWT", &claims)
         .unwrap()
 }

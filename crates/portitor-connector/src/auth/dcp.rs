@@ -92,7 +92,9 @@ use portitor_dcp::gaiax::{
 use portitor_dcp::message::{PresentationQueryMessage, PresentationResponseMessage};
 use portitor_dcp::scope::merge_scopes;
 use portitor_dcp::trust::IssuerTypes;
-use portitor_dcp::{Claims, DidDocument, JtiCache, unverified_claims, validate_self_issued};
+use portitor_dcp::{
+    Claims, DidDocument, JtiCache, check_before_resolving, unverified_claims, validate_self_issued,
+};
 use portitor_dsp::policy::HeldCredential;
 use portitor_runtime::BoxFuture;
 use portitor_runtime::did::DidWebResolver;
@@ -447,6 +449,11 @@ impl DcpVerifier {
     async fn check_token(&self, token: &str) -> Result<CheckedToken, VerifyError> {
         let unverified = unverified_claims(token).map_err(|e| format!("ID token: {e}"))?;
         let now = self.now();
+        // what needs no DID document first, on the claims not verified
+        // yet: a token for another verifier, or out of its time, makes us
+        // fetch nothing from the URL its `iss` names (F-06)
+        check_before_resolving(&unverified, &self.participant_id, now, LEEWAY)
+            .map_err(|e| format!("ID token: {e}"))?;
         let doc = self.resolver.resolve(&unverified.iss).await?;
         let claims = self
             .validate_and_remember(token, &doc, now)
