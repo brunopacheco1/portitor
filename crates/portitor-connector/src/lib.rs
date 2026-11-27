@@ -109,7 +109,7 @@ pub use ports::Ports;
 /// For the provider's messages to consumers ([`Ports::sender`]), whose
 /// callback addresses the consumers chose, pass the settings' block on
 /// internal addresses (R-17); for the consumer's messages to providers
-/// ([`Ports::provider_sender`]), whose address our operator gave, pass
+/// ([`Ports::sender_to_providers`]), whose address our operator gave, pass
 /// [`InternalAddresses::default`] (off).
 ///
 /// # Errors
@@ -126,7 +126,7 @@ pub fn dsp_sender(
 ///
 /// - [`Ports::sender`], to consumers at the callback addresses they
 ///   chose: with `internal_addresses`;
-/// - [`Ports::provider_sender`], to providers at the address our
+/// - [`Ports::sender_to_providers`], to providers at the address our
 ///   operator gave in the management API: without (the block is off);
 /// - [`Ports::internal_addresses`], for the clients the connector builds
 ///   itself (the data plane's push to a consumer's endpoint). The data
@@ -147,7 +147,7 @@ pub fn ports_for_partners(
     let to_consumers = tck::LateStart(to_consumers);
     let mut ports = Ports::new(std::sync::Arc::new(to_consumers), store);
     let to_providers = dsp_sender(allow_http, &InternalAddresses::default())?;
-    ports.provider_sender = std::sync::Arc::new(to_providers);
+    ports.sender_to_providers = std::sync::Arc::new(to_providers);
     ports.internal_addresses = internal_addresses.clone();
     Ok(ports)
 }

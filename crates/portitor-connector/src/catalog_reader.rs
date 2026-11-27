@@ -141,7 +141,7 @@ impl CatalogReader {
     pub(crate) fn new(ports: &Ports, allow_http: bool) -> Self {
         Self {
             // the provider address comes from our operator (R-17)
-            sender: Arc::clone(&ports.provider_sender),
+            sender: Arc::clone(&ports.sender_to_providers),
             prover: Arc::clone(&ports.prover),
             guard: Arc::clone(&ports.guard),
             allow_http,

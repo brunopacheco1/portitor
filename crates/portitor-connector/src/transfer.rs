@@ -149,7 +149,7 @@ impl TransferProvider {
                 catalog,
                 SystemEnvironment,
             ),
-            link: Link::new(ports),
+            link: Link::to_consumers(ports),
             verifier: Arc::clone(&ports.verifier),
             flow_store: ports.flow_store.clone(),
             allow_http,

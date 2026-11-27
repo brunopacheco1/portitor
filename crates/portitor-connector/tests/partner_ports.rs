@@ -93,7 +93,7 @@ async fn a_message_to_a_provider_on_an_internal_address_is_sent() {
     let (base, count) = counting_server().await;
     let request = format!("{base}{DSP}/negotiations/request");
     ports
-        .provider_sender
+        .sender_to_providers
         .post_authorized(&request, &json!({}), "Bearer t")
         .await
         .unwrap();
@@ -324,7 +324,7 @@ fn all_to(urls: &[String], base: &str) -> bool {
 }
 
 /// R-17: the consumer's negotiation and transfer messages and its
-/// catalog reads go only through `provider_sender`; the provider's
+/// catalog reads go only through `sender_to_providers`; the provider's
 /// messages to a consumer's callback only through `sender`.
 #[tokio::test]
 async fn consumer_and_provider_messages_use_their_own_senders() {
@@ -334,9 +334,9 @@ async fn consumer_and_provider_messages_use_their_own_senders() {
     let consumer_to_consumers = Recording::new(&network);
     let consumer_to_providers = Recording::new(&network);
     let mut provider_ports = common::ports(Arc::clone(&provider_to_consumers) as _);
-    provider_ports.provider_sender = Arc::clone(&provider_to_providers) as _;
+    provider_ports.sender_to_providers = Arc::clone(&provider_to_providers) as _;
     let mut consumer_ports = common::ports(Arc::clone(&consumer_to_consumers) as _);
-    consumer_ports.provider_sender = Arc::clone(&consumer_to_providers) as _;
+    consumer_ports.sender_to_providers = Arc::clone(&consumer_to_providers) as _;
     let (provider, consumer) = connect(&network, provider_ports, consumer_ports).await;
 
     let transfer = negotiate_and_transfer(&consumer).await;
