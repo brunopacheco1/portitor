@@ -1106,8 +1106,8 @@ fn transfer_routes(provider: Arc<transfer::TransferProvider>) -> Router {
         .with_state(provider)
 }
 
-async fn version(State(s): State<Arc<AppState>>) -> Json<VersionResponse> {
-    Json(s.versions.clone())
+async fn version(State(app): State<Arc<AppState>>) -> Json<VersionResponse> {
+    Json(app.versions.clone())
 }
 
 fn respond<T: Serialize>(outcome: Outcome<T>) -> Response {
@@ -1127,7 +1127,7 @@ fn respond<T: Serialize>(outcome: Outcome<T>) -> Response {
 /// catalog; a dataset with an access policy is shown only to the callers
 /// it holds for (ADR 0019, amendment in 1.4).
 async fn catalog_request(
-    State(s): State<Arc<AppState>>,
+    State(app): State<Arc<AppState>>,
     Extension(caller): Extension<auth::Caller>,
     body: Result<Json<serde_json::Value>, JsonRejection>,
 ) -> Response {
@@ -1145,11 +1145,11 @@ async fn catalog_request(
         Err(e) => return refused(&e.body_text()),
     };
     // the scopes of every access policy, asked for once per request
-    let scopes = match s.catalog.access_scopes(&s.credential_types) {
+    let scopes = match app.catalog.access_scopes(&app.credential_types) {
         Ok(scopes) => scopes,
         Err(e) => return respond::<()>(Outcome::StoreFailed(e)),
     };
-    let credentials = match caller_credentials(&s, &caller, &scopes).await {
+    let credentials = match caller_credentials(&app, &caller, &scopes).await {
         Ok(credentials) => credentials,
         Err(answer) => return answer,
     };
@@ -1158,21 +1158,24 @@ async fn catalog_request(
         now: &now,
         credentials: &credentials,
     };
-    respond(s.catalog.request(&msg, &requester))
+    respond(app.catalog.request(&msg, &requester))
 }
 
 /// `GET /catalog/datasets/{id}`: a dataset whose access policy does not
 /// hold for the caller gets the same answer as an unknown one.
 async fn dataset(
-    State(s): State<Arc<AppState>>,
+    State(app): State<Arc<AppState>>,
     Extension(caller): Extension<auth::Caller>,
     Path(id): Path<String>,
 ) -> Response {
-    let scopes = match s.catalog.dataset_access_scopes(&id, &s.credential_types) {
+    let scopes = match app
+        .catalog
+        .dataset_access_scopes(&id, &app.credential_types)
+    {
         Ok(scopes) => scopes,
         Err(e) => return respond::<()>(Outcome::StoreFailed(e)),
     };
-    let credentials = match caller_credentials(&s, &caller, &scopes).await {
+    let credentials = match caller_credentials(&app, &caller, &scopes).await {
         Ok(credentials) => credentials,
         Err(answer) => return answer,
     };
@@ -1181,7 +1184,7 @@ async fn dataset(
         now: &now,
         credentials: &credentials,
     };
-    respond(s.catalog.dataset(&id, &requester))
+    respond(app.catalog.dataset(&id, &requester))
 }
 
 /// The caller's credentials for `scopes`: those of the access policies.
@@ -1199,12 +1202,13 @@ async fn dataset(
 /// hidden because a service was down. No reason: it would tell the caller
 /// which service failed (as `auth::require_caller`'s 503).
 async fn caller_credentials(
-    s: &AppState,
+    app: &AppState,
     caller: &auth::Caller,
     scopes: &[String],
 ) -> Result<portitor_dsp::policy::CallerCredentials, Response> {
     let read =
-        auth::credentials_or_unavailable(&*s.verifier, &s.credential_types, caller, scopes).await;
+        auth::credentials_or_unavailable(&*app.verifier, &app.credential_types, caller, scopes)
+            .await;
     match read {
         Ok(credentials) => Ok(credentials),
         Err(reason) => {
