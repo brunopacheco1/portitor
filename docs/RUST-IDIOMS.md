@@ -811,6 +811,14 @@ through `tx`, with no other effect (no message sent, no counter in
 memory changed). This is why the work is a closure, and why it is an
 `FnMut` (a closure that can be called again) and not an `FnOnce`.
 
+Before it runs again, `transaction` gives its connection back to the
+pool and pauses for a random time, from 0 up to a ceiling that doubles
+with each collision (5 ms, 10 ms, ... at most 200 ms): "exponential
+backoff with full jitter". With a fixed pause, the two transactions that
+collided would wake together and collide again. It stops after 5
+seconds or 50 tries and returns the database's error
+(`pause_after_collision` in `portitor-runtime/src/database/postgres.rs`).
+
 The same SQL runs on PostgreSQL and on `SQLite`:
 
 - placeholders are `$1`, `$2`, ... (PostgreSQL's form); for `SQLite`

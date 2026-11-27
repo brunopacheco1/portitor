@@ -118,6 +118,13 @@ setting and file format still works, and every new setting is optional
   `portitor-runtime` (`status_lists.rs`), unchanged
   ([TD-20](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-20),
   [DEPLOYING](docs/DEPLOYING.md#getting-a-credential)).
+- PostgreSQL: a transaction that collided with another one (SQLSTATE
+  `40001` or `40P01`) now runs again after a random pause that doubles
+  with each collision (from up to 5 ms to at most 200 ms), for up to 5
+  seconds or 50 tries, and gives its connection back to the pool while
+  it waits. Before, both sides waited the same fixed time and gave up
+  after 10 tries, which busy replicas could reach
+  ([ARCHITECTURE](docs/ARCHITECTURE.md#storage)).
 - data-permits scenario, step 4: the transfer under the second permit
   works once Schuman's identity has checked, without deleting the
   revoked permit; the one under the revoked permit is still refused.

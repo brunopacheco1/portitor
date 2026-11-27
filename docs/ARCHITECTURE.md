@@ -606,7 +606,9 @@ is in `portitor-runtime` (`src/database.rs` and `src/database/`;
 - **Transactions.** A write of several statements is one transaction.
   On PostgreSQL it runs at the `SERIALIZABLE` level; when PostgreSQL
   answers that two transactions collided (SQLSTATE `40001` or
-  `40P01`), it runs again, up to 10 times. So a store sees "one writer
+  `40P01`), it runs again after a random pause that grows with each
+  collision ("exponential backoff with full jitter"), for up to 5
+  seconds. So a store sees "one writer
   at a time", as it did with SQLite's single connection, and the
   compare-and-update writes of
   [ADR 0007](adr/0007-outbox-and-proof-of-delivery.md) keep their
