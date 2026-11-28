@@ -912,10 +912,18 @@ TD-46, TD-60, TD-61, TD-70 and TD-71, and TD-47, fixed in 1.1).
 - **Why it matters.** A data user that wants the HDAB to negotiate for
   it cannot use Portitor; a delegation of our own would not
   interoperate with EDC or Simpl-Open.
-- **Current state: Open.**
-- **Next.** In progress for 1.5: a research ADR, no code (maintainer,
-  2026-11-28). Code in 1.10 only if the ADR is accepted and finds a way
-  to follow.
+- **Current state: Open.** In progress for 1.5:
+  [ADR 0032](adr/0032-negotiating-on-a-data-users-behalf.md)
+  (Proposed, 2026-11-28) found no existing way to follow. DSP 2025-1
+  lets the assignee differ from the negotiating agent but defines no
+  check; DCP binds the caller to its own DID; VC 2.0 leaves delegation
+  out of scope; EDC, Tractus-X and Simpl-Open always make the
+  authenticated caller the consumer. The EHDS does not have the HDAB
+  negotiate for a user: the holder makes data available to the HDAB
+  (Art. 60(1)), which processes it for the user (Art. 74(1)). The ADR
+  keeps ADR 0013 and lists what delegation would need.
+- **Next.** The maintainer accepts or rejects ADR 0032. No code in
+  1.10 unless DCP or DSP add a delegation.
 
 ## Technical debt
 

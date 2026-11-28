@@ -36,6 +36,12 @@ Portitor 1.5 (in progress): the HDAB and Schuman Clinical Research.
   upstream agreement, so the hdab-intermediary scenario keeps the
   HDAB's offer inside its agreement by hand; no code. ADR number 0030
   is not used (a withdrawn draft).
+- [ADR 0032](docs/adr/0032-negotiating-on-a-data-users-behalf.md),
+  Proposed (R-51, way D): DSP 2025-1, DCP v1.0.1, VC 2.0, EDC,
+  Tractus-X, Simpl-Open and the EHDS define no way for the HDAB to
+  negotiate an agreement for a data user that the holder can check;
+  ADR 0013 stays (the assignee is the caller), and the ADR lists what
+  delegation would need. No code.
 
 ## [1.4.0] - 2026-11-27
 

@@ -48,6 +48,7 @@ first, then here.
 | [0028](0028-separate-pluggable-data-plane.md) | A separate, pluggable data plane over Data Plane Signaling | Accepted (2026-11-25) | Operators register their own data planes over DPS; the built-in data plane becomes one of them, linked in by default and also an optional image |
 | [0029](0029-several-replicas.md) | Several replicas on one PostgreSQL database | Accepted (2026-11-26) | Several containers of each image share one PostgreSQL database and coordinate through it (leases, compare-and-swap, reads per request); SQLite deprecated in 1.3, removed in 2.0 (notes in 1.4: no copy tool; the identity's status check) |
 | [0031](0031-agreements-that-depend-on-an-upstream-agreement.md) | Agreements that depend on an upstream agreement | Proposed (2026-11-28) | No specification or product links two agreements; the HDAB's offer stays inside its agreement by hand, the gap is R-39 |
+| [0032](0032-negotiating-on-a-data-users-behalf.md) | Negotiating on a data user's behalf | Proposed (2026-11-28) | No specification or product lets one participant negotiate for another; ADR 0013 stays (the assignee is the caller), the gap is R-51 |
 
 Number 0030 was a withdrawn draft that never reached `main`; it is not
 used.

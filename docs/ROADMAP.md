@@ -719,7 +719,7 @@ data holder are compared, with pros and cons (maintainer, 2026-11-23).
 | Scenario | What it shows | Runs on |
 | --- | --- | --- |
 | The HDAB as permit authority | The HDAB only issues the data permit; the holder checks it at negotiation and sends the data where the permit says | 1.10, after the EHDS permit template is adopted; needs a destination check ([research, 1.4](spikes/1.4-destination-matches-permit.md)) |
-| The HDAB on a data user's behalf | The HDAB negotiates with the holder for a data user | research first: a delegation the holder can check (1.5) |
+| The HDAB on a data user's behalf | The HDAB negotiates with the holder for a data user | not built: no delegation the holder can check exists ([ADR 0032](adr/0032-negotiating-on-a-data-users-behalf.md), Proposed, 1.5) |
 | A mixed data space | One participant runs Eclipse EDC instead of Portitor, in the health story | 1.0 |
 | The holder withdraws its dataset | New negotiations fail, existing agreements keep their data (ADR 0020) | 1.0 |
 | Cross-border | A data user in another Member State, with its own authority, issuer and bundle; how HealthData@EU links national nodes is read first | partly 1.0 (several trusted issuers) |
@@ -742,7 +742,7 @@ what worked and what did not, and a demo or an ADR where it earns one
 | 3 | C. Permit credential, data to the SPE | the user's permit; data into the SPE the permit names | 1.10, after the permit template is adopted; needs a destination check |
 | 4 | E. The trusted holder runs the SPE (EHDS Art. 72) | the user's permit; data stays, results leave | needs 1.4; the SPE is outside Portitor |
 | 5 | B. Chained agreements | the HDAB; its offers held inside its agreement | 1.5: [ADR 0031](adr/0031-agreements-that-depend-on-an-upstream-agreement.md) Proposed, no existing way found; the limit stays by hand ([R-39](RISKS_AND_TECHNICAL_DEBTS.md#r-39)) |
-| 6 | D. The HDAB on the user's behalf | a delegation and the user's permit | 1.5 research ADR ([R-51](RISKS_AND_TECHNICAL_DEBTS.md#r-51)); refused today (ADR 0013) |
+| 6 | D. The HDAB on the user's behalf | a delegation and the user's permit | 1.5: [ADR 0032](adr/0032-negotiating-on-a-data-users-behalf.md) Proposed, no existing way found; stays refused (ADR 0013, [R-51](RISKS_AND_TECHNICAL_DEBTS.md#r-51)) |
 
 ## 2027: EHDS participant functions and Simpl-Open tests (proposal, 2026-11-21)
 
