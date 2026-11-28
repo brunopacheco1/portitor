@@ -24,6 +24,12 @@ Portitor 1.5 (in progress): the HDAB and Schuman Clinical Research.
   user to the HDAB that the holder can verify) and TD-79 (the
   identity's status check names an unknown status bit SUSPENDED and
   checks a REVOKED credential again).
+- Research note [1.5-dpv-ehds-purposes](docs/spikes/1.5-dpv-ehds-purposes.md)
+  (R-40): DPV EHDS 2.3 names the point of EHDS Article 53(1) for each
+  of its secondary use purposes and covers every point; it is a draft,
+  and HealthDCAT-AP does not use it. The two purpose IRIs of the docs
+  and scenarios are right. A dated note in ADR 0009 corrects its 1.4
+  remark.
 
 ## [1.4.0] - 2026-11-27
 

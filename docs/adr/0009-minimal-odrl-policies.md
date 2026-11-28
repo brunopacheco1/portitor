@@ -307,3 +307,12 @@ and does not map them to the points of Article 53.
   EDC interop test).
 - If DPV renames its draft IRIs, the docs and the demo change; Portitor
   accepts any IRI.
+
+## Note, 2026-11-28: DPV EHDS does name the points of Article 53
+
+The 1.4 amendment says DPV's EHDS extension "does not map them to the
+points of Article 53". The research note of 1.5,
+[1.5-dpv-ehds-purposes](../spikes/1.5-dpv-ehds-purposes.md), found that
+version 2.3 does, in a free-text `dct:source` on each purpose (for
+example `"EHDS Art.53.1(e)"` on `HealthcareScientificResearch`). The
+decision does not change: any IRI, compared exactly, no list shipped.

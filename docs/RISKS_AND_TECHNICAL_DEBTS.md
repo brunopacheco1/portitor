@@ -699,8 +699,18 @@ TD-46, TD-60, TD-61, TD-70 and TD-71, and TD-47, fixed in 1.1).
   amendment in 1.4); the docs and the hdab-intermediary demo
   use the DPV EHDS extension's draft IRIs
   (`https://w3id.org/dpv/legal/eu/ehds#`). Portitor ships no list.
-- **Next.** In progress for 1.5: a research note on how the DPV EHDS
-  purposes map to Article 53 (maintainer, 2026-11-28). Docs only.
+  In progress for 1.5: the research note
+  [1.5-dpv-ehds-purposes](spikes/1.5-dpv-ehds-purposes.md) (2026-11-28)
+  found that DPV EHDS 2.3 names the point of Article 53(1) for each of
+  its secondary use purposes, and covers every point, (a) to (f) with
+  (e)(i) and (e)(ii). The link is a free-text `dct:source`, the
+  extension is a draft Community Group report, and HealthDCAT-AP
+  release 8 uses no controlled list for `dpv:hasPurpose`. The two IRIs
+  the docs and scenarios use exist and fit their points:
+  `HealthcareScientificResearch` (e) and `ImproveHealthcareEducation`
+  (d). It stays Open: the list is a draft and nothing else uses it yet.
+- **Next.** Keep accepting any IRI. Look again when the EHDS permit
+  template is adopted (1.10) or DPV EHDS leaves draft.
 
 <a id="r-41"></a>
 ### R-41 A key removed from a DID document is still trusted for up to 5 minutes
