@@ -12,6 +12,11 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Documentation
+
+- ROADMAP: a management UI for operators is planned for 1.7, after
+  the user login of that release; no UI before.
+
 ## [1.4.0] - 2026-11-27
 
 Portitor 1.4: purpose and data permits in policies. Offers can name a
