@@ -504,6 +504,13 @@ Scope set by the maintainer on 2026-11-27. What shipped:
   data user to delegate to the HDAB that the holder can verify; DSP and
   DCP define none that we know of. Research and an ADR first, like
   [R-39](RISKS_AND_TECHNICAL_DEBTS.md#r-39).
+- A management console for demos (maintainer, 2026-11-28;
+  [ADR 0030](adr/0030-management-console.md), proposed): a static web
+  page beside the three images, never in them, served with a proxy that
+  holds the management keys. It shows each participant's credentials,
+  catalog, negotiations and transfers, with the reasons for refusals,
+  and makes the calls the management APIs already have. First the
+  two-party quickstart, then data-permits and the health demo.
 - Demo step 3: the four questions (below) answered by running the demo,
   each with its evidence, and a note of where Portitor fell short.
 - Debts and risks assigned to this release (maintainer, 2026-11-26):
@@ -523,7 +530,8 @@ Scope set by the maintainer on 2026-11-27. What shipped:
   ([TD-78](RISKS_AND_TECHNICAL_DEBTS.md#td-78));
   the DPV purposes mapped to Article 53
   ([R-40](RISKS_AND_TECHNICAL_DEBTS.md#r-40)).
-- Exit: the four answers written in the docs.
+- Exit: the four answers written in the docs; the quickstart can be
+  followed in the console, and a Playwright check walks it.
 - Main risk: our design for dependent agreements may not match what EDC
   or Simpl-Open do later.
 
