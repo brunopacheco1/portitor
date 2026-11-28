@@ -108,7 +108,7 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [R-29](#r-29) | DCP costs about 2 ms per request and 8 times fewer requests under load | Performance | Open | 1.6 |
 | [R-36](#r-36) | The OpenTelemetry Rust crates are 0.x and change their API often | Dependency, upstream | Mitigated | none |
 | [R-37](#r-37) | Telemetry costs some throughput at saturation | Performance | Mitigated | none |
-| [R-39](#r-39) | No specification defines agreements that depend on an upstream agreement | Interoperability | Open | 1.5 (research ADR); code only if the ADR finds a way to follow |
+| [R-39](#r-39) | No specification defines agreements that depend on an upstream agreement | Interoperability | Open | 1.5 (ADR 0031, Proposed: no code; the scenario keeps the limit by hand); then an upstream event: DSP or ODRL defines a link |
 | [R-40](#r-40) | No shared list of EHDS purposes | Interoperability | Open | 1.5 (map the DPV purposes to Article 53) |
 | [R-41](#r-41) | A key removed from a DID document is still trusted for up to 5 minutes | Security | Mitigated | none |
 | [R-42](#r-42) | The STS shares the identity's public port | Security | Open | 1.6 |
@@ -119,7 +119,7 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [R-47](#r-47) | The EDC Issuer Service's admin API may change with the next release candidate | Interoperability | Accepted | EDC 1.0.0 |
 | [R-49](#r-49) | Leases in the database depend on the hosts' clocks | Operations | Mitigated | none |
 | [R-50](#r-50) | The catalog asks every caller for the scopes of all access policies, so members learn which credential types hidden datasets need | Security | Accepted | 1.5 (check written into the entry) |
-| [R-51](#r-51) | No way for a data user to delegate a negotiation to the HDAB that the holder can verify | Interoperability | Open | 1.5 (research ADR); code 1.10, if the ADR is accepted |
+| [R-51](#r-51) | No way for a data user to delegate a negotiation to the HDAB that the holder can verify | Interoperability | Open | 1.5 (ADR 0032, Proposed: no code); then an upstream event: DSP or DCP defines a delegation |
 | [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | Open | 1.8 |
 | [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | Open | research; code 1.7 |
 | [TD-03](#td-03) | A provider in several dataspaces, each with its own rules | Technical debt | Accepted | 1.9 |
