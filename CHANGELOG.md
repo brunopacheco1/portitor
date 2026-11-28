@@ -12,10 +12,18 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+Portitor 1.5 (in progress): the HDAB and Schuman Clinical Research.
+
 ### Documentation
 
 - ROADMAP: a management UI for operators is planned for 1.7, after
   the user login of that release; no UI before.
+- ROADMAP and risks: the 1.5 plan approved by the maintainer
+  (2026-11-28). TD-35 moves to 1.9, TD-11 to 1.6, TD-12 and the permit
+  scenario (way C) to 1.10. New items: R-51 (no delegation from a data
+  user to the HDAB that the holder can verify) and TD-79 (the
+  identity's status check names an unknown status bit SUSPENDED and
+  checks a REVOKED credential again).
 
 ## [1.4.0] - 2026-11-27
 

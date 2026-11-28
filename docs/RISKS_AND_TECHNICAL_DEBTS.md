@@ -108,8 +108,8 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [R-29](#r-29) | DCP costs about 2 ms per request and 8 times fewer requests under load | Performance | Open | 1.6 |
 | [R-36](#r-36) | The OpenTelemetry Rust crates are 0.x and change their API often | Dependency, upstream | Mitigated | none |
 | [R-37](#r-37) | Telemetry costs some throughput at saturation | Performance | Mitigated | none |
-| [R-39](#r-39) | No specification defines agreements that depend on an upstream agreement | Interoperability | Open | 1.5 |
-| [R-40](#r-40) | No shared list of EHDS purposes | Interoperability | Open | 1.5 (suggested: map the DPV purposes to Article 53) |
+| [R-39](#r-39) | No specification defines agreements that depend on an upstream agreement | Interoperability | Open | 1.5 (research ADR); code only if the ADR finds a way to follow |
+| [R-40](#r-40) | No shared list of EHDS purposes | Interoperability | Open | 1.5 (map the DPV purposes to Article 53) |
 | [R-41](#r-41) | A key removed from a DID document is still trusted for up to 5 minutes | Security | Mitigated | none |
 | [R-42](#r-42) | The STS shares the identity's public port | Security | Open | 1.6 |
 | [R-43](#r-43) | Negative credential constraints can be met with another credential | Security | Accepted | none (documented in 1.4) |
@@ -118,7 +118,8 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [R-46](#r-46) | The EDC Issuer Service names a request status address that is not found | Interoperability, upstream | Open | report upstream; the next EDC release |
 | [R-47](#r-47) | The EDC Issuer Service's admin API may change with the next release candidate | Interoperability | Accepted | EDC 1.0.0 |
 | [R-49](#r-49) | Leases in the database depend on the hosts' clocks | Operations | Mitigated | none |
-| [R-50](#r-50) | The catalog asks every caller for the scopes of all access policies, so members learn which credential types hidden datasets need | Security | Accepted | 1.5 (suggested) |
+| [R-50](#r-50) | The catalog asks every caller for the scopes of all access policies, so members learn which credential types hidden datasets need | Security | Accepted | 1.5 (check written into the entry) |
+| [R-51](#r-51) | No way for a data user to delegate a negotiation to the HDAB that the holder can verify | Interoperability | Open | 1.5 (research ADR); code 1.10, if the ADR is accepted |
 | [TD-01](#td-01) | How schemas and vocabularies are collected and stored | Technical debt | Open | 1.8 |
 | [TD-02](#td-02) | Who calls the data plane, and with which credentials | Technical debt | Open | research; code 1.7 |
 | [TD-03](#td-03) | A provider in several dataspaces, each with its own rules | Technical debt | Accepted | 1.9 |
@@ -126,8 +127,8 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [TD-05](#td-05) | Key custody and key rotation | Technical debt | Open | 1.6 (OpenBao) |
 | [TD-07](#td-07) | STS tokens and presentations are not cached | Technical debt | Open | 1.6, if needed |
 | [TD-10](#td-10) | Transfers: no token renewal; whole sources and whole pushes only | Technical debt | Mitigated | 1.7 |
-| [TD-11](#td-11) | The provider cannot suspend a transfer from the management API | Technical debt | Open | no release named |
-| [TD-12](#td-12) | ODRL: few left operands; prohibitions and duties not enforced | Technical debt | Open | when needed |
+| [TD-11](#td-11) | The provider cannot suspend a transfer from the management API | Technical debt | Open | 1.6 |
+| [TD-12](#td-12) | ODRL: few left operands; prohibitions and duties not enforced | Technical debt | Open | 1.10 (after a check of what the EHDS permit and HealthData@EU use) |
 | [TD-14](#td-14) | Credential schemas, presentation definitions and issuance policies are not supported | Technical debt | Open | 1.6, if needed |
 | [TD-15](#td-15) | Agreements are not revised when the data's scope changes | Technical debt | Open | 1.7 |
 | [TD-16](#td-16) | One harvest source; no dataspace registry; other catalogs not checked; no bundle expiry or bundle key rotation | Technical debt | Open | 1.8 |
@@ -138,7 +139,7 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [TD-28](#td-28) | No trace across participants | Technical debt | Accepted | none |
 | [TD-29](#td-29) | No OTLP logs export, no gRPC, no compression | Technical debt | Open | 1.14 |
 | [TD-31](#td-31) | No audit trail of management actions | Technical debt | Mitigated | 1.7 |
-| [TD-35](#td-35) | No negotiation started by the provider | Technical debt, interoperability | Open | 1.5 |
+| [TD-35](#td-35) | No negotiation started by the provider | Technical debt, interoperability | Open | 1.9 (with the Simpl-Open tests) |
 | [TD-39](#td-39) | DEPLOYING is not in deployment order; the docs are long | Technical debt, usability | Mitigated | 1.14 (Helm chart) |
 | [TD-40](#td-40) | Database calls block the async runtime | Technical debt | Accepted | 1.12 |
 | [TD-45](#td-45) | Each running pull holds about 0.8 MB of memory | Technical debt | Open | 1.7 |
@@ -152,13 +153,14 @@ for an accepted residual risk); the yearly risk review re-reads those.
 | [TD-67](#td-67) | Datasets are harvested from one kind of source only | Technical debt | Open | 1.8 |
 | [TD-68](#td-68) | No dataspace-wide registry or federated catalogue | Technical debt | Open | 1.8, only if needed |
 | [TD-69](#td-69) | No Simpl-Open features beyond the protocols (mutual TLS, consent, API gateway) | Technical debt | Open | consent code: 1.7; ADR: 1.9 |
-| [TD-72](#td-72) | Two error types for the database, converted both ways | Technical debt, readability | Open | 1.5 (suggested, with TD-63) |
+| [TD-72](#td-72) | Two error types for the database, converted both ways | Technical debt, readability | Open | 1.5 (with TD-63) |
 | [TD-73](#td-73) | A negotiation step is about 3.5 ms slower on SQLite in 1.3 | Technical debt, performance | Open | 1.12 (with TD-40; cause found in 1.4) |
 | [TD-74](#td-74) | An issuer not limited by type is trusted for every credential type | Technical debt, security | Accepted | 2.0 |
-| [TD-75](#td-75) | A client constructor called `new` does not apply the block on internal addresses | Technical debt, readability, security | Open | 1.5 (suggested, with TD-63) |
-| [TD-76](#td-76) | A refused DSP message is logged as "counter-party not reachable" and its reason is lost; a refused transfer request is not logged by the provider | Technical debt, operations | Open | 1.5 (suggested) |
-| [TD-77](#td-77) | The identity answers 400 when an issuer's metadata cannot be read | Technical debt | Open | 1.5 (suggested) |
-| [TD-78](#td-78) | The catalog holds every dataset's access policy during a request | Technical debt, performance | Open | 1.5 (suggested) |
+| [TD-75](#td-75) | A client constructor called `new` does not apply the block on internal addresses | Technical debt, readability, security | Open | 1.5 (with TD-63) |
+| [TD-76](#td-76) | A refused DSP message is logged as "counter-party not reachable" and its reason is lost; a refused transfer request is not logged by the provider | Technical debt, operations | Open | 1.5 |
+| [TD-77](#td-77) | The identity answers 400 when an issuer's metadata cannot be read | Technical debt | Open | 1.5 |
+| [TD-78](#td-78) | The catalog holds every dataset's access policy during a request | Technical debt, performance | Open | 1.5 (time-boxed to one day; else 1.14) |
+| [TD-79](#td-79) | The identity records a set status bit of an unknown purpose as SUSPENDED, and checks a REVOKED credential again | Technical debt | Open | 1.5 |
 
 Counts on 2026-11-27, at the 1.4.0 release: 37 risks and 40 technical
 debts are not closed (Open 37, Mitigated 22, Accepted 18); 13 risks and
@@ -678,7 +680,10 @@ TD-46, TD-60, TD-61, TD-70 and TD-71, and TD-47, fixed in 1.1).
 - **Why it matters.** Portitor's design may differ from what EDC or
   Simpl-Open choose later.
 - **Current state: Open.**
-- **Next.** ROADMAP 1.5: research and an ADR before code.
+- **Next.** In progress for 1.5: a research ADR (DSP 2025-1, ODRL 2.2,
+  EDC, Simpl-Open and Tractus-X read first). Code only if the ADR finds
+  an existing way to follow; otherwise the scenario keeps the limit by
+  hand, as in step 0, and the gap is recorded (maintainer, 2026-11-28).
 
 <a id="r-40"></a>
 ### R-40 No shared list of EHDS purposes
@@ -694,9 +699,8 @@ TD-46, TD-60, TD-61, TD-70 and TD-71, and TD-47, fixed in 1.1).
   amendment in 1.4); the docs and the hdab-intermediary demo
   use the DPV EHDS extension's draft IRIs
   (`https://w3id.org/dpv/legal/eu/ehds#`). Portitor ships no list.
-- **Next.** Check how the DPV purposes map to Article 53; suggested for
-  1.5, where the HDAB issues data permits for a purpose (to be confirmed
-  by the maintainer).
+- **Next.** In progress for 1.5: a research note on how the DPV EHDS
+  purposes map to Article 53 (maintainer, 2026-11-28). Docs only.
 
 <a id="r-41"></a>
 ### R-41 A key removed from a DID document is still trusted for up to 5 minutes
@@ -873,8 +877,27 @@ TD-46, TD-60, TD-61, TD-70 and TD-71, and TD-47, fixed in 1.1).
   in the ADR 0019 amendment): the types are named in the dataspace's
   credential definitions anyway, and asking for fewer scopes would hide
   a dataset from a caller that meets its policy.
-- **Next.** Look again in 1.5 (suggested, to be confirmed by the
-  maintainer): for example ask only for the configured scopes, as EDC.
+- **Next.** In 1.5, no code (maintainer, 2026-11-28): the 1.5 check
+  is written into this entry, and it stays Accepted.
+
+<a id="r-51"></a>
+### R-51 No way for a data user to delegate a negotiation to the HDAB that the holder can verify
+
+- **What.** Way D of the health demo
+  ([ROADMAP](ROADMAP.md#ways-to-link-data-user-hdab-and-holder-maintainer-2026-11-23)):
+  the HDAB asks Lux Biobank for an agreement whose assignee is Schuman
+  Clinical Research. Lux Biobank refuses it today: the offer's assignee
+  must be the caller ([ADR 0013](adr/0013-transfer-and-data-plane.md)), and an
+  agreement the HDAB makes for itself is checked against the HDAB's
+  credentials and can be transferred only to the HDAB. DSP and DCP
+  define no delegation that we know of.
+- **Why it matters.** A data user that wants the HDAB to negotiate for
+  it cannot use Portitor; a delegation of our own would not
+  interoperate with EDC or Simpl-Open.
+- **Current state: Open.**
+- **Next.** In progress for 1.5: a research ADR, no code (maintainer,
+  2026-11-28). Code in 1.10 only if the ADR is accepted and finds a way
+  to follow.
 
 ## Technical debt
 
@@ -1042,7 +1065,8 @@ TD-46, TD-60, TD-61, TD-70 and TD-71, and TD-47, fixed in 1.1).
   (`portitor_dsp::policy::consumer_may_accept`); its `dateTime`
   constraints are still evaluated, and its acceptance's token allows the
   scopes the provider needs.
-- **Next.** Suspend as provider: no release named.
+- **Next.** Suspend as provider, in 1.6 (maintainer, 2026-11-28): the
+  domain already supports it.
 
 <a id="td-12"></a>
 ### TD-12 ODRL: few left operands; prohibitions and duties not enforced
@@ -1063,7 +1087,9 @@ TD-46, TD-60, TD-61, TD-70 and TD-71, and TD-47, fixed in 1.1).
   ([ADR 0009](adr/0009-minimal-odrl-policies.md), amendment in 1.4).
   Prohibitions and duties are still not enforced.
 - **Next.** Other left operands (such as `spatial`), prohibitions and
-  duties when a dataspace needs them; no release named.
+  duties, in 1.10 (maintainer, 2026-11-28), after a check of what the
+  EHDS data permit and HealthData@EU use; they matter only once a permit
+  or a dataspace needs a duty.
 
 <a id="td-14"></a>
 ### TD-14 Credential schemas, presentation definitions and issuance policies are not supported
@@ -1247,8 +1273,10 @@ TD-46, TD-60, TD-61, TD-70 and TD-71, and TD-47, fixed in 1.1).
   work is large, and it can be added later without a breaking change
   ([STABILITY](STABILITY.md#what-10-does-not-do); DEPLOYING, "Known
   limits").
-- **Next.** A negotiation started by the provider.
-  Assigned to 1.5 (maintainer, 2026-11-26).
+- **Next.** A negotiation started by the provider, in 1.9 with the
+  Simpl-Open tests (maintainer, 2026-11-28; it was assigned to 1.5 on
+  2026-11-26): no partner needs it today, and 1.9 shows whether
+  Simpl-Open does.
 
 <a id="td-39"></a>
 ### TD-39 DEPLOYING is not in deployment order; the docs are long
@@ -1496,8 +1524,8 @@ TD-46, TD-60, TD-61, TD-70 and TD-71, and TD-47, fixed in 1.1).
 - **Next.** One error type that keeps the code, or a transaction that
   takes the store's error type; no change of behaviour. It touches
   every store file, so it is done with their split in 1.5
-  ([TD-63](#td-63)) and is not a large item of its own: suggested for
-  1.5 (to be confirmed by the maintainer).
+  ([TD-63](#td-63)) and is not a large item of its own (maintainer,
+  2026-11-28).
 
 <a id="td-73"></a>
 ### TD-73 A negotiation step is about 3.5 ms slower on SQLite in 1.3
@@ -1581,8 +1609,8 @@ TD-46, TD-60, TD-61, TD-70 and TD-71, and TD-47, fixed in 1.1).
 - **Current state: Open.** Every partner client of 1.4 is built with
   `for_partners`.
 - **Next.** Rename to `for_operator_urls` and `for_partner_urls`, with
-  one private build function each. No change of behaviour. Suggested
-  for 1.5, with [TD-63](#td-63).
+  one private build function each. No change of behaviour. In 1.5,
+  with [TD-63](#td-63) (maintainer, 2026-11-28).
 
 <a id="td-76"></a>
 ### TD-76 A refused DSP message is logged as "counter-party not reachable" and its reason is lost; a refused transfer request is not logged by the provider
@@ -1603,8 +1631,8 @@ TD-46, TD-60, TD-61, TD-70 and TD-71, and TD-47, fixed in 1.1).
   problem when the partner refused, and neither side's log says why.
 - **Current state: Open.**
 - **Next.** Log a 4xx answer as a refusal, with the start of its body;
-  log the provider's refusal of a transfer request. Suggested for 1.5
-  (to be confirmed by the maintainer).
+  log the provider's refusal of a transfer request. In 1.5
+  (maintainer, 2026-11-28).
 
 <a id="td-77"></a>
 ### TD-77 The identity answers 400 when an issuer's metadata cannot be read
@@ -1622,8 +1650,10 @@ TD-46, TD-60, TD-61, TD-70 and TD-71, and TD-47, fixed in 1.1).
 - **Current state: Open.** The detail of the answer says what failed.
 - **Next.** Answer 502 when the issuer cannot be reached or read. A
   change of a status code on a frozen route: check
-  [STABILITY](STABILITY.md) first. Suggested for 1.5 (to be confirmed
-  by the maintainer).
+  [STABILITY](STABILITY.md) first: 502 is already listed for
+  `POST /v1/credential-requests` in
+  `docs/api/identity-management-openapi.json`. In 1.5 (maintainer,
+  2026-11-28).
 
 <a id="td-78"></a>
 ### TD-78 The catalog holds every dataset's access policy during a request
@@ -1638,8 +1668,30 @@ TD-46, TD-60, TD-61, TD-70 and TD-71, and TD-47, fixed in 1.1).
 - **Current state: Open.** Without access policies the catalog uses
   what it used in 1.3.0.
 - **Next.** Check the policies one by one while the catalog is read
-  (streaming), or share identical policies. Suggested for 1.5 (to be
-  confirmed by the maintainer).
+  (streaming), or share identical policies. In 1.5, time-boxed to one
+  day; if it does not fit, it moves to 1.14 (maintainer, 2026-11-28).
+
+<a id="td-79"></a>
+### TD-79 The identity records a set status bit of an unknown purpose as SUSPENDED, and checks a REVOKED credential again
+
+- **What.** The identity's status check
+  (`crates/portitor-identity/src/status_check.rs`, [TD-20](#td-20))
+  records a credential as SUSPENDED when a set bit is in a list whose
+  purpose is neither `revocation` nor `suspension`, and its log says
+  "suspended". It also checks a credential recorded REVOKED again on
+  each round, so it becomes valid again if the issuer clears the bit.
+- **Why it matters.** Not presenting such a credential is right: our
+  verifier, EDC's verifier (`BaseRevocationListService.checkStatus`)
+  and the W3C Bitstring Status List validation (step 13) all refuse a
+  credential with any set bit, and DCP then refuses the whole
+  presentation. But the stored name and the log mislead the operator.
+  W3C says revocation "is not reversible", and EDC IdentityHub never
+  checks a REVOKED credential again (`CredentialWatchdog.ALLOWED_STATES`,
+  read at commit `aeb8a7d` on 2026-11-28).
+- **Current state: Open.**
+- **Next.** In 1.5 (maintainer, 2026-11-28, D6 and D7 of the 1.5
+  plan): keep not presenting the credential, name the state and the
+  log honestly, and never check a REVOKED credential again.
 
 ## Closed
 

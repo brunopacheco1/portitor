@@ -481,6 +481,9 @@ Scope set by the maintainer on 2026-11-27. What shipped:
 
 ### 1.5 Data user and HDAB: the HDAB and Schuman Clinical Research
 
+Plan approved by the maintainer on 2026-11-28 (decisions D1 to D9 of
+the 1.5 plan, all as recommended). In progress.
+
 - The HDAB plays the health data access body towards Schuman Clinical
   Research, the data user; the lab and Lux Biobank stay a peer to peer
   agreement (maintainer, 2026-11-15). Schuman Clinical Research needs a
@@ -490,40 +493,57 @@ Scope set by the maintainer on 2026-11-27. What shipped:
   pipeline on Lux Biobank's data that produces counts, and pushes that
   output to RustFS in Schuman Clinical Research's infrastructure
   (maintainer, 2026-11-15).
-- Agreements that depend on an upstream agreement: the HDAB's offer to
-  Schuman Clinical Research cannot be wider than the HDAB's agreement
-  with Lux Biobank (purpose,
-  users, duration). No specification defines this; research and ADR
-  first ([R-39](RISKS_AND_TECHNICAL_DEBTS.md#r-39)).
-- A third health scenario, the HDAB negotiating on a data user's behalf
-  (maintainer, 2026-11-23): the HDAB asks Lux Biobank for an agreement
-  whose assignee is Schuman Clinical Research. Today Lux Biobank refuses
-  it (the offer's assignee must be the caller, ADR 0013), and an
-  agreement the HDAB makes for itself is checked against the HDAB's
-  credentials and transferable only to the HDAB. It needs a way for the
-  data user to delegate to the HDAB that the holder can verify; DSP and
-  DCP define none that we know of. Research and an ADR first, like
-  [R-39](RISKS_AND_TECHNICAL_DEBTS.md#r-39).
+- Agreements that depend on an upstream agreement (way B): the HDAB's
+  offer to Schuman Clinical Research cannot be wider than the HDAB's
+  agreement with Lux Biobank (purpose, users, duration). A research ADR
+  first, after reading DSP 2025-1, ODRL 2.2, EDC, Simpl-Open and
+  Tractus-X. Code only if the ADR finds an existing way to follow;
+  otherwise the scenario keeps the limit by hand, as step 0 does, and
+  the gap is recorded ([R-39](RISKS_AND_TECHNICAL_DEBTS.md#r-39)).
+- The HDAB negotiating on a data user's behalf (way D, maintainer,
+  2026-11-23): the HDAB asks Lux Biobank for an agreement whose
+  assignee is Schuman Clinical Research. Today Lux Biobank refuses it
+  (the offer's assignee must be the caller, ADR 0013). A research ADR
+  only, no code in 1.5 ([R-51](RISKS_AND_TECHNICAL_DEBTS.md#r-51)).
+- The DPV EHDS purposes mapped to Article 53, a research note, docs
+  only ([R-40](RISKS_AND_TECHNICAL_DEBTS.md#r-40)).
 - Demo step 3: the four questions (below) answered by running the demo,
   each with its evidence, and a note of where Portitor fell short.
-- Debts and risks assigned to this release (maintainer, 2026-11-26):
-  a negotiation started by the provider ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)); why and when a
-  negotiation ended stored ([TD-62](RISKS_AND_TECHNICAL_DEBTS.md#td-62)); source files above 1,000
-  lines split ([TD-63](RISKS_AND_TECHNICAL_DEBTS.md#td-63)). Suggested by the 1.3 readability
-  review (2026-11-26), to be confirmed: one error type for the database
-  and the stores, done with the split of the store files ([TD-72](RISKS_AND_TECHNICAL_DEBTS.md#td-72)).
-  Suggested by the 1.4 reviews and scenario runs (2026-11-27), to be
-  confirmed: the client constructors renamed
-  ([TD-75](RISKS_AND_TECHNICAL_DEBTS.md#td-75)); fewer scopes asked on
-  a catalog request ([R-50](RISKS_AND_TECHNICAL_DEBTS.md#r-50)); a
-  partner's refusal logged as one, with its reason
+- One large quality item, no change of behaviour, done first: source
+  files above 1,000 lines split, `BundleHarvester::start` and
+  `Pool::migrate` split, the catalog handlers in their own module
+  ([TD-63](RISKS_AND_TECHNICAL_DEBTS.md#td-63)), with one error type
+  for the database ([TD-72](RISKS_AND_TECHNICAL_DEBTS.md#td-72)) and
+  the client constructors renamed
+  ([TD-75](RISKS_AND_TECHNICAL_DEBTS.md#td-75)).
+- Small fixes after the split: why and when a negotiation ended stored
+  ([TD-62](RISKS_AND_TECHNICAL_DEBTS.md#td-62)); a partner's refusal
+  logged as one, with its reason
   ([TD-76](RISKS_AND_TECHNICAL_DEBTS.md#td-76)); 502, not 400, when an
   issuer cannot be read ([TD-77](RISKS_AND_TECHNICAL_DEBTS.md#td-77));
-  less memory for a catalog with access policies
-  ([TD-78](RISKS_AND_TECHNICAL_DEBTS.md#td-78));
-  the DPV purposes mapped to Article 53
-  ([R-40](RISKS_AND_TECHNICAL_DEBTS.md#r-40)).
-- Exit: the four answers written in the docs.
+  the identity's status check names an unknown status bit honestly and
+  never checks a REVOKED credential again
+  ([TD-79](RISKS_AND_TECHNICAL_DEBTS.md#td-79)).
+- Less memory for a catalog with access policies, time-boxed to one
+  day; if it does not fit, it moves to 1.14
+  ([TD-78](RISKS_AND_TECHNICAL_DEBTS.md#td-78)).
+- The catalog's scopes: no code; the 1.5 check is written into the
+  entry, which stays Accepted ([R-50](RISKS_AND_TECHNICAL_DEBTS.md#r-50)).
+- Moved out (maintainer, 2026-11-28): a negotiation started by the
+  provider to [1.9](#19-simpl-open-tests)
+  ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)); suspend as provider to
+  [1.6](#16-keys-and-credentials)
+  ([TD-11](RISKS_AND_TECHNICAL_DEBTS.md#td-11)); more ODRL operands,
+  prohibitions and duties to
+  [1.10](#110-data-user-and-hdab-permits-requests-and-the-spe)
+  ([TD-12](RISKS_AND_TECHNICAL_DEBTS.md#td-12)); the permit scenario
+  (way C, the destination check) to 1.10, after the EHDS permit
+  template is adopted.
+- Not in 1.5: no UI (the operator UI is in [1.7](#17-users-and-the-data-plane)).
+- Exit: the four answers written in the docs with evidence; both ADRs
+  Proposed for the maintainer to accept or reject; no source file above
+  1,000 lines, tests not counted; the TCKs and the EDC interop test
+  stay green.
 - Main risk: our design for dependent agreements may not match what EDC
   or Simpl-Open do later.
 
@@ -532,6 +552,9 @@ Scope set by the maintainer on 2026-11-27. What shipped:
 - A signer port with an OpenBao transit adapter (P-256 signing, versioned
   keys; the private key never leaves OpenBao), optional
   ([TD-05](RISKS_AND_TECHNICAL_DEBTS.md#td-05)).
+- Suspend, start again and complete a transfer as provider from the
+  management API; the domain already supports it (maintainer,
+  2026-11-28; [TD-11](RISKS_AND_TECHNICAL_DEBTS.md#td-11)).
 - Credential schemas, presentation definitions and issuance policies, if
   a target dataspace needs them
   ([TD-14](RISKS_AND_TECHNICAL_DEBTS.md#td-14)); STS token and
@@ -695,7 +718,7 @@ data holder are compared, with pros and cons (maintainer, 2026-11-23).
 
 | Scenario | What it shows | Runs on |
 | --- | --- | --- |
-| The HDAB as permit authority | The HDAB only issues the data permit; the holder checks it at negotiation and sends the data where the permit says | 1.1 and 1.4, plus a destination check no release has yet ([research, 1.4](spikes/1.4-destination-matches-permit.md)) |
+| The HDAB as permit authority | The HDAB only issues the data permit; the holder checks it at negotiation and sends the data where the permit says | 1.10, after the EHDS permit template is adopted; needs a destination check ([research, 1.4](spikes/1.4-destination-matches-permit.md)) |
 | The HDAB on a data user's behalf | The HDAB negotiates with the holder for a data user | research first: a delegation the holder can check (1.5) |
 | A mixed data space | One participant runs Eclipse EDC instead of Portitor, in the health story | 1.0 |
 | The holder withdraws its dataset | New negotiations fail, existing agreements keep their data (ADR 0020) | 1.0 |
@@ -716,10 +739,10 @@ what worked and what did not, and a demo or an ADR where it earns one
 | --- | --- | --- | --- |
 | 1 | A. The HDAB as intermediary | the HDAB; data to the HDAB, results to the user | done: `scenarios/hdab-intermediary` |
 | 2 | F. Permit-gated peer to peer | the user's credential; data to the user (non-personal data only, EHDS Art. 73(2)) | explored on 1.0: `scenarios/data-permits`, placeholder permit claims; findings [R-48](RISKS_AND_TECHNICAL_DEBTS.md#r-48), [TD-20](RISKS_AND_TECHNICAL_DEBTS.md#td-20), [TD-46](RISKS_AND_TECHNICAL_DEBTS.md#td-46) |
-| 3 | C. Permit credential, data to the SPE | the user's permit; data into the SPE the permit names | needs 1.1, 1.4 and a destination check |
+| 3 | C. Permit credential, data to the SPE | the user's permit; data into the SPE the permit names | 1.10, after the permit template is adopted; needs a destination check |
 | 4 | E. The trusted holder runs the SPE (EHDS Art. 72) | the user's permit; data stays, results leave | needs 1.4; the SPE is outside Portitor |
 | 5 | B. Chained agreements | the HDAB; its offers held inside its agreement | 1.5, research and ADR (R-39) |
-| 6 | D. The HDAB on the user's behalf | a delegation and the user's permit | research and ADR; refused today (ADR 0013) |
+| 6 | D. The HDAB on the user's behalf | a delegation and the user's permit | 1.5 research ADR ([R-51](RISKS_AND_TECHNICAL_DEBTS.md#r-51)); refused today (ADR 0013) |
 
 ## 2027: EHDS participant functions and Simpl-Open tests (proposal, 2026-11-21)
 
@@ -805,6 +828,9 @@ the maintainer's answers to [ADR 0017](adr/0017-simpl-open.md#maintainers-answer
   checked again ([R-24](RISKS_AND_TECHNICAL_DEBTS.md#r-24)); TLS inside the services, with mutual TLS
   ([TD-19](RISKS_AND_TECHNICAL_DEBTS.md#td-19)); the ADR on Simpl-Open features beyond the protocols:
   mutual TLS and the API gateway ([TD-69](RISKS_AND_TECHNICAL_DEBTS.md#td-69)).
+- A negotiation started by the provider, if Simpl-Open needs it
+  (moved from 1.5 by the maintainer, 2026-11-28;
+  [TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)).
 - A CI job only if the Simpl-Open stack fits a runner; otherwise a
   runbook, like the demo. Step 1 should fit; step 2 is checked once the
   Compose file exists.
@@ -835,6 +861,17 @@ Builds on 1.4 (data permit as credential) and 1.5 (the HDAB and Schuman Clinical
 - Hand-over to a secure processing environment (Art. 73): Portitor
   pushes the data into an SPE the operator runs, and only the output
   leaves it. Portitor builds no SPE.
+- The permit scenario, way C (moved from 1.5 by the maintainer,
+  2026-11-28): the holder checks that a transfer's destination matches
+  the permit. It waits for the EHDS permit template under Art. 70 to be
+  adopted (draft implementing regulation `Ares(2026)9764418`, adoption
+  due by 26 March 2027), because the draft has no DID or endpoint field
+  and a destination check now would be our own format
+  ([research, 1.4](spikes/1.4-destination-matches-permit.md)). Working
+  answer until then: the data user negotiates with its own permit.
+- More ODRL left operands, prohibitions and duties, after a check of
+  what the EHDS permit and HealthData@EU use (moved by the maintainer,
+  2026-11-28; [TD-12](RISKS_AND_TECHNICAL_DEBTS.md#td-12)).
 - Opt-out (Art. 71): the ADR finds out how Member States publish opt-out
   and whether the holder or the HDAB applies it, before any code.
 - Exit: the demo's four questions run again with permits that change and
