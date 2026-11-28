@@ -12,6 +12,11 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+### Documentation
+
+- ADR 0030 (proposed): a management console for demos, planned for
+  1.5 ([ADR 0030](docs/adr/0030-management-console.md)).
+
 ## [1.4.0] - 2026-11-27
 
 Portitor 1.4: purpose and data permits in policies. Offers can name a

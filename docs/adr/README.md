@@ -47,6 +47,7 @@ first, then here.
 | [0027](0027-push-transfers-and-object-storage.md) | Push transfers, object storage and revoking access | Accepted (2026-11-24) | Push by the Data Plane Signaling HTTP profile into a receiving route of the consumer; provider data may sit in its own object storage behind `/data`; suspend and terminate cut running downloads; no storage keys cross between participants |
 | [0028](0028-separate-pluggable-data-plane.md) | A separate, pluggable data plane over Data Plane Signaling | Accepted (2026-11-25) | Operators register their own data planes over DPS; the built-in data plane becomes one of them, linked in by default and also an optional image |
 | [0029](0029-several-replicas.md) | Several replicas on one PostgreSQL database | Accepted (2026-11-26) | Several containers of each image share one PostgreSQL database and coordinate through it (leases, compare-and-swap, reads per request); SQLite deprecated in 1.3, removed in 2.0 (notes in 1.4: no copy tool; the identity's status check) |
+| [0030](0030-management-console.md) | A management console for demos | Proposed (2026-11-28) | A static web console beside the three images, served with a proxy that holds the management keys, per scenario; demos only in 1.x |
 
 ## Adding an ADR
 
