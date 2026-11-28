@@ -117,6 +117,25 @@ Facts checked on 2026-11-28:
 - **Swagger UI on the OpenAPI files.** It works today, with no code,
   but it shows requests, not the state of a data space.
 
+## Risks
+
+- **1.5 gets too big.** 1.5 already holds the HDAB scenario and two
+  research ADRs with no specification to follow (R-39 and the
+  delegation question). The console is a separate track: it touches no
+  Rust code except the `GET /v1/datasets` route, so it must not block
+  the health scenario. If it is late, it ships in a later 1.x and the
+  1.5 exit drops its console line.
+- **A demo tool used as an operator tool.** Whoever reaches the console
+  acts with the full management key of each component. Mitigation: the
+  proxy port is bound to `127.0.0.1`, the page shows "demo, not for
+  production" on every view, and DEPLOYING says so. The operator use
+  waits for 1.7 (ADR 0025).
+- **Keys in the proxy.** nginx cannot read a key file into a header by
+  itself; the scenario must render the proxy configuration at start
+  (for example the nginx image's template step) so that the keys stay
+  out of the repository and out of the browser. Settled in the code
+  pull request.
+
 ## Consequences
 
 - Demos can be followed without a terminal; the scripts keep the
@@ -138,3 +157,5 @@ Facts checked on 2026-11-28:
 3. The new `GET /v1/datasets` route: yes, or show harvest jobs only?
 4. First scenario: two-party (the quickstart, as proposed) or the
    health demo?
+5. Audience: a console for demos now, and an operator console after
+   the 1.7 users and roles (proposed), or demos only?
