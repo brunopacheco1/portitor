@@ -11,7 +11,7 @@
 
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
-use portitor_dcp::{Claims, unverified_claims, validate_self_issued};
+use portitor_dcp::{Claims, check_before_resolving, unverified_claims, validate_self_issued};
 
 use crate::api_key::problem;
 use crate::directory::Directory;
@@ -38,8 +38,10 @@ pub struct Audience<'a> {
 /// `admit` sees the token's claims **before** they are verified, and
 /// before the caller's DID is resolved: a service that only takes calls
 /// from known DIDs says no there, so an unknown caller cannot make it
-/// fetch a URL of its choice. `directory` reads the DID document of the
-/// caller (`sub`).
+/// fetch a URL of its choice. Then the checks that need no DID document
+/// (`portitor_dcp::check_before_resolving`: `aud`, `iss` and the times),
+/// so a token for another service fetches nothing either. `directory`
+/// reads the DID document of the caller (`sub`).
 ///
 /// # Errors
 /// The answer to send: 401 with `WWW-Authenticate: Bearer`.
@@ -58,6 +60,10 @@ pub async fn authenticate(
     if !admit(&claimed) {
         return Err(refused("caller not admitted"));
     }
+    // what needs no DID document, before the caller's DID is fetched: a
+    // token for another service or out of its time fetches nothing (F-06)
+    check_before_resolving(&claimed, audience.did, now_secs(), audience.leeway)
+        .map_err(|e| refused(&e.to_string()))?;
     let document = directory
         .did_document(&claimed.sub)
         .await
@@ -190,6 +196,44 @@ mod tests {
         assert_eq!(claims.sub, CALLER);
         let again = authenticate(&bearer, audience, |_| true, &directory).await;
         assert_eq!(again.unwrap_err().status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// F-06: a token for another service, or expired, is refused before
+    /// the caller's DID is resolved.
+    #[tokio::test]
+    async fn a_token_for_another_service_or_expired_fetches_nothing() {
+        let (key, document) = caller();
+        let used = Mutex::new(JtiCache::default());
+        let found = OneDocument::new(Some(document));
+        let other_service = Audience {
+            did: "did:web:other.example",
+            leeway: 0,
+            used_token_ids: &used,
+        };
+        let bearer = headers(&format!("Bearer {}", token(&key, "j-4")));
+        let refused = authenticate(&bearer, other_service, |_| true, &found).await;
+        assert_eq!(refused.unwrap_err().status(), StatusCode::UNAUTHORIZED);
+        let now = now_secs();
+        let expired = Claims {
+            iss: CALLER.to_owned(),
+            sub: CALLER.to_owned(),
+            aud: SERVICE.to_owned(),
+            jti: "j-5".to_owned(),
+            exp: now - 600,
+            iat: now - 900,
+            nbf: None,
+            token: None,
+        };
+        let expired = key.sign(&format!("{CALLER}#key-1"), &expired).unwrap();
+        let audience = Audience {
+            did: SERVICE,
+            leeway: 0,
+            used_token_ids: &used,
+        };
+        let bearer = headers(&format!("Bearer {expired}"));
+        let refused = authenticate(&bearer, audience, |_| true, &found).await;
+        assert_eq!(refused.unwrap_err().status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(found.lookups(), 0, "resolved a token refused on its claims");
     }
 
     #[tokio::test]

@@ -197,6 +197,44 @@ pub fn validate_self_issued(
     // 3. key selection rules, then signature
     let vm = doc.key_for(jws.kid(), Purpose::CapabilityInvocation)?;
     jws.verify(&vm.public_key_jwk)?;
+    // 5. nbf and exp, and the checks beyond DCP on the times
+    check_times(&claims, now, leeway)?;
+    // 6. jti not used before; remembered as long as the token is valid
+    used_token_ids.remember(&claims.jti, claims.exp.saturating_add(leeway), now)?;
+    Ok(claims)
+}
+
+/// The checks of [`validate_self_issued`] that need no DID document,
+/// for the claims of a token **not verified yet**: `iss` equals `sub`,
+/// `aud` is `verifier_did`, and the times hold (`nbf`, `exp`, `iat`,
+/// [`MAX_TOKEN_LIFETIME`]). A verifier runs them before it resolves the
+/// caller's DID, so a token that would be refused anyway makes it fetch
+/// nothing (F-06 in `docs/SECURITY-ASSURANCE.md`). They prove nothing
+/// about the caller: [`validate_self_issued`] runs them again on the
+/// verified token.
+///
+/// # Errors
+/// The first check that does not hold, with the error
+/// [`validate_self_issued`] gives for it.
+pub fn check_before_resolving(
+    claims: &Claims,
+    verifier_did: &str,
+    now: u64,
+    leeway: u64,
+) -> Result<(), Error> {
+    if claims.iss != claims.sub {
+        return Err(Error::Invalid("iss and sub differ"));
+    }
+    if claims.aud != verifier_did {
+        return Err(Error::Invalid("aud is not the verifier"));
+    }
+    check_times(claims, now, leeway)
+}
+
+/// DCP "Validating Self-Issued ID Tokens", step 5 (`nbf`, `exp`), and
+/// two checks beyond DCP: not issued in the future, not valid for longer
+/// than [`MAX_TOKEN_LIFETIME`].
+fn check_times(claims: &Claims, now: u64, leeway: u64) -> Result<(), Error> {
     // 5. nbf
     if let Some(nbf) = claims.nbf
         && now.saturating_add(leeway) < nbf
@@ -217,9 +255,7 @@ pub fn validate_self_issued(
     if claims.exp > now.saturating_add(MAX_TOKEN_LIFETIME + leeway) {
         return Err(Error::Invalid("valid for too long"));
     }
-    // 6. jti not used before; remembered as long as the token is valid
-    used_token_ids.remember(&claims.jti, claims.exp.saturating_add(leeway), now)?;
-    Ok(claims)
+    Ok(())
 }
 
 /// The claims of a self-issued ID token, **not verified**: only to learn
@@ -285,6 +321,41 @@ mod tests {
             validate_self_issued(&t, &doc, BOB, 1_500, 0, &mut cache),
             Err(Error::Invalid("jti replayed"))
         ));
+    }
+
+    /// The checks that need no DID document refuse what
+    /// `validate_self_issued` refuses, with the same error, and let a
+    /// good token through.
+    #[test]
+    fn checks_before_resolving_need_no_document() {
+        let (_, _, claims) = setup();
+        assert_eq!(check_before_resolving(&claims, BOB, 1_500, 0), Ok(()));
+        assert_eq!(
+            check_before_resolving(&claims, ALICE, 1_500, 0),
+            Err(Error::Invalid("aud is not the verifier"))
+        );
+        assert_eq!(
+            check_before_resolving(&claims, BOB, 2_000, 0),
+            Err(Error::Invalid("expired"))
+        );
+        // the leeway counts as in `validate_self_issued`
+        assert_eq!(check_before_resolving(&claims, BOB, 2_000, 5), Ok(()));
+        let other_issuer = Claims {
+            iss: "did:web:mallory.example".to_owned(),
+            ..claims.clone()
+        };
+        assert_eq!(
+            check_before_resolving(&other_issuer, BOB, 1_500, 0),
+            Err(Error::Invalid("iss and sub differ"))
+        );
+        let later = Claims {
+            nbf: Some(1_800),
+            ..claims
+        };
+        assert_eq!(
+            check_before_resolving(&later, BOB, 1_500, 0),
+            Err(Error::Invalid("not yet valid"))
+        );
     }
 
     #[test]

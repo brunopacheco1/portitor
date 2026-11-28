@@ -8,6 +8,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 
 use super::*;
+use crate::catalog::ListedDataset;
+use crate::policy::AccessPolicy;
 use crate::{Dataset, DatasetType, Distribution, DistributionType, OfferType, Rule};
 
 /// `.1`: every write fails; `.2`: how many writes lose the version check
@@ -23,11 +25,29 @@ impl NegotiationStore for &Store {
     fn get(&self, pid: &str) -> Result<Option<Negotiation>, StoreError> {
         Ok(self.0.borrow().get(pid).cloned())
     }
-    fn insert(&self, n: &Negotiation) -> Result<(), StoreError> {
+    fn negotiation_requested_by(
+        &self,
+        party: &str,
+        cpid: &str,
+    ) -> Result<Option<Negotiation>, StoreError> {
+        Ok(self
+            .0
+            .borrow()
+            .values()
+            .find(|n| n.counter_party == party && n.consumer_pid == cpid)
+            .cloned())
+    }
+    fn insert(&self, negotiation: &Negotiation) -> Result<bool, StoreError> {
+        if self
+            .negotiation_requested_by(&negotiation.counter_party, &negotiation.consumer_pid)?
+            .is_some()
+        {
+            return Ok(false);
+        }
         self.0
             .borrow_mut()
-            .insert(n.provider_pid.clone(), n.clone());
-        Ok(())
+            .insert(negotiation.provider_pid.clone(), negotiation.clone());
+        Ok(true)
     }
     fn replace_if(&self, n: &Negotiation, expected: u64) -> Result<bool, StoreError> {
         if self.1.get() {
@@ -62,11 +82,9 @@ impl NegotiationStore for &Store {
 
 struct Catalog;
 
-impl CatalogDatasets for Catalog {
-    fn all(&self) -> Result<Vec<Dataset>, StoreError> {
-        Ok(self.get("d1")?.into_iter().collect())
-    }
-    fn get(&self, id: &str) -> Result<Option<Dataset>, StoreError> {
+impl Catalog {
+    /// Dataset `id`, if there is one.
+    fn dataset(id: &str) -> Option<Dataset> {
         // d2's offer expired before the test clock (2026-11-12)
         let mut expired = offer(None);
         expired.permission[0].constraint = vec![
@@ -76,12 +94,12 @@ impl CatalogDatasets for Catalog {
             .unwrap(),
         ];
         let policy = match id {
-            "d1" => offer(None),
+            "d1" | "d4" => offer(None),
             "d2" => expired,
             "d3" => providers_only(None),
-            _ => return Ok(None),
+            _ => return None,
         };
-        Ok(Some(Dataset {
+        Some(Dataset {
             context: None,
             id: id.to_owned(),
             kind: DatasetType,
@@ -93,7 +111,41 @@ impl CatalogDatasets for Catalog {
                 metadata: crate::Metadata::default(),
             }],
             metadata: crate::Metadata::default(),
+        })
+    }
+}
+
+impl CatalogDatasets for Catalog {
+    fn get_for_agreement(&self, id: &str) -> Result<Option<Dataset>, StoreError> {
+        Ok(Self::dataset(id))
+    }
+    /// Only d1 is listed.
+    fn all_with_access_policies(&self) -> Result<Vec<ListedDataset>, StoreError> {
+        Ok(self.get_with_access_policy("d1")?.into_iter().collect())
+    }
+    /// d4 has an access policy: only members with role `provider` see it
+    /// (ADR 0019, amendment in 1.4). Its offer has no constraint.
+    fn get_with_access_policy(&self, id: &str) -> Result<Option<ListedDataset>, StoreError> {
+        let Some(dataset) = Self::dataset(id) else {
+            return Ok(None);
+        };
+        let access_policy = if id == "d4" {
+            Some(
+                serde_json::from_value(serde_json::json!({"permission": [{"action": "use",
+                    "constraint": [{"leftOperand": "MembershipCredential.role",
+                    "operator": "eq", "rightOperand": "provider"}]}]}))
+                .unwrap(),
+            )
+        } else {
+            None
+        };
+        Ok(Some(ListedDataset {
+            dataset,
+            access_policy,
         }))
+    }
+    fn access_policies(&self) -> Result<Vec<AccessPolicy>, StoreError> {
+        Ok(Vec::new())
     }
 }
 
@@ -232,8 +284,8 @@ fn reason(f: &Failure) -> String {
 #[test]
 fn default_policy_agrees_and_finalizes() {
     let store = Store::default();
-    let p = service(&store, AgreeToCatalogOffers);
-    let (ack, out) = p
+    let provider = service(&store, AgreeToCatalogOffers);
+    let (ack, out) = provider
         .request(None, request(None), "did:web:consumer", &none())
         .unwrap();
     assert_eq!(ack.state, NegotiationState::Requested);
@@ -252,17 +304,17 @@ fn default_policy_agrees_and_finalizes() {
 
     // nothing changes until the consumer acknowledges
     assert_eq!(
-        p.get(&pid, "did:web:consumer").unwrap().state,
+        provider.get(&pid, "did:web:consumer").unwrap().state,
         NegotiationState::Requested
     );
-    assert_eq!(p.delivered(&out).unwrap(), None);
+    assert_eq!(provider.delivered(&out).unwrap(), None);
     assert_eq!(
-        p.get(&pid, "did:web:consumer").unwrap().state,
+        provider.get(&pid, "did:web:consumer").unwrap().state,
         NegotiationState::Agreed
     );
     assert!(store.0.borrow()[&pid].agreement.is_some());
 
-    let (ack, out) = p
+    let (ack, out) = provider
         .verify(&pid, &verification(&pid), "did:web:consumer")
         .unwrap();
     assert_eq!(ack.state, NegotiationState::Verified);
@@ -270,7 +322,7 @@ fn default_policy_agrees_and_finalizes() {
     assert_eq!(out.transition, Transition::Finalize);
     assert_eq!(out.body["eventType"], "FINALIZED");
     assert!(out.url.ends_with("/negotiations/c1/events"));
-    p.delivered(&out).unwrap();
+    provider.delivered(&out).unwrap();
     assert_eq!(store.0.borrow()[&pid].state, NegotiationState::Finalized);
 }
 
@@ -281,21 +333,21 @@ fn offer_accept_agree() {
         (NegotiationState::Requested, Decision::Offer),
         (NegotiationState::Accepted, Decision::Agree),
     ]));
-    let p = service(&store, script);
-    let (ack, out) = p.request(None, request(None), "c", &none()).unwrap();
+    let provider = service(&store, script);
+    let (ack, out) = provider.request(None, request(None), "c", &none()).unwrap();
     let pid = ack.provider_pid;
     let out = out.unwrap();
     assert_eq!(out.transition, Transition::Offer);
     assert_eq!(out.body["@type"], "ContractOfferMessage");
-    assert_eq!(p.delivered(&out).unwrap(), None);
-    let (ack, out) = p
+    assert_eq!(provider.delivered(&out).unwrap(), None);
+    let (ack, out) = provider
         .event(&pid, &event(&pid, NegotiationEvent::Accepted), "c", &none())
         .unwrap();
     assert_eq!(ack.state, NegotiationState::Accepted);
     assert_eq!(out.unwrap().transition, Transition::Agree);
 
     // counter-offer is not allowed after accepting
-    let err = p
+    let err = provider
         .request(Some(&pid), request(Some(&pid)), "c", &none())
         .unwrap_err();
     assert!(reason(&err).contains("not allowed"), "{err:?}");
@@ -308,20 +360,22 @@ fn counter_offer_and_provider_termination() {
         NegotiationState::Requested,
         Decision::Terminate,
     )]));
-    let p = service(&store, script);
-    let (ack, out) = p.request(None, request(None), "c", &none()).unwrap();
+    let provider = service(&store, script);
+    let (ack, out) = provider.request(None, request(None), "c", &none()).unwrap();
     let pid = ack.provider_pid;
     let out = out.unwrap();
     assert_eq!(out.transition, Transition::Terminate);
     assert!(out.url.ends_with("/negotiations/c1/termination"));
-    p.delivered(&out).unwrap();
+    provider.delivered(&out).unwrap();
     assert_eq!(store.0.borrow()[&pid].state, NegotiationState::Terminated);
     // nothing more after a terminal state
-    let err = p.terminate(&pid, &termination(&pid), "c").unwrap_err();
+    let err = provider
+        .terminate(&pid, &termination(&pid), "c")
+        .unwrap_err();
     assert!(reason(&err).contains("terminal"), "{err:?}");
     // a second acknowledgement of the same message changes nothing
-    assert_eq!(p.delivered(&out).unwrap(), None);
-    assert!(p.pending().unwrap().is_empty());
+    assert_eq!(provider.delivered(&out).unwrap(), None);
+    assert!(provider.pending().unwrap().is_empty());
 }
 
 #[test]
@@ -331,19 +385,19 @@ fn consumer_counter_offer_and_termination() {
         NegotiationState::Requested,
         Decision::Offer,
     )]));
-    let p = service(&store, script);
-    let (ack, out) = p.request(None, request(None), "c", &none()).unwrap();
+    let provider = service(&store, script);
+    let (ack, out) = provider.request(None, request(None), "c", &none()).unwrap();
     let pid = ack.provider_pid;
-    p.delivered(&out.unwrap()).unwrap();
-    let (ack, _) = p
+    provider.delivered(&out.unwrap()).unwrap();
+    let (ack, _) = provider
         .request(Some(&pid), request(Some(&pid)), "c", &none())
         .unwrap();
     assert_eq!(ack.state, NegotiationState::Requested);
-    let err = p
+    let err = provider
         .request(Some(&pid), request(Some("x")), "c", &none())
         .unwrap_err();
     assert!(reason(&err).contains("does not match"), "{err:?}");
-    let (ack, out) = p.terminate(&pid, &termination(&pid), "c").unwrap();
+    let (ack, out) = provider.terminate(&pid, &termination(&pid), "c").unwrap();
     assert_eq!(ack.state, NegotiationState::Terminated);
     assert_eq!(out, None);
 }
@@ -357,15 +411,17 @@ fn a_counter_request_with_another_consumer_pid_is_refused() {
         NegotiationState::Requested,
         Decision::Offer,
     )]));
-    let p = service(&store, script);
-    let (ack, out) = p.request(None, request(None), "c", &none()).unwrap();
+    let provider = service(&store, script);
+    let (ack, out) = provider.request(None, request(None), "c", &none()).unwrap();
     let pid = ack.provider_pid;
-    p.delivered(&out.unwrap()).unwrap();
+    provider.delivered(&out.unwrap()).unwrap();
     assert_eq!(store.0.borrow()[&pid].state, NegotiationState::Offered);
 
     let mut other_pid = request(Some(&pid));
     other_pid.consumer_pid = "c2".to_owned();
-    let err = p.request(Some(&pid), other_pid, "c", &none()).unwrap_err();
+    let err = provider
+        .request(Some(&pid), other_pid, "c", &none())
+        .unwrap_err();
     assert!(matches!(err, Failure::BadRequest(_)), "{err:?}");
     assert!(reason(&err).contains("process ids do not match"), "{err:?}");
     // nothing changed: still OFFERED, with the first consumer pid
@@ -378,40 +434,56 @@ fn a_counter_request_with_another_consumer_pid_is_refused() {
 fn refuses_bad_requests() {
     let store = Store::default();
     // waits: nothing is pending, so nothing can prove a later state
-    let p = service(&store, Script(BTreeMap::new()));
+    let provider = service(&store, Script(BTreeMap::new()));
 
     let mut no_cb = request(None);
     no_cb.callback_address = None;
-    assert!(reason(&p.request(None, no_cb, "c", &none()).unwrap_err()).contains("callbackAddress"));
+    assert!(
+        reason(&provider.request(None, no_cb, "c", &none()).unwrap_err())
+            .contains("callbackAddress")
+    );
 
     let mut unknown = request(None);
     unknown.offer.id = "other".to_owned();
-    assert!(reason(&p.request(None, unknown, "c", &none()).unwrap_err()).contains("unknown offer"));
+    assert!(
+        reason(&provider.request(None, unknown, "c", &none()).unwrap_err())
+            .contains("unknown offer")
+    );
 
     let mut no_target = request(None);
     no_target.offer.target = None;
-    assert!(reason(&p.request(None, no_target, "c", &none()).unwrap_err()).contains("no target"));
+    assert!(
+        reason(&provider.request(None, no_target, "c", &none()).unwrap_err()).contains("no target")
+    );
 
     let mut other_dataset = request(None);
     other_dataset.offer.target = Some("d7".to_owned());
-    assert!(p.request(None, other_dataset, "c", &none()).is_err());
+    assert!(provider.request(None, other_dataset, "c", &none()).is_err());
 
     // unknown negotiation, and another consumer's negotiation: 404
-    assert!(matches!(p.get("nope", "c"), Err(Failure::NotFound(_))));
-    let (ack, _) = p.request(None, request(None), "c", &none()).unwrap();
-    let pid = ack.provider_pid;
-    assert!(matches!(p.get(&pid, "intruder"), Err(Failure::NotFound(_))));
     assert!(matches!(
-        p.verify(&pid, &verification(&pid), "intruder"),
+        provider.get("nope", "c"),
+        Err(Failure::NotFound(_))
+    ));
+    let (ack, _) = provider.request(None, request(None), "c", &none()).unwrap();
+    let pid = ack.provider_pid;
+    assert!(matches!(
+        provider.get(&pid, "intruder"),
+        Err(Failure::NotFound(_))
+    ));
+    assert!(matches!(
+        provider.verify(&pid, &verification(&pid), "intruder"),
         Err(Failure::NotFound(_))
     ));
 
     // wrong state, wrong ids
-    let err = p.verify(&pid, &verification(&pid), "c").unwrap_err();
+    let err = provider.verify(&pid, &verification(&pid), "c").unwrap_err();
     assert!(reason(&err).contains("not allowed"), "{err:?}");
-    let err = p.verify(&pid, &verification("other"), "c").unwrap_err();
+    let err = provider
+        .verify(&pid, &verification("other"), "c")
+        .unwrap_err();
     assert!(reason(&err).contains("do not match"), "{err:?}");
-    let err = p
+    let err = provider
         .event(
             &pid,
             &event(&pid, NegotiationEvent::Finalized),
@@ -425,22 +497,25 @@ fn refuses_bad_requests() {
 #[test]
 fn concurrent_change_and_store_failure() {
     let store = Store::default();
-    let p = service(&store, AgreeToCatalogOffers);
-    let (ack, out) = p.request(None, request(None), "c", &none()).unwrap();
+    let provider = service(&store, AgreeToCatalogOffers);
+    // a consumer of its own: one consumer pid starts one negotiation
+    let (ack, out) = provider
+        .request(None, request(None), "c0", &none())
+        .unwrap();
     let pid = ack.provider_pid.clone();
     let out = out.unwrap();
     // the consumer terminates while the agreement is on its way; the
     // late acknowledgement of the agreement then changes nothing
-    p.terminate(&pid, &termination(&pid), "c").unwrap();
-    assert_eq!(p.delivered(&out).unwrap(), None);
+    provider.terminate(&pid, &termination(&pid), "c0").unwrap();
+    assert_eq!(provider.delivered(&out).unwrap(), None);
     let n = store.0.borrow()[&pid].clone();
     assert_eq!(n.state, NegotiationState::Terminated);
     assert_eq!((n.agreement, n.pending), (None, None));
 
-    let (ack, agree) = p.request(None, request(None), "c", &none()).unwrap();
+    let (ack, agree) = provider.request(None, request(None), "c", &none()).unwrap();
     let agree = agree.unwrap();
     store.1.set(true);
-    let err = p
+    let err = provider
         .terminate(&ack.provider_pid, &termination(&ack.provider_pid), "c")
         .unwrap_err();
     assert!(matches!(err, Failure::Store(_)));
@@ -448,41 +523,47 @@ fn concurrent_change_and_store_failure() {
 
     // abort saves a termination as pending, for a live negotiation only
     store.1.set(false);
-    let out = p.abort(&agree, "consumer unreachable").unwrap().unwrap();
+    let out = provider
+        .abort(&agree, "consumer unreachable")
+        .unwrap()
+        .unwrap();
     assert_eq!(out.transition, Transition::Terminate);
     assert_eq!(out.to, NegotiationState::Terminated);
     assert_eq!(out.body["reason"][0], "consumer unreachable");
-    assert_eq!(p.pending().unwrap(), vec![out.clone()]);
+    assert_eq!(provider.pending().unwrap(), vec![out.clone()]);
     // the consumer cannot move on while the provider is ending it
-    let err = p
+    let err = provider
         .verify(&ack.provider_pid, &verification(&ack.provider_pid), "c")
         .unwrap_err();
     assert!(reason(&err).contains("ending"), "{err:?}");
-    p.delivered(&out).unwrap();
-    assert_eq!(p.abort(&out, "again").unwrap(), None);
+    provider.delivered(&out).unwrap();
+    assert_eq!(provider.abort(&out, "again").unwrap(), None);
     let unknown = Outgoing {
         provider_pid: "nope".to_owned(),
         ..out
     };
-    assert!(matches!(p.abort(&unknown, "x"), Err(Failure::NotFound(_))));
+    assert!(matches!(
+        provider.abort(&unknown, "x"),
+        Err(Failure::NotFound(_))
+    ));
 }
 
 #[test]
 fn a_lost_write_is_read_and_tried_again() {
     let store = Store::default();
-    let p = service(&store, AgreeToCatalogOffers);
-    let (ack, out) = p.request(None, request(None), "c", &none()).unwrap();
+    let provider = service(&store, AgreeToCatalogOffers);
+    let (ack, out) = provider.request(None, request(None), "c", &none()).unwrap();
     let pid = ack.provider_pid;
     let out = out.unwrap();
     assert_eq!(store.0.borrow()[&pid].version, 0);
     // two other writes come first: the third try succeeds
     store.2.set(2);
-    assert_eq!(p.delivered(&out).unwrap(), None);
+    assert_eq!(provider.delivered(&out).unwrap(), None);
     let n = store.0.borrow()[&pid].clone();
     assert_eq!((n.state, n.version), (NegotiationState::Agreed, 3));
     // other writes keep coming first: give up, change nothing
     store.2.set(3);
-    let err = p.verify(&pid, &verification(&pid), "c").unwrap_err();
+    let err = provider.verify(&pid, &verification(&pid), "c").unwrap_err();
     assert!(reason(&err).contains("concurrently"), "{err:?}");
     assert_eq!(store.0.borrow()[&pid].state, NegotiationState::Agreed);
 }
@@ -492,8 +573,8 @@ fn a_lost_write_is_read_and_tried_again() {
 #[test]
 fn a_reply_proves_the_pending_message_arrived() {
     let store = Store::default();
-    let p = service(&store, AgreeToCatalogOffers);
-    let (ack, agree) = p.request(None, request(None), "c", &none()).unwrap();
+    let provider = service(&store, AgreeToCatalogOffers);
+    let (ack, agree) = provider.request(None, request(None), "c", &none()).unwrap();
     let pid = ack.provider_pid;
     let agree = agree.unwrap();
     assert_eq!(agree.to, NegotiationState::Agreed);
@@ -501,9 +582,9 @@ fn a_reply_proves_the_pending_message_arrived() {
         agree.status_url,
         "https://consumer.example/cb/negotiations/c1"
     );
-    assert_eq!(p.pending().unwrap(), vec![agree.clone()]);
+    assert_eq!(provider.pending().unwrap(), vec![agree.clone()]);
 
-    let (ack, finalize) = p.verify(&pid, &verification(&pid), "c").unwrap();
+    let (ack, finalize) = provider.verify(&pid, &verification(&pid), "c").unwrap();
     assert_eq!(ack.state, NegotiationState::Verified);
     let n = store.0.borrow()[&pid].clone();
     assert_eq!(
@@ -512,10 +593,10 @@ fn a_reply_proves_the_pending_message_arrived() {
     );
     assert_eq!(n.pending, finalize.clone());
     // the late acknowledgement, or a late failure, changes nothing
-    assert_eq!(p.delivered(&agree).unwrap(), None);
-    assert_eq!(p.abort(&agree, "timed out").unwrap(), None);
+    assert_eq!(provider.delivered(&agree).unwrap(), None);
+    assert_eq!(provider.abort(&agree, "timed out").unwrap(), None);
     assert_eq!(store.0.borrow()[&pid].state, NegotiationState::Verified);
-    p.delivered(&finalize.unwrap()).unwrap();
+    provider.delivered(&finalize.unwrap()).unwrap();
     assert_eq!(store.0.borrow()[&pid].state, NegotiationState::Finalized);
 }
 
@@ -528,20 +609,20 @@ fn proof_of_delivery_for_an_offer() {
         NegotiationState::Requested,
         Decision::Offer,
     )]));
-    let p = service(&store, script);
-    let (ack, out) = p.request(None, request(None), "c", &none()).unwrap();
+    let provider = service(&store, script);
+    let (ack, out) = provider.request(None, request(None), "c", &none()).unwrap();
     let pid = ack.provider_pid;
     assert_eq!(out.unwrap().to, NegotiationState::Offered);
-    let err = p.verify(&pid, &verification(&pid), "c").unwrap_err();
+    let err = provider.verify(&pid, &verification(&pid), "c").unwrap_err();
     assert!(reason(&err).contains("not allowed"), "{err:?}");
     let before = store.0.borrow()[&pid].clone();
     assert_eq!(before.state, NegotiationState::Requested);
-    let (ack, out) = p
+    let (ack, out) = provider
         .event(&pid, &event(&pid, NegotiationEvent::Accepted), "c", &none())
         .unwrap();
     assert_eq!(ack.state, NegotiationState::Accepted);
     assert_eq!(out, None);
-    assert!(p.pending().unwrap().is_empty());
+    assert!(provider.pending().unwrap().is_empty());
 }
 
 /// ADR 0009: the provider agrees only to the catalog's terms, and only
@@ -549,7 +630,7 @@ fn proof_of_delivery_for_an_offer() {
 #[test]
 fn agrees_only_to_catalog_terms_that_hold_now() {
     let store = Store::default();
-    let p = service(&store, AgreeToCatalogOffers);
+    let provider = service(&store, AgreeToCatalogOffers);
 
     let mut expired = request(None);
     expired.offer.target = Some("d2".to_owned());
@@ -559,7 +640,8 @@ fn agrees_only_to_catalog_terms_that_hold_now() {
         ))
         .unwrap(),
     ];
-    let (_, out) = p.request(None, expired, "c", &none()).unwrap();
+    expired.consumer_pid = "c-expired".to_owned();
+    let (_, out) = provider.request(None, expired, "c", &none()).unwrap();
     let out = out.unwrap();
     assert_eq!(out.transition, Transition::Terminate);
     let why = out.body["reason"][0].as_str().unwrap();
@@ -568,7 +650,8 @@ fn agrees_only_to_catalog_terms_that_hold_now() {
     // the catalog offer's id, with its constraint left out
     let mut altered = request(None);
     altered.offer.target = Some("d2".to_owned());
-    let (_, out) = p.request(None, altered, "c", &none()).unwrap();
+    altered.consumer_pid = "c-altered".to_owned();
+    let (_, out) = provider.request(None, altered, "c", &none()).unwrap();
     let out = out.unwrap();
     assert_eq!(out.transition, Transition::Terminate);
     let why = out.body["reason"][0].as_str().unwrap();
@@ -588,7 +671,7 @@ fn agrees_only_to_catalog_terms_that_hold_now() {
             version: 0,
         })
         .unwrap();
-    let (ack, out) = p
+    let (ack, out) = provider
         .event("p9", &event("p9", NegotiationEvent::Accepted), "c", &none())
         .unwrap();
     assert_eq!(ack.state, NegotiationState::Accepted);
@@ -608,17 +691,23 @@ fn none() -> CallerCredentials {
 #[test]
 fn agrees_only_when_the_callers_credentials_meet_the_offer() {
     let store = Store::default();
-    let p = service(&store, AgreeToCatalogOffers);
+    let provider = service(&store, AgreeToCatalogOffers);
     let mut msg = request(None);
     msg.offer = providers_only(Some("d3"));
 
-    let (_, out) = p
+    let (_, out) = provider
         .request(None, msg.clone(), "c", &member_with_role("provider"))
         .unwrap();
     assert_eq!(out.unwrap().transition, Transition::Agree);
 
-    for credentials in [member_with_role("consumer"), none()] {
-        let (_, out) = p.request(None, msg.clone(), "c", &credentials).unwrap();
+    // one consumer pid starts one negotiation: each one its own
+    for (cpid, credentials) in [
+        ("c-consumer", member_with_role("consumer")),
+        ("c-none", none()),
+    ] {
+        let mut msg = msg.clone();
+        msg.consumer_pid = cpid.to_owned();
+        let (_, out) = provider.request(None, msg, "c", &credentials).unwrap();
         let out = out.unwrap();
         assert_eq!(out.transition, Transition::Terminate);
         let why = out.body["reason"][0].as_str().unwrap();
@@ -627,7 +716,7 @@ fn agrees_only_when_the_callers_credentials_meet_the_offer() {
 
     // the provider offers first; the consumer's acceptance brings the
     // credentials
-    let p = service(
+    let provider = service(
         &store,
         Script(BTreeMap::from([
             (NegotiationState::Requested, Decision::Offer),
@@ -638,21 +727,127 @@ fn agrees_only_when_the_callers_credentials_meet_the_offer() {
         ("provider", Transition::Agree),
         ("consumer", Transition::Terminate),
     ] {
-        let (ack, out) = p.request(None, msg.clone(), "c", &none()).unwrap();
+        // a consumer for each role: one consumer pid starts one negotiation
+        let caller = format!("c-{role}");
+        let (ack, out) = provider
+            .request(None, msg.clone(), &caller, &none())
+            .unwrap();
         let pid = ack.provider_pid;
-        p.delivered(&out.unwrap()).unwrap();
-        assert_eq!(p.offer_under_negotiation(&pid, "c").unwrap(), msg.offer);
-        assert!(p.offer_under_negotiation(&pid, "other").is_err());
-        let (_, out) = p
+        provider.delivered(&out.unwrap()).unwrap();
+        assert_eq!(
+            provider.offer_under_negotiation(&pid, &caller).unwrap(),
+            msg.offer
+        );
+        assert!(provider.offer_under_negotiation(&pid, "other").is_err());
+        let (_, out) = provider
             .event(
                 &pid,
                 &event(&pid, NegotiationEvent::Accepted),
-                "c",
+                &caller,
                 &member_with_role(role),
             )
             .unwrap();
         assert_eq!(out.unwrap().transition, expected, "{role}");
     }
+}
+
+/// ADR 0019, amendment in 1.4: a contract request is checked against the
+/// access policy of its dataset, as in Eclipse EDC's
+/// `validateInitialOffer`. A caller the access policy does not hold for
+/// gets the answer of an unknown offer, even when it meets the offer.
+#[test]
+fn a_contract_request_is_checked_against_the_access_policy() {
+    let store = Store::default();
+    let provider = service(&store, AgreeToCatalogOffers);
+    let mut msg = request(None);
+    msg.offer = offer(Some("d4"));
+
+    // meets the offer (it has no constraint), not the access policy
+    let mut unknown = request(None);
+    unknown.offer = offer(Some("d9"));
+    let unknown_answer = reason(&provider.request(None, unknown, "c", &none()).unwrap_err());
+    for credentials in [member_with_role("consumer"), none()] {
+        let failure = provider
+            .request(None, msg.clone(), "c", &credentials)
+            .unwrap_err();
+        assert!(matches!(failure, Failure::BadRequest(_)));
+        assert_eq!(reason(&failure), unknown_answer);
+    }
+    assert!(store.0.borrow().is_empty(), "nothing is started");
+
+    // meets both: the agreement
+    let (_, out) = provider
+        .request(None, msg.clone(), "c", &member_with_role("provider"))
+        .unwrap();
+    assert_eq!(out.unwrap().transition, Transition::Agree);
+
+    // a counter request is checked too (EDC checks every contract request)
+    let provider = service(
+        &store,
+        Script(BTreeMap::from([(
+            NegotiationState::Requested,
+            Decision::Offer,
+        )])),
+    );
+    // another consumer pid: a repeat of the first request would get the
+    // negotiation already started (TD-60)
+    msg.consumer_pid = "c2".to_owned();
+    let (ack_offered, _) = provider
+        .request(None, msg.clone(), "c", &member_with_role("provider"))
+        .unwrap();
+    let pid = ack_offered.provider_pid;
+    let mut counter = msg.clone();
+    counter.provider_pid = Some(pid.clone());
+    let failure = provider
+        .request(Some(&pid), counter, "c", &member_with_role("consumer"))
+        .unwrap_err();
+    assert_eq!(reason(&failure), unknown_answer);
+
+    // a dataset without an access policy: unchanged
+    let provider = service(&store, AgreeToCatalogOffers);
+    let mut plain = request(None);
+    plain.consumer_pid = "c3".to_owned();
+    let (_, out) = provider.request(None, plain, "c", &none()).unwrap();
+    assert_eq!(out.unwrap().transition, Transition::Agree);
+}
+
+/// One presentation query brings the scopes of the offer and of its
+/// dataset's access policy.
+#[test]
+fn a_contract_request_asks_for_the_access_policy_scopes_too() {
+    let store = Store::default();
+    let provider = service(&store, AgreeToCatalogOffers);
+    let mut types = crate::policy::CredentialTypes::default();
+    types.add("MembershipCredential", "scope:membership");
+    assert_eq!(
+        provider.request_scopes(&offer(Some("d4")), &types).unwrap(),
+        vec!["scope:membership".to_owned()]
+    );
+    // the offer's and the access policy's scope, each once
+    assert_eq!(
+        provider
+            .request_scopes(&providers_only(Some("d4")), &types)
+            .unwrap(),
+        vec!["scope:membership".to_owned()]
+    );
+    assert!(
+        provider
+            .request_scopes(&offer(Some("d1")), &types)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        provider
+            .request_scopes(&offer(None), &types)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        provider
+            .request_scopes(&offer(Some("d9")), &types)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 /// An offer that names its parties (Eclipse EDC sends `assigner`, the DSP
@@ -661,18 +856,18 @@ fn agrees_only_when_the_callers_credentials_meet_the_offer() {
 #[test]
 fn the_parties_an_offer_names_are_checked_and_kept() {
     let store = Store::default();
-    let p = service(&store, AgreeToCatalogOffers);
+    let provider = service(&store, AgreeToCatalogOffers);
 
     let mut other_provider = request(None);
     other_provider.offer.assigner = Some("did:web:someone-else".to_owned());
-    let failure = p
+    let failure = provider
         .request(None, other_provider, "did:web:consumer", &none())
         .unwrap_err();
     assert!(reason(&failure).contains("the offer's assigner is not the provider"));
 
     let mut other_consumer = request(None);
     other_consumer.offer.assignee = Some("did:web:someone-else".to_owned());
-    let failure = p
+    let failure = provider
         .request(None, other_consumer, "did:web:consumer", &none())
         .unwrap_err();
     assert!(reason(&failure).contains("the offer's assignee is not the consumer"));
@@ -681,7 +876,9 @@ fn the_parties_an_offer_names_are_checked_and_kept() {
     let mut named = request(None);
     named.offer.assigner = Some("did:web:provider".to_owned());
     named.offer.assignee = Some("did:web:consumer".to_owned());
-    let (ack, out) = p.request(None, named, "did:web:consumer", &none()).unwrap();
+    let (ack, out) = provider
+        .request(None, named, "did:web:consumer", &none())
+        .unwrap();
     let stored = store.0.borrow()[&ack.provider_pid].offer.clone();
     assert_eq!(stored.assigner.as_deref(), Some("did:web:provider"));
     assert_eq!(stored.assignee.as_deref(), Some("did:web:consumer"));
@@ -690,14 +887,14 @@ fn the_parties_an_offer_names_are_checked_and_kept() {
 
     // a counter-request is checked the same way
     let waiting = Store::default();
-    let p = service(&waiting, Script(BTreeMap::new()));
-    let (ack, _) = p
+    let provider = service(&waiting, Script(BTreeMap::new()));
+    let (ack, _) = provider
         .request(None, request(None), "did:web:consumer", &none())
         .unwrap();
     let pid = ack.provider_pid;
     let mut counter = request(Some(&pid));
     counter.offer.assigner = Some("did:web:someone-else".to_owned());
-    let failure = p
+    let failure = provider
         .request(Some(&pid), counter, "did:web:consumer", &none())
         .unwrap_err();
     assert!(reason(&failure).contains("the offer's assigner is not the provider"));
@@ -706,14 +903,14 @@ fn the_parties_an_offer_names_are_checked_and_kept() {
 /// A negotiation of the default policy, taken to `VERIFIED` with the
 /// finalization event on its way. Returns its id and that event.
 fn verified_with_finalization_on_its_way(
-    p: &Service<'_, AgreeToCatalogOffers>,
+    provider: &Service<'_, AgreeToCatalogOffers>,
 ) -> (String, Outgoing) {
-    let (ack, agreement) = p
+    let (ack, agreement) = provider
         .request(None, request(None), "did:web:consumer", &none())
         .unwrap();
     let pid = ack.provider_pid;
-    p.delivered(&agreement.unwrap()).unwrap();
-    let (_, finalization) = p
+    provider.delivered(&agreement.unwrap()).unwrap();
+    let (_, finalization) = provider
         .verify(&pid, &verification(&pid), "did:web:consumer")
         .unwrap();
     (pid, finalization.unwrap())
@@ -724,22 +921,22 @@ fn verified_with_finalization_on_its_way(
 #[test]
 fn only_a_pending_finalization_event_can_be_proved_by_a_transfer_request() {
     let store = Store::default();
-    let p = service(&store, AgreeToCatalogOffers);
+    let provider = service(&store, AgreeToCatalogOffers);
 
     // REQUESTED, the agreement on its way: not a finalization
-    let (ack, agreement) = p
+    let (ack, agreement) = provider
         .request(None, request(None), "did:web:consumer", &none())
         .unwrap();
     let pid = ack.provider_pid;
     assert_eq!(finalization_proved(&store.0.borrow()[&pid]), None);
 
     // AGREED, nothing on its way
-    p.delivered(&agreement.unwrap()).unwrap();
+    provider.delivered(&agreement.unwrap()).unwrap();
     assert_eq!(store.0.borrow()[&pid].state, NegotiationState::Agreed);
     assert_eq!(finalization_proved(&store.0.borrow()[&pid]), None);
 
     // VERIFIED, the finalization event on its way
-    let (_, finalization) = p
+    let (_, finalization) = provider
         .verify(&pid, &verification(&pid), "did:web:consumer")
         .unwrap();
     let verified = store.0.borrow()[&pid].clone();
@@ -750,12 +947,15 @@ fn only_a_pending_finalization_event_can_be_proved_by_a_transfer_request() {
     assert_eq!(proved.agreement, verified.agreement);
 
     // VERIFIED, but the provider is ending the negotiation
-    let ending = p.abort(&finalization.unwrap(), "unreachable").unwrap();
+    let ending = provider
+        .abort(&finalization.unwrap(), "unreachable")
+        .unwrap();
     assert_eq!(ending.unwrap().transition, Transition::Terminate);
     assert_eq!(finalization_proved(&store.0.borrow()[&pid]), None);
 
     // TERMINATED and FINALIZED: nothing is pending
-    p.terminate(&pid, &termination(&pid), "did:web:consumer")
+    provider
+        .terminate(&pid, &termination(&pid), "did:web:consumer")
         .unwrap();
     assert_eq!(store.0.borrow()[&pid].state, NegotiationState::Terminated);
     assert_eq!(finalization_proved(&store.0.borrow()[&pid]), None);
@@ -768,8 +968,8 @@ fn only_a_pending_finalization_event_can_be_proved_by_a_transfer_request() {
 #[test]
 fn a_late_acknowledgement_or_failure_of_a_settled_finalization_changes_nothing() {
     let store = Store::default();
-    let p = service(&store, AgreeToCatalogOffers);
-    let (pid, finalization) = verified_with_finalization_on_its_way(&p);
+    let provider = service(&store, AgreeToCatalogOffers);
+    let (pid, finalization) = verified_with_finalization_on_its_way(&provider);
 
     // what the transfer provider writes
     let verified = store.0.borrow()[&pid].clone();
@@ -777,11 +977,14 @@ fn a_late_acknowledgement_or_failure_of_a_settled_finalization_changes_nothing()
     settled.version = verified.version + 1;
     assert!((&store).replace_if(&settled, verified.version).unwrap());
 
-    assert_eq!(p.delivered(&finalization).unwrap(), None);
+    assert_eq!(provider.delivered(&finalization).unwrap(), None);
     assert_eq!(store.0.borrow()[&pid], settled);
-    assert_eq!(p.abort(&finalization, "unreachable").unwrap(), None);
+    assert_eq!(provider.abort(&finalization, "unreachable").unwrap(), None);
     assert_eq!(store.0.borrow()[&pid], settled);
-    assert!(p.pending().unwrap().is_empty(), "nothing is sent again");
+    assert!(
+        provider.pending().unwrap().is_empty(),
+        "nothing is sent again"
+    );
 }
 
 /// The outbox asks whether a finalization event it could not deliver
@@ -790,51 +993,54 @@ fn a_late_acknowledgement_or_failure_of_a_settled_finalization_changes_nothing()
 #[test]
 fn a_finalization_event_is_settled_only_once_the_negotiation_is_finalized() {
     let store = Store::default();
-    let p = service(&store, AgreeToCatalogOffers);
+    let provider = service(&store, AgreeToCatalogOffers);
 
     // the agreement on its way is not a finalization event
-    let (ack, agreement) = p
+    let (ack, agreement) = provider
         .request(None, request(None), "did:web:consumer", &none())
         .unwrap();
     let pid = ack.provider_pid;
     let agreement = agreement.unwrap();
-    assert!(!p.finalization_settled(&agreement).unwrap());
-    p.delivered(&agreement).unwrap();
+    assert!(!provider.finalization_settled(&agreement).unwrap());
+    provider.delivered(&agreement).unwrap();
 
     // VERIFIED, the event on its way: not settled
-    let (_, finalization) = p
+    let (_, finalization) = provider
         .verify(&pid, &verification(&pid), "did:web:consumer")
         .unwrap();
     let finalization = finalization.unwrap();
-    assert!(!p.finalization_settled(&finalization).unwrap());
+    assert!(!provider.finalization_settled(&finalization).unwrap());
 
     // what the transfer provider writes for a transfer request
     let verified = store.0.borrow()[&pid].clone();
     let mut settled = finalization_proved(&verified).unwrap();
     settled.version = verified.version + 1;
     assert!((&store).replace_if(&settled, verified.version).unwrap());
-    assert!(p.finalization_settled(&finalization).unwrap());
+    assert!(provider.finalization_settled(&finalization).unwrap());
     // the earlier agreement message stays "not settled": only a
     // finalization event is asked about
-    assert!(!p.finalization_settled(&agreement).unwrap());
+    assert!(!provider.finalization_settled(&agreement).unwrap());
 
     // an unknown negotiation
     let mut unknown = finalization.clone();
     unknown.provider_pid = "urn:uuid:unknown".to_owned();
-    assert!(!p.finalization_settled(&unknown).unwrap());
+    assert!(!provider.finalization_settled(&unknown).unwrap());
 }
 
 /// An event the outbox gave up ends the negotiation: it is not settled.
 #[test]
 fn a_finalization_event_that_was_given_up_is_not_settled() {
     let store = Store::default();
-    let p = service(&store, AgreeToCatalogOffers);
-    let (pid, finalization) = verified_with_finalization_on_its_way(&p);
-    let ending = p.abort(&finalization, "unreachable").unwrap().unwrap();
-    assert!(!p.finalization_settled(&finalization).unwrap());
-    p.delivered(&ending).unwrap();
+    let provider = service(&store, AgreeToCatalogOffers);
+    let (pid, finalization) = verified_with_finalization_on_its_way(&provider);
+    let ending = provider
+        .abort(&finalization, "unreachable")
+        .unwrap()
+        .unwrap();
+    assert!(!provider.finalization_settled(&finalization).unwrap());
+    provider.delivered(&ending).unwrap();
     assert_eq!(store.0.borrow()[&pid].state, NegotiationState::Terminated);
-    assert!(!p.finalization_settled(&finalization).unwrap());
+    assert!(!provider.finalization_settled(&finalization).unwrap());
 }
 
 /// The acknowledgement and the transfer request arrive at the same
@@ -843,13 +1049,13 @@ fn a_finalization_event_that_was_given_up_is_not_settled() {
 #[test]
 fn an_acknowledgement_written_first_makes_the_settling_write_lose() {
     let store = Store::default();
-    let p = service(&store, AgreeToCatalogOffers);
-    let (pid, finalization) = verified_with_finalization_on_its_way(&p);
+    let provider = service(&store, AgreeToCatalogOffers);
+    let (pid, finalization) = verified_with_finalization_on_its_way(&provider);
     let verified = store.0.borrow()[&pid].clone();
     let mut settled = finalization_proved(&verified).unwrap();
     settled.version = verified.version + 1;
 
-    p.delivered(&finalization).unwrap();
+    provider.delivered(&finalization).unwrap();
     let finalized = store.0.borrow()[&pid].clone();
     assert_eq!(finalized.state, NegotiationState::Finalized);
     assert!(!(&store).replace_if(&settled, verified.version).unwrap());
@@ -860,10 +1066,16 @@ fn an_acknowledgement_written_first_makes_the_settling_write_lose() {
 struct Unreadable;
 
 impl CatalogDatasets for Unreadable {
-    fn all(&self) -> Result<Vec<Dataset>, StoreError> {
+    fn get_for_agreement(&self, _: &str) -> Result<Option<Dataset>, StoreError> {
         Err(StoreError("database down".to_owned()))
     }
-    fn get(&self, _: &str) -> Result<Option<Dataset>, StoreError> {
+    fn all_with_access_policies(&self) -> Result<Vec<ListedDataset>, StoreError> {
+        Err(StoreError("database down".to_owned()))
+    }
+    fn get_with_access_policy(&self, _: &str) -> Result<Option<ListedDataset>, StoreError> {
+        Err(StoreError("database down".to_owned()))
+    }
+    fn access_policies(&self) -> Result<Vec<AccessPolicy>, StoreError> {
         Err(StoreError("database down".to_owned()))
     }
 }
@@ -875,16 +1087,146 @@ impl CatalogDatasets for Unreadable {
 #[test]
 fn a_catalog_that_cannot_be_read_is_a_store_failure() {
     let store = Store::default();
-    let p = ProviderService::new(
+    let provider = ProviderService::new(
         &store,
         AgreeToCatalogOffers,
         Unreadable,
         Env::default(),
         "did:web:provider".to_owned(),
     );
-    let failure = p
+    let failure = provider
         .request(None, request(None), "did:web:consumer", &none())
         .unwrap_err();
     assert!(matches!(failure, Failure::Store(_)), "{failure:?}");
     assert!(store.0.borrow().is_empty(), "nothing was stored");
+}
+
+/// TD-60: a first request that the consumer's outbox sends again (our
+/// answer was lost) gets the negotiation it already started, as it is
+/// now, and starts nothing.
+#[test]
+fn a_repeated_first_request_gets_the_same_negotiation_and_starts_nothing() {
+    let store = Store::default();
+    let provider = service(&store, AgreeToCatalogOffers);
+    let (first, out) = provider
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap();
+    let agreement = out.unwrap();
+
+    // again while our agreement is on its way: the same negotiation, and
+    // no second agreement
+    let (again, out) = provider
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap();
+    assert_eq!(again, first);
+    assert_eq!(out, None);
+
+    // again once the agreement arrived: the answer shows the state now
+    provider.delivered(&agreement).unwrap();
+    let (again, out) = provider
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap();
+    assert_eq!(again.provider_pid, first.provider_pid);
+    assert_eq!(again.state, NegotiationState::Agreed);
+    assert_eq!(out, None);
+    assert_eq!(store.0.borrow().len(), 1, "one negotiation");
+}
+
+#[test]
+fn a_repeated_first_request_with_other_terms_is_refused() {
+    let store = Store::default();
+    let provider = service(&store, Script(BTreeMap::new()));
+    let (first, _) = provider
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap();
+
+    let mut other_callback = request(None);
+    other_callback.callback_address = Some("https://elsewhere.example/cb/".to_owned());
+    let mut other_offer = request(None);
+    other_offer.offer.permission[0].action = "read".to_owned();
+    let mut no_callback = request(None);
+    no_callback.callback_address = None;
+    for msg in [other_callback, other_offer, no_callback] {
+        let failure = provider
+            .request(None, msg, "did:web:consumer", &none())
+            .unwrap_err();
+        assert!(matches!(failure, Failure::BadRequest(_)), "{failure:?}");
+        assert!(reason(&failure).contains("already used"), "{failure:?}");
+        // the refusal does not name the existing negotiation
+        assert!(
+            !reason(&failure).contains(&first.provider_pid),
+            "{failure:?}"
+        );
+    }
+    assert_eq!(store.0.borrow().len(), 1);
+}
+
+/// Another consumer may use the same `consumerPid`: it gets a negotiation
+/// of its own, and learns nothing of the first one.
+#[test]
+fn the_same_consumer_pid_of_another_consumer_starts_its_own_negotiation() {
+    let store = Store::default();
+    let provider = service(&store, Script(BTreeMap::new()));
+    let (first, _) = provider
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap();
+    let (other, _) = provider
+        .request(None, request(None), "did:web:other", &none())
+        .unwrap();
+    assert_ne!(other.provider_pid, first.provider_pid);
+    assert_eq!(store.0.borrow().len(), 2);
+}
+
+/// A store in which a copy of the request is saved between the lookup and
+/// the insert, as when two copies arrive together (in two replicas).
+struct Racing<'a>(&'a Store, Cell<bool>);
+
+impl NegotiationStore for &Racing<'_> {
+    fn get(&self, pid: &str) -> Result<Option<Negotiation>, StoreError> {
+        (&self.0).get(pid)
+    }
+    fn negotiation_requested_by(
+        &self,
+        party: &str,
+        cpid: &str,
+    ) -> Result<Option<Negotiation>, StoreError> {
+        // the first lookup comes before the other copy is saved
+        if self.1.replace(true) {
+            (&self.0).negotiation_requested_by(party, cpid)
+        } else {
+            Ok(None)
+        }
+    }
+    fn insert(&self, negotiation: &Negotiation) -> Result<bool, StoreError> {
+        (&self.0).insert(negotiation)
+    }
+    fn replace_if(&self, negotiation: &Negotiation, expected: u64) -> Result<bool, StoreError> {
+        (&self.0).replace_if(negotiation, expected)
+    }
+    fn pending(&self) -> Result<Vec<Negotiation>, StoreError> {
+        (&self.0).pending()
+    }
+}
+
+#[test]
+fn two_copies_of_a_first_request_at_once_give_one_negotiation() {
+    let store = Store::default();
+    let (first, _) = service(&store, AgreeToCatalogOffers)
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap();
+
+    let racing = Racing(&store, Cell::new(false));
+    let late = ProviderService::new(
+        &racing,
+        AgreeToCatalogOffers,
+        Catalog,
+        Env(Cell::new(1)),
+        "did:web:provider".to_owned(),
+    );
+    let (again, out) = late
+        .request(None, request(None), "did:web:consumer", &none())
+        .unwrap();
+    assert_eq!(again.provider_pid, first.provider_pid);
+    assert_eq!(out, None, "the late copy sends no agreement");
+    assert_eq!(store.0.borrow().len(), 1);
 }

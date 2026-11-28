@@ -16,14 +16,12 @@
 //! transaction, so the two cannot disagree.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 use portitor_dcp::credential::Profile;
 use portitor_dcp::issuance::STATUS_LIST_ENTRIES;
 use portitor_dcp::message::RequestStatus;
-use portitor_runtime::database::{
-    Database, DatabaseSetting, DbError, Executor, Migrations, Row, from_db_int, to_db_int,
-};
+use portitor_runtime::component_store::{ComponentSchema, ComponentStore};
+use portitor_runtime::database::{DbError, Executor, Migrations, Row, from_db_int, to_db_int};
 use portitor_runtime::system::random_below;
 use portitor_runtime::used_tokens::UsedTokenStore;
 use portitor_runtime::values;
@@ -277,6 +275,16 @@ pub trait IssuerStore: UsedTokenStore + Send + Sync {
     /// # Errors
     /// The store fails.
     fn participants(&self) -> Result<Vec<Participant>, StoreError>;
+
+    /// Replaces the claims of a registered participant (TD-46), in one
+    /// statement: two processes that replace them at once leave one of
+    /// the two sets, whole. Credentials issued already keep their
+    /// claims; a request decided from now on gets the new ones. Returns
+    /// false if the DID is not registered (nothing changes).
+    ///
+    /// # Errors
+    /// The store fails.
+    fn replace_claims(&self, did: &str, claims: &Map<String, Value>) -> Result<bool, StoreError>;
 
     /// Removes a registration. Issued credentials stay valid until
     /// revoked. Returns false if there was none.
@@ -575,52 +583,21 @@ const ISSUED_COLUMNS: &str = "id, issuer_pid, holder_did, definition_id, credent
 const DELIVERY_COLUMNS: &str =
     "o.issuer_pid, r.holder_did, r.access_token, o.message, o.attempts, o.next_attempt_at";
 
-/// Adapter: the store in the issuer's database (PostgreSQL, or a
-/// `SQLite` file), shared with the health check.
-#[derive(Debug, Clone)]
-pub struct DatabaseStore(Arc<Database>);
+/// Names the issuer component's schema ([`MIGRATIONS`]) for the shared
+/// [`ComponentStore`].
+#[derive(Debug, Clone, Copy)]
+pub struct IssuerSchema;
 
-impl DatabaseStore {
-    /// The store in `db`, whose schema is [`MIGRATIONS`].
-    #[must_use]
-    pub fn new(db: Arc<Database>) -> Self {
-        Self(db)
-    }
-
-    /// Opens (or creates) the database `setting` names and brings its
-    /// schema up to date.
-    ///
-    /// # Errors
-    /// The database cannot be opened, or was written by a newer Portitor.
-    pub fn open(setting: &DatabaseSetting) -> Result<Self, StoreError> {
-        Ok(Self::new(Arc::new(Database::open(setting, &MIGRATIONS)?)))
-    }
-
-    /// An in-memory `SQLite` store, for tests.
-    ///
-    /// # Errors
-    /// `SQLite` cannot allocate the database.
-    pub fn in_memory() -> Result<Self, StoreError> {
-        Ok(Self::new(Arc::new(Database::in_memory(&MIGRATIONS)?)))
-    }
-
-    /// The database, for the health check.
-    #[must_use]
-    pub fn database(&self) -> &Arc<Database> {
-        &self.0
-    }
-
-    /// The database, to run one statement on (`self.db().execute(...)`).
-    fn db(&self) -> &Database {
-        &self.0
-    }
+impl ComponentSchema for IssuerSchema {
+    const MIGRATIONS: &'static Migrations = &MIGRATIONS;
 }
 
-impl UsedTokenStore for DatabaseStore {
-    fn use_token_id(&self, token_id: &str, expires_at: u64, now: u64) -> Result<bool, String> {
-        self.db().use_token_id(token_id, expires_at, now)
-    }
-}
+/// Adapter: the store in the issuer component's database (PostgreSQL, or
+/// a `SQLite` file), shared with the health check. `new`, `open`,
+/// `in_memory`, `database`, `db` and the used token ids and leases are
+/// written once, in `portitor-runtime` ([`ComponentStore`], TD-71); the
+/// [`IssuerStore`] methods are below.
+pub type DatabaseStore = ComponentStore<IssuerSchema>;
 
 impl IssuerStore for DatabaseStore {
     fn add_participant(&self, participant: &Participant) -> Result<bool, StoreError> {
@@ -653,6 +630,15 @@ impl IssuerStore for DatabaseStore {
             values![],
         )?;
         rows.iter().map(participant_from).collect()
+    }
+
+    fn replace_claims(&self, did: &str, claims: &Map<String, Value>) -> Result<bool, StoreError> {
+        let claims = to_json(claims)?;
+        let replaced = self.db().execute(
+            "UPDATE participant SET claims = $1 WHERE did = $2",
+            values![claims, did],
+        )?;
+        Ok(replaced == 1)
     }
 
     fn delete_participant(&self, did: &str) -> Result<bool, StoreError> {
@@ -1261,6 +1247,10 @@ fn from_json<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, StoreError
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use std::sync::Arc;
+
+    use portitor_runtime::database::{Database, DatabaseSetting};
+
     use super::*;
     use portitor_runtime::testing::{databases, schema};
     use std::path::Path;
@@ -1414,7 +1404,23 @@ mod tests {
             store.participant(HOLDER).unwrap(),
             Some(participant.clone())
         );
-        assert_eq!(store.participants().unwrap(), [participant]);
+        assert_eq!(
+            store.participants().unwrap(),
+            std::slice::from_ref(&participant)
+        );
+        // new claims replace the old ones; the registration time stays
+        let mut new_claims = Map::new();
+        new_claims.insert("role".to_owned(), Value::from("consumer"));
+        assert!(store.replace_claims(HOLDER, &new_claims).unwrap());
+        assert!(
+            !store
+                .replace_claims("did:web:unknown", &new_claims)
+                .unwrap()
+        );
+        let replaced = store.participant(HOLDER).unwrap().unwrap();
+        assert_eq!(replaced.claims, new_claims);
+        assert_eq!(replaced.registered_at, 50);
+        assert!(store.replace_claims(HOLDER, &participant.claims).unwrap());
 
         // a request, its duplicate, and its decision
         assert!(store.add_request(&request("i-1", "h-1")).unwrap());

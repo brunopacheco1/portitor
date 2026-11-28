@@ -10,7 +10,9 @@
 //!
 //! - A 2xx answer completes the transfer; any other answer, or none,
 //!   terminates it with the reason (the status code only: the URL and the
-//!   token are never logged or sent back).
+//!   token are never logged or sent back). An endpoint on an internal
+//!   address the block refuses (R-17) gets the fixed reason
+//!   [`ENDPOINT_NOT_ALLOWED`]; only the log names its host and address.
 //! - The connection must open within [`CONNECT_TIMEOUT`] (a setting of
 //!   the push client), and the push must make progress at least every
 //!   [`IDLE_TIMEOUT`]: a piece of the body written, or the answer's
@@ -56,6 +58,11 @@ use crate::access::Access;
 use crate::audit::{self, Outcome, Parties};
 use crate::plane::HttpDataPlane;
 use crate::running_flows::CutSignal;
+
+/// The reason of a push to an internal address the block refused
+/// (R-17). It goes to the consumer, so it names no address and no
+/// setting; the log has them.
+pub const ENDPOINT_NOT_ALLOWED: &str = "the consumer's endpoint is not allowed";
 
 /// The media type sent when neither the source nor the consumer's address
 /// names one.
@@ -387,9 +394,19 @@ async fn post(
             ));
         }
     };
-    let Ok(answer) = answer else {
-        call.end();
-        return Err("the data could not be sent to the consumer's endpoint".to_owned());
+    let answer = match answer {
+        Ok(answer) => answer,
+        Err(error) => {
+            call.end();
+            // an internal address the block refused (R-17): the log
+            // says which address and which setting allows it; the reason,
+            // which goes back to the consumer, does not name our network
+            if let Some(refused) = portitor_runtime::http::connect::refusal_in(&error) {
+                tracing::warn!(flow = %flow_id, %refused, "push not sent: the consumer's endpoint is an internal address");
+                return Err(ENDPOINT_NOT_ALLOWED.to_owned());
+            }
+            return Err("the data could not be sent to the consumer's endpoint".to_owned());
+        }
     };
     let status = answer.status();
     call.answered(status.as_u16());
@@ -418,6 +435,7 @@ pub fn audit(flow: &str, parties: &Parties, pushed: &Pushed) {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use portitor_dsp::transfer::{DataAddressType, HTTP_PUSH_ENDPOINT_TYPE};
+    use portitor_runtime::internal_addresses::InternalAddresses;
 
     use super::*;
 
@@ -453,7 +471,7 @@ mod tests {
         let flows = Arc::new(crate::test_store::InMemoryFlows::default());
         let plane = HttpDataPlane::new(flows, "https://provider.example", 60)
             .unwrap()
-            .with_push_over_http(true)
+            .with_push_client(true, &InternalAddresses::default())
             .unwrap();
         let address = DataAddress {
             kind: DataAddressType,
@@ -471,6 +489,45 @@ mod tests {
         .unwrap();
         let reason = sent.unwrap_err();
         assert!(reason.contains("no answer"), "{reason}");
+    }
+
+    /// R-17: with the block on internal addresses, a push to an endpoint
+    /// on one is refused before any data goes out, with a fixed reason. The source, which the operator chose, is on one
+    /// too and is still read.
+    #[tokio::test]
+    async fn a_push_to_an_internal_address_is_refused_with_the_block_on() {
+        use portitor_runtime::internal_addresses::{ALLOWED_SETTING, BLOCK_SETTING};
+        let source = source().await;
+        let flows = Arc::new(crate::test_store::InMemoryFlows::default());
+        let blocking = InternalAddresses::from_vars(|name: &str| {
+            (name == BLOCK_SETTING).then(|| std::ffi::OsString::from("true"))
+        })
+        .unwrap();
+        let plane = HttpDataPlane::new(flows, "https://provider.example", 60)
+            .unwrap()
+            .with_push_client(true, &blocking)
+            .unwrap();
+        let address = DataAddress {
+            kind: DataAddressType,
+            endpoint_type: HTTP_PUSH_ENDPOINT_TYPE.to_owned(),
+            endpoint: Some(silent_endpoint().await),
+            endpoint_properties: Vec::new(),
+        };
+        let counted = Arc::new(AtomicU64::new(0));
+        let idle = Duration::from_millis(200);
+        let sent = tokio::time::timeout(
+            Duration::from_secs(5),
+            post(&plane, "f1", &source, &address, Arc::clone(&counted), idle),
+        )
+        .await
+        .unwrap();
+        // the reason goes back to the consumer: it names neither the
+        // internal address nor the setting (those are in the log)
+        let reason = sent.unwrap_err();
+        assert_eq!(reason, ENDPOINT_NOT_ALLOWED);
+        assert!(!reason.contains(ALLOWED_SETTING), "{reason}");
+        assert!(!reason.contains("127.0.0.1"), "{reason}");
+        assert_eq!(counted.load(Ordering::Relaxed), 0, "no data went out");
     }
 
     /// A push whose connector lease is lost stops as cut, and leaves its
@@ -501,7 +558,7 @@ mod tests {
         flows.insert(&flow).unwrap();
         let plane = HttpDataPlane::new(flows, "https://provider.example", 60)
             .unwrap()
-            .with_push_over_http(true)
+            .with_push_client(true, &InternalAddresses::default())
             .unwrap();
         let mut job = plane.push_job("f1").unwrap().unwrap();
         assert!(plane.push_job("f1").unwrap().is_none(), "one push here");

@@ -26,8 +26,8 @@
 //! three services use too; this file holds what only the provider's
 //! negotiation does.
 
-use crate::catalog::CatalogDatasets;
-use crate::policy::CallerCredentials;
+use crate::catalog::{CatalogDatasets, Requester};
+use crate::policy::{CallerCredentials, CredentialTypes, add_once, credential_scopes};
 use crate::process::{self, Lookup, Message, Record, Records, Refused, Write};
 pub use crate::process::{Environment, StoreError};
 use crate::{Context, Offer};
@@ -116,12 +116,31 @@ pub trait NegotiationStore {
     /// The store cannot be read.
     fn get(&self, provider_pid: &str) -> Result<Option<Negotiation>, StoreError>;
 
-    /// Adds a new negotiation.
+    /// The negotiation that the consumer `counter_party` started with its
+    /// process id `consumer_pid`, if there is one: how a repeated first
+    /// `ContractRequestMessage` is recognised (TD-60). Another consumer's
+    /// negotiation with the same `consumerPid` is never returned. If a
+    /// store written before 1.4 holds several, the oldest.
     ///
     /// # Errors
     ///
-    /// The store cannot be written, or the id is taken.
-    fn insert(&self, negotiation: &Negotiation) -> Result<(), StoreError>;
+    /// The store cannot be read.
+    fn negotiation_requested_by(
+        &self,
+        counter_party: &str,
+        consumer_pid: &str,
+    ) -> Result<Option<Negotiation>, StoreError>;
+
+    /// Adds a new negotiation, unless its consumer (`counter_party`)
+    /// already has one with the same `consumer_pid`: then nothing is
+    /// written and the answer is `false`. Both happen in one step, so two
+    /// copies of one request that arrive together, in one process or in
+    /// two that share the database, cannot both be added.
+    ///
+    /// # Errors
+    ///
+    /// The store cannot be written, or the provider's id is taken.
+    fn insert(&self, negotiation: &Negotiation) -> Result<bool, StoreError>;
 
     /// Replaces a negotiation only if its stored `version` is still
     /// `expected`, atomically. Returns `false` when another write came
@@ -265,12 +284,43 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
         Ok(self.load(provider_pid, "", caller)?.offer)
     }
 
+    /// The DCP scopes to ask the caller's credential service for before a
+    /// contract request with `offer` (ADR 0019): those of the offer's
+    /// credential constraints, then those of the access policy of the
+    /// dataset it names (amendment in 1.4), each once. One presentation
+    /// query brings both.
+    ///
+    /// # Errors
+    ///
+    /// The catalog cannot be read.
+    pub fn request_scopes(
+        &self,
+        offer: &Offer,
+        types: &CredentialTypes,
+    ) -> Result<Vec<String>, Failure> {
+        let mut scopes = credential_scopes(offer, types);
+        let Some(target) = offer.target.as_deref() else {
+            return Ok(scopes);
+        };
+        let listed = self
+            .catalog
+            .get_with_access_policy(target)
+            .map_err(Failure::Store)?;
+        if let Some(policy) = listed.and_then(|listed| listed.access_policy) {
+            for scope in credential_scopes(&policy, types) {
+                add_once(&mut scopes, scope);
+            }
+        }
+        Ok(scopes)
+    }
+
     /// `POST /negotiations/request` (no `provider_pid`) and
     /// `POST /negotiations/:providerPid/request` (counter-offer).
     ///
-    /// `credentials` are the caller's verified credentials, against which
-    /// the offer's permissions are evaluated if the provider agrees now
-    /// (ADR 0019).
+    /// `credentials` are the caller's verified credentials: the access
+    /// policy of the offer's dataset must hold for them (ADR 0019,
+    /// amendment in 1.4), and the offer's permissions are evaluated with
+    /// them if the provider agrees now (ADR 0019).
     ///
     /// # Errors
     ///
@@ -298,24 +348,38 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
             // the request must name the consumer pid this negotiation was
             // started with, like every other message on it (TD-36)
             check_ids(negotiation, pid, &consumer_pid)?;
-            self.check_offer(&msg.offer, pid, &consumer_pid, caller)?;
+            self.check_offer(&msg.offer, pid, &consumer_pid, caller, credentials)?;
             receive(negotiation, Transition::Request)?;
             negotiation.offer = msg.offer.clone();
             Ok(())
         })
     }
 
+    /// A first request (no `providerPid`): starts a new negotiation.
+    ///
+    /// A first request that the same caller sends again with the same
+    /// `consumerPid` starts nothing: the answer is the negotiation it
+    /// already has, as it is now (TD-60). This happens when our answer to
+    /// the first one was lost and the consumer's outbox sent it again.
+    /// DSP 2025-1 has no such rule for contract requests (it has one for
+    /// transfer requests); Eclipse EDC does the same
+    /// (`findRequestedBy`: consumer pid and counter-party). The lookup
+    /// comes before the checks: the first copy passed them, and a repeat
+    /// must carry the same terms ([`answer_again`]).
     fn start(
         &self,
         msg: ContractRequestMessage,
         caller: &str,
         credentials: &CallerCredentials,
     ) -> Handled {
+        if let Some(existing) = self.negotiation_requested_by(caller, &msg.consumer_pid)? {
+            return answer_again(&existing, &msg.offer, msg.callback_address.as_deref());
+        }
         let consumer_pid = msg.consumer_pid;
         let Some(callback_address) = msg.callback_address.filter(|c| !c.is_empty()) else {
             return Err(bad("", &consumer_pid, "callbackAddress is required"));
         };
-        self.check_offer(&msg.offer, "", &consumer_pid, caller)?;
+        self.check_offer(&msg.offer, "", &consumer_pid, caller, credentials)?;
         let state = next_state(None, Transition::Request, Role::Consumer)
             .map_err(|e| bad("", &consumer_pid, &e.to_string()))?;
         let mut negotiation = Negotiation {
@@ -330,8 +394,37 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
             version: 0,
         };
         negotiation.pending = self.next(&negotiation, credentials)?;
-        self.store.insert(&negotiation).map_err(Failure::Store)?;
+        let inserted = self.store.insert(&negotiation).map_err(Failure::Store)?;
+        if !inserted {
+            // a copy of this request was saved while this one was being
+            // checked: answer with the negotiation that was saved
+            return match self.negotiation_requested_by(caller, &negotiation.consumer_pid)? {
+                Some(existing) => answer_again(
+                    &existing,
+                    &negotiation.offer,
+                    Some(negotiation.callback_address.as_str()),
+                ),
+                None => Err(bad(
+                    "",
+                    &negotiation.consumer_pid,
+                    "the request was sent twice; retry",
+                )),
+            };
+        }
         Ok((ack(&negotiation), negotiation.pending))
+    }
+
+    /// The negotiation `caller` already started with `consumer_pid`, if
+    /// any. Only the caller's own negotiations are searched, so another
+    /// participant that uses the same `consumerPid` finds nothing.
+    fn negotiation_requested_by(
+        &self,
+        caller: &str,
+        consumer_pid: &str,
+    ) -> Result<Option<Negotiation>, Failure> {
+        self.store
+            .negotiation_requested_by(caller, consumer_pid)
+            .map_err(Failure::Store)
     }
 
     /// `POST /negotiations/:providerPid/events` (`ACCEPTED` only).
@@ -602,8 +695,9 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
     ) -> Result<Result<(), String>, Failure> {
         let dataset = self
             .catalog
-            .get(negotiation.dataset_id())
-            .map_err(Failure::Store)?;
+            .get_with_access_policy(negotiation.dataset_id())
+            .map_err(Failure::Store)?
+            .map(|listed| listed.dataset);
         let listed = dataset.and_then(|d| {
             d.has_policy
                 .into_iter()
@@ -623,13 +717,18 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
 
     /// The offer must name a dataset of this provider and one of its
     /// offers. If it names its parties, they must be this provider and
-    /// `caller`, the consumer that sent it.
+    /// `caller`, the consumer that sent it. The dataset's access policy,
+    /// if it has one, must hold for the caller's `credentials` (ADR 0019,
+    /// amendment in 1.4, as Eclipse EDC's `validateInitialOffer`): a
+    /// dataset the caller may not see gets the answer of an unknown offer,
+    /// as a dataset request for it gets the answer of an unknown dataset.
     fn check_offer(
         &self,
         offer: &Offer,
         pid: &str,
         cpid: &str,
         caller: &str,
+        credentials: &CallerCredentials,
     ) -> Result<(), Failure> {
         let Some(target) = offer.target.as_deref() else {
             return Err(bad(pid, cpid, "the offer has no target"));
@@ -637,8 +736,22 @@ impl<S: NegotiationStore, D: Decider, C: CatalogDatasets, E: Environment>
         if let Err(reason) = crate::policy::check_parties(offer, &self.participant_id, caller) {
             return Err(bad(pid, cpid, reason));
         }
-        let dataset = self.catalog.get(target).map_err(Failure::Store)?;
-        let known = dataset.is_some_and(|d| d.has_policy.iter().any(|o| o.id == offer.id));
+        let listed = self
+            .catalog
+            .get_with_access_policy(target)
+            .map_err(Failure::Store)?;
+        let now = self.env.now();
+        let requester = Requester {
+            now: &now,
+            credentials,
+        };
+        let known = match listed {
+            None => false,
+            Some(listed) => {
+                listed.dataset.has_policy.iter().any(|o| o.id == offer.id)
+                    && requester.may_see(listed.access_policy.as_ref())
+            }
+        };
         if known {
             Ok(())
         } else {
@@ -687,6 +800,31 @@ impl<S: NegotiationStore, D, C, E> Records for ProviderService<S, D, C, E> {
         let reason = "the negotiation keeps changing concurrently; retry";
         bad(lookup.pid, lookup.named_pid, reason)
     }
+}
+
+/// The answer to a first `ContractRequestMessage`, with `offer` and
+/// `callback_address`, that the consumer of `existing` sent again with
+/// the same `consumerPid` (TD-60): the
+/// negotiation as it is now, and nothing new to send. A message of ours
+/// still pending is sent by the outbox, as for any negotiation.
+///
+/// A repeat is the first request again only if it names the same offer
+/// and callback address. Otherwise it is refused (HTTP 400), as for
+/// transfers (ADR 0013, amended in 0.12): the consumer would take the
+/// answer for a negotiation it did not ask for. A counter-offer of ours
+/// replaces the offer kept, so a repeat that comes after one is refused
+/// too.
+fn answer_again(existing: &Negotiation, offer: &Offer, callback_address: Option<&str>) -> Handled {
+    let same_request =
+        existing.offer == *offer && callback_address == Some(existing.callback_address.as_str());
+    if !same_request {
+        return Err(bad(
+            "",
+            &existing.consumer_pid,
+            "consumerPid is already used by another contract request of this consumer",
+        ));
+    }
+    Ok((ack(existing), None))
 }
 
 fn ack(negotiation: &Negotiation) -> ContractNegotiation {

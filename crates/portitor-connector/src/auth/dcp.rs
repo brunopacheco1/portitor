@@ -65,7 +65,7 @@
 //! from the caller's or the issuer's server.
 //!
 //! Status list credentials are cached for a short time, by URL
-//! ([`status_list_cache`]; ADR 0016, amended in 0.11). Tokens and
+//! (`portitor_runtime::status_lists::cache`; ADR 0016, amended in 0.11). Tokens and
 //! presentations are not: they are checked on every request.
 //!
 //! The caller's `MembershipCredential`s go with it too ([`Membership`]),
@@ -91,11 +91,15 @@ use portitor_dcp::gaiax::{
 };
 use portitor_dcp::message::{PresentationQueryMessage, PresentationResponseMessage};
 use portitor_dcp::scope::merge_scopes;
-use portitor_dcp::{Claims, DidDocument, JtiCache, unverified_claims, validate_self_issued};
+use portitor_dcp::trust::IssuerTypes;
+use portitor_dcp::{
+    Claims, DidDocument, JtiCache, check_before_resolving, unverified_claims, validate_self_issued,
+};
 use portitor_dsp::policy::HeldCredential;
 use portitor_runtime::BoxFuture;
 use portitor_runtime::did::DidWebResolver;
 use portitor_runtime::http::{HttpError, HttpSender, bearer_token};
+use portitor_runtime::internal_addresses::InternalAddresses;
 use portitor_runtime::system::now_secs;
 use portitor_runtime::used_tokens::{RecordIn, UsedTokenStore};
 use serde_json::Value;
@@ -104,9 +108,8 @@ use super::sts::{SecureTokenService, TokenRequest};
 use super::{AuthSettings, Caller, CallerVerifier, Membership, VerifyError, with_linked_scopes};
 
 pub mod membership;
-pub mod status_list_cache;
 
-use status_list_cache::StatusListCache;
+use portitor_runtime::status_lists::StatusListReader;
 
 /// Where the verifier reads the current time, in seconds since 1970:
 /// [`now_secs`], except in tests, which move time forward.
@@ -114,11 +117,6 @@ type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
 /// Allowed clock difference between participants, in seconds.
 const LEEWAY: u64 = 60;
-
-/// The largest status list credential read, in bytes. A list of the
-/// minimum size (16 KiB uncompressed) is a few kilobytes even when many
-/// bits are set.
-const MAX_STATUS_LIST: usize = 2 * 1024 * 1024;
 
 /// The credential type every caller must hold (ADR 0016).
 pub const MEMBERSHIP: &str = portitor_dsp::policy::MEMBERSHIP;
@@ -149,10 +147,17 @@ const START_WAIT: Duration = Duration::from_secs(2);
 /// The DCP verifier.
 pub struct DcpVerifier {
     participant_id: String,
+    /// Other parties' DID documents: callers and credential issuers, with
+    /// the block on internal addresses (R-17).
     resolver: DidWebResolver,
+    /// Our own DID document, which the operator chose: without the block.
+    own_resolver: DidWebResolver,
     http: HttpSender,
     sts: Arc<dyn SecureTokenService>,
     trusted_issuers: Vec<String>,
+    /// The types some trusted issuers are limited to
+    /// (`PORTITOR_TRUSTED_ISSUER_TYPES`, R-48).
+    issuer_types: IssuerTypes,
     /// The Gaia-X compliance services we trust (ADR 0022).
     gaiax_compliance_issuers: Vec<String>,
     scopes: Vec<String>,
@@ -160,9 +165,10 @@ pub struct DcpVerifier {
     /// database, so every process of the connector refuses a token used
     /// on another one (TD-09).
     used_token_ids: Arc<dyn UsedTokenStore>,
-    /// Verified status list credentials, by URL
-    /// (`PORTITOR_STATUS_LIST_CACHE_SECONDS`).
-    status_lists: StatusListCache,
+    /// Reads and checks status list credentials, with a cache by URL
+    /// (`PORTITOR_STATUS_LIST_CACHE_SECONDS`;
+    /// `portitor_runtime::status_lists`).
+    status_lists: StatusListReader,
     /// The current time.
     clock: Clock,
     start_tries: u32,
@@ -177,6 +183,7 @@ impl std::fmt::Debug for DcpVerifier {
         f.debug_struct("DcpVerifier")
             .field("participant_id", &self.participant_id)
             .field("trusted_issuers", &self.trusted_issuers)
+            .field("issuer_types", &self.issuer_types)
             .field("gaiax_compliance_issuers", &self.gaiax_compliance_issuers)
             .field("scopes", &self.scopes)
             .finish_non_exhaustive()
@@ -203,7 +210,9 @@ struct Verified {
 
 impl DcpVerifier {
     /// A verifier for `settings`, getting our own tokens from `sts`, and
-    /// recording the callers' token ids in `used_token_ids`.
+    /// recording the callers' token ids in `used_token_ids`, without the
+    /// block on internal addresses (tests; the binary uses
+    /// [`DcpVerifier::for_partners`]).
     ///
     /// # Errors
     ///
@@ -213,20 +222,40 @@ impl DcpVerifier {
         sts: Arc<dyn SecureTokenService>,
         used_token_ids: Arc<dyn UsedTokenStore>,
     ) -> Result<Self, String> {
+        Self::for_partners(settings, sts, used_token_ids, &InternalAddresses::default())
+    }
+
+    /// Like [`DcpVerifier::new`], with the block on internal addresses
+    /// (R-17): callers choose their DID documents, credential services and
+    /// status lists, and issuers theirs, so each is fetched only from an
+    /// address that `internal_addresses` allows.
+    ///
+    /// # Errors
+    ///
+    /// The HTTP client cannot be built.
+    pub fn for_partners(
+        settings: &AuthSettings,
+        sts: Arc<dyn SecureTokenService>,
+        used_token_ids: Arc<dyn UsedTokenStore>,
+        internal_addresses: &InternalAddresses,
+    ) -> Result<Self, String> {
         // how long a DID document is reused (PORTITOR_DID_CACHE_SECONDS)
         let did_cache = Duration::from_secs(settings.did_cache_seconds);
+        let allow_http = settings.allow_http;
         Ok(Self {
             participant_id: settings.participant_id.clone(),
-            resolver: DidWebResolver::new(settings.allow_http, did_cache)?,
-            http: HttpSender::new(settings.allow_http)?,
+            resolver: DidWebResolver::for_partners(allow_http, did_cache, internal_addresses)?,
+            own_resolver: DidWebResolver::new(allow_http, did_cache)?,
+            http: HttpSender::for_partners(allow_http, internal_addresses)?,
             sts,
             trusted_issuers: settings.trusted_issuers.clone(),
+            issuer_types: settings.issuer_types.clone(),
             gaiax_compliance_issuers: settings.gaiax_compliance_issuers.clone(),
             // a Gaia-X compliance scope brings its legal person scope, as
             // on the prover's side (ADR 0022)
             scopes: with_linked_scopes(&settings.scopes),
             used_token_ids,
-            status_lists: StatusListCache::new(settings.status_list_cache_seconds),
+            status_lists: StatusListReader::new(settings.status_list_cache_seconds),
             clock: Arc::new(now_secs),
             start_tries: START_TRIES,
             deadline: DEADLINE,
@@ -304,7 +333,8 @@ impl DcpVerifier {
         // anywhere: a list in memory is enough
         let unused: Arc<dyn UsedTokenStore> = Arc::new(Mutex::new(JtiCache::default()));
         let mut verifier = Self::new(settings, sts, unused)?;
-        verifier.resolver = DidWebResolver::new(settings.allow_http, Duration::ZERO)?.unobserved();
+        verifier.own_resolver =
+            DidWebResolver::new(settings.allow_http, Duration::ZERO)?.unobserved();
         verifier.http = verifier.http.unobserved();
         verifier.start_tries = 1;
         Ok(verifier)
@@ -318,7 +348,7 @@ impl DcpVerifier {
     async fn resolve_own_document(&self) -> Result<Arc<DidDocument>, String> {
         let mut last = String::new();
         for attempt in 1..=self.start_tries.max(1) {
-            match self.resolver.resolve(&self.participant_id).await {
+            match self.own_resolver.resolve(&self.participant_id).await {
                 Ok(doc) => return Ok(doc),
                 Err(e) => last = e.reason,
             }
@@ -419,6 +449,11 @@ impl DcpVerifier {
     async fn check_token(&self, token: &str) -> Result<CheckedToken, VerifyError> {
         let unverified = unverified_claims(token).map_err(|e| format!("ID token: {e}"))?;
         let now = self.now();
+        // what needs no DID document first, on the claims not verified
+        // yet: a token for another verifier, or out of its time, makes us
+        // fetch nothing from the URL its `iss` names (F-06)
+        check_before_resolving(&unverified, &self.participant_id, now, LEEWAY)
+            .map_err(|e| format!("ID token: {e}"))?;
         let doc = self.resolver.resolve(&unverified.iss).await?;
         let claims = self
             .validate_and_remember(token, &doc, now)
@@ -540,7 +575,19 @@ impl DcpVerifier {
     /// binding included.
     fn takes_gaiax_checks(&self, credential: &Credential) -> bool {
         let gaiax_type = is_gaiax_compliance(credential) || is_legal_person(credential);
-        gaiax_type && !self.trusted_issuers.contains(&credential.issuer)
+        gaiax_type && !self.trusts_issuer_of(credential)
+    }
+
+    /// Whether the issuer of `credential` is a trusted dataspace issuer
+    /// (`PORTITOR_TRUSTED_ISSUERS`) trusted for the credential's types
+    /// (`PORTITOR_TRUSTED_ISSUER_TYPES`, R-48; the rule is EDC's, see
+    /// [`IssuerTypes::allows`]). Only the credential's own fields are
+    /// read: nothing is fetched.
+    fn trusts_issuer_of(&self, credential: &Credential) -> bool {
+        self.trusted_issuers.contains(&credential.issuer)
+            && self
+                .issuer_types
+                .allows(&credential.issuer, &credential.types)
     }
 
     /// The credentials of one presentation that do not take the Gaia-X
@@ -562,6 +609,12 @@ impl DcpVerifier {
             // is fetched: an untrusted issuer could name any URL there
             if !self.trusted_issuers.contains(&credential.issuer) {
                 tracing::debug!(issuer = %credential.issuer, "credential from an untrusted issuer skipped");
+                continue;
+            }
+            // the same for an issuer not trusted for this credential's
+            // types (PORTITOR_TRUSTED_ISSUER_TYPES, R-48)
+            if !self.trusts_issuer_of(credential) {
+                tracing::debug!(issuer = %credential.issuer, types = ?credential.types, "credential from an issuer not trusted for its type skipped");
                 continue;
             }
             // holder binding (DCP 5.4.3) and the fetch limit
@@ -787,7 +840,7 @@ impl CallerVerifier for DcpVerifier {
         &'a self,
         caller: &'a Caller,
         scopes: &'a [String],
-    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, String>> {
+    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, VerifyError>> {
         Box::pin(async move {
             // the first query asked for the configured scopes already
             if scopes.iter().all(|scope| self.scopes.contains(scope)) {
@@ -799,8 +852,9 @@ impl CallerVerifier for DcpVerifier {
                     self.more_credentials(caller, scopes),
                 )
                 .await;
-            // this port gives text: any failure means no credentials
-            more.map_err(|error| error.to_string())
+            // the kind is kept: the catalog answers 503 for a failure
+            // that may pass (`credentials_or_unavailable`)
+            more
         })
     }
 

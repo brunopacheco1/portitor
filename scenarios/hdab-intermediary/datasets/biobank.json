@@ -96,6 +96,11 @@
                 "rightOperand": "eu"
               },
               {
+                "leftOperand": "purpose",
+                "operator": "eq",
+                "rightOperand": "https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch"
+              },
+              {
                 "leftOperand": "dateTime",
                 "operator": "lteq",
                 "rightOperand": "2027-06-30"

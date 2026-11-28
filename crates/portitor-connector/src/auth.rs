@@ -48,6 +48,7 @@ use axum::response::{IntoResponse, Response};
 use portitor_dcp::gaiax::{COMPLIANCE_SCOPE_TYPE, LEGAL_PERSON_SCOPE_TYPE};
 use portitor_dcp::scope::{Scope, VC_ID, merge_scopes};
 use portitor_dcp::status_list::StatusEntry;
+pub use portitor_dcp::trust::IssuerTypes;
 use portitor_dsp::CatalogError;
 use portitor_dsp::negotiation::ContractNegotiationError;
 use portitor_dsp::policy::{CallerCredentials, CredentialTypes, HeldCredential, MEMBERSHIP};
@@ -106,6 +107,12 @@ pub struct Membership {
     /// suspension bits are.
     #[serde(default)]
     pub status: Vec<StatusEntry>,
+    /// Its types (`MembershipCredential` and any other), so the check
+    /// again asks whether the issuer is still trusted for each of them, as
+    /// the first check did (`PORTITOR_TRUSTED_ISSUER_TYPES`, R-48). Empty
+    /// for a membership kept before 1.4: then `MembershipCredential` only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub types: Vec<String>,
 }
 
 /// How often a running download is checked again by default: once a
@@ -307,13 +314,14 @@ pub trait CallerVerifier: Send + Sync {
     ///
     /// # Errors
     ///
-    /// The query failed or a credential did not pass the checks. The text
-    /// goes to the log.
+    /// The query could not be made now ([`VerifyError::Unavailable`]: no
+    /// answer, 408, 429 or 5xx), or failed for another reason or a
+    /// credential did not pass the checks ([`VerifyError::Rejected`]).
     fn credentials<'a>(
         &'a self,
         caller: &'a Caller,
         scopes: &'a [String],
-    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, String>>;
+    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, VerifyError>>;
 
     /// Checks `membership` again, without the caller: its issuer is
     /// still trusted, it has not expired, and no status bit is set (ADR
@@ -366,29 +374,61 @@ pub trait Prover: Send + Sync {
 /// the configured `types`, and the caller's verified credentials for
 /// `scopes`, the scopes that policy needs ([`portitor_dsp::policy::credential_scopes`]).
 /// Without scopes, the credentials of the check on the HTTP edge. A query
-/// that fails gives no credentials, so every credential constraint fails
-/// (closed); the reason goes to the log.
+/// that fails, for any reason, gives the credentials of the check on the
+/// HTTP edge, which were verified already: a constraint on a type they
+/// do not hold fails (closed); the reason goes to the log. For the
+/// negotiation and transfer routes, whose answer to a failure is the
+/// termination of the process.
 pub async fn credentials_for(
     verifier: &dyn CallerVerifier,
     types: &CredentialTypes,
     caller: &Caller,
     scopes: &[String],
 ) -> CallerCredentials {
+    match credentials_or_unavailable(verifier, types, caller, scopes).await {
+        Ok(credentials) => credentials,
+        Err(reason) => {
+            tracing::warn!(caller = %caller.id, %reason, "the caller's credentials for a policy could not be read now; those of its first check are used");
+            CallerCredentials {
+                understood: types.clone(),
+                held: caller.credentials.clone(),
+            }
+        }
+    }
+}
+
+/// As [`credentials_for`], but a query that could not be made now (no
+/// answer, 408, 429 or 5xx: [`VerifyError::Unavailable`]) is an error, so
+/// that the caller can be told to try again (the catalog routes answer
+/// 503). A query refused for another reason gives the credentials of the
+/// check on the HTTP edge, as in [`credentials_for`].
+///
+/// # Errors
+///
+/// The reason the query could not be made now, for the log.
+pub async fn credentials_or_unavailable(
+    verifier: &dyn CallerVerifier,
+    types: &CredentialTypes,
+    caller: &Caller,
+    scopes: &[String],
+) -> Result<CallerCredentials, String> {
     let held = if scopes.is_empty() {
         caller.credentials.clone()
     } else {
         match verifier.credentials(caller, scopes).await {
             Ok(held) => held,
-            Err(reason) => {
-                tracing::warn!(caller = %caller.id, %reason, "the caller's credentials for a policy could not be read");
-                Vec::new()
+            Err(VerifyError::Unavailable(reason)) => return Err(reason),
+            Err(error) => {
+                let reason = error.reason();
+                tracing::warn!(caller = %caller.id, %reason, "the caller's credentials for a policy could not be read; those of its first check are used");
+                caller.credentials.clone()
             }
         }
     };
-    CallerCredentials {
+    Ok(CallerCredentials {
         understood: types.clone(),
         held,
-    }
+    })
 }
 
 /// Adapter: refuses every caller. What [`crate::Ports::new`] starts with,
@@ -405,8 +445,8 @@ impl CallerVerifier for RefuseAll {
         &'a self,
         _: &'a Caller,
         _: &'a [String],
-    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, String>> {
-        Box::pin(async { Err("no caller verifier configured".to_owned()) })
+    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, VerifyError>> {
+        Box::pin(async { Err(VerifyError::from("no caller verifier configured")) })
     }
 }
 
@@ -748,6 +788,10 @@ pub struct AuthSettings {
     /// DIDs trusted to issue `MembershipCredential`
     /// (`PORTITOR_TRUSTED_ISSUERS`, comma-separated).
     pub trusted_issuers: Vec<String>,
+    /// The credential types some trusted issuers are limited to
+    /// (`PORTITOR_TRUSTED_ISSUER_TYPES`, since 1.4; R-48). An issuer not
+    /// named keeps every type.
+    pub issuer_types: IssuerTypes,
     /// DIDs of the Gaia-X compliance services trusted to issue
     /// `gx:ParticipantComplianceCredential`
     /// (`PORTITOR_GAIAX_COMPLIANCE_ISSUERS`, comma-separated; ADR 0022).
@@ -761,7 +805,7 @@ pub struct AuthSettings {
     pub allow_http: bool,
     /// How long a verified status list credential is kept, in seconds
     /// (`PORTITOR_STATUS_LIST_CACHE_SECONDS`, default 300, at most 3600;
-    /// 0: fetched on every check). See [`dcp::status_list_cache`].
+    /// 0: fetched on every check). See `portitor_runtime::status_lists::cache`.
     pub status_list_cache_seconds: u64,
     /// How long a resolved DID document is reused, in seconds
     /// (`PORTITOR_DID_CACHE_SECONDS`, default 300, at most 3600; 0:
@@ -779,6 +823,7 @@ impl std::fmt::Debug for AuthSettings {
             .field("sts_allow_http", &self.sts_allow_http)
             .field("sts_client_id", &self.sts_client_id)
             .field("trusted_issuers", &self.trusted_issuers)
+            .field("issuer_types", &self.issuer_types)
             .field("gaiax_compliance_issuers", &self.gaiax_compliance_issuers)
             .field("scopes", &self.scopes)
             .field("allow_http", &self.allow_http)
@@ -846,6 +891,11 @@ impl AuthSettings {
         let Some(trusted_issuers) = list("PORTITOR_TRUSTED_ISSUERS")? else {
             return Err("PORTITOR_TRUSTED_ISSUERS is required: the DIDs trusted to issue MembershipCredential".to_owned());
         };
+        let issuer_types = IssuerTypes::parse(
+            &list("PORTITOR_TRUSTED_ISSUER_TYPES")?.unwrap_or_default(),
+            &trusted_issuers,
+        )
+        .map_err(|e| format!("PORTITOR_TRUSTED_ISSUER_TYPES: {e}"))?;
         let gaiax_compliance_issuers =
             list("PORTITOR_GAIAX_COMPLIANCE_ISSUERS")?.unwrap_or_default();
         for did in &gaiax_compliance_issuers {
@@ -872,6 +922,7 @@ impl AuthSettings {
                 .unwrap_or_else(|| participant_id.to_owned()),
             sts_client_secret,
             trusted_issuers,
+            issuer_types,
             gaiax_compliance_issuers,
             scopes,
             allow_http,
@@ -899,11 +950,11 @@ impl AuthSettings {
 }
 
 /// Reads `PORTITOR_STATUS_LIST_CACHE_SECONDS` (`value`): whole seconds
-/// from 0 to [`dcp::status_list_cache::MAX_SECONDS`];
-/// [`dcp::status_list_cache::DEFAULT_SECONDS`] when it is not set or
+/// from 0 to [`portitor_runtime::status_lists::cache::MAX_SECONDS`];
+/// [`portitor_runtime::status_lists::cache::DEFAULT_SECONDS`] when it is not set or
 /// empty ([`bounded_number`]).
 fn status_list_cache_seconds(value: Option<&str>) -> Result<u64, String> {
-    use dcp::status_list_cache::{DEFAULT_SECONDS, MAX_SECONDS};
+    use portitor_runtime::status_lists::cache::{DEFAULT_SECONDS, MAX_SECONDS};
     let name = "PORTITOR_STATUS_LIST_CACHE_SECONDS";
     bounded_number(name, value, 0..=MAX_SECONDS, DEFAULT_SECONDS)
 }
@@ -920,9 +971,15 @@ fn status_list_cache_seconds(value: Option<&str>) -> Result<u64, String> {
 pub async fn dcp_adapters(
     settings: &AuthSettings,
     used_token_ids: Arc<dyn portitor_runtime::used_tokens::UsedTokenStore>,
+    internal_addresses: &portitor_runtime::internal_addresses::InternalAddresses,
 ) -> Result<(Arc<dyn CallerVerifier>, Arc<dyn Prover>), String> {
     let sts: Arc<dyn sts::SecureTokenService> = Arc::new(sts::StsClient::new(settings)?);
-    let verifier = dcp::DcpVerifier::new(settings, Arc::clone(&sts), used_token_ids)?;
+    let verifier = dcp::DcpVerifier::for_partners(
+        settings,
+        Arc::clone(&sts),
+        used_token_ids,
+        internal_addresses,
+    )?;
     verifier.check_own_identity().await?;
     let prover = sts::StsProver::new(sts, settings.scopes.clone());
     Ok((Arc::new(verifier), Arc::new(prover)))
@@ -933,6 +990,39 @@ pub async fn dcp_adapters(
 mod tests {
     use super::*;
     use portitor_runtime::testing::vars;
+
+    /// `PORTITOR_TRUSTED_ISSUER_TYPES` limits a trusted issuer to some
+    /// credential types (R-48); an issuer not named keeps every type.
+    #[test]
+    fn reads_the_trusted_issuer_types() {
+        let dir = std::env::temp_dir().join(format!("portitor-auth-types-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let secret = dir.join("secret");
+        std::fs::write(&secret, "s3cret\n").unwrap();
+        let secret = secret.to_string_lossy().into_owned();
+        let me = "did:web:me.example";
+        let limited = AuthSettings::from_vars(
+            me,
+            false,
+            vars(&[
+                ("PORTITOR_STS_URL", "https://me.example/sts/token"),
+                ("PORTITOR_STS_CLIENT_SECRET_FILE", &secret),
+                ("PORTITOR_TRUSTED_ISSUERS", "did:web:a,did:web:b"),
+                (
+                    "PORTITOR_TRUSTED_ISSUER_TYPES",
+                    "did:web:b=DataPermitCredential",
+                ),
+            ]),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            limited.issuer_types.limit_of("did:web:b").unwrap(),
+            ["DataPermitCredential"]
+        );
+        assert_eq!(limited.issuer_types.limit_of("did:web:a"), None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn reads_the_settings() {
@@ -962,6 +1052,7 @@ mod tests {
         assert_eq!(s.sts_client_id, me);
         assert_eq!(s.sts_client_secret, "s3cret");
         assert_eq!(s.trusted_issuers, ["did:web:a", "did:web:b"]);
+        assert!(s.issuer_types.is_empty());
         assert_eq!(s.scopes, [DEFAULT_SCOPE]);
         assert!(s.gaiax_compliance_issuers.is_empty());
         assert!(!format!("{s:?}").contains("s3cret"));
@@ -1002,6 +1093,16 @@ mod tests {
                 ("PORTITOR_STS_CLIENT_SECRET_FILE", &secret),
                 ("PORTITOR_TRUSTED_ISSUERS", "did:web:a"),
                 ("PORTITOR_DCP_SCOPES", " , "),
+            ],
+            // a limit on an issuer that is not trusted (R-48)
+            vec![
+                ("PORTITOR_STS_URL", "u"),
+                ("PORTITOR_STS_CLIENT_SECRET_FILE", &secret),
+                ("PORTITOR_TRUSTED_ISSUERS", "did:web:a"),
+                (
+                    "PORTITOR_TRUSTED_ISSUER_TYPES",
+                    "did:web:b=DataPermitCredential",
+                ),
             ],
         ] {
             assert!(
@@ -1489,7 +1590,7 @@ mod tests {
                 &'a self,
                 _: &'a Caller,
                 _: &'a [String],
-            ) -> BoxFuture<'a, Result<Vec<HeldCredential>, String>> {
+            ) -> BoxFuture<'a, Result<Vec<HeldCredential>, VerifyError>> {
                 Box::pin(async { Ok(Vec::new()) })
             }
         }

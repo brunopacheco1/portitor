@@ -569,6 +569,34 @@ of 30 seconds ends (each process looks for them every second), or at
 the next start, so an upgrade does not leave negotiations waiting. A
 partner may receive such a message twice; that is handled.
 
+### From 1.3 to 1.4
+
+1.4 adds purpose and data permits in policies, access policies on
+datasets, and the identity's check of its credentials' status lists
+([CHANGELOG](../CHANGELOG.md)).
+
+1. **Back up first.** Migrations run at start, forward only. To go back
+   to 1.3, restore the backup.
+2. **Migrations.** The connector adds the column
+   `dataset.access_policy` and the index `negotiation_request`; the
+   identity adds the columns `credential.status_state` and
+   `credential.status_checked_at`. The issuer has none.
+3. **Stop every 1.3 replica before the first 1.4 replica starts.** A
+   1.3 connector still running would serve datasets that 1.4 hides
+   behind an access policy, without the check; a 1.3 identity does not
+   know the status columns.
+4. **Access policies** are filled at start: the stored datasets are
+   checked again with the 1.4 rules ([ADR 0020](adr/0020-dataset-harvest.md)),
+   which reads `portitor:accessPolicy` from their stored entries.
+5. **The identity reads its credentials' status lists** every 60
+   seconds by default (`PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS`;
+   [DEPLOYING](DEPLOYING.md#getting-a-credential)).
+   It now calls the issuers' DID documents and status lists: open that
+   egress from the identity. Set the setting to `0` to keep the 1.3
+   behaviour.
+6. Nothing else changes without a new setting
+   ([STABILITY](STABILITY.md)).
+
 ### From 1.2 to 1.3
 
 1.3 adds PostgreSQL and lets several containers of each component share
@@ -588,7 +616,7 @@ one database ([ADR 0029](adr/0029-several-replicas.md)).
    to do until 2.0.
 3. **PostgreSQL is optional in 1.3** for an existing deployment. To use
    it, read [From SQLite to PostgreSQL](#from-sqlite-to-postgresql)
-   first: there is no tool yet that copies your data.
+   first: no tool copies your data.
 4. **Several replicas** need PostgreSQL
    ([DEPLOYING, Database](DEPLOYING.md#database)), and the two-step
    [key rotation](#rotating-a-key-with-several-replicas).
@@ -601,10 +629,11 @@ one database ([ADR 0029](adr/0029-several-replicas.md)).
 
 ### From SQLite to PostgreSQL
 
-The tool that copies a SQLite file into PostgreSQL is planned for 1.4,
-before 2.0 removes SQLite
-([ROADMAP](ROADMAP.md#14-purpose-and-data-permit-in-policies)). Until
-then, a component moved to PostgreSQL starts with an empty database:
+No tool copies a SQLite file into PostgreSQL, and none is planned: the
+maintainer dropped it on 2026-11-27, as no deployment needs one yet
+([TD-59](RISKS_AND_TECHNICAL_DEBTS.md#td-59)). 2.0 removes SQLite
+([ROADMAP, For 2.0](ROADMAP.md#for-20)). A component moved to
+PostgreSQL starts with an empty database, and nothing is copied:
 
 - the connector forgets its negotiations, agreements, transfers and
   data flows, while partners keep theirs. Existing agreements can no
@@ -614,12 +643,16 @@ then, a component moved to PostgreSQL starts with an empty database:
 - the issuer forgets its participants, the credentials it issued and
   their status lists, so it can no longer revoke them.
 
-So move a component only if it can start over, for example a new
-dataspace or a test. Otherwise keep it on its SQLite file, with one
-container, until the copy tool exists. For a move: set
-`PORTITOR_DATABASE_URL` and `PORTITOR_DATABASE_PASSWORD_FILE`, and
-leave `PORTITOR_DB_FILE` unset (a component with both refuses to
-start).
+So move a component when it can start over, for example a new
+dataspace or a test, or before 2.0 at the latest. To move:
+
+1. Start an empty PostgreSQL database for the component
+   ([DEPLOYING, Database](DEPLOYING.md#database)).
+2. Set `PORTITOR_DATABASE_URL` and `PORTITOR_DATABASE_PASSWORD_FILE`,
+   and leave `PORTITOR_DB_FILE` unset (a component with both refuses
+   to start).
+3. Start the component: its migrations create the tables. Then do again
+   what the list above says was lost.
 
 ### From 1.1 to 1.2
 

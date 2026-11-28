@@ -361,9 +361,9 @@ with `the SQLite file ... is in use by another process`. The process
 that uses the file holds a lease row in it, renewed every 10 seconds
 and removed when it stops; after a crash, a new process can start once
 the lease has ended, at most 30 seconds later.
-There is no tool yet to copy a SQLite file into PostgreSQL; it is
-planned for 1.4 ([TD-59](RISKS_AND_TECHNICAL_DEBTS.md#td-59)). Moving
-to PostgreSQL before then starts from an empty database; see
+No tool copies a SQLite file into PostgreSQL, and none is planned
+(maintainer, 2026-11-27; [TD-59](RISKS_AND_TECHNICAL_DEBTS.md#td-59)).
+Moving to PostgreSQL starts from an empty database; see
 [OPERATING](OPERATING.md#from-sqlite-to-postgresql).
 
 ### Settings of every component
@@ -392,6 +392,8 @@ settings are in its step.
 | `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | The same for the management port |
 | `PORTITOR_ALLOW_HTTP` | `false` | `true` allows plain `http://` for the addresses partners give. **Never in production** |
 | `PORTITOR_DID_CACHE_SECONDS` | `300` | How long a resolved DID document is reused, `0` to `3600` ([DID document cache](#did-document-cache)) |
+| `PORTITOR_BLOCK_INTERNAL_ADDRESSES` | `false` | Since 1.4. `true` refuses internal addresses (loopback, private, link-local and others) in URLs a partner chooses ([Internal addresses](#internal-addresses)) |
+| `PORTITOR_INTERNAL_ADDRESSES_ALLOWED` | none | Since 1.4. Comma-separated host names, IP addresses and IP networks (`10.1.0.0/16`) allowed although internal; only with the block on |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | none (no traces or metrics) | Base URL of your OTLP/HTTP receiver ([OPERATING](OPERATING.md#traces-and-metrics), with the other `OTEL_*` variables) |
 | `RUST_LOG` | `info` | Log level; `debug` only while diagnosing |
 | `SSL_CERT_DIR`, `SSL_CERT_FILE` | the image's CA bundle | Only to trust a private CA ([Private CAs](#private-cas)) |
@@ -441,6 +443,62 @@ your components.
   kept. A restart empties the cache.
 - A partner that must drop a leaked key at once should tell you; then
   restart your components, or set a low value.
+
+### Internal addresses
+
+Since 1.4 ([R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17)). A partner
+chooses some URLs your components call: a consumer's callback address,
+a caller's DID document and credential service, status lists, a push
+endpoint, a holder's credential service. With
+`PORTITOR_BLOCK_INTERNAL_ADDRESSES=true`, a call to such a URL is
+refused when its host's address is internal: not globally reachable
+in IANA's special-purpose address registries
+([IPv4](https://www.iana.org/assignments/iana-ipv4-special-registry),
+[IPv6](https://www.iana.org/assignments/iana-ipv6-special-registry)),
+multicast or broadcast. That is loopback (`127.0.0.0/8`, `::1`),
+private (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`),
+link local (`169.254.0.0/16`, `fe80::/10`), shared address space
+(`100.64.0.0/10`, used by Kubernetes and carrier NAT), `0.0.0.0/8` and
+`::`, `192.0.0.0/24`, benchmarking (`198.18.0.0/15`), documentation,
+`240.0.0.0/4` with `255.255.255.255`, multicast (`224.0.0.0/4`,
+`ff00::/8`), site local (`fec0::/10`) and `64:ff9b:1::/48`. An IPv6
+address that carries an IPv4 address (mapped `::ffff:`, compatible
+`::a.b.c.d`, NAT64 `64:ff9b::/96`, 6to4 `2002::/16`, Teredo) counts as
+that IPv4 address. The host name is resolved first, also when it is a
+number such as `2130706433`, and the address checked is the one the
+call uses.
+
+- Off by default in 1.x, so a 1.3 setup starts unchanged. It will be on
+  by default in 2.0 ([ROADMAP](ROADMAP.md#for-20)). A component with
+  the block on says so in its log at start. A wrong value of either
+  setting stops the start.
+- Partners on your own network (a Compose demo, a test) go into
+  `PORTITOR_INTERNAL_ADDRESSES_ALLOWED`: host names as written in the
+  URL, IP addresses, or networks such as `10.1.0.0/16`.
+- Checked, because another party chooses the URL or serves the
+  document it comes from:
+  - connector: consumers' callback addresses (as provider), callers'
+    and credential issuers' DID documents, callers' credential
+    services, status lists, and push endpoints;
+  - identity: callers' and issuers' DID documents, issuers' metadata
+    and credential request addresses, and the status lists of the
+    credentials it holds;
+  - issuer: holders' DID documents and credential services.
+- So a trusted issuer on your own network needs an entry too: its DID
+  document is fetched like any other party's.
+- URLs you choose are never checked: your own DID document, your STS,
+  your data sources (`portitor:source`), your object storage, the
+  bundle URL and the authority's DID, the Gaia-X compliance service and its DID,
+  the OTLP receiver, the database, and the provider address you give
+  the management API (negotiations, transfers and catalog requests as
+  consumer).
+- A refused call is not sent, and counts as a partner that cannot be
+  reached: the connector's outbox tries it as often as any failed send,
+  then ends the negotiation or transfer. The error in your log names the
+  host, the address and `PORTITOR_INTERNAL_ADDRESSES_ALLOWED`; the
+  partner is told only that its address is not allowed.
+- Keep the egress firewall ([Security](#security)): the block is a
+  second line.
 
 ## Step 1: issuer (dataspace authority only)
 
@@ -589,7 +647,9 @@ check (`GET /api/check/readiness` on the management port) answers HTTP
 2. Give participants the issuer's DID; each adds it to
    `PORTITOR_TRUSTED_ISSUERS` (identity and connector) and asks for its
    credentials (or you send it an offer).
-3. When a participant leaves, revoke its credentials. Revocation cannot
+3. When what you say about a participant changes, replace its claims
+   (`PUT`, below) and let it ask again; revoke what no longer holds.
+4. When a participant leaves, revoke its credentials. Revocation cannot
    be undone.
 
 Management API (`Authorization: Bearer <key>`; described in
@@ -599,6 +659,7 @@ Management API (`Authorization: Bearer <key>`; described in
 |---|---|
 | `POST /v1/participants` `{"did": ..., "claims": {...}}` | registers a participant (409 if registered) |
 | `GET /v1/participants` | lists them |
+| `PUT /v1/participants/{did}` `{"claims": {...}}` | since 1.4: replaces all of a participant's claims (404 if not registered); it stays registered. Issued credentials keep their claims; a request decided from now on gets the new ones |
 | `DELETE /v1/participants/{did}` | removes a registration (the DID percent-encoded as a whole, for example `jq -rR @uri`); issued credentials stay valid until revoked |
 | `POST /v1/offers` `{"participantDid": ..., "credentialIds": [...]}` | sends a `CredentialOfferMessage` to the participant's credential service |
 | `GET /v1/credentials?holder={did}` | lists issued credentials, with their delivery state (`PENDING`, `DELIVERED`, `FAILED`) |
@@ -764,6 +825,8 @@ Besides the [settings of every component](#settings-of-every-component):
 | `PORTITOR_STS_CLIENT_SECRET_FILE` | none (**required**) | The STS secret, at least 32 characters; the connector mounts the same file |
 | `PORTITOR_STS_CLIENT_ID` | `PORTITOR_PARTICIPANT_ID` | The client id your connector sends |
 | `PORTITOR_TRUSTED_ISSUERS` | none (**required**) | Comma-separated issuer DIDs |
+| `PORTITOR_TRUSTED_ISSUER_TYPES` | none (every trusted issuer for every type) | Since 1.4. Comma-separated `<issuer DID>=<credential type>` items, as on the connector ([Trusted issuers by type](#trusted-issuers-by-type)) |
+| `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS` | `60` | Since 1.4. Seconds between two reads of the held credentials' status lists, `0` (never) to `86400`; a revoked, suspended or uncheckable credential is no longer presented ([Revoked credentials](#getting-a-credential)) |
 | `PORTITOR_SCOPE_TYPE_ALIASES` | `org.eclipse.edc.vc.type` | Comma-separated scope aliases that mean "credentials of this type", besides DCP's `org.eclipse.dspace.dcp.vc.type` |
 | `PORTITOR_IDENTITY_RETIRED_KEY_FILES` | none | Only during a key change: the old **public** keys, comma-separated paths ([Rotating a key](OPERATING.md#rotating-a-key)) |
 | `PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE` | none | Gaia-X only: the PEM chain of the identity key, the key's certificate first |
@@ -775,7 +838,10 @@ Besides the [settings of every component](#settings-of-every-component):
   is where the component serves it (the example serves
   `/cs/presentations/query`, `/cs/credentials`, `/cs/offers`).
 - Only trusted issuers may deliver credentials (Storage API) or offers,
-  and nothing is sent to any other issuer.
+  and nothing is sent to any other issuer. An issuer limited by
+  `PORTITOR_TRUSTED_ISSUER_TYPES` may deliver and offer only its types;
+  a delivery or offer with another type gets `400` with the reason, and
+  the identity does not ask it for another type.
 - To switch EDC's scope alias off, set `PORTITOR_SCOPE_TYPE_ALIASES` to
   `org.eclipse.dspace.dcp.vc.type`.
 - The Gaia-X settings go together
@@ -894,15 +960,40 @@ request. Credentials are stored as received (JWT); `GET
 /v1/credentials` lists them and `DELETE /v1/credentials/{id}` removes one,
 after which it is no longer presented.
 
-**Revoked credentials.** The component does not read status lists, so it
-keeps presenting a credential its issuer revoked (DCP v1.0.1, 5.4.2: a
-presentation "SHOULD only include valid" credentials). After a reissue,
-delete the revoked credential from the identity with
-`DELETE /v1/credentials/{id}` once the new one is listed. Otherwise
-other participants refuse you: a presentation that holds a revoked
-credential is invalid (DCP v1.0.1, 5.4.3, step 8), so Portitor
-verifiers refuse it even with the new credential next to it, and EDC
-verifiers may too.
+**Revoked credentials.** From 1.4 the identity reads the status lists
+of the credentials it holds every `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS`
+(default 60; `0` turns it off), as Eclipse EDC's IdentityHub does
+(`edc.iam.credential.status.check.period`). A credential found revoked
+or suspended is no longer presented (DCP v1.0.1, 5.4.2: a presentation
+"SHOULD only include valid" credentials), and is presented again when
+a suspension is lifted. You need not delete it: other participants
+would refuse a presentation that holds it (DCP v1.0.1, 5.4.3, step 8),
+and now it is left out. `GET /v1/credentials` shows the result
+(`status`: `VALID`, `REVOKED`, `SUSPENDED` or `UNCHECKABLE`, and
+`statusCheckedAt`; null until checked).
+
+- A list is trusted as the connector trusts it: signed by the
+  credential's issuer and valid now. The lists are fetched with the
+  same HTTP client as other parties' DID documents.
+- A credential whose lists cannot be read for a passing reason (no
+  answer, or HTTP 408, 429 or 5xx, from the issuer's DID host or the
+  list's server) keeps its last recorded status, and the log says so
+  each round (`credential status cannot be read now`, WARN): an outage
+  of a status list does not cut you off.
+- A credential whose lists cannot be used for any other reason (HTTP
+  404, a list signed by another party or not valid now, an issuer DID
+  that cannot be resolved or that the block on internal addresses
+  refuses, more than 4 status entries) is `UNCHECKABLE` and no longer
+  presented: other participants' connectors refuse it, and the whole
+  presentation with it. The log says so once, when it changes
+  (`credential status cannot be checked`, WARN). It is presented again
+  once its lists can be read. A credential never checked is presented.
+- Each round reads every list once, also with a check every second.
+- A revocation is seen within one period. Until then, verifiers may
+  refuse you, as before 1.4. With the check off (`0`), delete a revoked
+  credential by hand with `DELETE /v1/credentials/{id}`.
+- With several replicas, one runs each round (a lease in the
+  database, [ADR 0029](adr/0029-several-replicas.md)).
 
 **Offers.** An issuer may tell you that credentials are waiting (DCP
 6.6), for example before its key changes. `GET /v1/offers` lists the
@@ -1128,6 +1219,7 @@ Besides the [settings of every component](#settings-of-every-component):
 | `PORTITOR_STS_CLIENT_SECRET_FILE` | none (**required**) | The STS secret, the same file as the identity's |
 | `PORTITOR_STS_CLIENT_ID` | `PORTITOR_PARTICIPANT_ID` | Client id at the STS |
 | `PORTITOR_TRUSTED_ISSUERS` | none (**required**) | Comma-separated DIDs trusted to issue credentials, usually the dataspace's `portitor-issuer` |
+| `PORTITOR_TRUSTED_ISSUER_TYPES` | none (every trusted issuer for every type) | Since 1.4. Comma-separated `<issuer DID>=<credential type>` items that limit an issuer to those types ([Trusted issuers by type](#trusted-issuers-by-type)) |
 | `PORTITOR_DCP_SCOPES` | `org.eclipse.dspace.dcp.vc.type:MembershipCredential` | Comma-separated scopes asked from callers' credential services, and granted to the counter-party in our tokens |
 | `PORTITOR_POLICY_CREDENTIALS` | none (`MembershipCredential` only) | Credential types that offers may constrain ([Credential constraints](#credential-constraints)) |
 | `PORTITOR_GAIAX_COMPLIANCE_ISSUERS` | none (no Gaia-X compliance credential accepted) | `did:web` DIDs of the Gaia-X compliance services you trust ([Gaia-X compliance](#gaia-x-compliance)) |
@@ -1289,6 +1381,45 @@ the catalog serves them, without `@context`. See
   `HttpData-PUSH`, next to (or instead of) `HttpData-PULL`.
 - An offer in the datasets file has no `target`, `assigner` or
   `assignee`.
+- Since 1.4 a dataset may have `portitor:accessPolicy`: who may see it
+  in the catalog (ADR 0019, amendment in 1.4). It has only permissions,
+  read as an offer's, with `dateTime` and credential constraints. A
+  dataset whose access policy does not hold for the caller is left out
+  of the catalog, and a request for it is answered as for an unknown
+  dataset. A dataset without one is shown to every member. The access
+  policy is never shown in the catalog. A purpose, a prohibition or a
+  duty in it is not understood: the dataset is rejected (check `odrl`).
+
+  ```json
+  { "@id": "eu-reports", "@type": "Dataset",
+    "portitor:accessPolicy": {"permission": [{"action": "use", "constraint": [
+      {"leftOperand": "DataProcessorCredential.processing", "operator": "eq", "rightOperand": "eu"}
+    ]}]},
+    ... }
+  ```
+
+  The provider asks the caller's credential service for the scopes of
+  the access policies once per catalog request. The caller's token must
+  allow them: on Portitor as consumer, pass them in `additionalScopes`
+  of `POST /v1/catalog/request` or `POST /v1/catalog/dataset/request`.
+  List the credential types in `PORTITOR_POLICY_CREDENTIALS`, as for
+  offers. Those scopes are those of **every** access policy, also of
+  datasets hidden from the caller: a member learns which credential
+  types your access policies use, but not their values or which
+  dataset uses which. Eclipse EDC does not: it asks only for its
+  configured scopes on a catalog request
+  ([ADR 0019](adr/0019-credential-constraints.md#amendment-in-14-access-policies-trusted-issuers-by-type-negative-operators-accepted-2026-11-27)).
+  Do not put a secret in a credential type's name.
+
+  A contract request is checked against the access policy too, as
+  Eclipse EDC does: a member that knows the offer's `@id` of a dataset
+  hidden from it gets the answer of an unknown offer. The provider asks
+  for the scopes of the offer and of the access policy in one query.
+  Portitor as consumer grants, in a negotiation's token, only the scopes
+  of the offer's constraints. So write the access policy's credential
+  constraints into the offer too (or use only the membership, whose scope
+  every token grants), or a Portitor consumer cannot meet the access
+  policy at negotiation.
 
 ### Policies
 
@@ -1297,8 +1428,9 @@ Offers are minimal ODRL. The full rules are in
 [ADR 0019](adr/0019-credential-constraints.md); what you need to write
 and read offers:
 
-- A permission without constraints permits. Two kinds of constraint are
-  understood, and `and`, `andSequence`, `or` and `xone` combine them:
+- A permission without constraints permits. Three kinds of constraint
+  are understood, and `and`, `andSequence`, `or` and `xone` combine
+  them:
   - `dateTime` (when the action is exercised) with `eq`, `neq`, `lt`,
     `lteq`, `gt` or `gteq`, and a date (`2030-12-31`, the whole day) or a
     date and time with a time zone (`2030-12-31T23:59:59Z`);
@@ -1306,7 +1438,27 @@ and read offers:
     `MembershipCredential.role` or `DataProcessorCredential.level.name`),
     with `eq` or `neq` and a text, or `isAnyOf` or `isNoneOf` and a list
     of texts ([Credential constraints](#credential-constraints),
-    [Gaia-X compliance](#gaia-x-compliance)).
+    [Gaia-X compliance](#gaia-x-compliance));
+  - since 1.4, `purpose` (or `odrl:purpose`) with `eq` and one purpose,
+    or `isAnyOf` and a list of purposes. A purpose is an IRI, written as
+    a JSON string. It is a term of the agreement: the consumer's request
+    must carry the same purpose, or the negotiation is terminated (terms
+    are compared as written). The connector does not check that the
+    consumer has the purpose; to ask for proof, add a credential
+    constraint, for example on a data permit
+    ([ADR 0009](adr/0009-minimal-odrl-policies.md), amendment in 1.4).
+    Use the purposes of the Data Privacy Vocabulary's EHDS extension
+    (`https://w3id.org/dpv/legal/eu/ehds#`, a draft):
+
+    ```json
+    "permission": [{"action": "use", "constraint": [
+      {"leftOperand": "purpose", "operator": "eq",
+       "rightOperand": "https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch"}
+    ]}]
+    ```
+
+    An Eclipse EDC provider has no policy function for `odrl:purpose`
+    built in.
 - **Anything else is refused, never dropped** (fail closed, strict
   reading): for example a `duty` inside a permission, `unit` on a
   constraint or a misspelled key. In your datasets file, that dataset is
@@ -1327,11 +1479,15 @@ and read offers:
   hold now for the consumer's credentials. Otherwise it terminates the
   negotiation, saying why. It checks the agreement again, with fresh
   credentials, at each transfer request.
-- As consumer, it does not accept a provider's offer (DSP `OFFERED`)
-  that has credential constraints: it cannot check its own credentials
-  as the provider will. Requests it sends itself are not affected. It
-  verifies an agreement only if it has the terms it asked for or
-  accepted and names your participant id as `assignee`.
+- As consumer, it accepts a provider's offer (DSP `OFFERED`) when it
+  understands every constraint and its `dateTime` constraints hold. Since
+  1.4 it does not evaluate credential constraints, which are about its
+  own credentials (as Eclipse EDC): the provider checks them when it
+  gets the acceptance, and the consumer's token for the acceptance
+  allows their scopes. A credential type not in
+  `PORTITOR_POLICY_CREDENTIALS` is not understood, and the offer is
+  refused. It verifies an agreement only if it has the terms it asked
+  for or accepted and names your participant id as `assignee`.
 - Prohibitions and duties are carried into the agreement but not
   enforced.
 
@@ -1519,6 +1675,42 @@ so the shapes do not see it. DSP 2025-1 and DCAT-AP do not agree on everything:
   `dct:title` on a `DataService`; DCAT-AP requires both. Give each
   distribution a `dcat:accessURL`.
 
+### Trusted issuers by type
+
+Since 1.4 ([R-48](RISKS_AND_TECHNICAL_DEBTS.md#r-48)).
+`PORTITOR_TRUSTED_ISSUERS` names the issuers you trust.
+`PORTITOR_TRUSTED_ISSUER_TYPES` limits some of them to the credential
+types they may issue, as Eclipse EDC does with
+`edc.iam.trustedissuer.<alias>.supportedtypes`. Set the same value on
+your connector and your identity.
+
+```sh
+PORTITOR_TRUSTED_ISSUERS=did:web:authority.example,did:web:hdab.example
+PORTITOR_TRUSTED_ISSUER_TYPES=did:web:hdab.example=DataPermitCredential
+```
+
+- Here the authority issues every type, and the HDAB only data permits:
+  a `MembershipCredential` from the HDAB is skipped as if its issuer
+  were not trusted.
+- An issuer trusted for two types is named twice:
+  `did:web:hdab.example=DataPermitCredential,did:web:hdab.example=ResearcherCredential`.
+- An issuer the setting does not name keeps every type, as before 1.4.
+  This default changes in 2.0
+  ([TD-74](RISKS_AND_TECHNICAL_DEBTS.md#td-74)): name every issuer now.
+- Each DID named must be in `PORTITOR_TRUSTED_ISSUERS`, or the
+  component does not start.
+- A credential has several types. As in EDC, a limited issuer must be
+  trusted for each of them except `VerifiableCredential`: a credential
+  typed `DataPermitCredential` and `MembershipCredential` needs both.
+- On the identity, an issuer may deliver and offer only the types it is
+  limited to; anything else gets `400` with the reason.
+- A type holds no `:`, `=` or space, or the component does not start.
+  So a prefixed type such as `gx:LegalPerson` cannot be listed: a
+  limited issuer is never trusted for one. On the connector, a
+  `gx:LegalPerson` from a limited issuer then takes the Gaia-X checks
+  ([Gaia-X compliance](#gaia-x-compliance)), and is skipped unless a
+  compliance credential of the same presentation names it.
+
 ### Credential constraints
 
 An offer may admit only consumers with a credential claim (ADR 0019),
@@ -1547,6 +1739,13 @@ for example only data processors in the EU:
   verified credentials of that type has the claim, as text, and the
   comparison is true; a claim that is missing or not text never grants
   access.
+- **`neq` and `isNoneOf` are not deny lists.** They hold if *one* of
+  the consumer's credentials of the type has another value. A consumer
+  with two credentials of the type, one with the excluded value and one
+  without, meets them, and it chooses what it presents. To keep someone
+  out, revoke its credential at the issuer, or limit the issuer by type
+  ([ADR 0019, "Negative operators are not deny lists"](adr/0019-credential-constraints.md#negative-operators-are-not-deny-lists-r-43);
+  [R-43](RISKS_AND_TECHNICAL_DEBTS.md#r-43)).
 - An EDC participant needs the same mapping, per type, for example:
 
   ```yaml
@@ -1803,7 +2002,10 @@ dataset, by its `@id`. Both request bodies follow Eclipse EDC's
 management API (`/v4/catalog/request`, EDC v1.0.0-RC8), so a client
 written for EDC can send the same body. What Portitor does with each
 member (`querySpec` is refused, for example) is in the `CatalogRequest`
-and `DatasetRequest` schemas of the OpenAPI file.
+and `DatasetRequest` schemas of the OpenAPI file. Both take the
+optional `additionalScopes` (EDC's `DatasetRequest` does not): scopes
+added to the token, for a provider that shows a dataset only to holders
+of a credential (an access policy, [Datasets file](#datasets-file)).
 
 If the provider refuses, cannot be reached or sends something else, the
 answer is 502 and its `detail` says which (for example `the provider
@@ -1888,10 +2090,10 @@ consumer's DID (`counterPartyId`), never the data token or its hash.
     expired, bad signature, status list not readable, about someone
     else) makes its presentation invalid and refuses the caller, even
     next to a valid membership credential (DCP v1.0.1, 5.4.3, step 8);
-    the log names it (`credential refused`, INFO). So a participant must
-    delete a revoked credential once its reissued one arrives
-    ([Getting a credential](#getting-a-credential)). Credentials from
-    other issuers are skipped.
+    the log names it (`credential refused`, INFO). From 1.4 a Portitor
+    identity stops presenting a credential its status list revokes
+    ([Getting a credential](#getting-a-credential), "Revoked
+    credentials"). Credentials from other issuers are skipped.
   - A refused caller gets a DSP error that says only "unauthorized":
     HTTP 404 on the negotiation and transfer routes (DSP 2025-1 HTTPS
     bindings, "Unauthorized Access"; Eclipse EDC does the same), HTTP
@@ -2062,16 +2264,18 @@ known risk and technical debt, with its status and target release.
 
 - **Admission.** Partners are admitted by one credential type
   (`MembershipCredential`, `PORTITOR_DCP_SCOPES`); offers may add
-  credential claims (ADR 0019), compared as text only, but the catalog
-  still shows every offer to every member. Credential schemas are not
+  credential claims (ADR 0019), compared as text only. Since 1.4 a
+  dataset's access policy hides it from the members it does not hold
+  for, in the catalog and at negotiation; the offers of a dataset that
+  is shown are shown to all. Credential schemas are not
   checked: the issuer publishes each definition's `credentialSchema` URL
   and no component fetches it.
 - **Revocation** takes up to `PORTITOR_STATUS_LIST_CACHE_SECONDS` to be
   seen ([Status list cache](#status-list-cache)); a running download up
   to 60 seconds more
   ([Revocation and running transfers](#revocation-and-running-transfers)).
-- **Policies.** Only `dateTime` and credential claims are understood,
-  any other term is refused, and prohibitions and duties are carried
+- **Policies.** Only `dateTime`, `purpose` and credential claims are
+  understood, any other term is refused, and prohibitions and duties are carried
   into agreements but not enforced ([Policies](#policies)).
 - **Negotiations** start from the consumer only; a provider cannot start
   one with an offer ([TD-35](RISKS_AND_TECHNICAL_DEBTS.md#td-35)).

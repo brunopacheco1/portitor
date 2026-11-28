@@ -23,6 +23,7 @@ use portitor_runtime::BoxFuture;
 use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::directory::Directory;
 use portitor_runtime::http::HttpError;
+use portitor_runtime::status_lists::StatusListSource;
 use portitor_runtime::system::{new_uuid, now_secs};
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
@@ -134,6 +135,11 @@ impl Party {
 pub struct FakeDirectory {
     pub documents: Mutex<HashMap<String, Arc<DidDocument>>>,
     pub json: Mutex<HashMap<String, Value>>,
+    /// Status list credentials (JWTs) by URL; a URL not here answers
+    /// HTTP 503 (TD-20), unless it is in `gone_lists`.
+    pub status_lists: Mutex<HashMap<String, String>>,
+    /// Status list URLs that answer HTTP 404.
+    pub gone_lists: Mutex<Vec<String>>,
     pub lookups: Mutex<Vec<String>>,
 }
 
@@ -163,6 +169,25 @@ impl Directory for FakeDirectory {
         self.lookups.lock().unwrap().push(url.to_owned());
         let found = self.json.lock().unwrap().get(url).cloned();
         Box::pin(async move { found.ok_or_else(|| format!("HTTP 404 for {url}")) })
+    }
+}
+
+impl StatusListSource for FakeDirectory {
+    fn status_list_text<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<String, HttpError>> {
+        self.lookups.lock().unwrap().push(url.to_owned());
+        let found = self.status_lists.lock().unwrap().get(url).cloned();
+        let gone = self
+            .gone_lists
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|gone| gone == url);
+        let missing = if gone {
+            HttpError::Status(404)
+        } else {
+            HttpError::Status(503)
+        };
+        Box::pin(async move { found.ok_or(missing) })
     }
 }
 
@@ -238,6 +263,8 @@ pub struct World {
     pub app: Router,
     pub management: Router,
     pub directory: Arc<FakeDirectory>,
+    /// DID documents the operator chose (the Gaia-X compliance service).
+    pub operator_directory: Arc<FakeDirectory>,
     pub issuer_service: Arc<FakeIssuer>,
     pub issuer: Party,
     pub verifier: Party,
@@ -260,6 +287,8 @@ pub fn config() -> Config {
         sts_client_id: HOLDER.to_owned(),
         sts_client_secret_file: "unused".into(),
         trusted_issuers: vec![ISSUER.to_owned()],
+        issuer_types: portitor_dcp::trust::IssuerTypes::default(),
+        credential_status_check_seconds: 0,
         scope_type_aliases: vec!["org.eclipse.edc.vc.type".to_owned()],
         allow_http: false,
         certificate_chain_file: None,
@@ -292,6 +321,7 @@ impl World {
         compliance: Option<Arc<dyn GaiaxCompliance>>,
     ) -> Result<Self, String> {
         let directory = Arc::new(FakeDirectory::default());
+        let operator_directory = Arc::new(FakeDirectory::default());
         let issuer_service = Arc::new(FakeIssuer::default());
         let issuer = Party::new(ISSUER);
         let verifier = Party::new(VERIFIER);
@@ -301,8 +331,10 @@ impl World {
         let ports = Ports {
             store,
             directory: Arc::clone(&directory) as _,
+            operator_directory: Arc::clone(&operator_directory) as _,
             issuers: Arc::clone(&issuer_service) as _,
             compliance,
+            status_lists: Arc::clone(&directory) as _,
         };
         let identity = Arc::new(Identity::new(
             config,
@@ -320,6 +352,7 @@ impl World {
             app,
             management,
             directory,
+            operator_directory,
             issuer_service,
             issuer,
             verifier,

@@ -41,6 +41,9 @@ tokio.workspace = true
 # drives a router in memory in request_size::testing (feature test-support only); already in
 # the tree through axum
 tower = { version = "0.5", features = ["util"], optional = true }
+# the trait hyper-util's connectors and resolvers implement, for the connector that checks
+# internal addresses (http/connect.rs, R-17); already in the tree through hyper-util and axum
+tower-service = "0.3"
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true

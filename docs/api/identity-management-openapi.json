@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "1.3.0"
+    "version": "1.4.0"
   },
   "paths": {
     "/api/check/health": {
@@ -767,6 +767,22 @@
             "type": "string",
             "description": "The DCP profile: `vc11-sl2021/jwt` or `vc20-bssl/jwt`.",
             "example": "vc11-sl2021/jwt"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the last check of its status lists found (since 1.4, TD-20):\n`VALID`, `REVOKED`, `SUSPENDED` or `UNCHECKABLE` (its lists\ncannot be used, and not for a passing reason); null until a check\nfound an answer (`PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS`). Only\na `VALID` (or never checked) credential is presented to verifiers.",
+            "example": "VALID"
+          },
+          "statusCheckedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When that check read its status lists (`xsd:dateTime`, UTC), or\nnull.",
+            "example": "2026-11-27T12:00:00Z"
           },
           "types": {
             "type": "array",

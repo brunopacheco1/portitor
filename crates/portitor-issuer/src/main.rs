@@ -13,9 +13,8 @@ use portitor_issuer::config::{Config, DEFAULT_MANAGEMENT_BIND, DatabaseSetting, 
 use portitor_issuer::store::{DatabaseStore, MIGRATIONS};
 use portitor_issuer::{Issuer, Ports, definitions};
 use portitor_runtime::database::{Database, SQLITE_DEPRECATED};
-use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::health;
-use portitor_runtime::http::HttpSender;
+use portitor_runtime::internal_addresses::InternalAddresses;
 use portitor_runtime::management::management_port;
 use portitor_runtime::panics::spawn_supervised;
 use portitor_runtime::request_size::RequestLimits;
@@ -67,6 +66,8 @@ async fn serve_issuer() -> ExitCode {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    // first, so a wrong value stops the start before anything else
+    let internal_addresses = InternalAddresses::from_env()?;
     let config = Config::from_env()?;
     let limits = RequestLimits::from_env()?;
     if config.allow_http {
@@ -78,11 +79,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let store = DatabaseStore::new(Arc::clone(&database));
     // how long a holder's DID document is reused (R-41)
     let did_cache_seconds = portitor_runtime::did::cache_seconds_from_env()?;
-    let ports = Ports {
-        store: Arc::new(store),
-        directory: Arc::new(WebDirectory::new(config.allow_http, did_cache_seconds)?),
-        sender: Arc::new(HttpSender::new(config.allow_http)?),
-    };
+    // holders choose their DID documents and credential services: both
+    // with the block on internal addresses (R-17)
+    internal_addresses.log_at_start();
+    let ports = Ports::for_partners(
+        Arc::new(store),
+        config.allow_http,
+        did_cache_seconds,
+        &internal_addresses,
+    )?;
     let credential_key = key.public_jwk();
     let mut issuer = Issuer::new(&config, key, definitions, ports)?;
     for retired in issuer.retired_keys() {

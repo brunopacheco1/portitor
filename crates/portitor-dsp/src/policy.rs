@@ -5,10 +5,15 @@
 //! Minimal ODRL policy evaluation (ADR 0009, ADR 0019). Pure functions,
 //! no I/O.
 //!
-//! Two kinds of constraint are understood:
+//! Three kinds of constraint are understood:
 //!
 //! - the left operand `dateTime` (the time the action is exercised) with
 //!   the operators `eq`, `neq`, `lt`, `lteq`, `gt` and `gteq` (ADR 0009);
+//! - the left operand `purpose` with `eq` and a text, or `isAnyOf` and a
+//!   non-empty list of texts (ADR 0009, amendment in 1.4). It is a term
+//!   of the agreement, as Catena-X's `UsagePurpose`: only its form is
+//!   checked, and it always holds. The consumer agrees to it by sending
+//!   the same terms ([`same_terms`]);
 //! - a credential constraint (ADR 0019): the left operand
 //!   `<CredentialType>.<claim path>`, for a type the operator configured
 //!   ([`CredentialTypes`]), with `eq` or `neq` and a text, or `isAnyOf` or
@@ -33,8 +38,10 @@
 //! scopes a verifier needs to read the credentials: both sides use it, so
 //! the consumer's token allows what the provider asks for.
 
+mod access;
 mod credentials;
 
+pub use access::{AccessPolicy, access_policy_holds, validate_access_policy};
 pub use credentials::{
     CallerCredentials, CredentialTypes, DEFAULT_MEMBERSHIP_SCOPE, HeldCredential, MEMBERSHIP,
 };
@@ -109,6 +116,123 @@ pub fn permissions_hold<'a>(
     Ok(())
 }
 
+/// Whether a consumer may accept `offer`, a provider's offer (DSP
+/// `OFFERED`) about the consumer itself, at `now` (TD-11).
+///
+/// Every constraint must be understood, as [`validate`] checks with the
+/// consumer's credential `types`. A `dateTime` or `purpose` constraint
+/// is evaluated. A credential constraint is about the consumer's own
+/// credentials, which only the provider verifies, at agreement: the
+/// consumer does not evaluate it (as Eclipse EDC's consumer), it lets its
+/// token allow the scope instead ([`credential_scopes`]). So the offer is
+/// refused only when it is not understood, or when what the consumer can
+/// evaluate already decides that it does not hold.
+///
+/// # Errors
+///
+/// A constraint is not understood, or does not hold whatever the
+/// consumer's credentials are.
+pub fn consumer_may_accept<'a>(
+    policy: impl Into<Terms<'a>>,
+    now: &str,
+    types: &CredentialTypes,
+) -> Result<(), PolicyError> {
+    let terms = policy.into();
+    for constraint in terms.permission.iter().flat_map(|rule| &rule.constraint) {
+        check(constraint, &Mode::Validate(types))?;
+    }
+    let now = parse_time(now)
+        .ok_or_else(|| PolicyError::Unsupported(format!("current time {now:?}")))?
+        .start;
+    for constraint in terms.permission.iter().flat_map(|rule| &rule.constraint) {
+        if as_consumer(constraint, now) == ConsumerView::Fails {
+            return Err(PolicyError::NotSatisfied(describe(constraint)));
+        }
+    }
+    Ok(())
+}
+
+/// What the consumer can say about one understood constraint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConsumerView {
+    /// It holds, whatever the consumer's credentials are.
+    Holds,
+    /// It does not hold, whatever the consumer's credentials are.
+    Fails,
+    /// The answer depends on the consumer's own credentials, which only
+    /// the provider verifies.
+    ProviderDecides,
+}
+
+/// Evaluates an understood constraint as the consumer sees it.
+/// Logical constraints combine the three answers as three-valued
+/// (Kleene) logic: `and` fails if one part fails, `or` holds if one part
+/// holds, otherwise a part the provider decides makes the whole one the
+/// provider decides.
+fn as_consumer(constraint: &Constraint, now: i128) -> ConsumerView {
+    match constraint {
+        Constraint::Atomic(atomic) => {
+            match short(&atomic.left_operand) {
+                Some("dateTime" | "purpose") => {}
+                // a credential constraint (the only other understood kind)
+                _ => return ConsumerView::ProviderDecides,
+            }
+            let no_credentials = CallerCredentials::default();
+            let mode = Mode::Evaluate {
+                now,
+                caller: &no_credentials,
+            };
+            // already validated; an error here would mean "does not hold"
+            if check_atomic(atomic, &mode).unwrap_or(false) {
+                ConsumerView::Holds
+            } else {
+                ConsumerView::Fails
+            }
+        }
+        Constraint::Logical(logical) => {
+            let (_name, parts) = logical_parts(logical);
+            let (mut held, mut failed, mut provider_decides) = (0, 0, 0);
+            for part in parts {
+                match as_consumer(part, now) {
+                    ConsumerView::Holds => held += 1,
+                    ConsumerView::Fails => failed += 1,
+                    ConsumerView::ProviderDecides => provider_decides += 1,
+                }
+            }
+            match logical {
+                LogicalConstraint::And(_) | LogicalConstraint::AndSequence(_) => {
+                    if failed > 0 {
+                        ConsumerView::Fails
+                    } else if provider_decides > 0 {
+                        ConsumerView::ProviderDecides
+                    } else {
+                        ConsumerView::Holds
+                    }
+                }
+                LogicalConstraint::Or(_) => {
+                    if held > 0 {
+                        ConsumerView::Holds
+                    } else if provider_decides > 0 {
+                        ConsumerView::ProviderDecides
+                    } else {
+                        ConsumerView::Fails
+                    }
+                }
+                // exactly one part must hold
+                LogicalConstraint::Xone(_) => {
+                    if held > 1 || (held == 0 && provider_decides == 0) {
+                        ConsumerView::Fails
+                    } else if provider_decides > 0 {
+                        ConsumerView::ProviderDecides
+                    } else {
+                        ConsumerView::Holds
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The DCP scopes a verifier needs to evaluate the credential constraints
 /// in `policy`'s permissions: the scope of each credential type they name,
 /// once each, in order of first use (ADR 0019). Types not in `types` are
@@ -147,8 +271,18 @@ fn collect_scopes(constraint: &Constraint, types: &CredentialTypes, scopes: &mut
     }
 }
 
-/// The terms of a policy (an offer or an agreement): what [`same_terms`]
-/// compares.
+/// Adds `item` to `list` unless an equal one is there already: a list of
+/// distinct items in the order they were first added (scopes, access
+/// policies). Each call reads the whole list, so it is for short lists.
+pub fn add_once<T: PartialEq>(list: &mut Vec<T>, item: T) {
+    if !list.contains(&item) {
+        list.push(item);
+    }
+}
+
+/// The terms of a policy (an offer, an agreement or an access policy),
+/// borrowed: what [`same_terms`] compares, and what the functions that
+/// take `impl Into<Terms>` read.
 #[derive(Debug, Clone, Copy)]
 pub struct Terms<'a> {
     permission: &'a [Rule],
@@ -293,6 +427,9 @@ fn check_atomic(atomic: &AtomicConstraint, mode: &Mode<'_>) -> Result<bool, Poli
     if short(&atomic.left_operand) == Some("dateTime") {
         return date_time(atomic, mode);
     }
+    if short(&atomic.left_operand) == Some("purpose") {
+        return purpose(atomic);
+    }
     if credentials::split_left_operand(&atomic.left_operand).is_some() {
         return credential(atomic, mode);
     }
@@ -323,6 +460,33 @@ fn date_time(atomic: &AtomicConstraint, mode: &Mode<'_>) -> Result<bool, PolicyE
     match mode {
         Mode::Validate(_) => Ok(true),
         Mode::Evaluate { now, .. } => Ok(compare(*now, span)),
+    }
+}
+
+/// A `purpose` constraint (ADR 0009, amendment in 1.4): a term of the
+/// agreement. Only the form is checked: `eq` with one purpose, or
+/// `isAnyOf` with a non-empty list of purposes, each a JSON string. When
+/// the form is understood, the constraint holds, both when validating and
+/// when evaluating. Proof of the purpose, if a dataspace wants one, is a
+/// credential constraint next to it (ADR 0019).
+fn purpose(atomic: &AtomicConstraint) -> Result<bool, PolicyError> {
+    let understood = match (short(&atomic.operator), &atomic.right_operand) {
+        (Some("eq"), serde_json::Value::String(purpose)) => !purpose.is_empty(),
+        (Some("isAnyOf"), serde_json::Value::Array(purposes)) => {
+            let mut all_texts = !purposes.is_empty();
+            for purpose in purposes {
+                if purpose.as_str().is_none_or(str::is_empty) {
+                    all_texts = false;
+                }
+            }
+            all_texts
+        }
+        _ => false,
+    };
+    if understood {
+        Ok(true)
+    } else {
+        Err(PolicyError::Unsupported(describe_atomic(atomic)))
     }
 }
 

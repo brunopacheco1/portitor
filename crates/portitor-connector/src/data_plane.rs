@@ -45,7 +45,9 @@ pub(crate) fn start(
         &config.public_url,
         config.data_token_seconds,
     )
-    .and_then(|plane| plane.with_push_over_http(config.allow_http));
+    // the consumer chose the push endpoint: the block on internal
+    // addresses applies (R-17)
+    .and_then(|plane| plane.with_push_client(config.allow_http, &ports.internal_addresses));
     let plane = match built {
         Ok(plane) => plane,
         Err(e) => {

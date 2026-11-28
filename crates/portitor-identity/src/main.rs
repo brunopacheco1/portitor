@@ -13,13 +13,12 @@ use portitor_identity::config::{
     Config, DEFAULT_MANAGEMENT_BIND, DatabaseSetting, ManagementConfig,
 };
 use portitor_identity::gaiax::{GaiaxCompliance, HttpGaiaxCompliance};
-use portitor_identity::issuance::HttpIssuerClient;
 use portitor_identity::store::{DatabaseStore, MIGRATIONS};
 use portitor_identity::{Identity, Ports};
 use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::database::{Database, SQLITE_DEPRECATED};
-use portitor_runtime::directory::WebDirectory;
 use portitor_runtime::health;
+use portitor_runtime::internal_addresses::InternalAddresses;
 use portitor_runtime::management::management_port;
 use portitor_runtime::panics::spawn_supervised;
 use portitor_runtime::request_size::RequestLimits;
@@ -50,6 +49,8 @@ async fn serve_identity() -> ExitCode {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    // first, so a wrong value stops the start before anything else
+    let internal_addresses = InternalAddresses::from_env()?;
     let config = Config::from_env()?;
     let limits = RequestLimits::from_env()?;
     if config.allow_http {
@@ -69,12 +70,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     // how long another party's DID document is reused (R-41)
     let did_cache_seconds = portitor_runtime::did::cache_seconds_from_env()?;
-    let ports = Ports {
-        store: Arc::new(store),
-        directory: Arc::new(WebDirectory::new(config.allow_http, did_cache_seconds)?),
-        issuers: Arc::new(HttpIssuerClient::new(config.allow_http)?),
+    // callers and issuers choose their DID documents and the addresses
+    // in them: with the block on internal addresses (R-17). The Gaia-X
+    // compliance service above and its DID are the operator's choice:
+    // without it
+    internal_addresses.log_at_start();
+    let ports = Ports::for_partners(
+        Arc::new(store),
         compliance,
-    };
+        config.allow_http,
+        did_cache_seconds,
+        &internal_addresses,
+    )?;
     let identity = Arc::new(Identity::new(&config, key, sts_client_secret, ports)?);
     for retired in identity.retired_keys() {
         let kid = portitor_runtime::did_document::key_id(identity.participant_id(), retired);
@@ -92,6 +99,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         spawn_supervised("gaiax_schedule", move || {
             portitor_identity::gaiax::run_schedule(Arc::clone(&scheduled))
         });
+    }
+    // the credential status check (TD-20), unless
+    // PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS is 0
+    if portitor_identity::status_check::schedule(&identity).is_some() {
+        tracing::info!(
+            every_seconds = config.credential_status_check_seconds,
+            "credential status check on (PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS)"
+        );
     }
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
 

@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "1.3.0"
+    "version": "1.4.0"
   },
   "paths": {
     "/api/check/health": {
@@ -457,6 +457,91 @@
       }
     },
     "/v1/participants/{did}": {
+      "put": {
+        "tags": [
+          "Participants"
+        ],
+        "summary": "Replace a registered participant's claims (TD-46). Credentials issued\nalready keep their claims; a request decided from now on gets the new\nones. The participant stays registered all along. Eclipse EDC's Issuer\nService changes a holder with `PUT` too (`IssuerHolderAdminApiController`,\n`updateHolder`, in eclipse-edc/IdentityHub, read at commit `aeb8a7d`).",
+        "operationId": "replace_claims",
+        "parameters": [
+          {
+            "name": "did",
+            "in": "path",
+            "description": "The DID, percent-encoded as a whole",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewClaims"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The claims are replaced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParticipantView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body or claims",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API key",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reserved: the caller's token does not grant this action. Not answered by 1.0, where the API key grants every right.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not registered",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
       "delete": {
         "tags": [
           "Participants"
@@ -668,6 +753,20 @@
             "description": "Whether every component is healthy. False when there is no\ncomponent at all, as in EDC."
           }
         }
+      },
+      "NewClaims": {
+        "type": "object",
+        "description": "The new claims of a registered participant.",
+        "required": [
+          "claims"
+        ],
+        "properties": {
+          "claims": {
+            "type": "object",
+            "description": "They replace all its claims, as at registration. A claim may not\nbe named `id`."
+          }
+        },
+        "additionalProperties": false
       },
       "NewOffer": {
         "type": "object",

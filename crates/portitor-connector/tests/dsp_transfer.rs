@@ -633,7 +633,7 @@ impl CallerVerifier for Down {
         &'a self,
         _: &'a Caller,
         _: &'a [String],
-    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, String>> {
+    ) -> BoxFuture<'a, Result<Vec<HeldCredential>, VerifyError>> {
         Box::pin(async { Ok(Vec::new()) })
     }
 }

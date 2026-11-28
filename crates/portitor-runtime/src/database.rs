@@ -416,8 +416,9 @@ impl Database {
     ///
     /// On PostgreSQL the transaction is `SERIALIZABLE`, and when the
     /// database answers that it collided with another one (SQLSTATE
-    /// `40001` or `40P01`), `work` runs again, up to
-    /// [`postgres::TRIES`] times. So `work` must only read and write
+    /// `40001` or `40P01`), `work` runs again after a random, growing
+    /// pause, for up to [`postgres::COLLISION_BUDGET`] and at most
+    /// [`postgres::MAX_TRIES`] times. So `work` must only read and write
     /// through `tx`, with no other effect.
     ///
     /// # Errors

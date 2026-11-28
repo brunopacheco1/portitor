@@ -12,6 +12,221 @@ versions may change behaviour and configuration.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-27
+
+Portitor 1.4: purpose and data permits in policies. Offers can name a
+purpose, datasets can be hidden behind an access policy, issuers can be
+trusted for some credential types only, and the identity stops
+presenting a revoked credential by itself. Every 1.3 route, setting and
+file format still works, and every new setting is optional
+([STABILITY](docs/STABILITY.md)). One behaviour changes without a new
+setting: the identity reads the status lists of the credentials it
+holds every 60 seconds and no longer presents a revoked one (set
+`PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS=0` to keep the 1.3
+behaviour).
+
+**Upgrading from 1.3.** Back up first: migrations run at start, forward
+only. Stop every 1.3 replica before the first 1.4 replica starts. The
+identity now calls issuers' DID documents and status lists. Details:
+[OPERATING, From 1.3 to 1.4](docs/OPERATING.md#from-13-to-14).
+
+### Added
+
+- Policies: the left operand `purpose`, with `eq` or `isAnyOf` and
+  purposes as IRIs. It is a term of the agreement and is not evaluated;
+  a contract request with another purpose is refused, as other changed
+  terms are ([ADR 0009](docs/adr/0009-minimal-odrl-policies.md),
+  amendment in 1.4; [TD-12](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-12),
+  [DEPLOYING](docs/DEPLOYING.md#policies)). The hdab-intermediary
+  scenario: Lux Biobank's offer for EU processors names a purpose, and
+  a request with another purpose is refused.
+- Access policy per dataset: the optional `portitor:accessPolicy` in
+  the datasets file says who may see a dataset. It is checked with the
+  caller's credentials on DSP catalog and dataset requests (a dataset
+  hidden from the caller is left out, or answered as unknown) and, as
+  in EDC, on every contract request (an offer of a hidden dataset gets
+  the answer of an unknown offer). It is never shown. The provider asks
+  for the access policies' scopes in a second presentation query; when
+  that query fails, the caller keeps the credentials of the first check,
+  and a credential service that does not answer (or answers 408, 429,
+  5xx) makes a catalog or dataset request answer HTTP 503 with a
+  `CatalogError`, so the partner tries again rather than see a catalog
+  with datasets missing. A database migration adds the column
+  `dataset.access_policy`. The connector's management API takes an
+  optional `additionalScopes` on `POST /v1/catalog/dataset/request`, as
+  on `POST /v1/catalog/request`, to read a dataset behind an access
+  policy ([ADR 0019](docs/adr/0019-credential-constraints.md),
+  amendment in 1.4; [TD-13](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-13),
+  [DEPLOYING](docs/DEPLOYING.md#datasets-file)). A catalog request asks
+  every caller for the scopes of all access policies
+  ([R-50](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-50)).
+- Setting `PORTITOR_TRUSTED_ISSUER_TYPES` on the connector and the
+  identity: limits a trusted issuer to a list of credential types, as
+  EDC's `supportedtypes`; an issuer not named keeps every type
+  ([TD-74](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-74)). A limited issuer
+  must be trusted for each type of a credential except
+  `VerifiableCredential`, as EDC's `HasValidIssuer`. The connector skips
+  any other credential before it fetches anything for it, and checks a
+  membership kept with a transfer again for each of its types (one kept
+  before 1.4 counts as a `MembershipCredential`). The identity refuses
+  such a credential in a delivery and such a type in an offer (`400`,
+  with the reason), and does not ask a limited issuer for another type
+  ([ADR 0019](docs/adr/0019-credential-constraints.md), amendment in
+  1.4; [R-48](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-48),
+  [DEPLOYING](docs/DEPLOYING.md#trusted-issuers-by-type)). The
+  data-permits scenario, step 5, is now a refusal.
+- The identity checks the status of the credentials it holds: every
+  `PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS` (new setting, default 60,
+  0 off) it reads their status lists and no longer presents a revoked
+  or suspended credential; a lifted suspension presents it again. A
+  list that cannot be read now (no answer, 408, 429, 5xx) keeps the
+  last status; a list that cannot be used for another reason (404,
+  another signer, an issuer DID that cannot be resolved) makes the
+  credential `UNCHECKABLE`, not presented, as verifiers would refuse
+  it. Each round reads a list once. One replica runs each round, under
+  the lease `job`/`credential_status_check`. `GET /v1/credentials` of
+  the identity's management API shows `status` and `statusCheckedAt`. A
+  database migration adds the columns `credential.status_state` and
+  `credential.status_checked_at`. The status list reading and its cache
+  moved from the connector to `portitor-runtime` (`status_lists.rs`),
+  unchanged. So a revoked credential need not be deleted by hand any
+  more: in the data-permits scenario, step 4, the transfer under the
+  second permit works once Schuman's identity has checked
+  ([TD-20](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-20),
+  [ADR 0029](docs/adr/0029-several-replicas.md), note added in 1.4;
+  [DEPLOYING](docs/DEPLOYING.md#getting-a-credential)).
+- Settings `PORTITOR_BLOCK_INTERNAL_ADDRESSES` (default `false`) and
+  `PORTITOR_INTERNAL_ADDRESSES_ALLOWED` on all three components: refuse
+  internal addresses in URLs a partner chooses: those IANA's
+  special-purpose registries mark as not globally reachable, multicast
+  and broadcast, and an IPv6 address that carries one, such as NAT64 or
+  6to4. The address checked is the one the call connects to. A refused
+  call is not sent and counts as a partner that cannot be reached; its
+  error in the log names the setting that allows it. URLs the operator
+  chooses are not checked, the Gaia-X compliance service's DID
+  (`PORTITOR_GAIAX_COMPLIANCE_DID`) among them. Each binary builds its
+  clients to other parties in a library function that `main.rs` calls
+  (`ports_for_partners`, `Ports::for_partners`), so tests check the
+  block as the binaries set it
+  ([ADR 0016](docs/adr/0016-dsp-caller-authentication.md), amended in
+  1.4; [R-17](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-17),
+  [DEPLOYING](docs/DEPLOYING.md#internal-addresses)).
+- Issuer management route `PUT /v1/participants/{did}`: replaces a
+  registered participant's claims without deleting the registration;
+  issued credentials keep theirs, a request decided from then on gets
+  the new ones. The data-permits scenario, step 3, uses it
+  ([TD-46](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-46),
+  [DEPLOYING](docs/DEPLOYING.md#registering-participants-and-issuing)).
+
+### Changed
+
+- As consumer, the connector accepts a provider's offer (DSP `OFFERED`)
+  with credential constraints it understands, without evaluating them,
+  as Eclipse EDC; the provider checks them at the acceptance
+  ([TD-11](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-11)).
+- A caller's token is checked before its DID is resolved: the
+  identity's presentation API checks the access token and the ID
+  token's `aud` first, and the connector's DSP check and the identity's
+  and issuer's DCP checks refuse a token for another verifier, out of
+  its time, or whose `iss` is not its `sub`. Such a token makes them
+  fetch nothing; a caller without a valid access token gets the same
+  401 as before (F-06 in
+  [SECURITY-ASSURANCE](docs/SECURITY-ASSURANCE.md),
+  [ADR 0016](docs/adr/0016-dsp-caller-authentication.md), amended in
+  1.4).
+- A partner no longer learns about our network from a termination: a
+  push to an endpoint the block on internal addresses refuses ends with
+  the reason "the consumer's endpoint is not allowed", and a transfer
+  ended because the consumer's membership no longer holds with "the
+  consumer's membership no longer holds"; the details (host, address,
+  status list) are in our log only.
+- Code, no change of behaviour: `spawn_every` in `portitor-runtime`
+  runs a background round on a timer, used by the connector's outbox
+  loop, transfer step sweep, dataset harvest and bundle check, and by
+  the identity's status check
+  ([TD-70](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-70)); the identity's
+  and the issuer's `DatabaseStore` share one wrapper, `ComponentStore`
+  in `portitor-runtime`, with the used token ids and leases written
+  once ([TD-71](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-71)).
+- Code: the 1.4 readability review (2026-11-27), no change of
+  behaviour of the binaries: plainer names (`sender_to_providers`,
+  `Link::to_consumers`, `negotiation_requested_by`,
+  `last_status_check`, `authenticate_trusted_issuer`,
+  `resolve_did_document`), an enum for the consumer's view of a
+  constraint, one `add_once` helper, a plainer refusal text for
+  internal addresses, and three more patterns in
+  `docs/RUST-IDIOMS.md`. The catalog port `CatalogDatasets` no longer
+  has default bodies that answered "no access policy": an adapter must
+  write them, so one that forgets cannot show every dataset to every
+  caller. New debt [TD-75](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-75).
+
+### Fixed
+
+- A first contract request sent again by the same consumer (same
+  `consumerPid`, our answer lost) gets the negotiation it already
+  started, with the same status, instead of starting a second one; a
+  repeat with another offer or callback address gets 400. Two replicas
+  that get the repeat at once make one negotiation. A database
+  migration adds the index `negotiation_request` on `negotiation`
+  ([TD-60](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-60)).
+- The outbox counts a refused message as delivered only when the
+  partner's state is the one the message leads to **for the same
+  process**: `providerPid` and `consumerPid` are compared too
+  ([TD-61](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-61)).
+- PostgreSQL: a transaction that collided with another one (SQLSTATE
+  `40001` or `40P01`) now runs again after a random pause that doubles
+  with each collision (from up to 5 ms to at most 200 ms), for up to 5
+  seconds or 50 tries, and gives its connection back to the pool while
+  it waits. Before, both sides waited the same pause (5 ms more for
+  each try) and gave up after 10 tries, which busy replicas could reach
+  ([ARCHITECTURE](docs/ARCHITECTURE.md#storage)).
+
+### Dependencies
+
+- `tower-service` 0.3 is now a direct dependency of `portitor-runtime`
+  (the check of internal addresses); it was already in the tree through
+  `hyper-util` and `axum`. No new crate version: still 185 cargo-vet
+  exemptions ([R-04](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-04)).
+
+### Documentation
+
+- ADR amendments of 2026-11-27: [ADR 0009](docs/adr/0009-minimal-odrl-policies.md)
+  (purpose), [ADR 0016](docs/adr/0016-dsp-caller-authentication.md)
+  (internal addresses, the order of checks),
+  [ADR 0019](docs/adr/0019-credential-constraints.md) (access policies,
+  trusted issuers by type, negative operators) and
+  [ADR 0029](docs/adr/0029-several-replicas.md) (no copy tool; the
+  credential status check).
+- DEPLOYING, "Credential constraints": `neq` and `isNoneOf` are not
+  deny lists ([R-43](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-43)).
+- The SQLite to PostgreSQL copy tool announced for 1.4 is dropped
+  (maintainer, 2026-11-27): no deployment needs one yet. A component
+  moved to PostgreSQL starts empty; SQLite is still removed in 2.0
+  ([OPERATING, From SQLite to PostgreSQL](docs/OPERATING.md#from-sqlite-to-postgresql),
+  [TD-59](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-59)).
+- TD-73 (a negotiation step slower on SQLite in 1.3): the statements of
+  one provider negotiation counted against 1.2.0. The cause is the new
+  commits of 1.3 (a lease claim and release for each message sent, and
+  the used token id of each DCP token), not a bug; moved to 1.12 with
+  TD-40 ([TD-73](docs/RISKS_AND_TECHNICAL_DEBTS.md#td-73)).
+- The OpenSSF Baseline level 1 self-assessment checked again against
+  v2026.08.28 on 2026-11-27, with the GitHub settings read through the
+  API: 21 met, 1 to confirm, 1 not met (the website's "Enforce HTTPS"
+  is off), 1 not applicable
+  ([SECURITY-ASSURANCE](docs/SECURITY-ASSURANCE.md#level-1-self-assessment),
+  [R-05](docs/RISKS_AND_TECHNICAL_DEBTS.md#r-05)).
+- A research note on checking that a transfer's destination matches a
+  data permit (maintainer, 2026-11-27: research only in 1.4). No
+  specification or product does it; the note proposes checking the
+  receiving participant's DID in 1.5 or later
+  ([spike](docs/spikes/1.4-destination-matches-permit.md)).
+- RISKS_AND_TECHNICAL_DEBTS: R-48, TD-13, TD-20, TD-46, TD-47 (fixed in
+  1.1), TD-60, TD-61, TD-70 and TD-71 closed; R-17, TD-11 and TD-12
+  narrowed; new R-50, TD-74 to TD-78. ROADMAP, TESTING (the 1.4 runs of
+  the scenarios and the EDC interop test), STABILITY, ARCHITECTURE,
+  SECURITY-ASSURANCE (F-01, F-06, F-08), the C2 and C3 diagrams, the
+  website.
+
 ## [1.3.0] - 2026-11-27
 
 Portitor 1.3: several containers of each image (connector,

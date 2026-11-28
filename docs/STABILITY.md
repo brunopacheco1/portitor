@@ -39,10 +39,14 @@ must not parse them or rely on their length or alphabet; a 1.x release
 may accept or issue other forms, for example a JWT
 ([ADR 0025](adr/0025-users-and-roles.md), freeze point 1).
 
-A 1.x release may refuse internal network addresses on URLs that a
-partner chooses, by default, with a setting to allow them (security
+Since 1.4 the three components can refuse internal network addresses
+on URLs that a partner chooses (`PORTITOR_BLOCK_INTERNAL_ADDRESSES`,
+with `PORTITOR_INTERNAL_ADDRESSES_ALLOWED` for the exceptions; security
 finding F-01 in [SECURITY-ASSURANCE](SECURITY-ASSURANCE.md),
-[R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17)). 1.0 does not refuse them.
+[R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17)). The block is off by default
+in 1.x, so a 1.0 configuration behaves the same; 2.0 turns it on by
+default ([ADR 0016](adr/0016-dsp-caller-authentication.md), amended in
+1.4).
 
 Each service needs its own host name (or its own port): the connector
 serves `/dsp/2025-1`, `/data`, `/push` (since 1.1) and
@@ -190,6 +194,7 @@ GET {issuerService}/status-lists/{name}
 ```text
 GET /v1/participants
 POST /v1/participants
+PUT /v1/participants/{did}
 DELETE /v1/participants/{did}
 POST /v1/offers
 GET /v1/credentials
@@ -239,6 +244,8 @@ PORTITOR_MANAGEMENT_API_KEY_FILE
 PORTITOR_MAX_REQUEST_BYTES
 PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES
 PORTITOR_DID_CACHE_SECONDS
+PORTITOR_BLOCK_INTERNAL_ADDRESSES
+PORTITOR_INTERNAL_ADDRESSES_ALLOWED
 OTEL_EXPORTER_OTLP_ENDPOINT
 OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
 OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
@@ -257,6 +264,7 @@ PORTITOR_STS_ALLOW_HTTP
 PORTITOR_STS_CLIENT_ID
 PORTITOR_STS_CLIENT_SECRET_FILE
 PORTITOR_TRUSTED_ISSUERS
+PORTITOR_TRUSTED_ISSUER_TYPES
 PORTITOR_DCP_SCOPES
 PORTITOR_POLICY_CREDENTIALS
 PORTITOR_STATUS_LIST_CACHE_SECONDS
@@ -285,6 +293,8 @@ PORTITOR_IDENTITY_CERTIFICATE_CHAIN_FILE
 PORTITOR_STS_CLIENT_ID
 PORTITOR_STS_CLIENT_SECRET_FILE
 PORTITOR_TRUSTED_ISSUERS
+PORTITOR_TRUSTED_ISSUER_TYPES
+PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS
 PORTITOR_SCOPE_TYPE_ALIASES
 PORTITOR_GAIAX_COMPLIANCE_URL
 PORTITOR_GAIAX_COMPLIANCE_DID
@@ -318,7 +328,7 @@ named in the CHANGELOG.
 
 | File | Set with | Format |
 |---|---|---|
-| Datasets file | `PORTITOR_DATASETS_FILE` | A JSON list of DCAT datasets with their ODRL offers and `portitor:source` ([ADR 0020](adr/0020-dataset-harvest.md), [DEPLOYING](DEPLOYING.md#dataset-harvest)). `portitor:source` is an `http://` or `https://` URL, or, since 1.1, an object of the connector's object storage written `s3://{bucket}/{key}` ([ADR 0027](adr/0027-push-transfers-and-object-storage.md)). Policies are read strictly ([ADR 0009](adr/0009-minimal-odrl-policies.md)); a 1.x release may understand more terms |
+| Datasets file | `PORTITOR_DATASETS_FILE` | A JSON list of DCAT datasets with their ODRL offers and `portitor:source` ([ADR 0020](adr/0020-dataset-harvest.md), [DEPLOYING](DEPLOYING.md#dataset-harvest)). `portitor:source` is an `http://` or `https://` URL, or, since 1.1, an object of the connector's object storage written `s3://{bucket}/{key}` ([ADR 0027](adr/0027-push-transfers-and-object-storage.md)). Since 1.4 a dataset may have the optional `portitor:accessPolicy`, who may see it in the catalog ([ADR 0019](adr/0019-credential-constraints.md), amendment in 1.4). Policies are read strictly ([ADR 0009](adr/0009-minimal-odrl-policies.md)); a 1.x release may understand more terms |
 | Credential definitions | `PORTITOR_ISSUER_CREDENTIAL_DEFINITIONS_FILE` | A JSON list ([DEPLOYING, credential definitions file](DEPLOYING.md#credential-definitions-file), `examples/issuer-credentials.json`) |
 | Bundle | `PORTITOR_BUNDLE_URL`, `portitor-issuer bundle build` | A folder per version with `manifest.json` and `manifest.jws`, and `latest.json` ([ADR 0005](adr/0005-schema-and-vocabulary-registry.md)); the manifest follows [bundle-manifest.schema.json](schemas/bundle-manifest.schema.json) |
 | Gaia-X participant file | `PORTITOR_GAIAX_PARTICIPANT_FILE` | JSON ([DEPLOYING, Gaia-X onboarding](DEPLOYING.md#gaia-x-onboarding-optional)) |
@@ -339,11 +349,14 @@ PostgreSQL versions are supported is in
 **SQLite is deprecated since 1.3** (maintainer, 2026-11-26;
 [ADR 0029](adr/0029-several-replicas.md)). It keeps working in 1.x,
 for one process per file, and `PORTITOR_DB_FILE` stays in the list
-above until 2.0. 2.0 removes SQLite and `PORTITOR_DB_FILE`. A tool to
-copy a SQLite file into PostgreSQL comes in a 1.x release before 2.0.
+above until 2.0. 2.0 removes SQLite and `PORTITOR_DB_FILE`. No tool
+copies a SQLite file into PostgreSQL (maintainer, 2026-11-27;
+[OPERATING](OPERATING.md#from-sqlite-to-postgresql)).
 
 Migrations run at start and **forward only**. An older release refuses a
-database that a newer one migrated. To go back, restore the backup taken
+database that a newer one migrated. What each release adds is in
+[OPERATING](OPERATING.md#upgrade-and-rollback), for example
+[From 1.3 to 1.4](OPERATING.md#from-13-to-14). To go back, restore the backup taken
 before the upgrade; what was written since is lost. The maintainer
 confirmed this for 1.x at the freeze (2026-11-20,
 [TD-22](RISKS_AND_TECHNICAL_DEBTS.md#td-22);

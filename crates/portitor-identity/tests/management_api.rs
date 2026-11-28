@@ -129,6 +129,9 @@ async fn list_and_delete_credentials() {
     assert_eq!(credential["issuer"], ISSUER);
     assert_eq!(credential["profile"], "vc20-bssl/jwt");
     assert_eq!(credential["expiry"], "2099-01-01T00:00:00Z");
+    // not checked yet (TD-20; the check is off in these tests)
+    assert_eq!(credential["status"], Value::Null);
+    assert_eq!(credential["statusCheckedAt"], Value::Null);
     assert_eq!(
         credential["types"],
         json!(["VerifiableCredential", "MembershipCredential"])

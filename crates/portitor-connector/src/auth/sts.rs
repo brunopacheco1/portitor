@@ -217,6 +217,7 @@ mod tests {
             sts_client_id: "me client".into(),
             sts_client_secret: "s&cret=1".into(),
             trusted_issuers: vec!["did:web:issuer.example".into()],
+            issuer_types: portitor_dcp::trust::IssuerTypes::default(),
             gaiax_compliance_issuers: Vec::new(),
             scopes: vec!["org.eclipse.dspace.dcp.vc.type:MembershipCredential".into()],
             allow_http: true,

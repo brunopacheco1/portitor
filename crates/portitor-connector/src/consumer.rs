@@ -63,8 +63,9 @@ impl Consumer {
                 SystemEnvironment,
                 callback_address,
                 participant_id,
-            ),
-            link: Link::new(ports),
+            )
+            .with_credential_types(ports.credential_types.clone()),
+            link: Link::to_providers(ports),
             allow_http,
         }
     }
@@ -210,8 +211,14 @@ impl Outbox for Consumer {
     }
 
     fn reached(out: &Outgoing, state: Value) -> bool {
-        serde_json::from_value::<ContractNegotiation>(state)
-            .is_ok_and(|negotiation| negotiation.state == out.to)
+        serde_json::from_value::<ContractNegotiation>(state).is_ok_and(|negotiation| {
+            negotiation.state == out.to
+                && outbox::same_process(
+                    &out.body,
+                    &negotiation.provider_pid,
+                    &negotiation.consumer_pid,
+                )
+        })
     }
 
     fn delivered(
@@ -315,4 +322,68 @@ pub(crate) async fn terminate(
             Err(e) => return bad_request(*e),
         };
     consumer.answer(consumer.service.terminate(&cpid, &msg))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use portitor_dsp::negotiation::NegotiationState;
+    use serde_json::json;
+
+    use super::*;
+
+    /// Our `ContractAgreementVerificationMessage` for the process
+    /// (`p`, `c`), leading to `VERIFIED`.
+    fn verification() -> Outgoing {
+        Outgoing {
+            consumer_pid: "c".to_owned(),
+            url: "https://provider.example/dsp/2025-1/negotiations/p/agreement/verification"
+                .to_owned(),
+            body: json!({
+                "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+                "@type": "ContractAgreementVerificationMessage",
+                "providerPid": "p",
+                "consumerPid": "c"
+            }),
+            transition: Transition::Verify,
+            to: NegotiationState::Verified,
+            status_url: "https://provider.example/dsp/2025-1/negotiations/p".to_owned(),
+            initial: false,
+            counter_party: "did:web:provider.example".to_owned(),
+        }
+    }
+
+    /// The provider's answer to a state query.
+    fn state(provider_pid: &str, consumer_pid: &str, state: NegotiationState) -> Value {
+        serde_json::to_value(ContractNegotiation::new(provider_pid, consumer_pid, state)).unwrap()
+    }
+
+    /// TD-61: the provider's state counts as proof that our message
+    /// arrived only for the same process: the state the message leads to,
+    /// with both its ids.
+    #[test]
+    fn a_state_of_another_negotiation_is_no_proof_of_delivery() {
+        let sent = verification();
+        assert!(Consumer::reached(
+            &sent,
+            state("p", "c", NegotiationState::Verified)
+        ));
+        // another state of the same process
+        assert!(!Consumer::reached(
+            &sent,
+            state("p", "c", NegotiationState::Agreed)
+        ));
+        // the same state, of another provider process
+        assert!(!Consumer::reached(
+            &sent,
+            state("p-other", "c", NegotiationState::Verified)
+        ));
+        // the same state, of another consumer process
+        assert!(!Consumer::reached(
+            &sent,
+            state("p", "c-other", NegotiationState::Verified)
+        ));
+        // not a negotiation at all
+        assert!(!Consumer::reached(&sent, json!({"state": "VERIFIED"})));
+    }
 }

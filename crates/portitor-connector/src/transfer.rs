@@ -49,7 +49,7 @@ use portitor_dsp::transfer::{
     Transition,
 };
 use portitor_runtime::leases::HeldLease;
-use portitor_runtime::panics::spawn_supervised;
+use portitor_runtime::panics::spawn_every;
 use portitor_runtime::telemetry::metrics;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -149,7 +149,7 @@ impl TransferProvider {
                 catalog,
                 SystemEnvironment,
             ),
-            link: Link::new(ports),
+            link: Link::to_consumers(ports),
             verifier: Arc::clone(&ports.verifier),
             flow_store: ports.flow_store.clone(),
             allow_http,
@@ -371,22 +371,12 @@ impl TransferProvider {
     /// called inside the Tokio runtime.
     pub(crate) fn schedule_sweep(self: &Arc<Self>, every: Duration) -> tokio::task::JoinHandle<()> {
         let provider = Arc::clone(self);
-        // supervised, as every task that runs as long as the process: the
-        // closure makes the task anew after a panic
+        // one sweep; `spawn_every` runs it on the timer, supervised
         let sweep = move || {
             let provider = Arc::clone(&provider);
-            async move {
-                let first = tokio::time::Instant::now() + every;
-                let mut ticks = tokio::time::interval_at(first, every);
-                // a tick missed while a sweep was going on is skipped
-                ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                loop {
-                    ticks.tick().await;
-                    provider.sweep().await;
-                }
-            }
+            async move { provider.sweep().await }
         };
-        spawn_supervised("transfer_step_sweep", sweep)
+        spawn_every("transfer_step_sweep", every, sweep)
     }
 
     /// One sweep ([`TransferProvider::schedule_sweep`]).
@@ -511,7 +501,7 @@ impl Outbox for TransferProvider {
     }
 
     fn reached(out: &Outgoing, state: Value) -> bool {
-        reached_state(state, out.to)
+        sent_message_reached(state, out.to, &out.body)
     }
 
     fn delivered(&self, out: &Outgoing, _: Option<&Value>) -> Result<Option<Outgoing>, Failure> {
@@ -534,6 +524,16 @@ impl Outbox for TransferProvider {
 /// is `to`.
 pub(crate) fn reached_state(state: Value, to: TransferState) -> bool {
     serde_json::from_value::<TransferProcess>(state).is_ok_and(|transfer| transfer.state == to)
+}
+
+/// Whether `state`, a counter-party's answer to a transfer state query,
+/// is `to`, for the transfer our message `sent` belongs to
+/// ([`outbox::same_process`]): the check of [`Outbox::reached`].
+pub(crate) fn sent_message_reached(state: Value, to: TransferState, sent: &Value) -> bool {
+    serde_json::from_value::<TransferProcess>(state).is_ok_and(|transfer| {
+        transfer.state == to
+            && outbox::same_process(sent, &transfer.provider_pid, &transfer.consumer_pid)
+    })
 }
 
 pub(crate) fn bad_request(e: TransferError) -> Response {
@@ -790,6 +790,10 @@ pub(crate) fn log_termination_without_membership(caller: &Caller, process: &str)
     }
 }
 
+/// The reason of the termination sent when a consumer's membership no
+/// longer holds (ADR 0027, section 7.2). Fixed: the detail is in our log.
+pub(crate) const MEMBERSHIP_ENDED: &str = "the consumer's membership no longer holds";
+
 /// Ends transfers for the data plane's membership gate
 /// ([`crate::flow_membership::MembershipGate`]) as the provider's own
 /// termination. It holds a weak pointer, because the provider holds the
@@ -798,12 +802,15 @@ pub(crate) fn log_termination_without_membership(caller: &Caller, process: &str)
 pub(crate) struct EndsThroughProvider(pub(crate) Weak<TransferProvider>);
 
 impl EndsTransfers for EndsThroughProvider {
-    fn end_transfer(&self, provider_pid: &str, reason: &str) {
+    // the termination goes to the consumer: a fixed reason, not
+    // `_reason`. The check's own text may name a status list or an
+    // address inside our network; the gate has logged it
+    // (`MembershipGate::end_transfer`)
+    fn end_transfer(&self, provider_pid: &str, _reason: &str) {
         let Some(provider) = self.0.upgrade() else {
             return;
         };
-        let why = format!("the consumer's membership no longer holds: {reason}");
-        match provider.terminate_own(provider_pid, &why) {
+        match provider.terminate_own(provider_pid, MEMBERSHIP_ENDED) {
             Ok(_) => {}
             // another call is changing the transfer (TD-48): tried again
             // in the background; access is refused meanwhile by the gate
@@ -815,7 +822,7 @@ impl EndsTransfers for EndsThroughProvider {
                 runtime.spawn(async move {
                     let ended = retry_while_busy::<_, Box<Failure>>(
                         |failure| failure.is_busy(),
-                        || provider.terminate_own(&pid, &why),
+                        || provider.terminate_own(&pid, MEMBERSHIP_ENDED),
                     )
                     .await;
                     if let Err(failure) = ended {
@@ -828,5 +835,46 @@ impl EndsTransfers for EndsThroughProvider {
                 tracing::info!(transfer = %provider_pid, failure = ?failure, "transfer not ended again");
             }
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    /// The consumer's answer to a state query.
+    fn state(provider_pid: &str, consumer_pid: &str, state: TransferState) -> Value {
+        serde_json::to_value(TransferProcess::new(provider_pid, consumer_pid, state)).unwrap()
+    }
+
+    /// TD-61: the consumer's state counts as proof that our message
+    /// arrived only for the same transfer: the state the message leads
+    /// to, with both its ids.
+    #[test]
+    fn a_state_of_another_transfer_is_no_proof_of_delivery() {
+        let sent = json!({
+            "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+            "@type": "TransferStartMessage",
+            "providerPid": "p",
+            "consumerPid": "c"
+        });
+        let started = TransferState::Started;
+        assert!(sent_message_reached(
+            state("p", "c", started),
+            started,
+            &sent
+        ));
+        // another state of the same transfer
+        let requested = state("p", "c", TransferState::Requested);
+        assert!(!sent_message_reached(requested, started, &sent));
+        // the same state, of another provider process
+        let other_provider = state("p-other", "c", started);
+        assert!(!sent_message_reached(other_provider, started, &sent));
+        // the same state, of another consumer process
+        let other_consumer = state("p", "c-other", started);
+        assert!(!sent_message_reached(other_consumer, started, &sent));
     }
 }

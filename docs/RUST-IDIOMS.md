@@ -564,6 +564,51 @@ different names on purpose: if they had the same name, a call on the
 type would pick the type's own method first, and a reader could take
 the trait method for one that calls itself.
 
+### A type that names what it does not hold: `PhantomData`
+
+```rust
+pub trait ComponentSchema {
+    const MIGRATIONS: &'static Migrations;
+}
+pub struct ComponentStore<S> {
+    database: Arc<Database>,
+    schema: PhantomData<S>,
+}
+pub struct IdentitySchema;
+impl ComponentSchema for IdentitySchema {
+    const MIGRATIONS: &'static Migrations = &MIGRATIONS;
+}
+pub type DatabaseStore = ComponentStore<IdentitySchema>;
+impl IdentityStore for DatabaseStore { /* ... */ }
+```
+
+The identity's and the issuer's stores are the same wrapper around the
+database; only the migrations differ (TD-71). `ComponentStore`
+(`portitor-runtime/src/component_store.rs`) is written once, generic
+over `S`, a type that holds nothing and only names the schema:
+`S::MIGRATIONS` is a constant of the trait, read by `open` and
+`in_memory`. A struct must use each of its type parameters in a field,
+so `PhantomData<S>` is a field of size zero that "uses" `S`.
+
+`pub type DatabaseStore = ...` gives the type a short name in each
+component, so `DatabaseStore::open(...)` reads as before. Each
+component then implements its own port (`IdentityStore`,
+`IssuerStore`) for its own `ComponentStore<...>`; Rust allows that
+because the port is the component's own trait. The shared port
+methods (used token ids, leases) are implemented once, in
+`portitor-runtime`, for every `ComponentStore<S>`.
+
+```rust
+pub trait WithLeaseTable: ComponentSchema {}
+impl<S: WithLeaseTable + Send + Sync> LeaseStore for ComponentStore<S> { /* ... */ }
+impl WithLeaseTable for IdentitySchema {}
+```
+
+A *marker trait*: it has no methods, it only marks a type. Only the
+identity's schema has the `lease` table, so only its store is a
+`LeaseStore`; asking the issuer's store for a lease does not compile,
+instead of failing at run time with "no such table".
+
 ### `BoxFuture` in a trait
 
 A trait whose objects are kept as `dyn Trait` cannot have an `async fn`
@@ -573,6 +618,28 @@ tasks"](#async-await-and-background-tasks)). The data plane's
 `AccessGate` port does this, so the data plane can hold the control
 plane's gate as `Arc<dyn AccessGate>` without knowing its type
 (`portitor-dataplane/src/access.rs`).
+
+### One function for several inputs: `impl Into<Terms<'a>>`
+
+```rust
+impl<'a> From<&'a Offer> for Terms<'a> { /* ... */ }
+impl<'a> From<&'a Agreement> for Terms<'a> { /* ... */ }
+impl<'a> From<&'a AccessPolicy> for Terms<'a> { /* ... */ }
+
+pub fn credential_scopes<'a>(policy: impl Into<Terms<'a>>, types: &CredentialTypes) -> Vec<String> {
+    let terms = policy.into();
+    /* ... */
+}
+```
+
+`Terms` is a view of the rules of an offer, an agreement or an access
+policy. It borrows them and copies nothing. Each of the three types
+says how it becomes `Terms` (`impl From<...> for Terms`); Rust then
+gives `Into` for free, the same conversion seen from the other side. A function
+that takes `impl Into<Terms<'a>>` then accepts any of them:
+`credential_scopes(&offer, types)` and `credential_scopes(&policy,
+types)` both work. Its first line, `let terms = policy.into();`, makes
+the view (`portitor-dsp/src/policy.rs`, `policy/access.rs`).
 
 ## Sharing between threads: `Arc` and `Mutex`
 
@@ -692,7 +759,8 @@ Use the helpers, not `catch_unwind` itself:
 `answer_500_on_panic(router)` for HTTP handlers (already on every
 server, `serve.rs`), `spawn_supervised(name, || task())` instead of
 `tokio::spawn` for a task that runs as long as the process (the closure
-makes the task again after a panic), `report_panic(name, task)` around
+makes the task again after a panic), `spawn_every(name, every, || round())`
+for such a task that does one round every few seconds or minutes, `report_panic(name, task)` around
 a task that does one piece of work, and `report_sync_panic(name, || ...)`
 around one piece of work in a loop that is not async (one credential
 decision of many, `decide_guarded` in `portitor-issuer/src/issue.rs`).
@@ -764,6 +832,14 @@ closure again from the start. So the closure must only read and write
 through `tx`, with no other effect (no message sent, no counter in
 memory changed). This is why the work is a closure, and why it is an
 `FnMut` (a closure that can be called again) and not an `FnOnce`.
+
+Before it runs again, `transaction` gives its connection back to the
+pool and pauses for a random time, from 0 up to a ceiling that doubles
+with each collision (5 ms, 10 ms, ... at most 200 ms): "exponential
+backoff with full jitter". With a fixed pause, the two transactions that
+collided would wake together and collide again. It stops after 5
+seconds or 50 tries and returns the database's error
+(`pause_after_collision` in `portitor-runtime/src/database/postgres.rs`).
 
 The same SQL runs on PostgreSQL and on `SQLite`:
 
@@ -950,22 +1026,38 @@ stops it when the time is up (`UrlSource::get` in
 `portitor-bundle/src/source.rs`).
 
 ```rust
-pub fn schedule(self: &Arc<Self>, every: Duration) -> Option<JoinHandle<()>> {
+pub fn schedule(self: &Arc<Self>, every: Duration, leases: &Leases) -> Option<JoinHandle<()>> {
     let harvester = Arc::clone(self);
-    let schedule = move || {
+    let leases = leases.clone();
+    let round = move || {
         let harvester = Arc::clone(&harvester);
-        async move {
-            /* ... */
-            let ran = tokio::task::spawn_blocking(move || runner.run(Trigger::Interval));
-        }
+        let leases = leases.clone();
+        async move { run_if_due(&harvester, &leases, every).await }
     };
-    Some(spawn_supervised("dataset_harvest", schedule))
+    Some(spawn_every("dataset_harvest", every, round))
 }
 ```
 
-`schedule` is a closure that makes the task: `spawn_supervised` calls
-it once now and again after a panic ("Panics" above). Each call clones
-the pointer, so every new task has its own.
+`round` is a closure that makes the work of one round: `spawn_every`
+calls it on each tick of a timer, inside `spawn_supervised` ("Panics"
+above). Each call clones the pointers, so every round has its own.
+
+```rust
+let first = tokio::time::Instant::now() + every;
+let mut ticks = tokio::time::interval_at(first, every);
+ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+loop {
+    ticks.tick().await;
+    round().await;
+}
+```
+
+The timer inside `spawn_every` (`portitor-runtime/src/panics.rs`),
+written once for every loop that ticks. `interval_at(first, every)`
+ticks at `first`, then every `every`; the first round is one period
+after the start. `Skip`: when a round lasted longer than the period,
+the tick that was due runs at once, and the ticks missed meanwhile are
+dropped, so rounds never pile up behind a slow one.
 
 `self: &Arc<Self>` is a method that can be called only on a value kept in
 an `Arc`. It needs that, as the background task keeps its own pointer
@@ -975,7 +1067,7 @@ an `Arc`. It needs that, as the background task keeps its own pointer
 thread (reading a file, `SQLite`, a long computation) on a separate pool
 of threads, so the async threads stay free for requests. Awaiting it
 gives the closure's result, or an error if it panicked
-(`DatasetHarvester::schedule` in `portitor-connector/src/harvest.rs`).
+(`run_if_due` in `portitor-connector/src/harvest.rs`).
 
 ```rust
 tokio::select! {
@@ -1175,6 +1267,35 @@ body (`membership_watchdog` in `portitor-dataplane/src/download.rs`). `AbortOnDr
 `abort()` in `Drop`, so the task ends when the body ends, however it
 ends.
 
+### A step of hyper's client written by hand: `tower_service::Service`
+
+```rust
+/// A task that finishes later with a `T` or an error.
+type Later<T> = Pin<Box<dyn Future<Output = Result<T, BoxError>> + Send>>;
+
+impl tower_service::Service<Uri> for CheckedConnector {
+    type Response = TokioIo<TcpStream>;
+    type Error = BoxError;
+    type Future = Later<Self::Response>;
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> { ... }
+    fn call(&mut self, uri: Uri) -> Self::Future { Box::pin(async move { ... }) }
+}
+```
+
+hyper's client opens a connection by calling a "service": `call` with
+the URL gives, later, the open connection. Resolving a host name is a
+service too (`call` with the name gives the addresses). Read `call` as
+an `async fn` whose result type is spelled out (`type Future`); the
+body is an `async move` block in a `Box::pin`. `Later<T>` is a type
+alias: a short name for that long type, written once and used by both
+services. `poll_ready` asks "can
+you take a call now?"; ours always can, or asks the connector it wraps.
+`CheckedConnector` and `CheckedResolver` in
+`portitor-runtime/src/http/connect.rs` use this to check the address a
+call connects to (R-17). A refusal travels as a boxed error, and
+`refusal_in` finds it again in hyper's error (see
+[Finding an error inside another](#finding-an-error-inside-another-source-and-downcast_ref)).
+
 ### Set once, later: `OnceLock` and `Weak`
 
 ```rust
@@ -1258,6 +1379,26 @@ small. Clippy's `result_large_err` lint asks for this. Read
 a library asks for when it accepts errors of every kind (here oxjsonld's
 context loader). `.into()` turns a `String` into such a boxed error
 (`portitor-shacl/src/jsonld.rs`).
+
+### Finding an error inside another: `source()` and `downcast_ref`
+
+```rust
+let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
+while let Some(error) = current {
+    if let Some(refused) = error.downcast_ref::<InternalAddressRefused>() {
+        return Some(refused);
+    }
+    current = error.source();
+}
+None
+```
+
+A library may wrap our error in its own: hyper's client error holds the
+connector's error, which holds ours. `source()` gives the error one
+level down, or `None` at the bottom; the loop walks down level by level.
+`downcast_ref::<T>()` asks "is this error a `T`?" and gives it back as a
+`T` if it is. So `refusal_in` finds our refusal of an internal address
+however deep hyper put it (`portitor-runtime/src/http/connect.rs`).
 
 ## Attributes and `derive`
 

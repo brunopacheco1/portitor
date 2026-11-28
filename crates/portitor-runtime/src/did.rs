@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 use portitor_dcp::{DidDocument, did_web_url};
 
 use crate::http::HttpSender;
+use crate::internal_addresses::InternalAddresses;
 use crate::settings::bounded_number;
 
 /// The setting for how long a resolved DID document is reused.
@@ -132,13 +133,30 @@ impl DidWebResolver {
     /// A resolver that reuses documents for `ttl`
     /// (`PORTITOR_DID_CACHE_SECONDS`); a `ttl` of zero keeps nothing.
     /// With `allow_http`, documents are fetched over plain HTTP (tests
-    /// only).
+    /// only). For our own DID, which the operator chose: the block on
+    /// internal addresses does not apply ([`DidWebResolver::for_partners`]).
     ///
     /// # Errors
     /// The HTTP client cannot be built (see [`HttpSender::new`]).
     pub fn new(allow_http: bool, ttl: Duration) -> Result<Self, String> {
+        Self::for_partners(allow_http, ttl, &InternalAddresses::default())
+    }
+
+    /// Like [`DidWebResolver::new`], for the DIDs of other parties
+    /// (callers, holders, credential issuers): a document is fetched only
+    /// from an address that `internal_addresses` allows (R-17;
+    /// [`HttpSender::for_partners`]). [`DidWebResolver::new`] is for our
+    /// own DID only.
+    ///
+    /// # Errors
+    /// The HTTP client cannot be built (see [`HttpSender::new`]).
+    pub fn for_partners(
+        allow_http: bool,
+        ttl: Duration,
+        internal_addresses: &InternalAddresses,
+    ) -> Result<Self, String> {
         Ok(Self {
-            http: HttpSender::new(allow_http)?,
+            http: HttpSender::for_partners(allow_http, internal_addresses)?,
             allow_http,
             ttl,
             max_cached: MAX_CACHED,
@@ -286,6 +304,29 @@ mod tests {
             1,
             "the second resolve uses the cache"
         );
+    }
+
+    /// R-17: a resolver for other parties' DIDs fetches nothing from an
+    /// internal address while the block is on, unless it is allowed; the
+    /// refusal is not temporary and names the setting.
+    #[tokio::test]
+    async fn a_partner_did_on_an_internal_address_is_refused_with_the_block_on() {
+        use crate::internal_addresses::{ALLOWED_SETTING, BLOCK_SETTING};
+        let (did, hits) = serve(serde_json::json!({"verificationMethod": []})).await;
+        let rule = |settings: &[(&str, &str)]| {
+            InternalAddresses::from_vars(crate::testing::vars(settings)).unwrap()
+        };
+        let blocking = rule(&[(BLOCK_SETTING, "true")]);
+        let resolver = DidWebResolver::for_partners(true, DEFAULT_TTL, &blocking).unwrap();
+        let error = resolver.resolve(&did).await.unwrap_err();
+        assert!(error.reason.contains(ALLOWED_SETTING), "{}", error.reason);
+        assert!(!error.is_temporary());
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "nothing was fetched");
+
+        let allowed = rule(&[(BLOCK_SETTING, "true"), (ALLOWED_SETTING, "127.0.0.1")]);
+        let resolver = DidWebResolver::for_partners(true, DEFAULT_TTL, &allowed).unwrap();
+        resolver.resolve(&did).await.unwrap();
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
     }
 
     /// `PORTITOR_DID_CACHE_SECONDS=0`: every resolve fetches the document,

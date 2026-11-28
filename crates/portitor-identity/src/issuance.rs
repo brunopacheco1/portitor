@@ -6,7 +6,9 @@
 //! issuance protocol; ADR 0018, "Consequences"):
 //!
 //! 1. The issuer must be trusted (`PORTITOR_TRUSTED_ISSUERS`); otherwise
-//!    nothing is fetched or sent.
+//!    nothing is fetched or sent. An issuer limited to some credential
+//!    types (`PORTITOR_TRUSTED_ISSUER_TYPES`, R-48) is asked only for
+//!    those (checked in step 2, against the metadata's `credentialType`).
 //! 2. The issuer's DID document names its `IssuerService` (section 6.2,
 //!    endpoint discovery); its metadata (`GET /metadata`, section 6.7)
 //!    must list every credential id asked for (section 6.4: "Each IDs ...
@@ -36,6 +38,7 @@ use portitor_dcp::holder::{AccessToken, TokenFrame};
 use portitor_dcp::message::{CredentialRequestMessage, CredentialStatus, IssuerMetadata};
 use portitor_runtime::BoxFuture;
 use portitor_runtime::http::{HttpError, HttpSender, Sender as _};
+use portitor_runtime::internal_addresses::InternalAddresses;
 use portitor_runtime::system::{new_uuid, now_secs};
 
 use crate::store::{CredentialRequest, GAIAX_HOLDER_PID_PREFIX, StoreError};
@@ -116,13 +119,28 @@ pub struct HttpIssuerClient {
 }
 
 impl HttpIssuerClient {
-    /// With `allow_http`, plain-HTTP URLs are used (tests only).
+    /// With `allow_http`, plain-HTTP URLs are used (tests only). Without
+    /// the block on internal addresses (tests; the binary uses
+    /// [`HttpIssuerClient::for_partners`]).
     ///
     /// # Errors
     /// The HTTP client cannot be built.
     pub fn new(allow_http: bool) -> Result<Self, String> {
+        Self::for_partners(allow_http, &InternalAddresses::default())
+    }
+
+    /// Like [`HttpIssuerClient::new`], with the block on internal
+    /// addresses (R-17): the issuer's service address comes from the
+    /// issuer's own DID document and metadata.
+    ///
+    /// # Errors
+    /// The HTTP client cannot be built.
+    pub fn for_partners(
+        allow_http: bool,
+        internal_addresses: &InternalAddresses,
+    ) -> Result<Self, String> {
         Ok(Self {
-            http: HttpSender::new(allow_http)?,
+            http: HttpSender::for_partners(allow_http, internal_addresses)?,
         })
     }
 }
@@ -259,9 +277,14 @@ async fn check_request(
             .metadata
             .credentials_supported
             .iter()
-            .any(|supported| &supported.id == id);
-        if !listed {
+            .find(|supported| &supported.id == id);
+        let Some(supported) = listed else {
             return Err(AskError::Refused(format!("the issuer does not offer {id}")));
+        };
+        // what it would deliver would be refused (R-48)
+        let types: Vec<String> = supported.credential_type.iter().cloned().collect();
+        if let Some(reason) = identity.type_refusal(issuer, &types) {
+            return Err(AskError::Refused(format!("{id}: {reason}")));
         }
     }
     Ok(service)

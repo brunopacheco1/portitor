@@ -5,15 +5,20 @@
 //! The presentation API (DCP v1.0.1, presentation protocol, section 5.4):
 //! `POST <credential service>/presentations/query`.
 //!
-//! 1. The verifier's self-issued ID token is checked (`caller.rs`).
-//! 2. Its `token` claim must be an access token this component's STS
-//!    signed, for that verifier ([`AccessToken::verify`]).
+//! 1. What needs no fetch is checked first (F-06, ADR 0016 amended in
+//!    1.4): the ID token's `aud` is this holder, and its `token` claim is
+//!    an access token this component's STS signed, for that verifier,
+//!    not expired ([`AccessToken::verify`]). A caller without one never
+//!    makes the component fetch a DID document of its choice.
+//! 2. Only then is the caller's DID resolved and its self-issued ID token
+//!    checked (`caller.rs`).
 //! 3. The query must ask by `scope`; presentation definitions are not
 //!    supported (ADR 0015).
 //! 4. The answer holds the credentials the scopes asked for **and** the
 //!    access token allows (DCP 5.4.1.2: asking for more is not an error,
-//!    the answer just holds less), not expired, as one presentation per
-//!    profile (DCP "Homogeneity requirement").
+//!    the answer just holds less), not expired, and not found revoked or
+//!    suspended by the last status check (TD-20, [`crate::status_check`]),
+//!    as one presentation per profile (DCP "Homogeneity requirement").
 //!
 //! A scope by type `T` covers a credential whose `type` holds `T`, or
 //! holds `gx:T` while its `@context` names a Gaia-X context (ADR 0021,
@@ -28,6 +33,7 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
+use portitor_dcp::Claims;
 use portitor_dcp::credential::{Credential, Profile};
 use portitor_dcp::gaiax::{contexts, matches_scope_type};
 use portitor_dcp::holder::{AccessToken, TokenFrame, sign_presentation};
@@ -36,7 +42,7 @@ use portitor_dcp::scope::Scope;
 use portitor_runtime::api_key::problem;
 use portitor_runtime::system::{new_uuid, now_secs};
 
-use crate::caller::{Callers, authenticate, refused};
+use crate::caller::{authenticate_if, refused};
 use crate::store::StoredCredential;
 use crate::{Identity, LEEWAY, TOKEN_SECONDS};
 
@@ -46,29 +52,31 @@ pub(crate) async fn query(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let caller = match authenticate(&identity, &headers, Callers::Anyone).await {
+    let now = now_secs();
+    // the access token is checked on the claims before the DID is
+    // resolved (F-06): `admit` only says yes or no
+    let admit = |claimed: &Claims| match access_before_resolving(&identity, claimed, now) {
+        Ok(_) => true,
+        Err(reason) => {
+            tracing::info!(
+                reason,
+                "presentation query refused before resolving the caller"
+            );
+            false
+        }
+    };
+    let caller = match authenticate_if(&identity, &headers, admit).await {
         Ok(claims) => claims,
         Err(response) => return response,
     };
-    let Some(token) = caller.token.as_deref() else {
-        return refused("no access token in the ID token");
-    };
-    let now = now_secs();
-    // the current key, or a retired key still listed (TD-05)
-    let public_key = match identity.own_key_for(token) {
-        Ok(key) => key,
-        Err(e) => return refused(&format!("access token: {e}")),
-    };
-    let access = match AccessToken::verify(
-        token,
-        &public_key,
-        &identity.participant_id,
-        &caller.sub,
-        now,
-        LEEWAY,
-    ) {
+    // the same check again, now on the verified claims, gives the access
+    // token for the answer (one more signature check, nothing fetched)
+    let access = match access_before_resolving(&identity, &caller, now) {
         Ok(access) => access,
-        Err(e) => return refused(&e.to_string()),
+        Err(reason) => {
+            tracing::info!(reason, "presentation query refused");
+            return refused("no access token");
+        }
     };
     let message: PresentationQueryMessage = match serde_json::from_slice(&body) {
         Ok(message) => message,
@@ -97,6 +105,38 @@ pub(crate) async fn query(
             problem(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
         }
     }
+}
+
+/// The access token in the ID token whose claims are `claimed`, checked
+/// with what needs no fetch: the ID token is for this holder (`aud`), and
+/// its `token` claim is an access token our STS signed for the caller
+/// (`sub`), not expired. It is called twice: first on claims not verified
+/// yet, before the caller's DID is resolved, and again on the verified
+/// claims, which binds the access token to the `sub` that check confirms.
+fn access_before_resolving(
+    identity: &Identity,
+    claimed: &Claims,
+    now: u64,
+) -> Result<AccessToken, String> {
+    if claimed.aud != identity.participant_id {
+        return Err("the ID token is for another audience".to_owned());
+    }
+    let Some(token) = claimed.token.as_deref() else {
+        return Err("no access token in the ID token".to_owned());
+    };
+    // the current key, or a retired key still listed (TD-05)
+    let public_key = identity
+        .own_key_for(token)
+        .map_err(|e| format!("access token: {e}"))?;
+    AccessToken::verify(
+        token,
+        &public_key,
+        &identity.participant_id,
+        &claimed.sub,
+        now,
+        LEEWAY,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// The scopes the query asks for, parsed. 400 for a query DCP calls
@@ -138,8 +178,10 @@ fn granted(asked: &[Scope], identity: &Identity, access: &AccessToken) -> Vec<Sc
         .collect()
 }
 
-/// The credentials that a scope in `allowed` covers and that have not
-/// expired at `now`.
+/// The credentials that a scope in `allowed` covers, that have not
+/// expired at `now`, and that the last status check did not find revoked
+/// or suspended (TD-20; `crate::status_check`). A credential never
+/// checked, or whose lists could not be read, is shown.
 fn visible<'a>(
     credentials: &'a [StoredCredential],
     allowed: &[Scope],
@@ -149,11 +191,15 @@ fn visible<'a>(
     let mut shown = Vec::new();
     for credential in credentials {
         let expired = credential.expires_at.is_some_and(|until| until <= now);
+        let withdrawn = match credential.last_status_check {
+            Some(checked) => !checked.state.is_presented(),
+            None => false,
+        };
         let contexts = contexts_of(credential);
         let covered = allowed
             .iter()
             .any(|scope| covers(scope, credential, &contexts));
-        if covered && !expired {
+        if covered && !expired && !withdrawn {
             shown.push(credential);
         }
     }
@@ -229,6 +275,7 @@ mod tests {
             expires_at,
             holder_pid: "h-1".to_owned(),
             jwt: "a.b.c".to_owned(),
+            last_status_check: None,
         }
     }
 
@@ -253,6 +300,33 @@ mod tests {
             visible(&credentials, &[], now).is_empty(),
             "no scope, nothing"
         );
+    }
+
+    /// TD-20: a credential the last status check found revoked or
+    /// suspended is left out; one never checked, or found valid, is shown.
+    #[test]
+    fn revoked_and_suspended_credentials_are_not_shown() {
+        use crate::store::{CheckedStatus, HeldStatus};
+        let checked = |id: &str, state: HeldStatus| StoredCredential {
+            last_status_check: Some(CheckedStatus {
+                state,
+                checked_at: 900,
+            }),
+            ..held(id, "MembershipCredential", None)
+        };
+        let credentials = [
+            held("never-checked", "MembershipCredential", None),
+            checked("valid", HeldStatus::Valid),
+            checked("revoked", HeldStatus::Revoked),
+            checked("suspended", HeldStatus::Suspended),
+        ];
+        let allowed =
+            [Scope::parse("org.eclipse.dspace.dcp.vc.type:MembershipCredential", &[]).unwrap()];
+        let shown: Vec<&str> = visible(&credentials, &allowed, 1_000)
+            .iter()
+            .map(|credential| credential.id.as_str())
+            .collect();
+        assert_eq!(shown, ["never-checked", "valid"]);
     }
 
     #[test]

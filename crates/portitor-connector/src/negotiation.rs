@@ -50,7 +50,7 @@ impl Provider {
         allow_http: bool,
     ) -> Self {
         Self {
-            link: Link::new(&ports),
+            link: Link::to_consumers(&ports),
             verifier: Arc::clone(&ports.verifier),
             service: ProviderService::new(
                 ports.store,
@@ -84,6 +84,23 @@ impl Provider {
     async fn credentials(&self, caller: &Caller, offer: &Offer) -> CallerCredentials {
         let types = &self.link.credential_types;
         let scopes = credential_scopes(offer, types);
+        credentials_for(&*self.verifier, types, caller, &scopes).await
+    }
+
+    /// The caller's verified credentials for a contract request with
+    /// `offer`: those of the offer's credential constraints and of its
+    /// dataset's access policy, in one presentation query (ADR 0019,
+    /// amendment in 1.4).
+    ///
+    /// When the catalog cannot be read, only the offer's scopes are asked
+    /// for: `service.request` reads the catalog again and answers the
+    /// store failure itself.
+    async fn request_credentials(&self, caller: &Caller, offer: &Offer) -> CallerCredentials {
+        let types = &self.link.credential_types;
+        let scopes = match self.service.request_scopes(offer, types) {
+            Ok(scopes) => scopes,
+            Err(_) => credential_scopes(offer, types),
+        };
         credentials_for(&*self.verifier, types, caller, &scopes).await
     }
 
@@ -123,8 +140,14 @@ impl Outbox for Provider {
     }
 
     fn reached(out: &Outgoing, state: Value) -> bool {
-        serde_json::from_value::<ContractNegotiation>(state)
-            .is_ok_and(|negotiation| negotiation.state == out.to)
+        serde_json::from_value::<ContractNegotiation>(state).is_ok_and(|negotiation| {
+            negotiation.state == out.to
+                && outbox::same_process(
+                    &out.body,
+                    &negotiation.provider_pid,
+                    &negotiation.consumer_pid,
+                )
+        })
     }
 
     fn delivered(&self, out: &Outgoing, _: Option<&Value>) -> Result<Option<Outgoing>, Failure> {
@@ -222,7 +245,7 @@ pub(crate) async fn request_new(
             "callbackAddress must be an https URL",
         ));
     }
-    let credentials = provider.credentials(&caller, &msg.offer).await;
+    let credentials = provider.request_credentials(&caller, &msg.offer).await;
     let handled = provider
         .service
         .request(None, msg, &caller.id, &credentials);
@@ -240,7 +263,7 @@ pub(crate) async fn request_counter(
         Ok(m) => m,
         Err(e) => return bad_request(*e),
     };
-    let credentials = provider.credentials(&caller, &msg.offer).await;
+    let credentials = provider.request_credentials(&caller, &msg.offer).await;
     let handled = provider
         .service
         .request(Some(&pid), msg, &caller.id, &credentials);
@@ -367,6 +390,40 @@ mod tests {
         }
     }
 
+    /// TD-61: the consumer's state counts as proof that our message
+    /// arrived only when it is about the negotiation the message belongs
+    /// to: the same state and the same two process ids.
+    #[test]
+    fn a_state_of_another_negotiation_is_no_proof_of_delivery() {
+        let mut agreement = finalization_event();
+        agreement.transition = Transition::Agree;
+        agreement.to = NegotiationState::Agreed;
+        agreement.body = serde_json::json!({
+            "@type": "ContractAgreementMessage", "providerPid": "p", "consumerPid": "c"
+        });
+        let answer = |provider_pid: &str, consumer_pid: &str, state: &str| {
+            serde_json::json!({
+                "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+                "@type": "ContractNegotiation",
+                "providerPid": provider_pid, "consumerPid": consumer_pid, "state": state
+            })
+        };
+        assert!(Provider::reached(&agreement, answer("p", "c", "AGREED")));
+        assert!(!Provider::reached(
+            &agreement,
+            answer("p", "c", "REQUESTED")
+        ));
+        // the consumer's other negotiation is AGREED, not this one
+        assert!(!Provider::reached(
+            &agreement,
+            answer("p-other", "c", "AGREED")
+        ));
+        assert!(!Provider::reached(
+            &agreement,
+            answer("p", "c-other", "AGREED")
+        ));
+    }
+
     /// The provider as the connector builds it, on the negotiation store
     /// `store`. It never sends in these tests.
     fn provider_on(store: AnyStore) -> Provider {
@@ -427,7 +484,14 @@ mod tests {
         fn get(&self, _: &str) -> Result<Option<Negotiation>, StoreError> {
             Err(StoreError("disk I/O error".to_owned()))
         }
-        fn insert(&self, _: &Negotiation) -> Result<(), StoreError> {
+        fn negotiation_requested_by(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<Negotiation>, StoreError> {
+            Err(StoreError("disk I/O error".to_owned()))
+        }
+        fn insert(&self, _: &Negotiation) -> Result<bool, StoreError> {
             Err(StoreError("disk I/O error".to_owned()))
         }
         fn replace_if(&self, _: &Negotiation, _: u64) -> Result<bool, StoreError> {
@@ -489,7 +553,13 @@ mod tests {
         let reached = |state: Value| {
             serde_json::from_value::<ContractNegotiation>(state).is_ok_and(|n| n.state == to)
         };
-        outbox::arrived(&Link::new(&ports), url, "did:web:c.example", reached).await
+        outbox::arrived(
+            &Link::to_consumers(&ports),
+            url,
+            "did:web:c.example",
+            reached,
+        )
+        .await
     }
 
     /// Whether `sender` reads state `to` at `url`.

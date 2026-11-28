@@ -7,25 +7,25 @@
 //!
 //! - [`DcpVerifier::check_status`]: one `credentialStatus` entry of a
 //!   credential, looked up in its status list, which comes from the cache
-//!   or is fetched and verified ([`super::status_list_cache`]). Used by
+//!   or is fetched and verified (`portitor_runtime::status_lists`). Used by
 //!   every credential check of the verifier.
 //! - [`DcpVerifier::check_membership_again`]: a `MembershipCredential`
 //!   the caller presented when it started a transfer, checked again
-//!   without the caller: its issuer is still trusted, it has not expired,
-//!   and none of its status bits is set. The data plane runs it on every
+//!   without the caller: its issuer is still trusted (for each of its
+//!   types, R-48), it has not expired, and none of its status bits is set. The data plane runs it on every
 //!   `/data` request, while a download runs, and around a push
 //!   ([`CallerVerifier::check_membership`](super::CallerVerifier::check_membership)).
 //!   The signature and the holder binding are not checked again: they
 //!   cannot change.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use portitor_dcp::DidDocument;
 use portitor_dcp::credential::{Credential, Validity};
-use portitor_dcp::status_list::{self, Status, StatusEntry};
+use portitor_dcp::status_list::{Status, StatusEntry};
+use portitor_runtime::status_lists::{StatusListError, entry_status};
 
-use super::{DcpVerifier, LEEWAY, MAX_STATUS_LIST, fetch_failed};
+use super::{DcpVerifier, LEEWAY, MEMBERSHIP};
 use crate::auth::{DEFAULT_RECHECK, Membership, VerifyError};
 
 /// The shortest time between two checks of a running download: with a
@@ -46,13 +46,14 @@ pub fn recheck_interval(cache_seconds: u64) -> Duration {
 
 /// What is kept of a verified `MembershipCredential`: its issuer, the end
 /// of its validity (the earlier of its stated end and its JWT's `exp`),
-/// and its status entries.
+/// its status entries and its types.
 #[must_use]
 pub fn of(credential: &Credential) -> Membership {
     Membership {
         issuer: credential.issuer.clone(),
         valid_until: credential.validity.until,
         status: credential.status.clone(),
+        types: credential.types.clone(),
     }
 }
 
@@ -69,9 +70,23 @@ impl DcpVerifier {
         membership: &Membership,
     ) -> Result<(), VerifyError> {
         let issuer = &membership.issuer;
-        if !self.trusted_issuers.contains(issuer) {
+        // still trusted, for every type of the credential as at the first
+        // check: the settings may have changed since
+        // (PORTITOR_TRUSTED_ISSUER_TYPES, R-48). A membership kept before
+        // 1.4 has no types: `MembershipCredential` then
+        let kept_before_1_4 = [MEMBERSHIP.to_owned()];
+        let types: &[String] = if membership.types.is_empty() {
+            &kept_before_1_4
+        } else {
+            &membership.types
+        };
+        let trusted =
+            self.trusted_issuers.contains(issuer) && self.issuer_types.allows(issuer, types);
+        if !trusted {
             return Err(VerifyError::Rejected(format!(
-                "the membership's issuer {issuer} is no longer trusted"
+                "the membership's issuer {issuer} is no longer trusted for the types {} \
+                 (PORTITOR_TRUSTED_ISSUERS, PORTITOR_TRUSTED_ISSUER_TYPES)",
+                types.join(", ")
             )));
         }
         let now = self.now();
@@ -86,84 +101,55 @@ impl DcpVerifier {
         if membership.status.is_empty() {
             return Ok(());
         }
-        let document = self.resolver.resolve(issuer).await?;
+        let issuer_document = self.resolver.resolve(issuer).await?;
         for entry in &membership.status {
-            self.check_status(issuer, &document, entry, now).await?;
+            self.check_status(issuer, &issuer_document, entry, now)
+                .await?;
         }
         Ok(())
     }
 
     /// One status entry of a credential issued by `issuer_did`: takes the
     /// status list credential, which must be signed by the same issuer
-    /// and valid now ([`DcpVerifier::status_list_credential`]), and looks
-    /// up the bit. A list that cannot be read or checked refuses the
-    /// credential, unless its server did not answer or answered 408, 429
-    /// or 5xx (a temporary failure).
+    /// and valid now (`portitor_runtime::status_lists`, shared with the
+    /// identity's status check), and looks up the bit. A list that cannot
+    /// be read or checked refuses the credential, unless its server did
+    /// not answer or answered 408, 429 or 5xx (a temporary failure).
     pub(super) async fn check_status(
         &self,
         issuer_did: &str,
-        issuer: &DidDocument,
+        issuer_document: &DidDocument,
         entry: &StatusEntry,
         now: u64,
     ) -> Result<(), VerifyError> {
         let url = &entry.status_list_credential;
-        let list_credential = self
-            .status_list_credential(issuer_did, issuer, url, now)
-            .await?;
-        let list = status_list::list_in(&list_credential, entry)
-            .map_err(|e| format!("status list {url}: {e}"))?;
-        match status_list::check(entry, &list).map_err(|e| format!("status list {url}: {e}"))? {
+        let read = self
+            .status_lists
+            .list_credential(&self.http, issuer_did, issuer_document, url, now, LEEWAY)
+            .await;
+        let list_credential = match read {
+            Ok(read) => {
+                if read.fetched {
+                    // At DEBUG: with a cache time of 0 this is one line for
+                    // each credential checked. The EDC interop test reads
+                    // it to see that the list was fetched
+                    // (scenarios/edc-interop/run.sh, step 8e).
+                    tracing::debug!(%url, issuer = %read.credential.issuer, "status list fetched and verified");
+                }
+                read.credential
+            }
+            Err(StatusListError::Unavailable(reason)) => {
+                return Err(VerifyError::Unavailable(reason));
+            }
+            Err(StatusListError::Rejected(reason)) => return Err(VerifyError::Rejected(reason)),
+        };
+        match entry_status(&list_credential, entry)? {
             Status::Clear => Ok(()),
             Status::Set => Err(VerifyError::Rejected(format!(
                 "a credential is revoked or suspended ({})",
                 entry.status_purpose
             ))),
         }
-    }
-
-    /// The status list credential at `url` for a credential of
-    /// `issuer_did`, signed by the same issuer (`issuer` is its DID
-    /// document) and valid at `now`: from the cache, or fetched, checked
-    /// and then kept in the cache.
-    async fn status_list_credential(
-        &self,
-        issuer_did: &str,
-        issuer: &DidDocument,
-        url: &str,
-        now: u64,
-    ) -> Result<Arc<Credential>, VerifyError> {
-        let another_issuer =
-            || VerifyError::Rejected(format!("status list {url} has another issuer"));
-        if let Some(cached) = self.status_lists.get(url, now) {
-            // it was checked against its own issuer when it was fetched;
-            // another issuer's credential may name the same URL
-            if cached.issuer != issuer_did {
-                return Err(another_issuer());
-            }
-            return Ok(cached);
-        }
-        let text = self
-            .http
-            .get_text(url, "application/vc+jwt", MAX_STATUS_LIST)
-            .await
-            .map_err(|e| fetch_failed(&format!("status list {url}"), &e))?;
-        let list_credential =
-            Credential::parse(text.trim()).map_err(|e| format!("status list {url}: {e}"))?;
-        if list_credential.issuer != issuer_did {
-            return Err(another_issuer());
-        }
-        list_credential
-            .verify(issuer, now, LEEWAY)
-            .map_err(|e| format!("status list {url}: {e}"))?;
-        // At DEBUG: with a cache time of 0 this is one line for each
-        // credential checked. The EDC interop test reads it to see that
-        // the list was fetched (scenarios/edc-interop/run.sh, step 8e).
-        tracing::debug!(%url, issuer = %list_credential.issuer, "status list fetched and verified");
-        // only now, fetched and verified, may it be kept
-        let list_credential = Arc::new(list_credential);
-        self.status_lists
-            .keep(url, Arc::clone(&list_credential), now);
-        Ok(list_credential)
     }
 }
 

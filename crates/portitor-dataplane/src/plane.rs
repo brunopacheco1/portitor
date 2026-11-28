@@ -21,6 +21,7 @@ use portitor_dps::port::SignalError;
 use portitor_runtime::http::{
     HttpsClient, StreamingHttpsClient, https_client, https_streaming_client,
 };
+use portitor_runtime::internal_addresses::InternalAddresses;
 
 use crate::access::AccessGate;
 use crate::download::{self, AbortOnDrop};
@@ -83,7 +84,8 @@ impl HttpDataPlane {
             token_seconds,
             source_client,
             storage: None,
-            push_client: https_streaming_client(false)?,
+            // no `http://`, block off: `with_push_client` sets the real one
+            push_client: https_streaming_client(false, &InternalAddresses::default())?,
             running: Arc::new(RunningFlows::new()),
             gate: None,
         })
@@ -97,13 +99,20 @@ impl HttpDataPlane {
     }
 
     /// The same data plane, pushing to plain `http://` endpoints too
-    /// when `allow_http` (`PORTITOR_ALLOW_HTTP`, development only).
+    /// when `allow_http` (`PORTITOR_ALLOW_HTTP`, development only), and
+    /// only to addresses that `internal_addresses` allows
+    /// (`PORTITOR_BLOCK_INTERNAL_ADDRESSES`, R-17): the consumer chose
+    /// the endpoint.
     ///
     /// # Errors
     ///
     /// The HTTP client cannot be built.
-    pub fn with_push_over_http(mut self, allow_http: bool) -> Result<Self, String> {
-        self.push_client = https_streaming_client(allow_http)?;
+    pub fn with_push_client(
+        mut self,
+        allow_http: bool,
+        internal_addresses: &InternalAddresses,
+    ) -> Result<Self, String> {
+        self.push_client = https_streaming_client(allow_http, internal_addresses)?;
         Ok(self)
     }
 

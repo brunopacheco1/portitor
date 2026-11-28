@@ -5,6 +5,10 @@
 //! Catalog protocol (domain). Pure logic; datasets come through the
 //! [`CatalogDatasets`] port.
 
+use crate::policy::{
+    AccessPolicy, CallerCredentials, CredentialTypes, access_policy_holds, add_once,
+    credential_scopes,
+};
 pub use crate::process::StoreError;
 use crate::{
     Catalog, CatalogError, CatalogRequestMessage, CatalogType, Context, DataService,
@@ -15,27 +19,68 @@ use crate::{
 /// where they are kept (the connector's database, ADR 0029, D4), so every
 /// call can fail.
 pub trait CatalogDatasets {
-    /// All datasets visible to the requester.
-    ///
-    /// # Errors
-    /// The datasets cannot be read.
-    fn all(&self) -> Result<Vec<Dataset>, StoreError>;
-    /// One dataset by id, if it is in the catalog.
-    ///
-    /// # Errors
-    /// The datasets cannot be read.
-    fn get(&self, id: &str) -> Result<Option<Dataset>, StoreError>;
     /// One dataset by id, for a transfer under an agreement already made.
     /// It may be a dataset that has left the catalog since (the provider
     /// withdrew or hid it): the agreement is a contract, so its transfers
     /// keep working. Use it only for transfers; catalog, dataset and
-    /// contract requests use [`CatalogDatasets::get`]. The default is `get`,
-    /// for stores whose datasets never leave the catalog.
+    /// contract requests use [`CatalogDatasets::get_with_access_policy`].
     ///
     /// # Errors
     /// The datasets cannot be read.
-    fn get_for_agreement(&self, id: &str) -> Result<Option<Dataset>, StoreError> {
-        self.get(id)
+    fn get_for_agreement(&self, id: &str) -> Result<Option<Dataset>, StoreError>;
+    /// Every dataset in the catalog with its access policy, if it has one
+    /// (ADR 0019, amendment in 1.4).
+    ///
+    /// No default: an adapter that forgot the access policies would show
+    /// every dataset to every caller.
+    ///
+    /// # Errors
+    /// The datasets cannot be read.
+    fn all_with_access_policies(&self) -> Result<Vec<ListedDataset>, StoreError>;
+    /// One dataset in the catalog, if it is there, with its access policy.
+    ///
+    /// # Errors
+    /// The datasets cannot be read.
+    fn get_with_access_policy(&self, id: &str) -> Result<Option<ListedDataset>, StoreError>;
+    /// The access policies of the datasets in the catalog, each once: what
+    /// a catalog request needs to know which credentials to ask for.
+    ///
+    /// # Errors
+    /// The datasets cannot be read.
+    fn access_policies(&self) -> Result<Vec<AccessPolicy>, StoreError>;
+}
+
+/// A dataset of the catalog with its access policy (ADR 0019, amendment
+/// in 1.4). The access policy decides who sees the dataset; it is never
+/// shown in the catalog.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ListedDataset {
+    /// The dataset as the catalog shows it.
+    pub dataset: Dataset,
+    /// Who may see it; `None`: every member.
+    pub access_policy: Option<AccessPolicy>,
+}
+
+/// Who asks for the catalog or a dataset: the time of the request (an
+/// `xsd:dateTime` with a time zone) and the caller's verified
+/// credentials, for the access policies.
+#[derive(Debug, Clone, Copy)]
+pub struct Requester<'a> {
+    /// The time now.
+    pub now: &'a str,
+    /// The caller's verified credentials.
+    pub credentials: &'a CallerCredentials,
+}
+
+impl Requester<'_> {
+    /// Whether the requester may see a dataset with this access policy.
+    /// Without one, every member may (as before 1.4). A contract request
+    /// asks this too (the provider's negotiation).
+    pub(crate) fn may_see(&self, access_policy: Option<&AccessPolicy>) -> bool {
+        match access_policy {
+            None => true,
+            Some(policy) => access_policy_holds(policy, self.now, self.credentials).is_ok(),
+        }
     }
 }
 
@@ -304,11 +349,54 @@ impl<S: CatalogDatasets> CatalogService<S> {
         }
     }
 
-    /// Answers a `CatalogRequestMessage`. Filters are not supported, so a
-    /// filter that would select something is a bad request, as DSP 2025-1
-    /// requires. A filter that selects nothing is ignored (see
-    /// [`filters_nothing`]).
-    pub fn request(&self, msg: &CatalogRequestMessage) -> Outcome<Catalog> {
+    /// The DCP scopes to ask the caller's credential service for, to
+    /// evaluate the access policies of the catalog (ADR 0019, amendment in
+    /// 1.4): those of the credential types the policies name, each once.
+    ///
+    /// # Errors
+    ///
+    /// The datasets cannot be read.
+    pub fn access_scopes(&self, types: &CredentialTypes) -> Result<Vec<String>, StoreError> {
+        let mut scopes: Vec<String> = Vec::new();
+        for policy in self.store.access_policies()? {
+            for scope in credential_scopes(&policy, types) {
+                add_once(&mut scopes, scope);
+            }
+        }
+        Ok(scopes)
+    }
+
+    /// As [`CatalogService::access_scopes`], for the access policy of
+    /// dataset `id` only (a dataset request).
+    ///
+    /// # Errors
+    ///
+    /// The datasets cannot be read.
+    pub fn dataset_access_scopes(
+        &self,
+        id: &str,
+        types: &CredentialTypes,
+    ) -> Result<Vec<String>, StoreError> {
+        let policy = self
+            .store
+            .get_with_access_policy(id)?
+            .and_then(|listed| listed.access_policy);
+        Ok(match policy {
+            Some(policy) => credential_scopes(&policy, types),
+            None => Vec::new(),
+        })
+    }
+
+    /// Answers a `CatalogRequestMessage` from `requester`. Filters are not
+    /// supported, so a filter that would select something is a bad
+    /// request, as DSP 2025-1 requires. A filter that selects nothing is
+    /// ignored (see [`filters_nothing`]). A dataset whose access policy
+    /// does not hold for the requester is left out.
+    pub fn request(
+        &self,
+        msg: &CatalogRequestMessage,
+        requester: &Requester<'_>,
+    ) -> Outcome<Catalog> {
         let filter = msg.filter.as_deref().unwrap_or_default();
         if !filter.iter().all(filters_nothing) {
             return Outcome::BadRequest(CatalogError::new(
@@ -316,28 +404,39 @@ impl<S: CatalogDatasets> CatalogService<S> {
                 "filter expressions are not supported",
             ));
         }
-        let dataset = match self.store.all() {
-            Ok(datasets) => datasets,
+        let listed = match self.store.all_with_access_policies() {
+            Ok(listed) => listed,
             Err(e) => return Outcome::StoreFailed(e),
         };
+        let mut shown = Vec::new();
+        for entry in listed {
+            if requester.may_see(entry.access_policy.as_ref()) {
+                shown.push(entry.dataset);
+            }
+        }
         Outcome::Ok(Catalog {
             context: Context::default(),
             id: self.catalog_id.clone(),
             kind: CatalogType,
             participant_id: self.participant_id.clone(),
             service: vec![self.service.clone()],
-            dataset,
+            dataset: shown,
         })
     }
 
-    /// Answers a dataset request.
-    pub fn dataset(&self, id: &str) -> Outcome<Dataset> {
-        match self.store.get(id) {
-            Ok(Some(mut d)) => {
-                d.context = Some(Context::default());
-                Outcome::Ok(d)
+    /// Answers a dataset request from `requester`. A dataset whose access
+    /// policy does not hold for the requester gets the same answer as an
+    /// unknown dataset.
+    pub fn dataset(&self, id: &str, requester: &Requester<'_>) -> Outcome<Dataset> {
+        match self.store.get_with_access_policy(id) {
+            Ok(Some(listed)) if requester.may_see(listed.access_policy.as_ref()) => {
+                let mut dataset = listed.dataset;
+                dataset.context = Some(Context::default());
+                Outcome::Ok(dataset)
             }
-            Ok(None) => Outcome::NotFound(CatalogError::new("404", "dataset not found")),
+            // unknown, or hidden by its access policy: the same answer
+            // (ADR 0019, 1.4)
+            Ok(Some(_) | None) => Outcome::NotFound(CatalogError::new("404", "dataset not found")),
             Err(e) => Outcome::StoreFailed(e),
         }
     }
@@ -522,10 +621,16 @@ mod tests {
     struct Unreadable;
 
     impl CatalogDatasets for Unreadable {
-        fn all(&self) -> Result<Vec<Dataset>, StoreError> {
+        fn get_for_agreement(&self, _: &str) -> Result<Option<Dataset>, StoreError> {
             Err(StoreError("database down".to_owned()))
         }
-        fn get(&self, _: &str) -> Result<Option<Dataset>, StoreError> {
+        fn all_with_access_policies(&self) -> Result<Vec<ListedDataset>, StoreError> {
+            Err(StoreError("database down".to_owned()))
+        }
+        fn get_with_access_policy(&self, _: &str) -> Result<Option<ListedDataset>, StoreError> {
+            Err(StoreError("database down".to_owned()))
+        }
+        fn access_policies(&self) -> Result<Vec<AccessPolicy>, StoreError> {
             Err(StoreError("database down".to_owned()))
         }
     }
@@ -544,7 +649,135 @@ mod tests {
             "@type": "CatalogRequestMessage"
         }))
         .unwrap();
-        assert!(matches!(service.request(&request), Outcome::StoreFailed(_)));
-        assert!(matches!(service.dataset("a"), Outcome::StoreFailed(_)));
+        let credentials = CallerCredentials::default();
+        let requester = Requester {
+            now: "2026-11-27T12:00:00Z",
+            credentials: &credentials,
+        };
+        assert!(matches!(
+            service.request(&request, &requester),
+            Outcome::StoreFailed(_)
+        ));
+        assert!(matches!(
+            service.dataset("a", &requester),
+            Outcome::StoreFailed(_)
+        ));
+    }
+
+    /// Two datasets, `open` without an access policy and `permits` for
+    /// holders of a data permit (ADR 0019, amendment in 1.4).
+    struct WithAccessPolicies;
+
+    impl WithAccessPolicies {
+        fn listed() -> Vec<ListedDataset> {
+            let policy: AccessPolicy = serde_json::from_value(serde_json::json!({
+                "permission": [{"action": "use", "constraint": [{
+                    "leftOperand": "DataPermitCredential.purpose", "operator": "eq",
+                    "rightOperand": "research"}]}]}))
+            .unwrap();
+            vec![
+                ListedDataset {
+                    dataset: dataset("open"),
+                    access_policy: None,
+                },
+                ListedDataset {
+                    dataset: dataset("permits"),
+                    access_policy: Some(policy),
+                },
+            ]
+        }
+    }
+
+    impl CatalogDatasets for WithAccessPolicies {
+        fn get_for_agreement(&self, id: &str) -> Result<Option<Dataset>, StoreError> {
+            Ok(self.get_with_access_policy(id)?.map(|l| l.dataset))
+        }
+        fn all_with_access_policies(&self) -> Result<Vec<ListedDataset>, StoreError> {
+            Ok(Self::listed())
+        }
+        fn get_with_access_policy(&self, id: &str) -> Result<Option<ListedDataset>, StoreError> {
+            Ok(Self::listed().into_iter().find(|l| l.dataset.id == id))
+        }
+        fn access_policies(&self) -> Result<Vec<AccessPolicy>, StoreError> {
+            let mut policies = Vec::new();
+            for listed in Self::listed() {
+                if let Some(policy) = listed.access_policy {
+                    policies.push(policy);
+                }
+            }
+            Ok(policies)
+        }
+    }
+
+    #[test]
+    fn a_dataset_is_shown_only_to_callers_its_access_policy_holds_for() {
+        use crate::policy::HeldCredential;
+        let service = CatalogService::new(
+            WithAccessPolicies,
+            "cat".to_owned(),
+            "did:web:p".to_owned(),
+            "svc".to_owned(),
+            "https://p.example/dsp".to_owned(),
+        );
+        let mut types = CredentialTypes::default();
+        types.add("DataPermitCredential", "scope:permit");
+        assert_eq!(service.access_scopes(&types).unwrap(), vec!["scope:permit"]);
+        assert_eq!(
+            service.dataset_access_scopes("permits", &types).unwrap(),
+            vec!["scope:permit"]
+        );
+        assert!(
+            service
+                .dataset_access_scopes("open", &types)
+                .unwrap()
+                .is_empty()
+        );
+
+        let request: CatalogRequestMessage = serde_json::from_value(serde_json::json!({
+            "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+            "@type": "CatalogRequestMessage"
+        }))
+        .unwrap();
+        let holder = |purpose: &str| {
+            let serde_json::Value::Object(subject) = serde_json::json!({"purpose": purpose}) else {
+                panic!("an object")
+            };
+            CallerCredentials {
+                understood: types.clone(),
+                held: vec![HeldCredential {
+                    types: vec!["DataPermitCredential".to_owned()],
+                    subjects: vec![subject],
+                }],
+            }
+        };
+        for (credentials, seen) in [
+            (holder("research"), vec!["open", "permits"]),
+            (holder("marketing"), vec!["open"]),
+            (CallerCredentials::default(), vec!["open"]),
+        ] {
+            let requester = Requester {
+                now: "2026-11-27T12:00:00Z",
+                credentials: &credentials,
+            };
+            let Outcome::Ok(catalog) = service.request(&request, &requester) else {
+                panic!("a catalog")
+            };
+            let ids: Vec<&str> = catalog.dataset.iter().map(|d| d.id.as_str()).collect();
+            assert_eq!(ids, seen);
+            // the access policy is never shown
+            let text = serde_json::to_string(&catalog).unwrap();
+            assert!(!text.contains("DataPermitCredential"), "{text}");
+            let permits = service.dataset("permits", &requester);
+            if seen.len() == 2 {
+                assert!(matches!(permits, Outcome::Ok(_)));
+            } else {
+                // the same answer as an unknown dataset
+                assert_eq!(permits, service.dataset("unknown", &requester));
+            }
+            assert!(matches!(
+                service.dataset("open", &requester),
+                Outcome::Ok(_)
+            ));
+        }
     }
 }

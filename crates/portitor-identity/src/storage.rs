@@ -14,7 +14,11 @@
 //!   ([`crate::issuance`]), never by itself.
 //!
 //! Both accept calls only from a trusted issuer (`PORTITOR_TRUSTED_ISSUERS`)
-//! with a valid self-issued ID token for this participant.
+//! with a valid self-issued ID token for this participant. An issuer
+//! limited to some credential types (`PORTITOR_TRUSTED_ISSUER_TYPES`,
+//! R-48) may deliver and offer only those: a delivery or an offer with
+//! another type is refused (`400`, with the reason), and nothing of it
+//! is stored.
 //!
 //! A delivery answers one open credential request (status `REQUESTED`) of
 //! the delivering issuer; the answer, `ISSUED` or `REJECTED`, closes it
@@ -44,7 +48,7 @@ use portitor_dcp::message::{
 use portitor_runtime::api_key::{internal_error, problem};
 use portitor_runtime::system::{new_uuid, now_secs};
 
-use crate::caller::{Callers, authenticate, refused};
+use crate::caller::{authenticate_trusted_issuer, refused};
 use crate::issuance::issuer_metadata;
 use crate::store::{Answer, CredentialRequest, Delivered, RequestStatus, StoredCredential};
 use crate::{Identity, LEEWAY};
@@ -55,11 +59,10 @@ pub(crate) async fn credentials(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let (issuer, access_token) =
-        match authenticate(&identity, &headers, Callers::TrustedIssuers).await {
-            Ok(claims) => (claims.sub, claims.token),
-            Err(response) => return response,
-        };
+    let (issuer, access_token) = match authenticate_trusted_issuer(&identity, &headers).await {
+        Ok(claims) => (claims.sub, claims.token),
+        Err(response) => return response,
+    };
     let message: CredentialMessage = match serde_json::from_slice(&body) {
         Ok(message) => message,
         Err(e) => return bad_request(&e.to_string()),
@@ -155,6 +158,7 @@ async fn store_delivery(identity: &Identity, delivery: Delivery<'_>) -> Result<S
                 expires_at: credential.validity.until,
                 holder_pid: request.holder_pid.clone(),
                 jwt: container.payload.clone(),
+                last_status_check: None,
             });
         }
     }
@@ -248,6 +252,10 @@ fn check_credential(
     if credential.issuer != issuer_document.id {
         return Err("the credential is from another issuer".to_owned());
     }
+    // before its signature or status is looked at (R-48)
+    if let Some(reason) = identity.type_refusal(&credential.issuer, &credential.types) {
+        return Err(reason);
+    }
     credential
         .verify(issuer_document, now_secs(), LEEWAY)
         .map_err(|e| e.to_string())?;
@@ -264,7 +272,7 @@ pub(crate) async fn offers(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let issuer = match authenticate(&identity, &headers, Callers::TrustedIssuers).await {
+    let issuer = match authenticate_trusted_issuer(&identity, &headers).await {
         Ok(claims) => claims.sub,
         Err(response) => return response,
     };
@@ -283,6 +291,13 @@ pub(crate) async fn offers(
         Ok(offered) => offered,
         Err(response) => return response,
     };
+    // an issuer limited by type offers only those types (R-48)
+    for credential in &offered {
+        let types: Vec<String> = credential.credential_type.iter().cloned().collect();
+        if let Some(reason) = identity.type_refusal(&issuer, &types) {
+            return bad_request(&reason);
+        }
+    }
     match identity.store.record_offer(&issuer, &offered, now_secs()) {
         Ok(()) => {
             tracing::info!(%issuer, count = offered.len(), "credential offer recorded");

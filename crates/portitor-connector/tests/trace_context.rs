@@ -48,6 +48,7 @@ fn settings(base: &str) -> AuthSettings {
         sts_client_id: "test-only-client".to_owned(),
         sts_client_secret: "test-only-secret".to_owned(),
         trusted_issuers: vec!["did:web:issuer.example".to_owned()],
+        issuer_types: portitor_dcp::trust::IssuerTypes::default(),
         gaiax_compliance_issuers: Vec::new(),
         scopes: Vec::new(),
         allow_http: true,
@@ -83,7 +84,11 @@ async fn the_outbox_sends_no_trace_context() {
         credential_types: portitor_dsp::policy::CredentialTypes::default(),
     };
     // the sender `main` gives the outbox
-    let sender = portitor_connector::dsp_sender(true).unwrap();
+    let sender = portitor_connector::dsp_sender(
+        true,
+        &portitor_runtime::internal_addresses::InternalAddresses::default(),
+    )
+    .unwrap();
     let ports = authenticating(common::ports(Arc::new(sender)), CONSUMER);
     let (_, negotiator) = portitor_connector::build(&config, ports).unwrap();
     let app = router(negotiator, ApiKey::new(KEY).unwrap());
@@ -112,12 +117,14 @@ async fn the_outbox_sends_no_trace_context() {
     );
 }
 
-/// A token whose `iss` is the recorder's DID: the verifier fetches that
-/// DID document before it checks anything else.
+/// A token whose `iss` is the recorder's DID, for the verifier of
+/// [`settings`] (its participant id is that DID too) and valid now: the
+/// verifier fetches that DID document to check its signature.
 fn token_from(did: &str) -> String {
     let key = portitor_dcp::SigningKey::generate().unwrap();
-    let claims = json!({"iss": did, "sub": did, "aud": "did:web:us.example",
-                        "jti": "test-only-jti", "exp": 4_000_000_000_u64, "iat": 1});
+    let now = portitor_runtime::system::now_secs();
+    let claims = json!({"iss": did, "sub": did, "aud": did,
+                        "jti": "test-only-jti", "exp": now + 300, "iat": now});
     key.sign_json(&format!("{did}#key-1"), "JWT", &claims)
         .unwrap()
 }

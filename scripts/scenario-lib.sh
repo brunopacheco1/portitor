@@ -103,11 +103,13 @@ register() { # issuer participant claims-json: the issuer registers the particip
 request_credentials() { # participant issuer-did credential-id...: asks, then waits for the delivery
   local who=$1 issuer=$2
   shift 2
-  local ids holder_pid view status
+  local ids answer holder_pid view status
   ids=$(printf '%s\n' "$@" | jq -R . | jq -sc .)
-  holder_pid=$(identity_api "$who" POST /v1/credential-requests \
-    "$(jq -nc --arg issuer "$issuer" --argjson ids "$ids" '{issuerDid: $issuer, credentialIds: $ids}')" |
-    jq -r '.holderPid') || fail "$who: credential request to $issuer"
+  # the answer is kept, so that a refusal shows the identity's reason
+  answer=$(identity_api "$who" POST /v1/credential-requests \
+    "$(jq -nc --arg issuer "$issuer" --argjson ids "$ids" '{issuerDid: $issuer, credentialIds: $ids}')") ||
+    fail "$who: credential request to $issuer: $answer"
+  holder_pid=$(jq -r '.holderPid' <<<"$answer")
   for _ in $(seq 1 100); do
     view=$(identity_api "$who" GET "/v1/credential-requests/$holder_pid") || fail "$who: read the credential request"
     status=$(jq -r '.status' <<<"$view")

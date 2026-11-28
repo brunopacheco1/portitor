@@ -181,6 +181,17 @@ pub struct CredentialView {
     /// When it expires (`xsd:dateTime`, UTC), or null if it does not.
     #[schema(example = "2027-11-13T12:00:00Z")]
     expiry: Option<String>,
+    /// What the last check of its status lists found (since 1.4, TD-20):
+    /// `VALID`, `REVOKED`, `SUSPENDED` or `UNCHECKABLE` (its lists
+    /// cannot be used, and not for a passing reason); null until a check
+    /// found an answer (`PORTITOR_CREDENTIAL_STATUS_CHECK_SECONDS`). Only
+    /// a `VALID` (or never checked) credential is presented to verifiers.
+    #[schema(example = "VALID")]
+    status: Option<String>,
+    /// When that check read its status lists (`xsd:dateTime`, UTC), or
+    /// null.
+    #[schema(example = "2026-11-27T12:00:00Z")]
+    status_checked_at: Option<String>,
 }
 
 impl From<StoredCredential> for CredentialView {
@@ -193,6 +204,12 @@ impl From<StoredCredential> for CredentialView {
             expiry: credential
                 .expires_at
                 .map(|secs| xsd_date_time(u64::try_from(secs).unwrap_or_default())),
+            status: credential
+                .last_status_check
+                .map(|checked| checked.state.text().to_owned()),
+            status_checked_at: credential
+                .last_status_check
+                .map(|checked| xsd_date_time(checked.checked_at)),
         }
     }
 }

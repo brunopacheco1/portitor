@@ -280,6 +280,17 @@ const SQLITE_MIGRATIONS: &[&str] = &[
     // second (`LeaseStore::forget_ended`)
     "ALTER TABLE harvest_state ADD COLUMN version INTEGER NOT NULL DEFAULT 0;
      CREATE INDEX lease_until ON lease (lease_until)",
+    // 1.4 (policy): a dataset's access policy, as JSON, NULL for none
+    // (`portitor:accessPolicy`; ADR 0019, amendment in 1.4; TD-13). Its
+    // datasets are checked again at start after the upgrade (ADR 0020),
+    // which fills it from their stored entries
+    "ALTER TABLE dataset ADD COLUMN access_policy TEXT",
+    // 1.4: a repeated first contract request is found by its consumer and
+    // consumer pid, as a repeated transfer request is (TD-60, TD-34). A
+    // plain index, not a UNIQUE one: a file from before 1.4 may hold a
+    // second negotiation for a repeated request, and must still open.
+    // `NegotiationStore::insert` keeps new rows unique
+    "CREATE INDEX negotiation_request ON negotiation (counter_party, consumer_pid)",
 ];
 
 /// The PostgreSQL schema (since 1.3), applied in order as the `SQLite`
@@ -458,6 +469,12 @@ const POSTGRES_MIGRATIONS: &[&str] = &[
     // the SQLite migration of the same name
     "ALTER TABLE harvest_state ADD COLUMN version BIGINT NOT NULL DEFAULT 0;
      CREATE INDEX lease_until ON lease (lease_until)",
+    // 1.4 (policy): a dataset's access policy, as the SQLite migration of
+    // the same name
+    "ALTER TABLE dataset ADD COLUMN access_policy TEXT",
+    // 1.4: as the SQLite migration of the same name; not UNIQUE either, as
+    // a 1.3 database may hold repeated requests (TD-60)
+    "CREATE INDEX negotiation_request ON negotiation (counter_party, consumer_pid)",
 ];
 
 /// Adapter: every store of the connector, on its database. Cloning it
@@ -696,26 +713,69 @@ impl NegotiationStore for ConnectorStore {
         self.query_first(&sql, values![provider_pid], negotiation_from_row)
     }
 
-    fn insert(&self, negotiation: &Negotiation) -> Result<(), StoreError> {
+    fn negotiation_requested_by(
+        &self,
+        counter_party: &str,
+        consumer_pid: &str,
+    ) -> Result<Option<Negotiation>, StoreError> {
+        // served by the index `negotiation_request` (1.4, TD-60). A
+        // database from before 1.4 may hold several negotiations for one
+        // repeated request: the first one stored is returned. In SQLite
+        // `rowid` grows with each insert; PostgreSQL has no `rowid`, and
+        // any one of them will do there (none of 1.3 is more right)
+        let first_stored_first = if self.database.is_postgres() {
+            "ORDER BY provider_pid"
+        } else {
+            "ORDER BY rowid"
+        };
         let sql = format!(
+            "SELECT {NEGOTIATION_COLUMNS} FROM negotiation
+             WHERE counter_party = $1 AND consumer_pid = $2
+             {first_stored_first} LIMIT 1"
+        );
+        self.query_first(
+            &sql,
+            values![counter_party, consumer_pid],
+            negotiation_from_row,
+        )
+    }
+
+    fn insert(&self, negotiation: &Negotiation) -> Result<bool, StoreError> {
+        // one transaction, so the check and the write are one step: the
+        // row is added only if this consumer has no negotiation with this
+        // consumer pid yet (TD-60). Two copies of one request that arrive
+        // together, in two processes on one PostgreSQL database, cannot
+        // both be added: the transaction is SERIALIZABLE there, so the
+        // second one collides with the first, runs again, and finds its
+        // row (`Database::transaction`). Not a UNIQUE index: a database
+        // from before 1.4 may already hold repeated requests and must
+        // still open.
+        let insert = format!(
             "INSERT INTO negotiation ({NEGOTIATION_COLUMNS})
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
         );
-        self.execute(
-            &sql,
-            values![
-                &negotiation.provider_pid,
-                &negotiation.consumer_pid,
-                state_text(negotiation.state)?,
-                &negotiation.callback_address,
-                &negotiation.counter_party,
-                json(&negotiation.offer)?,
-                negotiation.agreement.as_ref().map(json).transpose()?,
-                provider_pending(negotiation.pending.as_ref())?,
-                version(negotiation.version)?,
-            ],
-        )?;
-        Ok(())
+        let row = [
+            Value::from(&negotiation.provider_pid),
+            Value::from(&negotiation.consumer_pid),
+            Value::from(state_text(negotiation.state)?),
+            Value::from(&negotiation.callback_address),
+            Value::from(&negotiation.counter_party),
+            Value::from(json(&negotiation.offer)?),
+            Value::from(negotiation.agreement.as_ref().map(json).transpose()?),
+            Value::from(provider_pending(negotiation.pending.as_ref())?),
+            Value::from(version(negotiation.version)?),
+        ];
+        self.transaction(|tx| {
+            let already_requested = tx.query_one(
+                "SELECT 1 FROM negotiation WHERE counter_party = $1 AND consumer_pid = $2",
+                values![&negotiation.counter_party, &negotiation.consumer_pid],
+            )?;
+            if already_requested.is_some() {
+                return Ok(false);
+            }
+            tx.execute(&insert, &row)?;
+            Ok(true)
+        })
     }
 
     fn replace_if(&self, negotiation: &Negotiation, expected: u64) -> Result<bool, StoreError> {
@@ -917,6 +977,10 @@ mod tests {
     const MIGRATIONS_OF_1_0: usize = 11;
     /// How many migrations a file written by 1.1 has.
     const MIGRATIONS_OF_1_1: usize = 13;
+    /// How many migrations a file written by 1.3 has.
+    const MIGRATIONS_OF_1_3: usize = 21;
+    /// How many PostgreSQL migrations a database written by 1.3 has.
+    const POSTGRES_MIGRATIONS_OF_1_3: usize = 5;
 
     /// Brings `conn` up to date, as `open` does.
     fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
@@ -1038,7 +1102,12 @@ mod tests {
         let n = sample("p", NegotiationState::Requested);
         store.insert(&n).unwrap();
         assert_eq!(store.get("p").unwrap().unwrap(), n);
-        assert!(store.insert(&n).is_err(), "duplicate provider pid");
+        // the same request again adds nothing (TD-60); another one with
+        // a provider pid that is taken is refused
+        assert!(!store.insert(&n).unwrap());
+        let mut same_pid = n.clone();
+        same_pid.consumer_pid = "urn:uuid:other".into();
+        assert!(store.insert(&same_pid).is_err(), "duplicate provider pid");
 
         let mut agreed = n.clone();
         agreed.state = NegotiationState::Agreed;
@@ -1360,7 +1429,9 @@ mod tests {
         let written_by_0_11 = on_connection(conn);
         let mut finalized = sample("urn:uuid:p-finalized", NegotiationState::Finalized);
         finalized.agreement = Some(agreement());
-        let requested = sample("urn:uuid:p-requested", NegotiationState::Requested);
+        let mut requested = sample("urn:uuid:p-requested", NegotiationState::Requested);
+        // one consumer pid starts one negotiation (TD-60)
+        requested.consumer_pid = "urn:uuid:c-requested".into();
         NegotiationStore::insert(&written_by_0_11, &finalized).unwrap();
         NegotiationStore::insert(&written_by_0_11, &requested).unwrap();
         let mut held = consumer_sample(NegotiationState::Finalized);
@@ -1455,6 +1526,337 @@ mod tests {
         let mut third = found.clone();
         third.provider_pid = "urn:uuid:third".to_owned();
         assert!(!TransferStore::insert(&store, &third).unwrap());
+    }
+
+    /// A database from before the index `negotiation_request` (1.3, with
+    /// the other 1.4 migrations applied too) may hold two negotiations for
+    /// one repeated first contract request (TD-60). The index migration
+    /// must still apply: it adds the lookup index and keeps both rows; the
+    /// first one answers.
+    #[test]
+    fn a_file_with_a_repeated_first_contract_request_still_opens() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        portitor_runtime::sqlite::migrate(&mut conn, &SQLITE_MIGRATIONS[..MIGRATIONS_OF_1_3])
+            .unwrap();
+        for provider_pid in ["urn:uuid:z-first", "urn:uuid:a-second"] {
+            conn.execute(
+                "INSERT INTO negotiation (provider_pid, consumer_pid, state, callback_address, \
+                 counter_party, offer, agreement, pending, version) \
+                 VALUES (?1, 'urn:uuid:c', 'REQUESTED', 'https://c.example/cb', 'did:web:c', \
+                 ?2, NULL, NULL, 0)",
+                params![
+                    provider_pid,
+                    json(&sample("x", NegotiationState::Requested).offer).unwrap()
+                ],
+            )
+            .unwrap();
+        }
+        let store = setup(conn).unwrap();
+        let index: String = sqlite(&store)
+            .query_row(
+                "SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = 'negotiation_request'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(index, "negotiation");
+        assert!(
+            NegotiationStore::get(&store, "urn:uuid:a-second")
+                .unwrap()
+                .is_some()
+        );
+        let found = store
+            .negotiation_requested_by("did:web:c", "urn:uuid:c")
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.provider_pid, "urn:uuid:z-first");
+        let mut third = found.clone();
+        third.provider_pid = "urn:uuid:third".to_owned();
+        assert!(!NegotiationStore::insert(&store, &third).unwrap());
+    }
+
+    /// A PostgreSQL database written by 1.3 (its first
+    /// [`POSTGRES_MIGRATIONS_OF_1_3`] migrations), with a dataset and two
+    /// negotiations for one repeated first contract request (TD-60),
+    /// opens with 1.4: the new column is NULL, the lookup index is there,
+    /// the first negotiation answers, and no third one is added.
+    #[test]
+    fn a_postgres_database_of_1_3_opens_with_1_4() {
+        use portitor_runtime::testing::databases;
+        let Some(url) = databases::postgres_url() else {
+            return;
+        };
+        let setting = DatabaseSetting::Postgres(Box::new(databases::fresh_postgres_settings(&url)));
+        let of_1_3 = Migrations {
+            component: MIGRATIONS.component,
+            sqlite: &SQLITE_MIGRATIONS[..MIGRATIONS_OF_1_3],
+            postgres: &POSTGRES_MIGRATIONS[..POSTGRES_MIGRATIONS_OF_1_3],
+        };
+        let old = ConnectorStore::new(Arc::new(Database::open(&setting, &of_1_3).unwrap()));
+        let column_of_1_4 = "SELECT column_name FROM information_schema.columns
+             WHERE table_name = 'dataset' AND column_name = 'access_policy'";
+        let read = |row: &Row| col::<String>(row, 0);
+        assert_eq!(
+            old.query_first(column_of_1_4, values![], read).unwrap(),
+            None
+        );
+        let content = serde_json::json!({
+            "@id": "d", "@type": "Dataset",
+            "hasPolicy": [{"@id": "d:offer", "@type": "Offer", "permission": [{"action": "use"}]}],
+            "distribution": [{"@type": "Distribution", "format": "HttpData-PULL"}]
+        })
+        .to_string();
+        old.execute(
+            "INSERT INTO dataset (id, entry, content, upstream, content_sha256, state,
+                 conforms_to, first_seen, last_changed, last_job)
+             VALUES ('d', $1, $1, NULL, 'ab', 'active', NULL, 1, 1, 1)",
+            values![&content],
+        )
+        .unwrap();
+        let offer = json(&sample("x", NegotiationState::Requested).offer).unwrap();
+        for provider_pid in ["urn:uuid:first", "urn:uuid:second"] {
+            old.execute(
+                "INSERT INTO negotiation (provider_pid, consumer_pid, state, callback_address,
+                     counter_party, offer, agreement, pending, version)
+                 VALUES ($1, 'urn:uuid:c', 'REQUESTED', 'https://c.example/cb', 'did:web:c',
+                     $2, NULL, NULL, 0)",
+                values![provider_pid, &offer],
+            )
+            .unwrap();
+        }
+        drop(old);
+
+        let store = ConnectorStore::new(Arc::new(Database::open(&setting, &MIGRATIONS).unwrap()));
+        let version = store
+            .query_first("SELECT version FROM portitor_schema", values![], |row| {
+                col::<i64>(row, 0)
+            })
+            .unwrap();
+        assert_eq!(
+            version,
+            Some(i64::try_from(POSTGRES_MIGRATIONS.len()).unwrap())
+        );
+        assert_eq!(
+            store.query_first(column_of_1_4, values![], read).unwrap(),
+            Some("access_policy".to_owned())
+        );
+        let dataset = crate::harvest::DatasetStore::dataset(&store, "d")
+            .unwrap()
+            .unwrap();
+        assert_eq!(dataset.access_policy, None);
+        let index = store
+            .query_first(
+                "SELECT tablename FROM pg_indexes WHERE indexname = 'negotiation_request'",
+                values![],
+                |row| col::<String>(row, 0),
+            )
+            .unwrap();
+        assert_eq!(index.as_deref(), Some("negotiation"));
+        // both rows kept; the request is answered with one of them
+        assert!(
+            NegotiationStore::get(&store, "urn:uuid:second")
+                .unwrap()
+                .is_some()
+        );
+        let found = store
+            .negotiation_requested_by("did:web:c", "urn:uuid:c")
+            .unwrap()
+            .unwrap();
+        assert!(
+            ["urn:uuid:first", "urn:uuid:second"].contains(&found.provider_pid.as_str()),
+            "{found:?}"
+        );
+        let mut third = found.clone();
+        third.provider_pid = "urn:uuid:third".to_owned();
+        assert!(!NegotiationStore::insert(&store, &third).unwrap());
+        assert_eq!(
+            NegotiationStore::get(&store, "urn:uuid:third").unwrap(),
+            None
+        );
+    }
+
+    /// TD-60: a negotiation is found by its consumer and consumer pid, and
+    /// a second one for the same pair is not added.
+    #[test]
+    fn a_first_contract_request_is_found_and_added_once() {
+        on_every_database(a_first_contract_request_is_found_and_added_once_on);
+    }
+
+    fn a_first_contract_request_is_found_and_added_once_on(store: &ConnectorStore) {
+        let first = sample("urn:uuid:p1", NegotiationState::Requested);
+        let found = |party: &str| store.negotiation_requested_by(party, "urn:uuid:c").unwrap();
+        assert_eq!(found("did:web:c.example"), None);
+        assert!(NegotiationStore::insert(store, &first).unwrap());
+        assert_eq!(found("did:web:c.example"), Some(first.clone()));
+
+        let mut repeat = first.clone();
+        repeat.provider_pid = "urn:uuid:p2".to_owned();
+        assert!(!NegotiationStore::insert(store, &repeat).unwrap());
+        assert_eq!(NegotiationStore::get(store, "urn:uuid:p2").unwrap(), None);
+
+        // another consumer with the same consumer pid has its own
+        let mut other = repeat.clone();
+        other.counter_party = "did:web:other.example".to_owned();
+        assert!(NegotiationStore::insert(store, &other).unwrap());
+        assert_eq!(found("did:web:other.example"), Some(other));
+        assert_eq!(found("did:web:c.example"), Some(first));
+    }
+
+    /// A catalog with dataset `d`, offered with the offer of [`sample`].
+    struct OneDataset;
+
+    impl OneDataset {
+        /// Dataset `d`, if `id` names it.
+        fn dataset(id: &str) -> Option<portitor_dsp::catalog::ListedDataset> {
+            if id != "d" {
+                return None;
+            }
+            let dataset = portitor_dsp::Dataset {
+                context: None,
+                id: "d".to_owned(),
+                kind: portitor_dsp::DatasetType,
+                has_policy: vec![sample("x", NegotiationState::Requested).offer],
+                distribution: vec![],
+                metadata: portitor_dsp::Metadata::default(),
+            };
+            Some(portitor_dsp::catalog::ListedDataset {
+                dataset,
+                access_policy: None,
+            })
+        }
+    }
+
+    impl portitor_dsp::catalog::CatalogDatasets for OneDataset {
+        fn get_for_agreement(&self, id: &str) -> Result<Option<portitor_dsp::Dataset>, StoreError> {
+            Ok(Self::dataset(id).map(|listed| listed.dataset))
+        }
+        fn all_with_access_policies(
+            &self,
+        ) -> Result<Vec<portitor_dsp::catalog::ListedDataset>, StoreError> {
+            Ok(Self::dataset("d").into_iter().collect())
+        }
+        fn get_with_access_policy(
+            &self,
+            id: &str,
+        ) -> Result<Option<portitor_dsp::catalog::ListedDataset>, StoreError> {
+            Ok(Self::dataset(id))
+        }
+        fn access_policies(&self) -> Result<Vec<portitor_dsp::policy::AccessPolicy>, StoreError> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// A provider that never answers on its own, so only the request
+    /// writes.
+    struct Waits;
+
+    impl provider::Decider for Waits {
+        fn decide(&self, _: &Negotiation) -> provider::Decision {
+            provider::Decision::Wait
+        }
+    }
+
+    /// The provider's service on a store, with the test catalog.
+    type Provider = provider::ProviderService<
+        ConnectorStore,
+        Waits,
+        OneDataset,
+        crate::system::SystemEnvironment,
+    >;
+
+    /// `store`'s provider service, as the connector builds it.
+    fn provider_service(store: ConnectorStore) -> Provider {
+        provider::ProviderService::new(
+            store,
+            Waits,
+            OneDataset,
+            crate::system::SystemEnvironment,
+            "did:web:p.example".to_owned(),
+        )
+    }
+
+    /// The first request of consumer pid `cpid`, from `sample`'s consumer.
+    fn first_request(cpid: &str) -> portitor_dsp::negotiation::ContractRequestMessage {
+        serde_json::from_value(serde_json::json!({
+            "@context": ["https://w3id.org/dspace/2025/1/context.jsonld"],
+            "@type": "ContractRequestMessage",
+            "consumerPid": cpid,
+            "offer": sample("x", NegotiationState::Requested).offer,
+            "callbackAddress": "https://c.example/cb",
+        }))
+        .unwrap()
+    }
+
+    /// Two copies of each first request, sent at once by two threads
+    /// to `services` (one process, or two replicas on one database):
+    /// one negotiation each, and both copies get its provider pid
+    /// (TD-60).
+    fn two_copies_at_once_give_one_negotiation(services: [Arc<Provider>; 2]) {
+        use portitor_dsp::policy::CallerCredentials;
+        const ROUNDS: usize = 20;
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let threads: Vec<_> = services
+            .into_iter()
+            .map(|service| {
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let mut answers = Vec::new();
+                    for round in 0..ROUNDS {
+                        let msg = first_request(&format!("urn:uuid:c-{round}"));
+                        barrier.wait();
+                        let (ack, _) = service
+                            .request(
+                                None,
+                                msg,
+                                "did:web:c.example",
+                                &CallerCredentials::default(),
+                            )
+                            .unwrap();
+                        answers.push(ack.provider_pid);
+                    }
+                    answers
+                })
+            })
+            .collect();
+        let answers: Vec<Vec<String>> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+        assert_eq!(
+            answers[0], answers[1],
+            "both copies get the same negotiation"
+        );
+        let distinct: std::collections::BTreeSet<&String> = answers[0].iter().collect();
+        assert_eq!(distinct.len(), ROUNDS);
+    }
+
+    #[test]
+    fn two_first_requests_at_once_in_one_process_give_one_negotiation() {
+        // SQLite: one process per file (ADR 0029)
+        let store = ConnectorStore::in_memory().unwrap();
+        let service = Arc::new(provider_service(store.clone()));
+        two_copies_at_once_give_one_negotiation([Arc::clone(&service), service]);
+        let count = store
+            .query_first("SELECT COUNT(*) FROM negotiation", values![], |row| {
+                col::<i64>(row, 0)
+            })
+            .unwrap();
+        assert_eq!(count, Some(20));
+    }
+
+    #[test]
+    fn two_first_requests_at_once_in_two_replicas_give_one_negotiation() {
+        let Some([one, two]) = two_replicas() else {
+            return;
+        };
+        let services = [
+            Arc::new(provider_service(one.clone())),
+            Arc::new(provider_service(two)),
+        ];
+        two_copies_at_once_give_one_negotiation(services);
+        let count = one
+            .query_first("SELECT COUNT(*) FROM negotiation", values![], |row| {
+                col::<i64>(row, 0)
+            })
+            .unwrap();
+        assert_eq!(count, Some(20));
     }
 
     /// A file written by 1.0 (11 migrations) with a data flow: 1.1 marks

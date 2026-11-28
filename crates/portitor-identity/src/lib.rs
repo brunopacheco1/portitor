@@ -15,6 +15,8 @@
 //!   [`issuance`];
 //! - a management API (API key, as the connector's), [`management`];
 //! - its readiness checks (ADR 0023), [`health`];
+//! - the scheduled check of its credentials' status lists (TD-20),
+//!   [`status_check`];
 //! - the X.509 chain of its key, [`certificate`], and Gaia-X onboarding,
 //!   [`gaiax`] (ADR 0021).
 //!
@@ -25,6 +27,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::routing::{get, post};
+use portitor_dcp::trust::IssuerTypes;
 use portitor_dcp::{Jwk, SigningKey};
 use portitor_runtime::api_key::ApiKey;
 use portitor_runtime::did_document::{key_id, read_retired_keys};
@@ -40,6 +43,7 @@ pub mod health;
 pub mod issuance;
 pub mod management;
 pub mod presentation;
+pub mod status_check;
 pub mod storage;
 pub mod store;
 pub mod sts;
@@ -48,6 +52,8 @@ use certificate::CertificateChain;
 use config::Config;
 use gaiax::{GaiaxCompliance, Onboarding};
 use issuance::IssuerClient;
+use portitor_runtime::status_lists::StatusListSource;
+use status_check::StatusCheck;
 use store::IdentityStore;
 
 /// Allowed clock difference with other parties, in seconds.
@@ -70,11 +76,16 @@ pub struct Identity {
     did_path: String,
     service_path: String,
     trusted_issuers: Vec<String>,
+    /// The types some trusted issuers are limited to
+    /// (`PORTITOR_TRUSTED_ISSUER_TYPES`, R-48).
+    issuer_types: IssuerTypes,
     type_aliases: Vec<String>,
     sts_client_id: String,
     sts_client_secret: ApiKey,
     store: Arc<dyn IdentityStore>,
     directory: Arc<dyn Directory>,
+    /// DID documents the operator chose ([`Ports::operator_directory`]).
+    operator_directory: Arc<dyn Directory>,
     issuers: Arc<dyn IssuerClient>,
     /// Where the participant's public documents are: its `did:web` URL
     /// without `did.json` ([`gaiax::public_base`]).
@@ -86,6 +97,8 @@ pub struct Identity {
     certificate: Option<Arc<CertificateChain>>,
     /// Gaia-X onboarding, if configured (ADR 0021).
     gaiax: Option<Onboarding>,
+    /// The credential status check, unless off (TD-20).
+    status_check: Option<StatusCheck>,
 }
 
 impl std::fmt::Debug for Identity {
@@ -101,13 +114,63 @@ impl std::fmt::Debug for Identity {
 pub struct Ports {
     /// Where credentials, requests and offers are kept.
     pub store: Arc<dyn IdentityStore>,
-    /// Where other parties' DID documents and metadata are read.
+    /// Where other parties' DID documents and metadata are read: with
+    /// the block on internal addresses (R-17).
     pub directory: Arc<dyn Directory>,
+    /// Where DID documents the operator chose are read (the Gaia-X
+    /// compliance service, `PORTITOR_GAIAX_COMPLIANCE_DID`): never with
+    /// the block on internal addresses, as for any URL the operator
+    /// chooses.
+    pub operator_directory: Arc<dyn Directory>,
     /// Where the participant asks issuers for credentials.
     pub issuers: Arc<dyn IssuerClient>,
     /// The Gaia-X compliance service; needed when
     /// `PORTITOR_GAIAX_COMPLIANCE_URL` is set, unused otherwise.
     pub compliance: Option<Arc<dyn GaiaxCompliance>>,
+    /// Where the status lists of held credentials are fetched (TD-20):
+    /// the partner HTTP sender, as for DID documents.
+    pub status_lists: Arc<dyn StatusListSource>,
+}
+
+impl Ports {
+    /// The identity's ports on `store`, as the binary sets them: other
+    /// parties choose their DID documents and the addresses in them, so
+    /// the directory (DID documents, issuers' metadata), the client of
+    /// the issuers and the status lists (the same sender as the DID
+    /// documents, TD-20) apply `internal_addresses` (R-17). `compliance`,
+    /// the operator's choice, is passed as built, and the directory of
+    /// DID documents the operator chose has no block.
+    ///
+    /// # Errors
+    /// An HTTP client cannot be built.
+    pub fn for_partners(
+        store: Arc<dyn IdentityStore>,
+        compliance: Option<Arc<dyn GaiaxCompliance>>,
+        allow_http: bool,
+        did_cache_seconds: u64,
+        internal_addresses: &portitor_runtime::internal_addresses::InternalAddresses,
+    ) -> Result<Self, String> {
+        let directory = Arc::new(portitor_runtime::directory::WebDirectory::for_partners(
+            allow_http,
+            did_cache_seconds,
+            internal_addresses,
+        )?);
+        let issuers = issuance::HttpIssuerClient::for_partners(allow_http, internal_addresses)?;
+        // the Gaia-X compliance service's DID is the operator's choice:
+        // read without the block
+        let operator_directory = Arc::new(portitor_runtime::directory::WebDirectory::new(
+            allow_http,
+            did_cache_seconds,
+        )?);
+        Ok(Self {
+            store,
+            directory: Arc::clone(&directory) as _,
+            operator_directory,
+            issuers: Arc::new(issuers),
+            compliance,
+            status_lists: directory,
+        })
+    }
 }
 
 impl Identity {
@@ -171,6 +234,12 @@ impl Identity {
                 .map_err(|e| format!("PORTITOR_GAIAX_PARTICIPANT_FILE: {e}"))?,
             ),
         };
+        let status_check = StatusCheck::new(
+            config.credential_status_check_seconds,
+            ports.status_lists,
+            // the same store, seen as the lease port
+            Arc::clone(&ports.store) as Arc<dyn portitor_runtime::leases::LeaseStore>,
+        );
         let service_path = config::base_path(&config.credential_service_url)
             .ok_or("PORTITOR_CREDENTIAL_SERVICE_URL is not an http(s) URL")?;
         Ok(Self {
@@ -182,16 +251,19 @@ impl Identity {
             did_path,
             service_path,
             trusted_issuers: config.trusted_issuers.clone(),
+            issuer_types: config.issuer_types.clone(),
             type_aliases: config.scope_type_aliases.clone(),
             sts_client_id: config.sts_client_id.clone(),
             sts_client_secret,
             store: ports.store,
             directory: ports.directory,
+            operator_directory: ports.operator_directory,
             issuers: ports.issuers,
             public_base,
             public_path,
             certificate,
             gaiax,
+            status_check,
         })
     }
 
@@ -259,6 +331,26 @@ impl Identity {
     /// Whether `did` is a trusted issuer (`PORTITOR_TRUSTED_ISSUERS`).
     fn trusts(&self, did: &str) -> bool {
         self.trusted_issuers.iter().any(|trusted| trusted == did)
+    }
+
+    /// Why the trusted issuer `did` may not deliver or offer a credential
+    /// with the types `credential_types`, or `None` if it may: it is
+    /// limited to other types by `PORTITOR_TRUSTED_ISSUER_TYPES` (R-48;
+    /// the rule is Eclipse EDC's, see [`IssuerTypes::allows`]).
+    fn type_refusal(&self, did: &str, credential_types: &[String]) -> Option<String> {
+        if self.issuer_types.allows(did, credential_types) {
+            return None;
+        }
+        let limit = self.issuer_types.limit_of(did).unwrap_or_default();
+        let asked = if credential_types.is_empty() {
+            "a credential without a type".to_owned()
+        } else {
+            credential_types.join(", ")
+        };
+        Some(format!(
+            "the issuer is trusted only for {} (PORTITOR_TRUSTED_ISSUER_TYPES), not for {asked}",
+            limit.join(", ")
+        ))
     }
 
     /// The scope aliases that mean "credentials of this type".

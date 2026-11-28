@@ -6,7 +6,8 @@
 //! (`id_token.rs`), did:web and DID documents (`did.rs`), JWS
 //! verification (`jws.rs`) and keys (`keys.rs`), credentials and
 //! presentations ([`credential`]), the DCP messages ([`message`]),
-//! scopes ([`scope`]), status list checks ([`status_list`]), and what a
+//! scopes ([`scope`]), status list checks ([`status_list`]), the credential
+//! types a trusted issuer may issue ([`trust`]), and what a
 //! holder ([`holder`]) and an issuer ([`issuance`]) sign.
 //!
 //! Only `ES256` and `PS256` are accepted. Any other `alg`, including
@@ -30,6 +31,7 @@ mod keys;
 pub mod message;
 pub mod scope;
 pub mod status_list;
+pub mod trust;
 pub mod x509;
 
 pub use bundle::sha256_hex;
@@ -37,8 +39,8 @@ pub use did::{
     DidDocument, Purpose, Relationship, Service, VerificationMethod, did_web_url, same_did,
 };
 pub use id_token::{
-    Claims, DEFAULT_MAX_TOKEN_IDS, JtiCache, MAX_TOKEN_LIFETIME, UsedTokenIds, unverified_claims,
-    validate_self_issued,
+    Claims, DEFAULT_MAX_TOKEN_IDS, JtiCache, MAX_TOKEN_LIFETIME, UsedTokenIds,
+    check_before_resolving, unverified_claims, validate_self_issued,
 };
 pub use jws::{Alg, Jws};
 pub use keys::{Jwk, Signer, SigningKey};

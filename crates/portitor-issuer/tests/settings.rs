@@ -14,10 +14,11 @@
 #![allow(clippy::unwrap_used, missing_docs)]
 
 use portitor_issuer::config::{Config, REMOVED_SETTINGS};
+use portitor_runtime::internal_addresses::InternalAddresses;
 use portitor_runtime::request_size::RequestLimits;
 use portitor_runtime::testing::settings_rule::{
-    Case, Read, SWITCH_TRUTH_TABLE, check_binary_refuses_to_start, check_removed, check_rule,
-    switch_truth_table,
+    Case, Read, SWITCH_TRUTH_TABLE, check_binary_refuses_to_start, check_binary_refuses_value,
+    check_removed, check_rule, switch_truth_table,
 };
 use portitor_runtime::testing::{Lookup, TempDir, frozen, vars};
 
@@ -45,6 +46,12 @@ const POSTGRES_SETTINGS: [&str; 2] = ["PORTITOR_DATABASE_URL", "PORTITOR_DATABAS
 /// refuses to start without it.
 fn table() -> Vec<Case> {
     vec![
+        Case::optional("PORTITOR_BLOCK_INTERNAL_ADDRESSES", "true", "false"),
+        Case::optional(
+            "PORTITOR_INTERNAL_ADDRESSES_ALLOWED",
+            "provider",
+            "10.1.0.0/16",
+        ),
         Case::optional("PORTITOR_BIND", "0.0.0.0:9000", "0.0.0.0:9003"),
         Case::required(
             "PORTITOR_PARTICIPANT_ID",
@@ -86,9 +93,11 @@ fn table() -> Vec<Case> {
 /// Everything the issuer reads from `var` at start, as one text; or why
 /// it does not start.
 fn read(var: &Lookup) -> Read {
+    // first, as in `main`
+    let internal_addresses = InternalAddresses::from_vars(var)?;
     let config = Config::from_vars(var).map_err(|error| error.to_string())?;
     let limits = RequestLimits::from_vars(var)?;
-    Ok(format!("{config:?}\n{limits:?}"))
+    Ok(format!("{config:?}\n{limits:?}\n{internal_addresses:?}"))
 }
 
 #[test]
@@ -209,5 +218,20 @@ fn the_binary_does_not_start_without_settings_or_with_a_removed_name() {
         check_binary_refuses_to_start(binary, "PORTITOR_PARTICIPANT_ID", REMOVED_SETTINGS);
     if let Err(failures) = checked {
         panic!("{failures}");
+    }
+}
+
+/// R-17: the binary reads the block on internal addresses first thing at
+/// start, and a wrong value stops it.
+#[test]
+fn the_binary_reads_the_block_on_internal_addresses() {
+    let binary = env!("CARGO_BIN_EXE_portitor-issuer");
+    for (name, wrong) in [
+        ("PORTITOR_BLOCK_INTERNAL_ADDRESSES", "yes"),
+        ("PORTITOR_INTERNAL_ADDRESSES_ALLOWED", "10.0.0.0/33"),
+    ] {
+        if let Err(failure) = check_binary_refuses_value(binary, name, wrong) {
+            panic!("{failure}");
+        }
     }
 }

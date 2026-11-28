@@ -61,7 +61,8 @@ release 8 bundle when each connector starts:
   health categories HGPD (human genetic data) and EINS (biobanks). Two
   offers: one for access bodies (`MembershipCredential.role` =
   `health-data-access-body`, until 2027-12-31), one for EU processors
-  (`DataProcessorCredential.processing` = `eu`, until 2027-06-30). Two
+  (`DataProcessorCredential.processing` = `eu`, until 2027-06-30, for
+  the purpose `eu-ehds:HealthcareScientificResearch`, 1.4). Two
   distributions: `HttpData-PULL`, which the HDAB uses, and
   `HttpData-PUSH`, which the lab uses.
 - The HDAB's **carriers of each variant per population**
@@ -91,6 +92,10 @@ In:
 
 - Two offers of one dataset, each checking another credential, and two
   agreements on it: the lab's and the HDAB's.
+- A purpose as a term of the agreement (1.4,
+  [ADR 0009](../../docs/adr/0009-minimal-odrl-policies.md), amendment in
+  1.4): the lab's agreement carries Lux Biobank's purpose, and a request
+  with another purpose is refused.
 - A push transfer (1.1, [ADR 0027](../../docs/adr/0027-push-transfers-and-object-storage.md)):
   Lux Biobank sends the genotypes to the lab connector's receiving
   route, which stores them in the lab's own RustFS bucket. The storage
@@ -98,8 +103,8 @@ In:
 - A chained transfer: the HDAB's data source is a pipeline that pulls
   from Lux Biobank under the HDAB's own agreement, during Schuman's
   fetch, and keeps nothing.
-- Refusals: the wrong role, a missing credential, an offer whose end has
-  passed, a revoked member.
+- Refusals: the wrong role, a missing credential, another purpose, an
+  offer whose end has passed, a revoked member.
 
 Out, on purpose:
 
@@ -131,8 +136,10 @@ Out, on purpose:
 
 ## Run it
 
-**It needs 1.1 images.** Step 1 is a push transfer, and step 6 needs
-the TD-47 fix; both are new in 1.1. `compose.yaml` names the 1.2.0
+**It needs 1.4 images.** Lux Biobank's offer for EU processors names
+a purpose, which a connector before 1.4 does not understand: it rejects
+the dataset at harvest. Step 1 is also a push transfer, and step 6 needs
+the TD-47 fix; both are new in 1.1. `compose.yaml` names the 1.4.0
 release images by default, and `run.sh` stops at once with a 1.0
 connector image. To try images built from source ([docs/TESTING.md, "Building the images locally"](../../docs/TESTING.md#building-the-images-locally);
 with Podman, `podman build --format docker`):
@@ -177,7 +184,14 @@ prints what it checks and stops at the first failure.
 
 1. **Lux Biomedicine Lab, peer to peer, by push.** The lab reads Lux
    Biobank's catalog and takes the offer for EU processors. Lux Biobank
-   checks its `DataProcessorCredential`. `steps.sh` creates the lab's
+   checks its `DataProcessorCredential`. The offer names a purpose,
+   `https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch`
+   (from the Data Privacy Vocabulary's EHDS extension, a draft), and the
+   agreement carries it. Since 1.4 the lab then asks with another
+   purpose, `eu-ehds:ImproveHealthcareEducation`: the terms differ from
+   the catalog's, so Lux Biobank terminates the negotiation. Nothing
+   checks that the lab really has the purpose: proof would be a
+   credential, such as a data permit. `steps.sh` creates the lab's
    bucket `lab-genotypes`, and the lab asks for a push transfer
    (`POST /v1/transfers` with `format` `HttpData-PUSH`). The lab's
    connector gives Lux Biobank its receiving route
@@ -241,7 +255,7 @@ questions. Here is what rc.1 shows.
 | Can the same data be reached through several channels? | Yes. One dataset at Lux Biobank with two offers gives two agreements: the lab's (step 1) and the HDAB's (step 2). Schuman reaches the same data only as counts, through the HDAB (step 4). |
 | Does the HDAB negotiate with Lux Biobank for every new query? | No. One agreement covers every pull. Each pull is a new transfer, and Lux Biobank checks the HDAB's credentials again at each one (steps 4 and 6). rc.1 sends no parameters with a fetch, so a different query needs its own dataset and offer at the HDAB. |
 | Does the HDAB negotiate with Lux Biobank for every new data user? | No. Each data user agrees with the HDAB only (steps 4 and 5). Nothing ties those agreements to the HDAB's agreement with Lux Biobank ([R-39](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#r-39)). |
-| Can the HDAB's policy be less strict, and what can never be wider? | The policies differ: Lux Biobank asks for an access body, the HDAB for any data user. The HDAB's end date (2027-12-31) is no later than its own agreement's, but only because it was written so by hand. Nothing checks it. Purpose cannot be stated until 1.4. Which users may take the counts cannot be limited either (step 5). |
+| Can the HDAB's policy be less strict, and what can never be wider? | The policies differ: Lux Biobank asks for an access body, the HDAB for any data user. The HDAB's end date (2027-12-31) is no later than its own agreement's, but only because it was written so by hand. Nothing checks it. Since 1.4 an offer states a purpose, and a request with another one is refused (step 1); nothing yet checks that the HDAB's purposes stay within its own agreement's. Which users may take the counts cannot be limited either (step 5). |
 
 ## Findings
 
@@ -272,7 +286,15 @@ questions. Here is what rc.1 shows.
   `TERMINATED` (step 6).
 - **The catalog shows every offer to every member**
   ([TD-13](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-13)): Schuman
-  sees offers it cannot meet.
+  sees offers it cannot meet. From 1.4 a dataset may have an access
+  policy that hides it; this scenario does not use one yet, as the same
+  dataset is offered to access bodies and to EU processors.
+- **A purpose is a term, not a proof** (1.4): Lux Biobank refuses a
+  request with another purpose (step 1), but a data user may state the
+  offer's purpose without having it. Proof needs a credential constraint
+  (a data permit). The DPV EHDS purposes are a draft, not mapped to
+  Article 53 of the EHDS
+  ([R-40](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#r-40)).
 
 Findings from running it go into issues. A finding that needs an API or
 configuration change blocks 1.0.0.

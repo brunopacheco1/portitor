@@ -49,18 +49,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use portitor_dsp::catalog::{CatalogService, Outcome, read_catalog_request};
+use portitor_dsp::catalog::{CatalogService, Outcome, Requester, read_catalog_request};
 use portitor_dsp::negotiation::provider::Failure;
 use portitor_dsp::policy::CredentialTypes;
 use portitor_dsp::transfer::consumer::{ConsumerTransfer, ConsumerTransferDecision};
 use portitor_dsp::transfer::provider::Failure as TransferFailure;
 use portitor_dsp::{Binding, CatalogError, ProtocolVersion, VERSION, VersionResponse};
 use portitor_runtime::database::{self, DatabaseSetting};
+use portitor_runtime::internal_addresses::InternalAddresses;
 use portitor_runtime::request_size::small_message;
 use portitor_runtime::settings::{self, RemovedSetting};
 use serde::Serialize;
@@ -105,10 +106,50 @@ pub use ports::Ports;
 /// its measures do not name the hosts (ADR 0023, section 4;
 /// `tests/trace_context.rs`). Plain `http://` only with `allow_http`.
 ///
+/// For the provider's messages to consumers ([`Ports::sender`]), whose
+/// callback addresses the consumers chose, pass the settings' block on
+/// internal addresses (R-17); for the consumer's messages to providers
+/// ([`Ports::sender_to_providers`]), whose address our operator gave, pass
+/// [`InternalAddresses::default`] (off).
+///
 /// # Errors
 /// The HTTP client cannot be built.
-pub fn dsp_sender(allow_http: bool) -> Result<HttpSender, String> {
-    HttpSender::new(allow_http)
+pub fn dsp_sender(
+    allow_http: bool,
+    internal_addresses: &InternalAddresses,
+) -> Result<HttpSender, String> {
+    HttpSender::for_partners(allow_http, internal_addresses)
+}
+
+/// The connector's ports on `store`, with the binary's two DSP senders
+/// and its rule for internal addresses (R-17):
+///
+/// - [`Ports::sender`], to consumers at the callback addresses they
+///   chose: with `internal_addresses`;
+/// - [`Ports::sender_to_providers`], to providers at the address our
+///   operator gave in the management API: without (the block is off);
+/// - [`Ports::internal_addresses`], for the clients the connector builds
+///   itself (the data plane's push to a consumer's endpoint). The data
+///   plane's reads of our own data sources do not use it.
+///
+/// With the `tck` feature, the sender to consumers waits for the start
+/// ([`tck::LateStart`]).
+///
+/// # Errors
+/// An HTTP client cannot be built.
+pub fn ports_for_partners(
+    store: &std::sync::Arc<store::ConnectorStore>,
+    allow_http: bool,
+    internal_addresses: &InternalAddresses,
+) -> Result<Ports, String> {
+    let to_consumers = dsp_sender(allow_http, internal_addresses)?;
+    #[cfg(feature = "tck")]
+    let to_consumers = tck::LateStart(to_consumers);
+    let mut ports = Ports::new(std::sync::Arc::new(to_consumers), store);
+    let to_providers = dsp_sender(allow_http, &InternalAddresses::default())?;
+    ports.sender_to_providers = std::sync::Arc::new(to_providers);
+    ports.internal_addresses = internal_addresses.clone();
+    Ok(ports)
 }
 
 /// Path prefix of the DSP 2025-1 endpoints.
@@ -390,6 +431,11 @@ impl Config {
 struct AppState {
     catalog: CatalogService<harvest::StoredCatalog>,
     versions: VersionResponse,
+    /// Reads the caller's credentials for the datasets' access policies
+    /// (ADR 0019, amendment in 1.4).
+    verifier: Arc<dyn auth::CallerVerifier>,
+    /// The credential types policies may use.
+    credential_types: portitor_dsp::policy::CredentialTypes,
 }
 
 /// Starts and follows contract negotiations and transfers as consumer (the
@@ -640,7 +686,8 @@ impl Negotiator {
 
     /// Reads the dataset `dataset_id` from the provider `provider_id` at
     /// its DSP endpoint `provider_address`, as [`Negotiator::read_catalog`]
-    /// reads the catalog.
+    /// reads the catalog: with a token of ours that also grants
+    /// `additional_scopes`.
     ///
     /// # Errors
     ///
@@ -650,10 +697,11 @@ impl Negotiator {
         provider_address: &str,
         provider_id: &str,
         dataset_id: &str,
+        additional_scopes: &[String],
     ) -> Result<catalog_reader::ProviderAnswer, catalog_reader::ReadFailure> {
         let reader = &self.catalog_reader;
         reader
-            .dataset(provider_address, provider_id, dataset_id)
+            .dataset(provider_address, provider_id, dataset_id, additional_scopes)
             .await
     }
 
@@ -708,28 +756,21 @@ impl Negotiator {
     #[must_use]
     pub fn schedule_outbox(&self, every: Duration) -> tokio::task::JoinHandle<()> {
         let outboxes = self.outboxes();
-        // supervised, as every task that runs as long as the process: the
-        // closure makes the task anew after a panic
-        let rounds = move || {
+        // one round; `spawn_every` runs it on the timer, supervised
+        let round = move || {
             let outboxes = outboxes.clone();
             async move {
-                let first = tokio::time::Instant::now() + every;
-                let mut ticks = tokio::time::interval_at(first, every);
-                ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                loop {
-                    ticks.tick().await;
-                    match outboxes.take_up() {
-                        Ok(0) => {}
-                        Ok(count) => tracing::info!(count, "pending messages taken up"),
-                        Err(failure) => {
-                            tracing::error!(?failure, "cannot read pending messages");
-                        }
+                match outboxes.take_up() {
+                    Ok(0) => {}
+                    Ok(count) => tracing::info!(count, "pending messages taken up"),
+                    Err(failure) => {
+                        tracing::error!(?failure, "cannot read pending messages");
                     }
-                    outboxes.leases.forget_old();
                 }
+                outboxes.leases.forget_old();
             }
         };
-        portitor_runtime::panics::spawn_supervised("outbox_loop", rounds)
+        portitor_runtime::panics::spawn_every("outbox_loop", every, round)
     }
 
     /// The four senders of DSP messages, for the loop.
@@ -891,7 +932,12 @@ pub fn build(config: &Config, ports: Ports) -> Result<(Router, Negotiator), Star
         receiving,
         leases,
     };
-    let state = Arc::new(AppState { catalog, versions });
+    let state = Arc::new(AppState {
+        catalog,
+        versions,
+        verifier: Arc::clone(&verifier),
+        credential_types: config.credential_types.clone(),
+    });
     // open: discovery (DSP 2025-1), health, and the data plane, which
     // checks its own tokens (ADR 0013)
     let open = Router::new()
@@ -1060,8 +1106,8 @@ fn transfer_routes(provider: Arc<transfer::TransferProvider>) -> Router {
         .with_state(provider)
 }
 
-async fn version(State(s): State<Arc<AppState>>) -> Json<VersionResponse> {
-    Json(s.versions.clone())
+async fn version(State(app): State<Arc<AppState>>) -> Json<VersionResponse> {
+    Json(app.versions.clone())
 }
 
 fn respond<T: Serialize>(outcome: Outcome<T>) -> Response {
@@ -1078,9 +1124,11 @@ fn respond<T: Serialize>(outcome: Outcome<T>) -> Response {
 }
 
 /// `POST /catalog/request`. Any authenticated caller may read the
-/// catalog; credential rules per dataset come in 0.6.
+/// catalog; a dataset with an access policy is shown only to the callers
+/// it holds for (ADR 0019, amendment in 1.4).
 async fn catalog_request(
-    State(s): State<Arc<AppState>>,
+    State(app): State<Arc<AppState>>,
+    Extension(caller): Extension<auth::Caller>,
     body: Result<Json<serde_json::Value>, JsonRejection>,
 ) -> Response {
     let refused = |reason: &str| {
@@ -1089,15 +1137,87 @@ async fn catalog_request(
         );
         respond::<()>(Outcome::BadRequest(CatalogError::new("400", reason)))
     };
-    match body {
+    let msg = match body {
         Ok(Json(value)) => match read_catalog_request(value) {
-            Ok(msg) => respond(s.catalog.request(&msg)),
-            Err(reason) => refused(&reason),
+            Ok(msg) => msg,
+            Err(reason) => return refused(&reason),
         },
-        Err(e) => refused(&e.body_text()),
-    }
+        Err(e) => return refused(&e.body_text()),
+    };
+    // the scopes of every access policy, asked for once per request
+    let scopes = match app.catalog.access_scopes(&app.credential_types) {
+        Ok(scopes) => scopes,
+        Err(e) => return respond::<()>(Outcome::StoreFailed(e)),
+    };
+    let credentials = match caller_credentials(&app, &caller, &scopes).await {
+        Ok(credentials) => credentials,
+        Err(answer) => return answer,
+    };
+    let now = system::xsd_date_time(system::now_secs());
+    let requester = Requester {
+        now: &now,
+        credentials: &credentials,
+    };
+    respond(app.catalog.request(&msg, &requester))
 }
 
-async fn dataset(State(s): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
-    respond(s.catalog.dataset(&id))
+/// `GET /catalog/datasets/{id}`: a dataset whose access policy does not
+/// hold for the caller gets the same answer as an unknown one.
+async fn dataset(
+    State(app): State<Arc<AppState>>,
+    Extension(caller): Extension<auth::Caller>,
+    Path(id): Path<String>,
+) -> Response {
+    let scopes = match app
+        .catalog
+        .dataset_access_scopes(&id, &app.credential_types)
+    {
+        Ok(scopes) => scopes,
+        Err(e) => return respond::<()>(Outcome::StoreFailed(e)),
+    };
+    let credentials = match caller_credentials(&app, &caller, &scopes).await {
+        Ok(credentials) => credentials,
+        Err(answer) => return answer,
+    };
+    let now = system::xsd_date_time(system::now_secs());
+    let requester = Requester {
+        now: &now,
+        credentials: &credentials,
+    };
+    respond(app.catalog.dataset(&id, &requester))
+}
+
+/// The caller's credentials for `scopes`: those of the access policies.
+/// Without scopes, none are asked for (the credentials checked on the
+/// HTTP edge are used); when the query is refused, those are used too
+/// ([`auth::credentials_or_unavailable`]).
+///
+/// # Errors
+///
+/// The answer when the query could not be made now (the caller's
+/// credential service did not answer, or answered 408, 429 or 5xx): HTTP
+/// 503 with a `CatalogError`, as DSP 2025-1, "Catalog HTTPS Binding",
+/// "Catalog Error" asks ("an appropriate HTTP code and a Catalog Error in
+/// the response body"). A partner may try again later, and no dataset is
+/// hidden because a service was down. No reason: it would tell the caller
+/// which service failed (as `auth::require_caller`'s 503).
+async fn caller_credentials(
+    app: &AppState,
+    caller: &auth::Caller,
+    scopes: &[String],
+) -> Result<portitor_dsp::policy::CallerCredentials, Response> {
+    let read =
+        auth::credentials_or_unavailable(&*app.verifier, &app.credential_types, caller, scopes)
+            .await;
+    match read {
+        Ok(credentials) => Ok(credentials),
+        Err(reason) => {
+            tracing::warn!(caller = %caller.id, %reason, "catalog: the caller's credentials could not be read now; answered 503");
+            let error = CatalogError::new(
+                "503",
+                "the caller's credentials cannot be read now; try again later",
+            );
+            Err((StatusCode::SERVICE_UNAVAILABLE, Json(error)).into_response())
+        }
+    }
 }

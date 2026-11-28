@@ -36,7 +36,9 @@ Read the first lines of each `lib.rs`: they say what the crate does.
    test `state_machine_matches_the_specification` next to the figure in
    the DSP specification.
 3. `portitor-dsp/src/policy.rs`. What Portitor understands of ODRL:
-   `validate`, `permissions_hold`, `same_terms`.
+   `validate`, `permissions_hold`, `same_terms`, and for a consumer
+   `consumer_may_accept`. A dataset's access policy is in
+   `policy/access.rs`.
 4. `portitor-dps/src/port.rs` and `portitor-dps/src/state.rs`. The two
    ports between control plane and data plane (`DataPlane`,
    `ControlPlane`) and the data flow states. Small.
@@ -45,12 +47,18 @@ Read the first lines of each `lib.rs`: they say what the crate does.
    and a credential are checked. Leave the rest of `portitor-dcp` and
    all of `portitor-shacl` for when you need them.
 6. `portitor-runtime/src/lib.rs`. The list of adapters the three
-   binaries share. Read `sqlite.rs` (how a database file is opened and
-   migrated) and skim `serve.rs` and `panics.rs`.
+   binaries share. Read `database.rs` (`Database::open`: how the
+   database, PostgreSQL or SQLite, is opened and migrated), then
+   `internal_addresses.rs` and `http/connect.rs` (the block on internal
+   addresses for URLs a partner chose, R-17), and skim `serve.rs` and
+   `panics.rs`.
 7. `portitor-connector/src/lib.rs`. The connector: its settings
    (`Config`), and `build`, which wires ports to adapters and lists
    every route. `portitor-identity` and `portitor-issuer` have the same
-   shape: `main.rs`, `config.rs`, `lib.rs` with the routes, `store.rs`.
+   shape: `main.rs`, `config.rs`, `lib.rs` with the routes, `store.rs`
+   (its `DatabaseStore` is `ComponentStore` of
+   `portitor-runtime/src/component_store.rs`, with the component's own
+   store port on it).
 
 ## Part 2: one request, end to end
 
@@ -74,20 +82,25 @@ does three things and holds no protocol rule:
 - `provider.read(...)` runs the message past the `MessageGuard` port
   and turns the JSON into a `ContractRequestMessage`
   (`inbound::read_message`). Bad JSON stops here with HTTP 400.
-- `provider.credentials(...)` asks for the caller's credentials if the
-  offer needs some.
+- `provider.request_credentials(...)` asks for the caller's
+  credentials that the offer and its dataset's access policy need, in
+  one query.
 - `provider.service.request(...)` calls the domain.
 
 **4. Domain service.** `ProviderService::request` in
 `portitor-dsp/src/negotiation/provider.rs`. For a new negotiation it
 calls `start`, which:
 
-- checks that the offer is the one in the catalog (`check_offer`);
+- answers a repeat of a first request (same caller, same `consumerPid`)
+  with the negotiation it already started (`negotiation_requested_by`, TD-60);
+- checks that the offer is the one in the catalog, and that its
+  dataset's access policy, if any, holds for the caller (`check_offer`);
 - asks the state machine for the next state (`next_state`, from Part 1);
 - builds a `Negotiation` value with a new `provider_pid`;
 - decides what the provider sends next (`next`, through the `Decider`
   port) and stores that message in the field `pending`;
-- saves it: `self.store.insert(...)`.
+- saves it: `self.store.insert(...)`, which adds nothing when a copy
+  of the same request was saved meanwhile.
 
 `ProviderService<S, D, C, E>` has four type parameters. They are its
 four ports: `S` the store, `D` the decider, `C` the catalog, `E` the
@@ -166,7 +179,8 @@ builds.
 A change to one service's own rules (a check, a message) may still be
 needed in its siblings: check the other three.
 
-The connector keeps every store in SQLite (`store.rs`). Unit tests that
+The connector keeps every store in its database, PostgreSQL or SQLite
+(`store.rs`, `portitor-runtime/src/database.rs`). Unit tests that
 need a store in memory find the few that are left in
 `portitor-connector/src/test_stores.rs`, which is compiled only for
 tests; the integration tests use an in-memory SQLite database.
@@ -216,9 +230,14 @@ From there the steps are the same: state machine, store, outbox.
 - `portitor-dataplane/src/audit.rs`: the audit line of each pull, push
   sent and push received.
 - The DCP check of step 2 in full:
-  `portitor-connector/src/auth/dcp.rs`.
+  `portitor-connector/src/auth/dcp.rs`. Status lists are read and
+  cached in `portitor-runtime/src/status_lists.rs` (moved from the
+  connector in 1.4), which the identity's credential status check
+  (`portitor-identity/src/status_check.rs`, TD-20) uses too.
 - Datasets and the bundle: `portitor-connector/src/harvest.rs` and
-  `bundle_harvest.rs`.
+  `bundle_harvest.rs`. A dataset's access policy is read in
+  `harvest/check.rs` and applied in `portitor-dsp/src/catalog.rs`
+  (`Requester::may_see`).
 - Files above 1,000 lines and the macros that write types are known
   debts ([R-01](RISKS_AND_TECHNICAL_DEBTS.md#r-01)); read them last.
 

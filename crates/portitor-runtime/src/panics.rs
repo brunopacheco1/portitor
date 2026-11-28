@@ -15,6 +15,8 @@
 //!   and started again after a pause: [`RESTART_PAUSE`] the first time,
 //!   twice as long after each further panic in a row, at most
 //!   [`MAX_RESTART_PAUSE`] ([`next_pause`]);
+//!   [`spawn_every`] starts such a task that runs one round every few
+//!   seconds or minutes;
 //! - a background task that does one piece of work ([`report_panic`];
 //!   [`report_sync_panic`] for work that is not async): logged and
 //!   counted; the work is left as it was saved;
@@ -195,6 +197,50 @@ where
             pause = Some(wait);
         }
     })
+}
+
+/// Starts a background task that runs `round` every `every`, for as
+/// long as the process, under [`spawn_supervised`] (so a panic in a
+/// round starts the schedule again after the restart pause). The first
+/// round is `every` after now, not at once: the callers run their first
+/// round at start themselves, or do not need one. A tick missed while a
+/// round was still going on is skipped, not made up, so rounds never
+/// pile up behind a slow one (`MissedTickBehavior::Skip`). `name` is a
+/// fixed text for the log and the `portitor.task.name` attribute.
+///
+/// `round` makes the work of one round; it is called once per tick.
+/// `every` must not be zero (Tokio's timer refuses it): a caller with a
+/// setting of 0 for "off" does not start the schedule at all.
+///
+/// Aborting the returned handle stops the schedule for good.
+pub fn spawn_every<R, F>(
+    name: &'static str,
+    every: Duration,
+    round: R,
+) -> tokio::task::JoinHandle<()>
+where
+    // `round` is shared by the restarts of the schedule (an `Arc`), so
+    // it must be safe to share between threads
+    R: Fn() -> F + Send + Sync + 'static,
+    F: Future<Output = ()> + Send + 'static,
+{
+    let round = std::sync::Arc::new(round);
+    // the closure makes the schedule anew after a panic (see
+    // `spawn_supervised`), with a new timer and its own pointer to `round`
+    let schedule = move || {
+        let round = std::sync::Arc::clone(&round);
+        async move {
+            let first = tokio::time::Instant::now() + every;
+            let mut ticks = tokio::time::interval_at(first, every);
+            // a tick missed while a round was going on is skipped, not made up
+            ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticks.tick().await;
+                round().await;
+            }
+        }
+    };
+    spawn_supervised(name, schedule)
 }
 
 /// `work`, a background task that does one piece of work (deciding one
@@ -490,6 +536,80 @@ mod tests {
         assert!(rounds.load(Ordering::SeqCst) >= 10, "the other task ran on");
         working.abort();
         panicking.abort();
+    }
+
+    /// A paused clock: the first round comes one period after the
+    /// start, then one per period.
+    #[tokio::test(start_paused = true)]
+    async fn spawn_every_runs_the_first_round_one_period_after_the_start() {
+        let every = Duration::from_secs(10);
+        let begun = tokio::time::Instant::now();
+        let rounds_at = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&rounds_at);
+        let task = spawn_every("test", every, move || {
+            recorded
+                .lock()
+                .unwrap()
+                .push(tokio::time::Instant::now() - begun);
+            async {}
+        });
+        tokio::time::sleep(Duration::from_secs(35)).await;
+        task.abort();
+        let rounds = rounds_at.lock().unwrap().clone();
+        assert_eq!(rounds, [every, every * 2, every * 3]);
+    }
+
+    /// A round that takes longer than the period: the ticks missed
+    /// meanwhile are skipped, not made up in a burst.
+    #[tokio::test(start_paused = true)]
+    async fn spawn_every_skips_the_ticks_missed_during_a_slow_round() {
+        let every = Duration::from_secs(10);
+        let begun = tokio::time::Instant::now();
+        let rounds_at = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&rounds_at);
+        let task = spawn_every("test", every, move || {
+            let nth = {
+                let mut rounds = recorded.lock().unwrap();
+                rounds.push(tokio::time::Instant::now() - begun);
+                rounds.len()
+            };
+            async move {
+                if nth == 1 {
+                    // the first round lasts 25 s: the ticks at 20 s and
+                    // 30 s pass while it runs
+                    tokio::time::sleep(Duration::from_secs(25)).await;
+                }
+            }
+        });
+        tokio::time::sleep(Duration::from_secs(50)).await;
+        task.abort();
+        let rounds = rounds_at.lock().unwrap().clone();
+        // Skip: the round that was due runs at once (35 s), then the
+        // rounds are back on the 10 s grid of the start (40 s); not
+        // three rounds in a row at 35 s
+        assert_eq!(
+            rounds,
+            [every, Duration::from_secs(35), Duration::from_secs(40)]
+        );
+    }
+
+    /// A round that panics: the schedule starts again after the restart
+    /// pause, with its first round one period after that.
+    #[tokio::test(start_paused = true)]
+    async fn spawn_every_starts_again_after_a_round_panics() {
+        let every = Duration::from_secs(10);
+        let rounds = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&rounds);
+        let task = spawn_every("test", every, move || {
+            let nth = counted.fetch_add(1, Ordering::SeqCst) + 1;
+            async move {
+                assert!(nth != 1, "the first round panics");
+            }
+        });
+        // round 1 at 10 s panics; restart at 15 s; round 2 at 25 s
+        tokio::time::sleep(Duration::from_secs(26)).await;
+        assert_eq!(rounds.load(Ordering::SeqCst), 2);
+        task.abort();
     }
 
     #[tokio::test]

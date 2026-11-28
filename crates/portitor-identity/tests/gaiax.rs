@@ -274,7 +274,8 @@ async fn setup_through(
         Some(port_around(adapter)),
     )
     .unwrap();
-    world.directory.add(&service.party);
+    // the operator chose the service's DID: not a partner's
+    world.operator_directory.add(&service.party);
     *service.holder.lock().unwrap() = Some(did_document(&world).await);
     Setup {
         world,
@@ -351,6 +352,10 @@ async fn onboarding_stores_and_serves_the_credentials() {
         *setup.service.asked.lock().unwrap(),
         [format!("{BASE}/compliance")]
     );
+    // the service's DID, which the operator chose, is read without the
+    // block on internal addresses: not through the partners' directory
+    assert!(world.operator_directory.looked_up(COMPLIANCE));
+    assert!(!world.directory.looked_up(COMPLIANCE));
     assert_eq!(
         held_gaiax(world),
         [
@@ -482,7 +487,7 @@ async fn an_answer_signed_with_another_dids_key_is_refused_and_nothing_is_stored
         .assertion_method
         .extend(other.document.assertion_method.clone());
     world
-        .directory
+        .operator_directory
         .documents
         .lock()
         .unwrap()

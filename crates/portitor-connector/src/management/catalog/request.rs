@@ -94,8 +94,11 @@ pub struct CatalogRequest {
 /// and `DatasetRequestValidator.java`). `@id` (the dataset's id),
 /// `counterPartyAddress` and `counterPartyId` are required, and exactly
 /// one of `protocol` and `profile`; all are read as in
-/// [`CatalogRequest`]. EDC's `DatasetRequest` has no `querySpec` and no
-/// `additionalScopes`, so neither is taken here.
+/// [`CatalogRequest`]. EDC's `DatasetRequest` has no `querySpec`, so
+/// none is taken here. It has no `additionalScopes` either; Portitor
+/// takes it anyway, optional and read as in [`CatalogRequest`], so that
+/// a dataset a provider shows only to holders of a credential can be read
+/// (ADR 0019, amendment in 1.4). A body written for EDC works unchanged.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DatasetRequest {
@@ -127,6 +130,13 @@ pub struct DatasetRequest {
     pub(super) protocol: Option<String>,
     /// Eclipse EDC's newer name for `protocol`; the same value.
     pub(super) profile: Option<String>,
+    /// Scopes the provider may read from our Credential Service with our
+    /// token, on top of the configured ones (`PORTITOR_DCP_SCOPES`): for a
+    /// dataset a provider shows only to holders of a credential. Not in
+    /// Eclipse EDC's `DatasetRequest`.
+    #[serde(default)]
+    #[schema(example = json!(["org.eclipse.dspace.dcp.vc.type:DataProcessorCredential:read"]))]
+    pub(super) additional_scopes: Vec<String>,
 }
 
 /// Checks the members that say what kind of request this is: `@type`,

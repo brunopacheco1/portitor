@@ -80,9 +80,20 @@ pub(crate) struct Link {
 }
 
 impl Link {
-    pub(crate) fn new(ports: &Ports) -> Self {
+    /// The link of the provider's processes: messages go to the callback
+    /// address each consumer chose (`ports.sender`).
+    pub(crate) fn to_consumers(ports: &Ports) -> Self {
         Self {
             sender: Arc::clone(&ports.sender),
+            ..Self::to_providers(ports)
+        }
+    }
+
+    /// The link of the consumer's processes: messages go to the provider
+    /// address our operator gave (`ports.sender_to_providers`, R-17).
+    pub(crate) fn to_providers(ports: &Ports) -> Self {
+        Self {
+            sender: Arc::clone(&ports.sender_to_providers),
             prover: Arc::clone(&ports.prover),
             guard: Arc::clone(&ports.guard),
             retry: ports.retry,
@@ -175,7 +186,8 @@ pub(crate) trait Outbox: Send + Sync + 'static {
     fn message(out: &Self::Out) -> Message<'_>;
 
     /// Whether `state`, the counter-party's answer at the status URL, shows
-    /// the state that `out` leads to.
+    /// the state that `out` leads to, for the process `out` belongs to
+    /// ([`same_process`]).
     fn reached(out: &Self::Out, state: Value) -> bool;
 
     /// `out` arrived (`answer`: the acknowledgement, if there was one).
@@ -641,6 +653,20 @@ enum SendFailure {
     Failed(String),
 }
 
+/// Whether the counter-party's answer to a state query, which names
+/// `provider_pid` and `consumer_pid`, is about the process our message
+/// `sent` belongs to: the message's `providerPid` and `consumerPid` are
+/// the same (DSP 2025-1: every message after the first names both). Each
+/// [`Outbox::reached`] checks this with the state, so an answer about
+/// another process (for example a second negotiation that a repeated
+/// first request started before 1.4) never counts as proof that our
+/// message arrived (TD-61).
+pub(crate) fn same_process(sent: &Value, provider_pid: &str, consumer_pid: &str) -> bool {
+    let sent_provider_pid = sent.get("providerPid").and_then(Value::as_str);
+    let sent_consumer_pid = sent.get("consumerPid").and_then(Value::as_str);
+    sent_provider_pid == Some(provider_pid) && sent_consumer_pid == Some(consumer_pid)
+}
+
 /// Whether the counter-party `audience`'s state at `status_url` passes
 /// `reached`, that is, a message that leads there has arrived. `false`
 /// when it cannot tell.
@@ -836,7 +862,7 @@ mod tests {
             attempts: 1,
             first_delay: std::time::Duration::from_millis(1),
         };
-        let link = Link::new(&ports);
+        let link = Link::to_consumers(&ports);
         let body = serde_json::json!({"@type": "ContractRequestMessage"});
         let msg = Message::new(
             "urn:uuid:1",
@@ -959,7 +985,7 @@ mod tests {
             attempts: 3,
             first_delay: std::time::Duration::from_millis(1),
         };
-        let link = Link::new(&ports);
+        let link = Link::to_consumers(&ports);
         let body = serde_json::json!({"@type": "ContractAgreementMessage"});
         let msg = Message::new(
             "urn:uuid:1",
@@ -1097,7 +1123,7 @@ mod tests {
             attempts: 1,
             first_delay: Duration::from_millis(1),
         };
-        Link::new(&ports)
+        Link::to_consumers(&ports)
     }
 
     impl Undeliverable {
@@ -1300,7 +1326,7 @@ mod tests {
         let mut outbox = Undeliverable::new(false);
         let mut ports = Ports::in_memory(Arc::new(Accepts));
         ports.prover = Arc::new(FixedToken);
-        outbox.link = Link::new(&ports);
+        outbox.link = Link::to_consumers(&ports);
         let event = serde_json::json!({"@type": "ContractNegotiationEventMessage"});
         assert!(matches!(send_and_record(&outbox, &event).await, Step::Done));
         assert_eq!(*outbox.calls.lock().unwrap(), ["delivered"]);
@@ -1323,7 +1349,7 @@ mod tests {
         let mut ports = Ports::in_memory(Arc::new(Accepts));
         ports.prover = Arc::new(FixedToken);
         let outbox = Arc::new(PanicsWhenRecording {
-            link: Link::new(&ports),
+            link: Link::to_consumers(&ports),
             panics: 2,
             recordings: std::sync::atomic::AtomicUsize::new(0),
         });
@@ -1382,5 +1408,18 @@ mod tests {
         assert!(begun.elapsed() >= BUSY_WAIT_LIMIT);
         assert!(begun.elapsed() < BUSY_WAIT_LIMIT + Duration::from_secs(6));
         assert!(BUSY_WAIT_LIMIT > Duration::from_secs(LEASE_SECONDS));
+    }
+
+    /// TD-61: the ids a state answer names are compared with those of
+    /// the message sent; a message without them (a first request) never
+    /// matches.
+    #[test]
+    fn the_same_process_is_named_by_both_ids() {
+        let sent = serde_json::json!({"providerPid": "p", "consumerPid": "c"});
+        assert!(same_process(&sent, "p", "c"));
+        assert!(!same_process(&sent, "p", "c2"));
+        assert!(!same_process(&sent, "p2", "c"));
+        let first = serde_json::json!({"consumerPid": "c"});
+        assert!(!same_process(&first, "", "c"));
     }
 }

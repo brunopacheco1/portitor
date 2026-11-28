@@ -95,14 +95,15 @@ pub(super) async fn request_catalog(
 
 /// Read one dataset from a provider (DSP 2025-1 `Dataset`), by its
 /// `@id`. Works as `POST /v1/catalog/request` does: the connector's own
-/// DCP token, one try, the provider's JSON as it came.
+/// DCP token (with `additionalScopes`, if given), one try, the provider's
+/// JSON as it came.
 #[utoipa::path(
     post,
     path = "/v1/catalog/dataset/request",
     request_body = DatasetRequest,
     responses(
         (status = 200, description = "The dataset (DSP 2025-1 Dataset), as the provider sent it", body = Object, content_type = "application/json"),
-        (status = 400, description = "Invalid request, a protocol other than dataspace-protocol-http:2025-1, a dataset id that is \".\" or \"..\", or an address that is not an https URL", body = Problem, content_type = "application/problem+json"),
+        (status = 400, description = "Invalid request, a protocol other than dataspace-protocol-http:2025-1, a dataset id that is \".\" or \"..\", a scope in additionalScopes that is not one word, or an address that is not an https URL", body = Problem, content_type = "application/problem+json"),
         (status = 401, description = "Missing or wrong API key", body = Problem, content_type = "application/problem+json"),
         (status = 403, description = FORBIDDEN, body = Problem, content_type = "application/problem+json"),
         (status = 502, description = "No dataset: the provider refused (the detail has its HTTP status; 404 for a dataset it does not have or does not show us), did not answer, answered with something that is not a JSON object or whose @type is not Dataset (a dataset without @type is accepted), or the identity component gave no token", body = Problem, content_type = "application/problem+json"),
@@ -127,10 +128,14 @@ pub(super) async fn request_dataset(
     if let Err(reason) = checked {
         return problem(StatusCode::BAD_REQUEST, &reason);
     }
+    if let Err(reason) = check_scopes(&request.additional_scopes) {
+        return problem(StatusCode::BAD_REQUEST, &reason);
+    }
     let read = negotiator.read_dataset(
         &request.counter_party_address,
         &request.counter_party_id,
         &request.id,
+        &request.additional_scopes,
     );
     provider_answer(read.await)
 }

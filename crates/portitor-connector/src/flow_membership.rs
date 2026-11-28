@@ -238,7 +238,7 @@ mod tests {
             &'a self,
             _: &'a Caller,
             _: &'a [String],
-        ) -> BoxFuture<'a, Result<Vec<HeldCredential>, String>> {
+        ) -> BoxFuture<'a, Result<Vec<HeldCredential>, VerifyError>> {
             Box::pin(async { Ok(Vec::new()) })
         }
         fn check_membership<'a>(
@@ -261,6 +261,7 @@ mod tests {
             issuer: issuer.to_owned(),
             valid_until: None,
             status: Vec::new(),
+            types: Vec::new(),
         }
     }
 

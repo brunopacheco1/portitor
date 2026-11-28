@@ -103,3 +103,128 @@ commit 17bb5b8, `k8s/provider/application/controlplane-config.yaml`):
 - Prohibitions and duties are still not enforced (ADR 0009).
 - Offers that use credential constraints are now accepted at start;
   offers with any other left operand still stop the connector.
+
+## Amendment in 1.4: access policies, trusted issuers by type, negative operators (accepted 2026-11-27)
+
+Decided by the maintainer on 2026-11-27, for
+[TD-13](../RISKS_AND_TECHNICAL_DEBTS.md#td-13),
+[R-48](../RISKS_AND_TECHNICAL_DEBTS.md#r-48) and
+[R-43](../RISKS_AND_TECHNICAL_DEBTS.md#r-43).
+
+### Access policy per dataset (TD-13)
+
+Eclipse EDC builds its catalog from the contract definitions whose
+**access policy** holds for the caller
+(`ContractDefinitionResolverImpl`, read at EDC Connector commit
+`4215744` on 2026-11-27); the contract policy is checked at
+negotiation. Portitor does the same, per dataset:
+
+- A dataset in the datasets file may have `portitor:accessPolicy`, an
+  object with `permission` rules read as an offer's (strictly, ADR
+  0009): `{"permission": [{"action": "use", "constraint": [...]}]}`.
+  It uses the constraints offers use: `dateTime` and credential
+  constraints. A `purpose` constraint, a prohibition or a duty in an
+  access policy is not understood, and the dataset is rejected (check
+  `odrl`), as a bad offer is.
+- The access policy is checked on DSP catalog requests and dataset
+  requests. A dataset whose access policy does not hold for the caller
+  is left out of the catalog, and a dataset request for it gets the
+  same answer as an unknown dataset. Like offers, a policy that is not
+  understood never holds.
+- A dataset without an access policy is shown to every member, as
+  before 1.4.
+- Like `portitor:source`, the access policy is never shown in the
+  catalog.
+- The verifier asks the caller's credential service for the scopes of
+  the access policies' credential types once per catalog request
+  (ADR 0019 scopes, as for offers).
+  A dataset request asks for the scopes of that dataset's access policy.
+  So a catalog request shows the caller the scopes of **every** access
+  policy, also of datasets hidden from it: a member learns which
+  credential types the access policies use (not their values, nor
+  which dataset uses which), as does its credential service, which
+  sees the query. Accepted as is in 1.4 (engineering review of 1.4,
+  2026-11-27): the types are named in the dataspace's credential
+  definitions anyway, and asking for fewer scopes would hide a dataset
+  from a caller that meets its policy. Eclipse EDC differs: on a catalog
+  request its provider verifies the token with an empty policy
+  (`ProtocolTokenValidator.verify` without a policy, used by
+  `CatalogProtocolServiceImpl.getCatalog`; both read at EDC Connector
+  commit `4215744` on 2026-11-27), so it asks only for the scopes its
+  default scope extractors give, the same for every catalog request,
+  and evaluates the access policies with the credentials that come back.
+  The caller's token must allow them: Portitor as consumer adds those
+  given in `additionalScopes` of its management catalog request and
+  dataset request (EDC's `DatasetRequest` has no `additionalScopes`;
+  Portitor takes it anyway).
+- Details found when building it (2026-11-27): an access policy must
+  have at least one permission, and has no other field (no `@id` or
+  `@type`). It is stored with the dataset, in its own column, and kept
+  in the stored entry too, so a check with new rules reads it again.
+- **A contract request checks the access policy too** (changed on
+  2026-11-27; the first build checked the offer only, so a member that
+  knew a hidden offer's `@id` could negotiate it). EDC does so: its
+  provider resolves the offer's contract definition with its access
+  policy (`ConsumerOfferResolverImpl`), and
+  `ContractValidationServiceImpl.validateInitialOffer` evaluates that
+  access policy before the contract policy, on every
+  `ContractRequestMessage`, the first and a counter request
+  (`ContractNegotiationProtocolServiceImpl.notifyRequested`; all three
+  under `core/control-plane/`, read at EDC Connector commit `4215744` on
+  2026-11-27). Portitor does the same: on every contract request, the
+  access policy of the offer's dataset must hold for the caller's
+  credentials, at the time of the request. If it does not, the answer is
+  the one an unknown offer gets (400, "unknown offer for this dataset"),
+  as a dataset request for a hidden dataset gets the answer of an
+  unknown dataset; nothing is stored. The rule is in the domain
+  (`negotiation/provider.rs`, `check_offer`); the connector asks for the
+  credentials.
+- The provider asks for the scopes of the offer's constraints and of the
+  dataset's access policy in one presentation query. EDC asks only for
+  those its scope extractors find in the contract policy (and the
+  default scopes) and evaluates the access policy with what comes back.
+  Portitor as consumer grants, in a negotiation's token, the scopes of
+  the offer only: an access policy on a credential type that the offer
+  does not name can then hold at negotiation only if the type's scope is
+  a configured one (`PORTITOR_DCP_SCOPES`, the membership). The datasets
+  file should name such a type in the offer too.
+
+### Trusted issuers by credential type (R-48)
+
+"Trusted issuers stay one list for all types" (Configuration, above)
+changes. The new, optional setting `PORTITOR_TRUSTED_ISSUER_TYPES`
+limits an issuer of `PORTITOR_TRUSTED_ISSUERS` to a list of credential
+types (`<issuer DID>=<type>` items), on the connector and the identity,
+as EDC's `edc.iam.trustedissuer.<alias>.supportedtypes`. A credential
+from an issuer that is not trusted for its type is skipped, as one from
+an untrusted issuer. An issuer the setting does not name keeps every
+type (EDC's `"*"`), so a 1.3 deployment behaves the same. The safer
+default waits for 2.0 ([TD-74](../RISKS_AND_TECHNICAL_DEBTS.md#td-74)).
+
+A credential has several types, for example `["VerifiableCredential",
+"DataPermitCredential"]`. As in EDC's `HasValidIssuer` (its default
+mode; `core/common/lib/core-lib/src/main/java/org/eclipse/edc/iam/verifiablecredentials/rules/HasValidIssuer.java`,
+read at EDC Connector commit `4215744` on 2026-11-27), a limited issuer
+must be trusted for **every** type of the credential except
+`VerifiableCredential`, which never limits. A credential with only
+`VerifiableCredential` needs that type in the list.
+
+- The connector skips such a credential before it fetches anything for
+  it (its issuer's DID document, its status list), and logs it at
+  DEBUG. A membership kept with a transfer is checked again against the
+  setting too, for each of its types (one kept before 1.4 has none
+  stored: `MembershipCredential` then).
+- The identity refuses such a credential in a delivery (Storage API)
+  and such a type in an offer (`400`, with the reason), and does not
+  ask a limited issuer for an id of another type.
+
+### Negative operators are not deny lists (R-43)
+
+A constraint holds if **at least one** valid credential of the type has
+the claim and the comparison is true (Decision above). So `neq` and
+`isNoneOf` say "the caller holds a credential of this type whose claim
+is not this value", not "no credential of the caller has this value". A
+holder with two credentials of the type, one with the excluded value
+and one without, meets the constraint, and the holder chooses what it
+presents. Do not use `neq` or `isNoneOf` to keep someone out; refuse
+them at the issuer (revoke the credential) or limit the issuer by type.

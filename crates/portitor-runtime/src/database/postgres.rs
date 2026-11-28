@@ -19,8 +19,9 @@
 //! The calling thread is usually one of tokio's worker threads: a
 //! request handler or a background loop calls a store port, which is a
 //! plain function. The worker is then parked for the database's round
-//! trip, and for the short sleep before a transaction that collided runs
-//! again ([`TRIES`]); other tasks wait for another worker meanwhile.
+//! trip, and for the short pause before a transaction that collided runs
+//! again ([`pause_after_collision`]); other tasks wait for another worker
+//! meanwhile.
 //! Besides requests, two loops call the database from async code this
 //! way: the connector's outbox loop (`take_up`, every second) and each
 //! running download's or push's state watchdog in the data plane
@@ -46,9 +47,21 @@ use tokio_postgres::{Client, Config};
 
 use super::{DbError, Executor, Migrations, Row, Value};
 
-/// How many times a transaction runs when PostgreSQL keeps answering
-/// that it collided with another one.
-pub const TRIES: u32 = 10;
+/// How long, in all, a transaction is run again while PostgreSQL keeps
+/// answering that it collided with another one. A try that would start
+/// later gives up with the database's error.
+pub const COLLISION_BUDGET: Duration = Duration::from_secs(5);
+
+/// How many times a transaction runs at most, whatever time is left in
+/// [`COLLISION_BUDGET`].
+pub const MAX_TRIES: u32 = 50;
+
+/// The longest pause after the first collision, in milliseconds; it
+/// doubles after each further one, up to [`LONGEST_PAUSE_MS`].
+const FIRST_PAUSE_MS: u64 = 5;
+
+/// The longest pause after any collision, in milliseconds.
+const LONGEST_PAUSE_MS: u64 = 200;
 
 /// Connections a process keeps open at most.
 const POOL_SIZE: usize = 10;
@@ -427,15 +440,28 @@ impl Pool {
         &self,
         work: &mut dyn FnMut(&dyn Executor) -> Result<T, DbError>,
     ) -> Result<T, DbError> {
-        let mut tries = 0;
+        let started = Instant::now();
+        let mut tries: u32 = 0;
         loop {
             tries += 1;
-            let mut taken = self.take()?;
-            let (client, timed_out) = taken.parts()?;
-            match run_once(client, timed_out, work) {
-                Err(e) if is_collision(&e) && tries < TRIES => {
-                    // another transaction won; ours rolled back: run it again
-                    std::thread::sleep(Duration::from_millis(5 * u64::from(tries)));
+            let result = {
+                let mut taken = self.take()?;
+                let (client, timed_out) = taken.parts()?;
+                run_once(client, timed_out, work)
+                // `taken` is dropped here: the connection goes back to the
+                // pool before the pause, so the transaction that won can
+                // use it meanwhile
+            };
+            match result {
+                Err(e) if is_collision(&e) => {
+                    // another transaction won; ours rolled back: run it
+                    // again after a random pause, unless the tries or the
+                    // time are used up
+                    let pause = pause_after_collision(tries);
+                    if tries >= MAX_TRIES || started.elapsed() + pause > COLLISION_BUDGET {
+                        return Err(e);
+                    }
+                    std::thread::sleep(pause);
                 }
                 result => return result,
             }
@@ -773,6 +799,34 @@ fn is_collision(e: &DbError) -> bool {
     matches!(e.code.as_deref(), Some("40001" | "40P01"))
 }
 
+/// The pause before a transaction that collided runs again, after its
+/// try number `tries` (1 for the first): "exponential backoff with full
+/// jitter", a random time from 0 up to [`FIRST_PAUSE_MS`] times
+/// 2^(tries - 1), at most [`LONGEST_PAUSE_MS`].
+///
+/// Random, so two transactions that collided do not both wake at the
+/// same moment and collide again; growing, so many that collide spread
+/// out over a longer time.
+fn pause_after_collision(tries: u32) -> Duration {
+    let doublings = tries.saturating_sub(1).min(16);
+    let longest = FIRST_PAUSE_MS
+        .saturating_mul(1 << doublings)
+        .min(LONGEST_PAUSE_MS);
+    Duration::from_millis(random_below(longest + 1))
+}
+
+/// A random number from 0 to `bound - 1` (`bound` must be at least 1),
+/// from the system's random source (ring). The small bias of `%` does not
+/// matter for a pause. When the random source fails, the middle.
+fn random_below(bound: u64) -> u64 {
+    use ring::rand::SecureRandom;
+    let mut bytes = [0u8; 8];
+    match ring::rand::SystemRandom::new().fill(&mut bytes) {
+        Ok(()) => u64::from_le_bytes(bytes) % bound.max(1),
+        Err(_) => bound / 2,
+    }
+}
+
 fn params(values: &[Value]) -> Vec<&(dyn ToSql + Sync)> {
     values.iter().map(|v| v as &(dyn ToSql + Sync)).collect()
 }
@@ -948,6 +1002,40 @@ impl Wake for Unpark {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pause_after_a_collision_grows_and_stays_under_its_ceiling() {
+        // the ceiling doubles from 5 ms and stops at 200 ms
+        let ceilings = [
+            (1, 5),
+            (2, 10),
+            (3, 20),
+            (4, 40),
+            (5, 80),
+            (6, 160),
+            (7, 200),
+        ];
+        for (tries, ceiling) in ceilings {
+            for _ in 0..200 {
+                let pause = pause_after_collision(tries);
+                assert!(
+                    pause <= Duration::from_millis(ceiling),
+                    "{tries}: {pause:?}"
+                );
+            }
+        }
+        for _ in 0..200 {
+            assert!(pause_after_collision(u32::MAX) <= Duration::from_millis(LONGEST_PAUSE_MS));
+        }
+    }
+
+    #[test]
+    fn the_pause_after_a_collision_is_random() {
+        // 200 draws from 0..=200 ms: all equal has odds of about 201^-199
+        let pauses: std::collections::BTreeSet<Duration> =
+            (0..200).map(|_| pause_after_collision(10)).collect();
+        assert!(pauses.len() > 1, "{pauses:?}");
+    }
 
     fn read(url: &str) -> Result<Settings, String> {
         Settings::from_url(url, None)

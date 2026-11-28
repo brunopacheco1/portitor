@@ -58,13 +58,33 @@ impl NegotiationStore for InMemoryNegotiations {
         Ok(self.map().get(provider_pid).cloned())
     }
 
-    fn insert(&self, negotiation: &Negotiation) -> Result<(), StoreError> {
+    fn negotiation_requested_by(
+        &self,
+        counter_party: &str,
+        consumer_pid: &str,
+    ) -> Result<Option<Negotiation>, StoreError> {
+        let map = self.map();
+        let found = map.values().find(|negotiation| {
+            negotiation.counter_party == counter_party && negotiation.consumer_pid == consumer_pid
+        });
+        Ok(found.cloned())
+    }
+
+    fn insert(&self, negotiation: &Negotiation) -> Result<bool, StoreError> {
+        // the check and the write under one lock, so they are one step
         let mut map = self.map();
         if map.contains_key(&negotiation.provider_pid) {
             return Err(StoreError(format!("{} exists", negotiation.provider_pid)));
         }
+        let already_requested = map.values().any(|other| {
+            other.counter_party == negotiation.counter_party
+                && other.consumer_pid == negotiation.consumer_pid
+        });
+        if already_requested {
+            return Ok(false);
+        }
         map.insert(negotiation.provider_pid.clone(), negotiation.clone());
-        Ok(())
+        Ok(true)
     }
 
     fn replace_if(&self, negotiation: &Negotiation, expected: u64) -> Result<bool, StoreError> {

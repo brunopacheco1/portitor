@@ -14,8 +14,9 @@
 #    transfer (HttpData-PUSH, ADR 0027): Lux Biobank sends the genotypes
 #    to the lab connector's receiving route, which stores them in the
 #    lab's own object storage (RustFS, bucket lab-genotypes). The object
-#    must equal the original file. The offer for access bodies is refused
-#    to the lab.
+#    must equal the original file. The offer for EU processors names a
+#    purpose (1.4): a request with another purpose is refused. The offer
+#    for access bodies is refused to the lab.
 # 2. The HDAB takes the offer for access bodies (its MembershipCredential
 #    role). Nothing is pulled.
 # 3. Schuman Clinical Research is refused both of Lux Biobank's offers.
@@ -62,6 +63,10 @@ CARRIERS=https://hdab.health-lu.example/datasets/variant-carriers
 ORIGINAL=examples/genotypes/genotypes.vcf
 LAB_S3=http://127.0.0.1:18114 # lab-storage, the lab's RustFS
 LAB_BUCKET=lab-genotypes      # the lab connector's PORTITOR_PUSH_BUCKET
+# the purpose of Lux Biobank's offer for EU processors (datasets/biobank.json),
+# EHDS Art. 53(1)(e) as the DPV EHDS extension names it, and another one
+PURPOSE_IRI=https://w3id.org/dpv/legal/eu/ehds#HealthcareScientificResearch
+WRONG_PURPOSE_IRI=https://w3id.org/dpv/legal/eu/ehds#ImproveHealthcareEducation
 
 hdab_pulls() { # how many transfers the HDAB has asked Lux Biobank for
   api hdab GET /v1/transfers | jq '.transfers | length'
@@ -84,6 +89,17 @@ step "1. The lab takes the offer for EU processors: Lux Biobank checks its DataP
 VIEW=$(negotiate lab "$BIOBANK" "$BIOBANK_ID" "$GENOTYPES" "$(offer "$CATALOG" "$GENOTYPES" genotypes:offer:eu-processors)")
 expect "the lab's agreement" "$VIEW" FINALIZED
 LAB_AGREEMENT=$(jq -r '.agreement["@id"]' <<<"$VIEW")
+jq -c '.agreement.permission[0].constraint[] | select(.leftOperand == "purpose")' <<<"$VIEW"
+jq -e --arg p "$PURPOSE_IRI" \
+  'any(.agreement.permission[0].constraint[]; .leftOperand == "purpose" and .operator == "eq" and .rightOperand == $p)' \
+  <<<"$VIEW" >/dev/null || fail "the lab's agreement does not name the purpose $PURPOSE_IRI: $VIEW"
+
+step "1. The lab asks with another purpose than the offer's: refused, the terms differ"
+OFFER=$(offer "$CATALOG" "$GENOTYPES" genotypes:offer:eu-processors)
+WRONG_PURPOSE=$(jq -c --arg p "$WRONG_PURPOSE_IRI" \
+  '(.permission[0].constraint[] | select(.leftOperand == "purpose") | .rightOperand) = $p' <<<"$OFFER")
+VIEW=$(negotiate lab "$BIOBANK" "$BIOBANK_ID" "$GENOTYPES" "$WRONG_PURPOSE")
+expect "the lab's request with purpose $WRONG_PURPOSE_IRI" "$VIEW" TERMINATED
 
 step "1. The lab's object storage (RustFS): its bucket $LAB_BUCKET"
 for _ in $(seq 1 100); do
@@ -192,7 +208,7 @@ complete schuman "$TRANSFER"
 
 # --- 5 ------------------------------------------------------------------------
 
-step "5. Known gap: the lab is a data user too, and the HDAB agrees (no data permit until 1.2)"
+step "5. Known gap: the lab is a data user too, and the HDAB agrees (no data permit asked for here; data permits since 1.4: data-permits scenario)"
 CATALOG=$(catalog lab "$HDAB" "$HDAB_ID")
 VIEW=$(negotiate lab "$HDAB" "$HDAB_ID" "$CARRIERS" "$(offer "$CATALOG" "$CARRIERS" variant-carriers:offer:data-users)")
 expect "the lab's request for the counts" "$VIEW" FINALIZED

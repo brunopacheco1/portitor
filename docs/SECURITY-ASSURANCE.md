@@ -90,9 +90,13 @@ dataspace participants over HTTPS.
   serves one process, and a second process on the same file refuses to
   start. Several replicas need PostgreSQL, from 1.3
   ([ADR 0029](adr/0029-several-replicas.md)).
-- Offers hidden by credentials: the catalog shows every offer to every
-  caller with a trusted membership credential (DCP, ADR 0016); credential
-  constraints (ADR 0019) are checked at negotiation and transfer only.
+- Offers hidden by credentials: credential constraints (ADR 0019) are
+  checked at negotiation and transfer. Since 1.4 a dataset with an
+  access policy is hidden from callers it does not hold for (ADR 0019,
+  amendment in 1.4), but the offers of a shown dataset are shown to
+  every member, and a catalog request asks every caller for the scopes
+  of all access policies
+  ([R-50](RISKS_AND_TECHNICAL_DEBTS.md#r-50)).
 - Protection against server-side request forgery through the
   consumer-chosen `callbackAddress` beyond the `https://`-only rule:
   internal addresses are not blocked yet.
@@ -111,7 +115,7 @@ dataspace participants over HTTPS.
 | Private keys | Keys leak from the internet-facing connector; an old key is kept after a key change | Keys live only in `portitor-identity` and `portitor-issuer`, not in the connector (ADR 0003); a retired key is listed by its public key only, and a private key in the retired list stops the start, so the old private key can be destroyed at once (ADR 0015, ADR 0018, TD-05) |
 | Schema and vocabulary bundle | A forged or changed bundle makes connectors accept bad datasets or refuse good ones | A separate bundle key, kept offline: the issuer holds only its public part and refuses to start if it is the credential key; signature checked against the authority's DID document; the version (never older than the one in use) and authority; SHA-256 of every file; size limits (manifest 1 MiB, 64 MiB per file, 256 MiB in all) and a 120 s timeout per download; a published version is never written again |
 | Validation code | Crafted shapes or JSON-LD make the connector fetch remote content, or exploit an XML parser | JSON-LD contexts come only from a map the caller fills (the bundle's and the DSP contexts), never from the network; no Portitor binary parses RDF/XML (`bundle build` refuses it, code lists travel as N-Triples); fuzz targets `shacl_load`, `shacl_jsonld` and `bundle_manifest` |
-| Internal services | A consumer gives a `callbackAddress` that points at an internal service, so the connector calls it (SSRF) | Only `https://` URLs with a host, unless the operator allows `http://`; the response body is never read; a 10 s timeout; blocking internal addresses *(planned)* |
+| Internal services | A consumer gives a `callbackAddress` that points at an internal service, so the connector calls it (SSRF) | Only `https://` URLs with a host, unless the operator allows `http://`; the response body is never read; a 10 s timeout; from 1.4, internal addresses refused with `PORTITOR_BLOCK_INTERNAL_ADDRESSES=true` (off by default in 1.x; F-01) |
 | Negotiation state | A consumer drives a negotiation out of order, or two messages race | The DSP state machine as a pure function in the domain; every change is a compare-and-update on a version number; a message that races our acknowledgement is accepted only as proof of delivery of our saved pending message (ADR 0007) |
 | Service availability | Crafted or oversized messages crash or exhaust a service | Typed parsing with no `unsafe`; a request size limit per port (`PORTITOR_MAX_REQUEST_BYTES`, `PORTITOR_MANAGEMENT_MAX_REQUEST_BYTES`, 2 MiB by default) and a fixed 64 KiB limit on routes whose messages are small by specification, HTTP 413 above them ([R-18](RISKS_AND_TECHNICAL_DEBTS.md#r-18)); fuzzing of every parser of input from outside the process (ClusterFuzzLite; list in [Parsers and fuzz targets](#parsers-and-fuzz-targets)); a nesting limit in SHACL validation |
 | Operational data (health answers, traces, metrics) | A caller reads health answers, or a receiver reads traces and metrics, and learns secrets, partners or process ids; a partner links our internal calls through trace context | Health checks only on the management port, which stays on the operator's network; failure messages without secrets; export off by default and only to the receiver the operator names; attribute allow-list (no tokens, keys, headers, bodies or id-bearing paths); client metrics name only hosts inside the participant (no untrusted cardinality); `traceparent` neither sent to nor taken from other participants, and taken on `/sts/token` only after the client is authenticated (ADR 0023) |
@@ -186,8 +190,8 @@ document, issuer service, status lists and bundles.
 | T | A message is changed on the way | TLS at the operator's proxy (not checked, TD-19). DSP messages are not signed (DSP 2025-1 has no message signature); tokens, credentials and presentations are, and are verified (`auth/dcp.rs`); typed parsing and, with a bundle, the SHACL message guard (`portitor-connector/src/shacl.rs`) |
 | R | A partner denies it agreed, or denies it pulled data | Partly: state changes logged with process ids (`portitor-connector/src/state_events.rs`); the agreement and the counter-party's DID stored (`portitor-connector/src/store.rs`). The caller's token and presentation are not kept, and data pulls are not logged: **F-02** |
 | I | A caller learns offers, flows or reasons it should not | A refusal without a reason: on DSP routes 404 for negotiations and transfers and 401 for the catalog (`auth.rs` `unauthorized`, `refusal_status`; ADR 0016, amended in 0.12), 401 on the identity and the issuer (`portitor-runtime/src/caller.rs` `refused`); the data plane answers the same 401 for an unknown flow, a wrong or expired token and a stopped flow (`portitor-dataplane/src/serving.rs`); a presentation holds only what the scopes and our access token allow (`portitor-identity/src/presentation.rs`); a request status only for the holder that made it (`portitor-issuer/src/requests.rs`). The catalog shows every offer to every member ([TD-13](RISKS_AND_TECHNICAL_DEBTS.md#td-13), known) |
-| D | A caller exhausts a component | 256 requests at once and 60 s per request on every public port (`portitor-runtime/src/serve.rs`, applied in each `main.rs`); a 20 s deadline, at most 8 presentations of 16 credentials and 2 MiB status lists per check (`auth/dcp.rs`); 10 s and 64 KiB per outgoing call (`portitor-runtime/src/http.rs`); body limits ([R-18](RISKS_AND_TECHNICAL_DEBTS.md#r-18), changed in 0.11). No limit per partner: **F-10**. The identity fetches any caller's DID before cheaper checks: **F-06**. One slow holder delays every issuer delivery: **F-09** |
-| E | A caller gets more than its credentials allow | A policy not understood fails closed (`portitor-dsp/src/policy.rs`, ADR 0009); credential constraints checked again at each transfer request (ADR 0019); credentials from untrusted issuers skipped (`auth/dcp.rs`). `neq` and `isNoneOf` can be met with another credential of the type: **F-07**. A trusted issuer is trusted for every credential type: **F-08** |
+| D | A caller exhausts a component | 256 requests at once and 60 s per request on every public port (`portitor-runtime/src/serve.rs`, applied in each `main.rs`); a 20 s deadline, at most 8 presentations of 16 credentials and 2 MiB status lists per check (`auth/dcp.rs`); 10 s and 64 KiB per outgoing call (`portitor-runtime/src/http.rs`); body limits ([R-18](RISKS_AND_TECHNICAL_DEBTS.md#r-18), changed in 0.11). No limit per partner: **F-10**. Before 1.4 the identity and the connector fetched any caller's DID before cheaper checks: **F-06**, fixed in 1.4 in both. One slow holder delays every issuer delivery: **F-09** |
+| E | A caller gets more than its credentials allow | A policy not understood fails closed (`portitor-dsp/src/policy.rs`, ADR 0009); credential constraints checked again at each transfer request (ADR 0019); credentials from untrusted issuers skipped (`auth/dcp.rs`). `neq` and `isNoneOf` can be met with another credential of the type: **F-07**. A trusted issuer is trusted for every credential type unless `PORTITOR_TRUSTED_ISSUER_TYPES` (1.4) limits it: **F-08** |
 
 #### 2. The DID web and the Gaia-X compliance service
 
@@ -198,7 +202,7 @@ document, issuer service, status lists and bundles.
 | R | The compliance service denies what it answered | Its answer is a signed credential, checked and stored with the run (`portitor-identity/src/gaiax.rs`, table `gaiax_run`) |
 | I | The hosts we fetch from learn whom we talk to | By design of `did:web` (each verifier fetches the caller's document); not countered. The compliance service gets the participant's Gaia-X credentials, by design (ADR 0021) |
 | D | A DID host or the compliance service is slow or down | 10 s and 64 KiB per fetch; documents cached `PORTITOR_DID_CACHE_SECONDS` (5 minutes by default), at most 1,000 (`portitor-runtime/src/did.rs`); a compliance run repeats at two thirds of the credential's validity and keeps the credential it has (ADR 0021; the keeping not checked in code) |
-| E | The caller chooses the URL we fetch (its DID, its credential service) to reach an internal service | `https://` only, no redirects, time and size limits; internal addresses are not blocked: **F-01** |
+| E | The caller chooses the URL we fetch (its DID, its credential service; an issuer's status lists, read by the connector and, since 1.4, by the identity's status check) to reach an internal service | `https://` only, no redirects, time and size limits; from 1.4, internal addresses refused when `PORTITOR_BLOCK_INTERNAL_ADDRESSES=true`, off by default in 1.x: **F-01** |
 
 #### 3. The data plane
 
@@ -238,7 +242,7 @@ The authority's bundle and its issuer, as seen by participants.
 | R | The authority denies a bundle or a credential | Both are signed; the connector keeps the signed manifest and the key it used (`portitor-bundle/src/store.rs`); the issuer logs registrations, deletions and revocations (`portitor-issuer/src/management.rs`) |
 | I | The bundle or the issuer shows more than it should | The bundle is public by design; issuance answers go only to the holder (`portitor-issuer/src/requests.rs`) |
 | D | Huge bundles, or the authority is down | 1 MiB manifest, 64 MiB per file, 256 MiB in all, 120 s per download (`portitor-bundle/src/source.rs`); the cached copy is used while the authority is down (ADR 0005) |
-| E | Shapes run code, or the issuer key admits anyone | `portitor-shacl` refuses terms it does not implement, SPARQL constraints among them (`tests/refusal.rs`), and stops after `MAX_CHECKS` with a violation (`src/validate.rs`); the issuer key is the root of trust ([R-20](RISKS_AND_TECHNICAL_DEBTS.md#r-20), known); every trusted issuer may issue every type: **F-08** |
+| E | Shapes run code, or the issuer key admits anyone | `portitor-shacl` refuses terms it does not implement, SPARQL constraints among them (`tests/refusal.rs`), and stops after `MAX_CHECKS` with a violation (`src/validate.rs`); the issuer key is the root of trust ([R-20](RISKS_AND_TECHNICAL_DEBTS.md#r-20), known); every trusted issuer may issue every type unless `PORTITOR_TRUSTED_ISSUER_TYPES` (1.4) limits it: **F-08** |
 
 #### 6. The operator's monitoring
 
@@ -256,7 +260,8 @@ chain" above was checked: `cargo vet --locked` runs in
 `.github/workflows/dependencies.yml`, with 185 exemptions in
 `supply-chain/config.toml` and 57 crate versions covered by imported
 audits (2026-11-26; [R-04](RISKS_AND_TECHNICAL_DEBTS.md#r-04)). 1.3
-added the 32 crate versions of `tokio-postgres`, all exempted.
+added the 32 crate versions of `tokio-postgres`, all exempted; 1.4
+added none (185 exemptions, counted on 2026-11-27).
 
 #### Findings
 
@@ -266,19 +271,19 @@ freeze.
 
 | Id | Boundary | Finding | Severity | Proposed action | Tracked in |
 |---|---|---|---|---|---|
-| F-01 | 1, 2 | Internal addresses are not blocked on calls whose URL a partner chooses: the `callbackAddress`, the caller's DID document and credential service, and, for the issuer, a registered holder's credential service (`portitor-issuer/src/delivery.rs`). The table row "Internal services" says *(planned)*, but no release has the work | medium | The maintainer names a release; before the 0.13 freeze if the block is on by default, since turning it on later changes behaviour. Until then DEPLOYING's egress firewall advice stands | [R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17) |
+| F-01 | 1, 2 | Internal addresses are not blocked on calls whose URL a partner chooses: the `callbackAddress`, the caller's DID document and credential service, and, for the issuer, a registered holder's credential service (`portitor-issuer/src/delivery.rs`). The table row "Internal services" says *(planned)*, but no release has the work. **Built in 1.4, off by default**: `PORTITOR_BLOCK_INTERNAL_ADDRESSES` and `PORTITOR_INTERNAL_ADDRESSES_ALLOWED` on all three components; the address checked is the one connected to (`portitor-runtime/src/http/connect.rs`; [ADR 0016](adr/0016-dsp-caller-authentication.md), amended in 1.4). On by default in 2.0 | medium | The maintainer names a release; before the 0.13 freeze if the block is on by default, since turning it on later changes behaviour. Until then DEPLOYING's egress firewall advice stands | [R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17) |
 | F-02 | 1, 3, 4, 6 | No audit trail: data pulls are not logged, the caller's token is not kept with an agreement, failed management key checks and some management changes are not logged, and a management call has no person behind it | medium | Research with the TD-04 ADR (0.12): what an audit record holds, where it goes, how long it is kept (EHDS rules for health data) | [TD-31](RISKS_AND_TECHNICAL_DEBTS.md#td-31) |
 | F-03 | 4 | One API key per management API, with every right | medium | The TD-04 ADR (0.12) | [TD-04](RISKS_AND_TECHNICAL_DEBTS.md#td-04) |
 | F-04 | 2 | DID documents are cached 5 minutes, fixed (ADR 0016 says "default"; there is no setting): a key its owner removed after a leak is still accepted for up to 5 minutes. The cache is bounded (1,000) and caches no failures. **From 0.12 the time is a setting**, `PORTITOR_DID_CACHE_SECONDS` (default 300, at most 3600, `0` for no cache; ADR 0016, amended in 0.12; DEPLOYING, "DID document cache"). With the default the 5 minutes remain | low | Say it in this case and DEPLOYING; decide with the retired keys work (0.11) whether the time becomes a setting | [R-41](RISKS_AND_TECHNICAL_DEBTS.md#r-41) |
 | F-05 | 4 | The STS (`/sts/token`) is served on the identity's public port; keeping it internal depends on the proxy's routing (DEPLOYING). The secret is long and compared in constant time, so guessing is not practical | low | A separate listen address for the STS, or a check in the deployment tests that the proxy does not route it | [R-42](RISKS_AND_TECHNICAL_DEBTS.md#r-42) |
-| F-06 | 1 | The identity's presentation API resolves the caller's DID before it checks `aud` and the access token that only our STS signs (`portitor-runtime/src/caller.rs`, `Callers::Anyone`), so anyone can make it fetch a `did.json` from a host of their choice | low | Check `aud` and the access token's signature before resolving | [R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17) |
+| F-06 | 1 | The identity's presentation API resolves the caller's DID before it checks `aud` and the access token that only our STS signs (`portitor-runtime/src/caller.rs`, `Callers::Anyone`), so anyone can make it fetch a `did.json` from a host of their choice. **Fixed in 1.4**, always on: the access token (signed by our STS, for this holder and this caller, not expired) and the ID token's `aud` are checked first; a caller that fails gets the same 401 and nothing is fetched (`portitor-identity/src/presentation.rs`, `access_before_resolving`). The connector's DSP check had the same gap: from 1.4 it checks the unverified token's `aud`, `iss` = `sub` and times before it resolves the DID (`portitor-connector/src/auth/dcp.rs`, `check_token`), as do the identity's Storage and Offer APIs and the issuer (`portitor-runtime/src/caller.rs`); all use `portitor_dcp::check_before_resolving` | low | Check `aud` and the access token's signature before resolving | [R-17](RISKS_AND_TECHNICAL_DEBTS.md#r-17) |
 | F-07 | 1 | `neq` and `isNoneOf` hold if one credential of the type has another value (ADR 0019), and the holder chooses what it presents, so they cannot exclude a holder that has a second credential of that type | low | Say in ADR 0019 and DEPLOYING that negative operators are not deny lists | [R-43](RISKS_AND_TECHNICAL_DEBTS.md#r-43) |
-| F-08 | 1, 5 | `PORTITOR_TRUSTED_ISSUERS` is one list for every credential type (ADR 0019): any trusted issuer may issue a `MembershipCredential`. EDC limits each trusted issuer to its `supportedtypes` | low (one issuer today); grows with several data spaces and with the HDAB issuer of 1.5 | Part of [ADR 0024](adr/0024-several-data-spaces.md) (several data spaces) | [TD-03](RISKS_AND_TECHNICAL_DEBTS.md#td-03), [R-48](RISKS_AND_TECHNICAL_DEBTS.md#r-48) |
+| F-08 | 1, 5 | `PORTITOR_TRUSTED_ISSUERS` is one list for every credential type (ADR 0019): any trusted issuer may issue a `MembershipCredential`. EDC limits each trusted issuer to its `supportedtypes`. **From 1.4** `PORTITOR_TRUSTED_ISSUER_TYPES` limits a trusted issuer to a list of types, as EDC; an issuer not named keeps every type ([DEPLOYING](DEPLOYING.md#trusted-issuers-by-type)) | low (one issuer today); grows with several data spaces and with the HDAB issuer of 1.5 | Part of [ADR 0024](adr/0024-several-data-spaces.md) (several data spaces) | [TD-03](RISKS_AND_TECHNICAL_DEBTS.md#td-03), [R-48](RISKS_AND_TECHNICAL_DEBTS.md#r-48) |
 | F-09 | 1 | The issuer sends deliveries one after the other, up to 10 s each; a registered holder whose credential service hangs delays every other holder (bounded by `PORTITOR_ISSUER_MAX_ACTIVE_PER_HOLDER` and the retry waits) | low | Send to different holders side by side, a few at a time | [R-44](RISKS_AND_TECHNICAL_DEBTS.md#r-44) |
 | F-10 | 1, 3 | No limit per partner: one authenticated partner can use the 256 request slots, and downloads, once started, are not limited | low | Document rate limits per client at the reverse proxy in DEPLOYING; a limit in Portitor only if measured | [R-45](RISKS_AND_TECHNICAL_DEBTS.md#r-45) |
 
-The open items the maintainer asked to check are F-01 (SSRF: no
-release has it), F-02 (repudiation), F-03 (the single management key)
+The open items the maintainer asked to check are F-01 (SSRF: built
+in 1.4, off by default), F-02 (repudiation), F-03 (the single management key)
 and F-04 (the DID document cache).
 
 ## Secure design principles applied
@@ -457,72 +462,88 @@ version 2026-08-28 ([ADR 0012](adr/0012-openssf-baseline.md)). The target
 stays level 1 for 1.0 (maintainer, 2026-11-20;
 [R-05](RISKS_AND_TECHNICAL_DEBTS.md#r-05)).
 
-### Level 1 self-assessment (2026-11-20)
+### Level 1 self-assessment
+
+Written for 0.14 on 2026-11-20; checked again, control by control, on
+2026-11-27 for 1.4 ([R-05](RISKS_AND_TECHNICAL_DEBTS.md#r-05)).
 
 **Source.** The control list is the Baseline's own source, tag
 [`v2026.08.28`](https://github.com/ossf/security-baseline/tree/v2026.08.28/baseline)
 (commit `a26a796`): every requirement that applies to maturity level 1.
-The requirement column is our short paraphrase; the Baseline's text
-decides.
+On 2026-11-27, [baseline.openssf.org](https://baseline.openssf.org/)
+still named v2026.08.28 (released 2026-08-28) as the current version,
+and its [level 1 checklist](https://baseline.openssf.org/versions/2026-08-28-checklist.md)
+has the same 24 ids as this table. Since 2026.02.19 no level 1 id
+changed; "While active" left the requirement texts, OSPS-LE-03.01 also
+accepts a `LICENSE/` folder, and OSPS-GV-03.01 also accepts a statement
+that public contributions are not accepted
+([release notes](https://baseline.openssf.org/release_notes), read
+2026-11-27). The requirement column is our short paraphrase; the
+Baseline's text decides.
 
-**Scope.** The repository at version 0.14.0, the release candidate.
+**Scope.** The repository at 1.4.0-dev (commit `3eeba24`), after the
+1.3.0 release.
 
 **Status.** *Met*: the evidence is in the repository, or is a GitHub
-setting read through the GitHub API on 2026-11-20, and was checked
-there. *Met, to confirm*: the evidence is a GitHub setting that could
-not be read; the maintainer confirms it in the
+setting read through the GitHub API (`gh api`) on 2026-11-27, and was
+checked there. *Met, to confirm*: the evidence is a GitHub setting that
+could not be read; the maintainer confirms it in the
 [settings checklist](#settings-to-confirm) below. *Not met* and *Not
 applicable* mean what they say.
 
-**Result.** 24 requirements apply (one more is retired): 19 met, 4 met,
-to confirm, 1 not applicable.
-Level 1 is reached when the four settings are confirmed. Private
-vulnerability reporting, the one requirement that was not met when this
-was written, was turned on on 2026-11-21.
+**Result (2026-11-27).** 24 requirements apply (one more is retired):
+21 met, 1 met, to confirm (OSPS-AC-01.01), 1 not met (OSPS-BR-03.01),
+1 not applicable. Level 1 is reached when the maintainer turns on
+"Enforce HTTPS" for the website and confirms two-factor authentication
+(checklist rows 4 and 1). On 2026-11-20 it was 19 met, 4 to confirm and
+1 not applicable; three of those settings could be read this time, and
+one of them, the website, is not as expected.
 
 | Control | Requirement (paraphrase) | Status | Evidence |
 |---|---|---|---|
 | OSPS-AC-01.01 | Reading or changing a sensitive resource of the repository needs multi-factor authentication | Met, to confirm | The only account with such access is the maintainer's ([GOVERNANCE, "Roles"](../GOVERNANCE.md#roles)). The repository belongs to a personal account, so no organisation rule can show it. Checklist 1 |
-| OSPS-AC-02.01 | A new collaborator gets permissions by hand, or the lowest ones by default | Met, to confirm | Only the owner can add a collaborator, by hand; none is planned without a record in [GOVERNANCE](../GOVERNANCE.md#roles). Checklist 2 |
-| OSPS-AC-03.01 | A direct commit to the primary branch is prevented | Met | The ruleset `main`, as read: active, on the default branch, with the rule "pull request" (one approval) and required status checks; an admin may bypass it only to merge a pull request ([R-02](RISKS_AND_TECHNICAL_DEBTS.md#r-02)). Described in [ROADMAP, "Repository settings"](ROADMAP.md#decisions-recorded-here) |
+| OSPS-AC-02.01 | A new collaborator gets permissions by hand, or the lowest ones by default | Met | Only the owner can add a collaborator, by hand; none is planned without a record in [GOVERNANCE](../GOVERNANCE.md#roles). As read on 2026-11-27: the only collaborator is the owner. Checklist 2 |
+| OSPS-AC-03.01 | A direct commit to the primary branch is prevented | Met | The ruleset `main`, as read on 2026-11-27: active, on the default branch, with the rule "pull request" (one approval) and required status checks; an admin may bypass it only to merge a pull request ([R-02](RISKS_AND_TECHNICAL_DEBTS.md#r-02)). Described in [ROADMAP, "Repository settings"](ROADMAP.md#decisions-recorded-here) |
 | OSPS-AC-03.02 | Deleting the primary branch is prevented or needs explicit confirmation | Met | The same ruleset, as read: the rules "deletion" and "non fast forward" (no deletion, no force push) |
 | OSPS-BR-01.01 | Untrusted metadata (branch names, titles, tags) is validated before the pipeline uses it | Met | No `run:` step holds an untrusted `${{ }}` expression: values reach scripts as environment variables ([`changes.yml`](../.github/workflows/changes.yml), step "Which jobs does this change need?"); the tag name is matched against a pattern before use ([`release.yml`](../.github/workflows/release.yml), job `verify`); values fetched for the website are reduced to plain characters ([`pages.yml`](../.github/workflows/pages.yml), `clean`). CodeQL analyses the workflows ([`codeql.yml`](../.github/workflows/codeql.yml), language `actions`) |
 | OSPS-BR-01.02 | Retired by the Baseline | Retired | |
-| OSPS-BR-01.03 | Untrusted code (a pull request) cannot reach privileged credentials | Met, to confirm | No workflow uses `pull_request_target`. Every workflow starts with `permissions: contents: read`. The only repository secret a pull request job reads, `SONAR_TOKEN`, goes to the scan step alone, and GitHub gives no secrets to a pull request from a fork ([`ci.yml`](../.github/workflows/ci.yml), job `sonar`). Pushing, signing and releasing run only for a tag, in the `release` environment ([`release.yml`](../.github/workflows/release.yml), jobs `images` and `release`). Checklist 3 |
-| OSPS-BR-03.01 | Every official project address is served over an encrypted channel only | Met, to confirm | The project's addresses are `https://github.com/brunopacheco1/portitor` and `https://bruno.pacheco.lu/portitor/` ([README](../README.md)). The website is on GitHub Pages with its own domain. Checklist 4 |
+| OSPS-BR-01.03 | Untrusted code (a pull request) cannot reach privileged credentials | Met | No workflow uses `pull_request_target`. Every workflow starts with `permissions: contents: read`. The only repository secret a pull request job reads, `SONAR_TOKEN`, goes to the scan step alone, and GitHub gives no secrets to a pull request from a fork ([`ci.yml`](../.github/workflows/ci.yml), job `sonar`). Pushing, signing and releasing run only for a tag, in the `release` environment ([`release.yml`](../.github/workflows/release.yml), jobs `images` and `release`). As read on 2026-11-27: workflows of all outside contributors wait for approval; `release` deploys only from tags `v*` and needs the maintainer's approval; `SONAR_TOKEN` is the only repository secret. Checklist 3 |
+| OSPS-BR-03.01 | Every official project address is served over an encrypted channel only | **Not met** | The project's addresses are `https://github.com/brunopacheco1/portitor` and `https://bruno.pacheco.lu/portitor/` ([README](../README.md)). GitHub sends `http://` to `https://`. The website is not: on 2026-11-27 `http://bruno.pacheco.lu/portitor/` answered `200 OK` over plain HTTP, and the repository's Pages setting reads `"https_enforced": false` (the user site `bruno.pacheco.lu` itself has it on). Checklist 4 |
 | OSPS-BR-03.02 | Distribution channels are protected against an attacker in the middle | Met | Images come from `ghcr.io` and release files from GitHub Releases, both over HTTPS; each image is signed and has provenance ([RELEASING, "Checking a release"](RELEASING.md#checking-a-release)) |
-| OSPS-BR-07.01 | Secrets are kept out of version control | Met | Secret scanning and push protection are on, as read ([ROADMAP, "Repository settings"](ROADMAP.md#decisions-recorded-here)); the rule and the naming of test keys ([AGENTS, "Rules"](../AGENTS.md#rules)); checkouts do not keep the workflow token (`persist-credentials: false`), except the tag check of the release |
+| OSPS-BR-07.01 | Secrets are kept out of version control | Met | Secret scanning and push protection are on, as read on 2026-11-27 ([ROADMAP, "Repository settings"](ROADMAP.md#decisions-recorded-here)); the rule and the naming of test keys ([AGENTS, "Rules"](../AGENTS.md#rules)); checkouts do not keep the workflow token (`persist-credentials: false`), except the tag check of the release |
 | OSPS-DO-01.01 | User guides for all basic functionality | Met | [README](../README.md), [DEPLOYING](DEPLOYING.md), [OPERATING](OPERATING.md), the OpenAPI files in [`docs/api/`](api/), and the quickstart on the [website](https://bruno.pacheco.lu/portitor/) |
 | OSPS-DO-02.01 | A guide for reporting defects | Met | [CONTRIBUTING](../CONTRIBUTING.md#before-you-start); the issue forms in [`.github/ISSUE_TEMPLATE/`](../.github/ISSUE_TEMPLATE/); vulnerabilities in [SECURITY](../SECURITY.md#reporting-a-vulnerability) |
 | OSPS-GV-02.01 | A public place to discuss proposed changes and problems of use | Met | GitHub issues (on, as read) and pull requests ([CONTRIBUTING](../CONTRIBUTING.md#before-you-start); [GOVERNANCE, "Decisions"](../GOVERNANCE.md#decisions)) |
-| OSPS-GV-03.01 | The contribution process is explained | Met | [CONTRIBUTING](../CONTRIBUTING.md#pull-requests) |
+| OSPS-GV-03.01 | The contribution process is explained, or public contributions are said not to be accepted | Met | [CONTRIBUTING](../CONTRIBUTING.md#pull-requests) |
 | OSPS-LE-02.01 | The source code licence is an open source licence (OSI or FSF) | Met | Apache-2.0 ([LICENSE](../LICENSE)); every file carries its licence, checked by `reuse lint` in [`ci.yml`](../.github/workflows/ci.yml) (job `reuse`) |
 | OSPS-LE-02.02 | The licence of the released software is an open source licence | Met | The images are Apache-2.0 and hold one third-party file, the CA certificate bundle, MPL-2.0 ([NOTICE](../NOTICE)). Crates linked into the binaries must have a licence on the allowlist in [`deny.toml`](../deny.toml) (cargo-deny in [`dependencies.yml`](../.github/workflows/dependencies.yml)) |
-| OSPS-LE-03.01 | The source licence is in `LICENSE`, `COPYING` or `LICENSES/` | Met | [LICENSE](../LICENSE) and [`LICENSES/`](../LICENSES/) |
+| OSPS-LE-03.01 | The source licence is in `LICENSE`, `COPYING`, `LICENSES/` or `LICENSE/` | Met | [LICENSE](../LICENSE) and [`LICENSES/`](../LICENSES/) |
 | OSPS-LE-03.02 | The licence of the released software is in the released source, or in a licence file next to the release assets | Met | The released source (the tag) holds `LICENSE` and `LICENSES/`; each GitHub release also has `THIRD-PARTY-NOTICES.txt` ([`release.yml`](../.github/workflows/release.yml), job `release`). The images hold no licence file: they name the licence in the label `org.opencontainers.image.licenses` ([Dockerfile](../Dockerfile)) |
 | OSPS-QA-01.01 | The source repository is public, at a fixed address | Met | `https://github.com/brunopacheco1/portitor` (public, as read) |
 | OSPS-QA-01.02 | A public record of every change: what, who and when | Met | The Git history, with signed commits ([CONTRIBUTING, "Pull requests"](../CONTRIBUTING.md#pull-requests), step 6) |
 | OSPS-QA-02.01 | A dependency list for the direct language dependencies | Met | [`Cargo.toml`](../Cargo.toml) and [`Cargo.lock`](../Cargo.lock) (also `fuzz/Cargo.lock`) |
 | OSPS-QA-04.01 | A project with several repositories lists its codebases | Not applicable | One repository ([AGENTS, "Repository layout"](../AGENTS.md#repository-layout)) |
-| OSPS-QA-05.01 | No generated executable in version control | Met | Checked on 2026-11-20: the files Git marks executable are shell and Python scripts. Scorecard's Binary-Artifacts check runs weekly ([`scorecard.yml`](../.github/workflows/scorecard.yml)) |
-| OSPS-QA-05.02 | No binary in version control that cannot be reviewed | Met | Checked on 2026-11-20: two binary files, neither executable. A font for the website (`site/fonts/cinzel-regular.woff2`, source and licence in [NOTICE](../NOTICE)) and a test-only RSA key in DER (`crates/portitor-dcp/tests/fixtures/test-only-rsa-2048.der`) |
-| OSPS-VM-02.01 | The documentation names security contacts | Met | [SECURITY, "Reporting a vulnerability"](../SECURITY.md#reporting-a-vulnerability) names one contact: a private report through GitHub. Private vulnerability reporting is on for the repository (the API answered `enabled: true` on 2026-11-21; it was off the day before) |
+| OSPS-QA-05.01 | No generated executable in version control | Met | Checked on 2026-11-20 and 2026-11-27: the files Git marks executable are shell and Python scripts. Scorecard's Binary-Artifacts check runs weekly ([`scorecard.yml`](../.github/workflows/scorecard.yml)) |
+| OSPS-QA-05.02 | No binary in version control that cannot be reviewed | Met | Checked on 2026-11-20 and 2026-11-27: two binary files, neither executable. A font for the website (`site/fonts/cinzel-regular.woff2`, source and licence in [NOTICE](../NOTICE)) and a test-only RSA key in DER (`crates/portitor-dcp/tests/fixtures/test-only-rsa-2048.der`) |
+| OSPS-VM-02.01 | The documentation names security contacts | Met | [SECURITY, "Reporting a vulnerability"](../SECURITY.md#reporting-a-vulnerability) names one contact: a private report through GitHub. Private vulnerability reporting is on for the repository (the API answered `enabled: true` on 2026-11-21 and on 2026-11-27; it was off on 2026-11-20) |
 
 ### Settings to confirm
 
-Read through the GitHub API on 2026-11-20, so not in this list: the
+Read through the GitHub API on 2026-11-27, so not in this list: the
 ruleset `main`, secret scanning and push protection, the repository's
-visibility and its issue tracker. The maintainer checks the rest in
-GitHub and writes the date here.
+visibility and its issue tracker. The "As read" column holds what the
+API answered that day; the maintainer checks the rows it could not
+read, or that are not as they must be, in GitHub and writes the date
+here.
 
-| # | Control | Where in GitHub | What must be true |
-|---|---|---|---|
-| 1 | OSPS-AC-01.01 | The maintainer's account: Settings, Password and authentication, Two-factor authentication | Two-factor authentication is on |
-| 2 | OSPS-AC-02.01 | Repository: Settings, Collaborators | No collaborator, or only people named in GOVERNANCE |
-| 3 | OSPS-BR-01.03 | Repository: Settings, Actions, General (approval for fork pull request workflows); Settings, Environments, `release`; Settings, Secrets and variables, Actions | Workflows of outside contributors wait for approval; `release` deploys only from tags `v*`; `SONAR_TOKEN` is the only repository secret |
-| 4 | OSPS-BR-03.01 | Repository: Settings, Pages | "Enforce HTTPS" is on for the custom domain |
-| 5 | OSPS-VM-02.01 | Repository: Settings, Advanced Security, Private vulnerability reporting | Done on 2026-11-21: the API answers `enabled: true` |
-| 6 | OSPS-AC-04.01 (level 2) | Repository: Settings, Actions, General, Workflow permissions | "Read repository contents and packages permissions" is selected |
+| # | Control | Where in GitHub | What must be true | As read on 2026-11-27 |
+|---|---|---|---|---|
+| 1 | OSPS-AC-01.01 | The maintainer's account: Settings, Password and authentication, Two-factor authentication | Two-factor authentication is on | Could not be read: maintainer to confirm |
+| 2 | OSPS-AC-02.01 | Repository: Settings, Collaborators | No collaborator, or only people named in GOVERNANCE | Met: the owner only |
+| 3 | OSPS-BR-01.03 | Repository: Settings, Actions, General (approval for fork pull request workflows); Settings, Environments, `release`; Settings, Secrets and variables, Actions | Workflows of outside contributors wait for approval; `release` deploys only from tags `v*`; `SONAR_TOKEN` is the only repository secret | Met: approval for `all_external_contributors`; `release` from tags `v*`, with the maintainer as required reviewer; `SONAR_TOKEN` only |
+| 4 | OSPS-BR-03.01 | Repository: Settings, Pages | "Enforce HTTPS" is on | **Not met**: `https_enforced` is `false`, and the site answers over plain HTTP. Maintainer to turn it on |
+| 5 | OSPS-VM-02.01 | Repository: Settings, Advanced Security, Private vulnerability reporting | Private vulnerability reporting is on | Met: `enabled: true` (turned on 2026-11-21) |
+| 6 | OSPS-AC-04.01 (level 2) | Repository: Settings, Actions, General, Workflow permissions | "Read repository contents and packages permissions" is selected | Met: `default_workflow_permissions` is `read` |
 
 ### What level 2 would need
 
