@@ -895,8 +895,44 @@ TD-46, TD-60, TD-61, TD-70 and TD-71, and TD-47, fixed in 1.1).
   in the ADR 0019 amendment): the types are named in the dataspace's
   credential definitions anyway, and asking for fewer scopes would hide
   a dataset from a caller that meets its policy.
-- **Next.** In 1.5, no code (maintainer, 2026-11-28): the 1.5 check
-  is written into this entry, and it stays Accepted.
+- **The 1.5 check** (2026-11-28; code at commit `feb80ac`). What the
+  provider asks the caller's credential service for today:
+  1. Every DSP request, the catalog too: `auth::require_caller` checks
+     the token and makes a first presentation query with the
+     configured scopes (`PORTITOR_DCP_SCOPES`, default the
+     `MembershipCredential` scope; `DcpVerifier` in `auth/dcp.rs`).
+  2. Catalog request (`catalog_request` in
+     `crates/portitor-connector/src/lib.rs`):
+     `CatalogService::access_scopes` collects, once each, the scopes of
+     the credential types named in the access policy of **every**
+     stored dataset (`portitor-dsp/src/catalog.rs`,
+     `policy::credential_scopes`, permissions only).
+     `caller_credentials` passes them to
+     `auth::credentials_or_unavailable`. When all of them are among the
+     configured scopes, no second query is made
+     (`DcpVerifier::credentials`). Otherwise a second query asks for
+     the configured scopes plus these, with the `LegalPerson` scope
+     added for a Gaia-X compliance scope (`more_credentials`,
+     `with_linked_scopes`). If that query is refused for a reason other
+     than "unavailable", the credentials of the first query are used,
+     and datasets whose policy needs more stay hidden; if the caller's
+     service is unavailable, the answer is 503.
+  3. Dataset request (`dataset`, same file): only the scopes of that
+     dataset's access policy (`CatalogService::dataset_access_scopes`).
+
+  So the entry still describes the code. Eclipse EDC, read again at
+  commit `4215744f2f22764668ac9bfffda646e06238d888` on 2026-11-28:
+  `CatalogProtocolServiceImpl.getCatalog` calls
+  `protocolTokenValidator.verify(participantContext, tokenRepresentation, message)`,
+  whose default in `ProtocolTokenValidator` (`spi/control-plane-spi`)
+  passes an empty `Policy`, so `ProtocolTokenValidatorImpl` extracts
+  scopes from no policy: only the default scopes, the same for every
+  caller. Its dataset resolver then evaluates the access policies with
+  the credentials that came back. Unchanged since 1.4.
+  **Decision: stays Accepted** (maintainer, D4 of the 1.5 plan,
+  2026-11-28), for the reasons above; no code.
+- **Next.** None planned. Look again if a dataspace's credential types
+  become confidential, or if EDC changes `getCatalog`.
 
 <a id="r-51"></a>
 ### R-51 No way for a data user to delegate a negotiation to the HDAB that the holder can verify

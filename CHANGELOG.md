@@ -42,6 +42,11 @@ Portitor 1.5 (in progress): the HDAB and Schuman Clinical Research.
   negotiate an agreement for a data user that the holder can check;
   ADR 0013 stays (the assignee is the caller), and the ADR lists what
   delegation would need. No code.
+- Risks, R-50: the 1.5 check written into the entry. A catalog request
+  still asks the caller for the scopes of every access policy, in a
+  second presentation query when they are not among the configured
+  scopes; EDC still asks only for its default scopes. It stays
+  Accepted (maintainer, D4).
 
 ## [1.4.0] - 2026-11-27
 
