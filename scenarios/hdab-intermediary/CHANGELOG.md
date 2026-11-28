@@ -9,6 +9,13 @@ SPDX-License-Identifier: Apache-2.0
 How the scenario changed, newest first. Each entry names the Portitor
 version it ran on.
 
+## 2026-11-28, for 1.5.0-dev
+
+- README, findings: the limit on the HDAB's offer stays by hand; no
+  specification or product links two agreements
+  ([ADR 0031](../../docs/adr/0031-agreements-that-depend-on-an-upstream-agreement.md),
+  Proposed). Docs only; the run does not change.
+
 ## 2026-11-27, for 1.4.0
 
 - Lux Biobank's offer for EU processors names a purpose (1.4,

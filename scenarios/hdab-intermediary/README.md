@@ -263,7 +263,10 @@ questions. Here is what rc.1 shows.
   the HDAB's offer, the lab too (step 5).
 - **No link between agreements** (1.5,
   [R-39](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#r-39)): the HDAB's
-  offer is kept inside its own agreement by hand.
+  offer is kept inside its own agreement by hand. No specification or
+  product links two agreements, so it stays so
+  ([ADR 0031](../../docs/adr/0031-agreements-that-depend-on-an-upstream-agreement.md),
+  Proposed).
 - **Pull only** (up to 1.0, [TD-10](../../docs/RISKS_AND_TECHNICAL_DEBTS.md#td-10),
   answered in 1.1): the lab's app fetched into a plain folder. From 1.1
   Lux Biobank pushes into the lab's own bucket (step 1); no storage key

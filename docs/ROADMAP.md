@@ -663,7 +663,7 @@ rejects. It runs beside the releases.
 | Users and roles ([TD-04](RISKS_AND_TECHNICAL_DEBTS.md#td-04)) | Accepted in 0.13 ([ADR 0025](adr/0025-users-and-roles.md)); code in 1.7 |
 | Who calls the data plane ([TD-02](RISKS_AND_TECHNICAL_DEBTS.md#td-02)) | 1.7 |
 | S3 data address | Answered in 1.1: none is needed ([ADR 0027](adr/0027-push-transfers-and-object-storage.md)) |
-| Agreements that depend on an upstream agreement | 1.5 |
+| Agreements that depend on an upstream agreement ([R-39](RISKS_AND_TECHNICAL_DEBTS.md#r-39)) | 1.5: [ADR 0031](adr/0031-agreements-that-depend-on-an-upstream-agreement.md) Proposed; no existing way found, the limit stays by hand |
 | Consent | 1.7 |
 | How schemas are published ([TD-01](RISKS_AND_TECHNICAL_DEBTS.md#td-01)) | with TD-03 |
 | A dataspace's policy rules as SHACL shapes in the bundle (maintainer, 2026-11-18; [TD-32](RISKS_AND_TECHNICAL_DEBTS.md#td-32)) | 1.4 |
@@ -741,7 +741,7 @@ what worked and what did not, and a demo or an ADR where it earns one
 | 2 | F. Permit-gated peer to peer | the user's credential; data to the user (non-personal data only, EHDS Art. 73(2)) | explored on 1.0: `scenarios/data-permits`, placeholder permit claims; findings [R-48](RISKS_AND_TECHNICAL_DEBTS.md#r-48), [TD-20](RISKS_AND_TECHNICAL_DEBTS.md#td-20), [TD-46](RISKS_AND_TECHNICAL_DEBTS.md#td-46) |
 | 3 | C. Permit credential, data to the SPE | the user's permit; data into the SPE the permit names | 1.10, after the permit template is adopted; needs a destination check |
 | 4 | E. The trusted holder runs the SPE (EHDS Art. 72) | the user's permit; data stays, results leave | needs 1.4; the SPE is outside Portitor |
-| 5 | B. Chained agreements | the HDAB; its offers held inside its agreement | 1.5, research and ADR (R-39) |
+| 5 | B. Chained agreements | the HDAB; its offers held inside its agreement | 1.5: [ADR 0031](adr/0031-agreements-that-depend-on-an-upstream-agreement.md) Proposed, no existing way found; the limit stays by hand ([R-39](RISKS_AND_TECHNICAL_DEBTS.md#r-39)) |
 | 6 | D. The HDAB on the user's behalf | a delegation and the user's permit | 1.5 research ADR ([R-51](RISKS_AND_TECHNICAL_DEBTS.md#r-51)); refused today (ADR 0013) |
 
 ## 2027: EHDS participant functions and Simpl-Open tests (proposal, 2026-11-21)

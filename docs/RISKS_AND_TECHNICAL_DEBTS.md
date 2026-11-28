@@ -679,11 +679,19 @@ TD-46, TD-60, TD-61, TD-70 and TD-71, and TD-47, fixed in 1.1).
   agreement by hand ([scenarios/hdab-intermediary](../scenarios/hdab-intermediary/README.md)).
 - **Why it matters.** Portitor's design may differ from what EDC or
   Simpl-Open choose later.
-- **Current state: Open.**
-- **Next.** In progress for 1.5: a research ADR (DSP 2025-1, ODRL 2.2,
-  EDC, Simpl-Open and Tractus-X read first). Code only if the ADR finds
-  an existing way to follow; otherwise the scenario keeps the limit by
-  hand, as in step 0, and the gap is recorded (maintainer, 2026-11-28).
+- **Current state: Open.** In progress for 1.5:
+  [ADR 0031](adr/0031-agreements-that-depend-on-an-upstream-agreement.md)
+  (Proposed, 2026-11-28) found no existing way to follow. DSP 2025-1
+  has no link between agreements. ODRL 2.2 has `inheritFrom` and
+  `nextPolicy`, but DSP does not carry them and ODRL has no rule that a
+  downstream policy stays inside an upstream one. EDC and Simpl-Open
+  have no link; Tractus-X states onward sharing as legal terms that
+  always hold. Under the EHDS the limit comes from the data permit the
+  HDAB issues (Art. 61(2), 68). So the scenario keeps the limit by
+  hand, as in step 0; no code.
+- **Next.** The maintainer accepts or rejects ADR 0031. Look again when
+  DSP, EDC or Simpl-Open add a link between agreements, or with the
+  EHDS permit (1.10).
 
 <a id="r-40"></a>
 ### R-40 No shared list of EHDS purposes

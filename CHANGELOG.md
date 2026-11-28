@@ -30,6 +30,12 @@ Portitor 1.5 (in progress): the HDAB and Schuman Clinical Research.
   and HealthDCAT-AP does not use it. The two purpose IRIs of the docs
   and scenarios are right. A dated note in ADR 0009 corrects its 1.4
   remark.
+- [ADR 0031](docs/adr/0031-agreements-that-depend-on-an-upstream-agreement.md),
+  Proposed (R-39, way B): no specification or product (DSP 2025-1,
+  ODRL 2.2, EDC, Tractus-X, Simpl-Open) links a downstream offer to an
+  upstream agreement, so the hdab-intermediary scenario keeps the
+  HDAB's offer inside its agreement by hand; no code. ADR number 0030
+  is not used (a withdrawn draft).
 
 ## [1.4.0] - 2026-11-27
 
