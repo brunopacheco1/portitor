@@ -556,6 +556,21 @@ Scope set by the maintainer on 2026-11-27. What shipped:
   a standard to follow (ISO/IEC TS 27560 and DPV to read first).
 - User to system access is tested against Simpl-Open, which has
   implemented user-to-system actions (maintainer, 2026-11-20).
+- A management UI for operators (maintainer, 2026-11-28: in 1.7, no
+  UI before). It needs the user login of this release first: each
+  person signs in and acts with their own scopes (ADR 0025, option B),
+  never with a shared management key in a page or a proxy. It sits
+  beside the three images, never inside them (ADR 0003), and covers the
+  identity, the issuer and the connector. Its own ADR first, in the 1.7
+  plan. Precedent checked on 2026-11-28: EDC's
+  [DataDashboard](https://github.com/eclipse-edc/DataDashboard) is a
+  separate Angular application served by nginx, with the API key in a
+  configuration file, and its README says it "is only intended for
+  demonstration purposes"; Simpl-Open plans a landing page per
+  participant type (requirement 13.8, proposed). Open points for that
+  ADR: no npm build or an npm supply chain, read and act or read only,
+  and a connector route to list its own datasets (STABILITY allows new
+  routes in 1.x).
 - Debts and risks assigned to this release (maintainer, 2026-11-26):
   a request limit per partner ([R-45](RISKS_AND_TECHNICAL_DEBTS.md#r-45)); token renewal and partial
   transfers ([TD-10](RISKS_AND_TECHNICAL_DEBTS.md#td-10)); memory per running pull ([TD-45](RISKS_AND_TECHNICAL_DEBTS.md#td-45));
